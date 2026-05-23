@@ -1,0 +1,30 @@
+# HV power path plus the motor/resolver bundle.
+#
+# Exercises all four sides of the rectangle:
+#   - left/right: HV power flow across pack -> contactor -> inverter
+#   - bottom:     contactor coil (unconnected here, will warn)
+#   - top:        resolver bundle between inverter and motor
+
+kind: schematic
+title: "HV Power Path"
+
+layout:
+  pack:      { x:   0, y: 0 }
+  contactor: { x: 280, y: 0 }
+  inverter:  { x: 560, y: 0 }
+  motor:     { x: 940, y: 0 }
+
+ports:
+  pack:
+    right: [hv.pos, hv.neg]
+  contactor:
+    left:   [power.in]
+    right:  [power.out]
+    bottom: [coil.pos, coil.neg]
+  inverter:
+    left:   [dc.pos, dc.neg]
+    right:  [ac.u, ac.v, ac.w]
+    top:    [resolver.exc_p, resolver.exc_n, resolver.sin_p, resolver.sin_n, resolver.cos_p, resolver.cos_n]
+  motor:
+    left:   [terminals.u, terminals.v, terminals.w]
+    top:    [resolver.exc_p, resolver.exc_n, resolver.sin_p, resolver.sin_n, resolver.cos_p, resolver.cos_n]
