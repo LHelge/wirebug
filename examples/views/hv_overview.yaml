@@ -24,7 +24,7 @@ ports:
   inverter:
     left:   [dc.pos, dc.neg]
     right:  [ac.u, ac.v, ac.w]
-    top:    [resolver.exc_p, resolver.exc_n, resolver.sin_p, resolver.sin_n, resolver.cos_p, resolver.cos_n]
+    bottom:    [resolver.exc_p, resolver.exc_n, resolver.sin_p, resolver.sin_n, resolver.cos_p, resolver.cos_n]
   motor:
     left:   [terminals.u, terminals.v, terminals.w]
-    top:    [resolver.exc_p, resolver.exc_n, resolver.sin_p, resolver.sin_n, resolver.cos_p, resolver.cos_n]
+    bottom:    [resolver.exc_p, resolver.exc_n, resolver.sin_p, resolver.sin_n, resolver.cos_p, resolver.cos_n]

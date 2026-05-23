@@ -56,16 +56,20 @@ redesign each when it lands.
 
 ```
 src/
-├── main.rs          # clap CLI; thin
-├── lib.rs           # re-exports
-├── model.rs         # Model, Component, Connector, Port, Connection (serde)
-├── view.rs          # View, ViewKind (serde)
-├── parse.rs         # serde_yaml wrappers; preserve line/col in errors
+├── main.rs          # clap CLI; thin shim over render_paths
+├── lib.rs           # re-exports + render_paths orchestration
+├── model.rs         # Model, Component, Connector, Port, Connection;
+│                    # Model::load(path) + FromStr<Model>
+├── view.rs          # View, ViewKind; View::load(path) + FromStr<View>
 ├── render/
 │   ├── mod.rs       # Renderer trait; dispatch on ViewKind
 │   └── schematic.rs # rectangle-based SVG renderer
 └── error.rs         # thiserror types
 ```
+
+Parsing is on the types — `Model::load(path)` / `View::load(path)` for
+files (errors carry the source path); `text.parse::<Model>()` via
+`FromStr` for strings. There is no separate `parse` module.
 
 ## Coding practices
 
