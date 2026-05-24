@@ -23,32 +23,54 @@ const PIN_WEIGHT: f64 = 1e6;
 /// Weight of an (immovable) obstacle boundary.
 const WALL_WEIGHT: f64 = 1e9;
 
-/// Solve both axes in place, mutating each segment's `perp`. `obstacles`
-/// are the clearance-inflated component rectangles.
+/// Solve both axes, writing each segment's final `perp`. The horizontal
+/// pass runs first and its result is applied before the vertical pass:
+/// a vertical segment's span depends on the `y` its horizontal neighbours
+/// just took. `obstacles` are the clearance-inflated component rectangles.
 pub(super) fn place(
     shapes: &mut [Option<Vec<Segment>>],
     channels: &[Channel],
     raws: &[RawRoute],
     obstacles: &[Rect],
 ) {
-    solve_axis(shapes, channels, raws, obstacles, Orientation::Horizontal);
-    solve_axis(shapes, channels, raws, obstacles, Orientation::Vertical);
+    let horizontal = solve_axis(shapes, channels, raws, obstacles, Orientation::Horizontal);
+    apply(shapes, &horizontal);
+    let vertical = solve_axis(shapes, channels, raws, obstacles, Orientation::Vertical);
+    apply(shapes, &vertical);
 }
 
+/// Write solved perpendicular coordinates back onto their segments.
+fn apply(shapes: &mut [Option<Vec<Segment>>], assignment: &[(usize, usize, f64)]) {
+    for &(ri, si, perp) in assignment {
+        if let Some(segs) = shapes[ri].as_mut() {
+            segs[si].perp = perp;
+        }
+    }
+}
+
+/// Solve one axis, returning the new `perp` for every segment of
+/// `orientation` as `(route, segment, perp)`. Pure: reads the current
+/// segments, writes nothing.
 fn solve_axis(
-    shapes: &mut [Option<Vec<Segment>>],
+    shapes: &[Option<Vec<Segment>>],
     channels: &[Channel],
     raws: &[RawRoute],
     obstacles: &[Rect],
     orientation: Orientation,
-) {
-    // Spans depend on the perpendicular axis, which the previous pass may
-    // have moved — refresh them before deciding what overlaps.
-    for (ri, shape) in shapes.iter_mut().enumerate() {
-        if let Some(segs) = shape {
-            recompute_spans(segs, raws[ri].a, raws[ri].b);
-        }
-    }
+) -> Vec<(usize, usize, f64)> {
+    // Each segment's extent along its parallel axis, from its neighbours'
+    // current `perp`. A segment of this orientation runs between two of
+    // the *other* orientation, whose `perp` this pass leaves fixed — so
+    // these spans are stable for the whole solve.
+    let spans: Vec<Option<Vec<(f64, f64)>>> = shapes
+        .iter()
+        .enumerate()
+        .map(|(ri, shape)| {
+            shape
+                .as_ref()
+                .map(|segs| spans_of(segs, raws[ri].a, raws[ri].b))
+        })
+        .collect();
 
     // One VPSC variable per segment of this orientation.
     let mut vars = Vec::new();
@@ -84,16 +106,14 @@ fn solve_axis(
             let Some(si) = seg_in_channel(r) else {
                 continue;
             };
-            if let Some((pr, psi)) = prev {
-                let a = &shapes[pr].as_ref().unwrap()[psi];
-                let b = &shapes[r].as_ref().unwrap()[si];
-                if spans_overlap(a, b) {
-                    cons.push(Constraint {
-                        left: var_of[&(pr, psi)],
-                        right: var_of[&(r, si)],
-                        gap: NUDGE_GAP,
-                    });
-                }
+            if let Some((pr, psi)) = prev
+                && spans_overlap(span_at(&spans, pr, psi), span_at(&spans, r, si))
+            {
+                cons.push(Constraint {
+                    left: var_of[&(pr, psi)],
+                    right: var_of[&(r, si)],
+                    gap: NUDGE_GAP,
+                });
             }
             prev = Some((r, si));
         }
@@ -103,12 +123,16 @@ fn solve_axis(
     // box it routed around, so nudging can't push it into the clearance.
     // Each boundary becomes an immovable variable.
     for (vi, &(ri, si)) in owner.iter().enumerate() {
-        let seg = &shapes[ri].as_ref().unwrap()[si];
+        let Some(segs) = shapes[ri].as_ref() else {
+            continue;
+        };
+        let seg = &segs[si];
         if seg.is_end {
             continue; // anchored at a port on the box edge — leave it.
         }
+        let (lo, hi) = span_at(&spans, ri, si);
         for r in obstacles {
-            if let Some((wall_pos, seg_below_wall)) = wall_for(seg, orientation, r) {
+            if let Some((wall_pos, seg_below_wall)) = wall_for(seg.perp, lo, hi, orientation, r) {
                 let wall = vars.len();
                 vars.push(Var {
                     desired: wall_pos,
@@ -134,60 +158,76 @@ fn solve_axis(
     }
 
     let positions = vpsc::solve(&vars, &cons);
-    for (v, &(ri, si)) in owner.iter().enumerate() {
-        shapes[ri].as_mut().unwrap()[si].perp = positions[v];
-    }
+    owner
+        .iter()
+        .enumerate()
+        .map(|(vi, &(ri, si))| (ri, si, positions[vi]))
+        .collect()
 }
 
-/// If segment `seg` (of `orientation`) spans across obstacle `r` along its
-/// parallel axis, return the boundary it must not cross and whether the
-/// segment currently lies *below* (smaller coordinate than) that boundary.
-fn wall_for(seg: &Segment, orientation: Orientation, r: &Rect) -> Option<(f64, bool)> {
-    let (near, far, lo, hi) = match orientation {
+/// The precomputed `(lo, hi)` span of segment `si` in route `ri`. Indices
+/// come from `owner`/`var_of`, so the route always has a span list.
+fn span_at(spans: &[Option<Vec<(f64, f64)>>], ri: usize, si: usize) -> (f64, f64) {
+    spans[ri].as_ref().map_or((0.0, 0.0), |s| s[si])
+}
+
+/// Each segment's `(lo, hi)` extent along its parallel axis, derived from
+/// its neighbours' `perp` and the route's port points at the two ends.
+fn spans_of(segs: &[Segment], a: Point, b: Point) -> Vec<(f64, f64)> {
+    let n = segs.len();
+    (0..n)
+        .map(|i| {
+            let left = if i == 0 {
+                port_parallel(a, segs[i].orientation)
+            } else {
+                segs[i - 1].perp
+            };
+            let right = if i == n - 1 {
+                port_parallel(b, segs[i].orientation)
+            } else {
+                segs[i + 1].perp
+            };
+            (left.min(right), left.max(right))
+        })
+        .collect()
+}
+
+/// If a segment of `orientation` at `perp`, spanning `[lo, hi]` along its
+/// parallel axis, crosses obstacle `r`, return the boundary it must not
+/// cross and whether the segment currently lies *below* (smaller
+/// coordinate than) that boundary.
+fn wall_for(
+    perp: f64,
+    lo: f64,
+    hi: f64,
+    orientation: Orientation,
+    r: &Rect,
+) -> Option<(f64, bool)> {
+    let (near, far, blo, bhi) = match orientation {
         // Horizontal: perp = y, parallel = x; box spans [r.x, r.x+w] in x.
         Orientation::Horizontal => (r.y, r.y + r.h, r.x, r.x + r.w),
         // Vertical: perp = x, parallel = y; box spans [r.y, r.y+h] in y.
         Orientation::Vertical => (r.x, r.x + r.w, r.y, r.y + r.h),
     };
 
-    let overlaps = seg.lo.max(lo) < seg.hi.min(hi) - EPS;
+    let overlaps = lo.max(blo) < hi.min(bhi) - EPS;
     if !overlaps {
         return None;
     }
 
-    if seg.perp <= near + EPS {
+    if perp <= near + EPS {
         Some((near, true)) // stay at/above the near edge
-    } else if seg.perp >= far - EPS {
+    } else if perp >= far - EPS {
         Some((far, false)) // stay at/below the far edge
     } else {
         // Already inside (routing shouldn't allow this) — push to nearer.
-        let to_near = seg.perp - near;
-        let to_far = far - seg.perp;
+        let to_near = perp - near;
+        let to_far = far - perp;
         if to_near <= to_far {
             Some((near, true))
         } else {
             Some((far, false))
         }
-    }
-}
-
-/// Recompute each segment's parallel extent from its neighbours' current
-/// perpendicular positions (and the port points at the ends).
-fn recompute_spans(segs: &mut [Segment], a: Point, b: Point) {
-    let n = segs.len();
-    for i in 0..n {
-        let left = if i == 0 {
-            port_parallel(a, segs[i].orientation)
-        } else {
-            segs[i - 1].perp
-        };
-        let right = if i == n - 1 {
-            port_parallel(b, segs[i].orientation)
-        } else {
-            segs[i + 1].perp
-        };
-        segs[i].lo = left.min(right);
-        segs[i].hi = left.max(right);
     }
 }
 
@@ -199,8 +239,8 @@ fn port_parallel(p: Point, orientation: Orientation) -> f64 {
     }
 }
 
-fn spans_overlap(a: &Segment, b: &Segment) -> bool {
-    a.hi.min(b.hi) - a.lo.max(b.lo) > EPS
+fn spans_overlap(a: (f64, f64), b: (f64, f64)) -> bool {
+    a.1.min(b.1) - a.0.max(b.0) > EPS
 }
 
 /// Rebuild a route's polyline from its solved segments: the port points
@@ -226,18 +266,10 @@ fn corner(s0: &Segment, s1: &Segment) -> Point {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::collections::HashSet;
 
-    fn hseg(perp: f64, lo: f64, hi: f64) -> Segment {
-        Segment {
-            orientation: Orientation::Horizontal,
-            perp,
-            lo,
-            hi,
-            edges: Vec::new(),
-            is_end: false,
-        }
-    }
+    use super::super::segments::Edge;
+    use super::*;
 
     // Box (already clearance-inflated) covering x∈[0,200], y∈[0,100].
     fn box_rect() -> Rect {
@@ -246,23 +278,119 @@ mod tests {
 
     #[test]
     fn segment_below_a_box_is_walled_below_it() {
-        let seg = hseg(110.0, 0.0, 200.0);
-        let (pos, below) = wall_for(&seg, Orientation::Horizontal, &box_rect()).expect("wall");
+        let (pos, below) =
+            wall_for(110.0, 0.0, 200.0, Orientation::Horizontal, &box_rect()).expect("wall");
         assert_eq!(pos, 100.0); // the box's bottom edge
         assert!(!below); // segment must stay ≥ the wall
     }
 
     #[test]
     fn segment_above_a_box_is_walled_above_it() {
-        let seg = hseg(-10.0, 0.0, 200.0);
-        let (pos, below) = wall_for(&seg, Orientation::Horizontal, &box_rect()).expect("wall");
+        let (pos, below) =
+            wall_for(-10.0, 0.0, 200.0, Orientation::Horizontal, &box_rect()).expect("wall");
         assert_eq!(pos, 0.0); // the box's top edge
         assert!(below); // segment must stay ≤ the wall
     }
 
     #[test]
     fn segment_clear_of_a_box_in_x_needs_no_wall() {
-        let seg = hseg(110.0, 300.0, 400.0); // past the box in x
-        assert!(wall_for(&seg, Orientation::Horizontal, &box_rect()).is_none());
+        // Span 300..400 is past the box in x, so no parallel-axis overlap.
+        assert!(wall_for(110.0, 300.0, 400.0, Orientation::Horizontal, &box_rect()).is_none());
+    }
+
+    /// A route shaped like `⊐`: a vertical stub, a horizontal run at `y`
+    /// carrying `edge`, then a vertical stub. The middle segment is the
+    /// one a shared channel nudges; `pinned` marks it port-anchored.
+    fn channel_route(y: f64, edge: Edge, pinned: bool) -> Vec<Segment> {
+        vec![
+            Segment {
+                orientation: Orientation::Vertical,
+                perp: 0.0,
+                edges: vec![],
+                is_end: true,
+            },
+            Segment {
+                orientation: Orientation::Horizontal,
+                perp: y,
+                edges: vec![edge],
+                is_end: pinned,
+            },
+            Segment {
+                orientation: Orientation::Vertical,
+                perp: 100.0,
+                edges: vec![],
+                is_end: true,
+            },
+        ]
+    }
+
+    fn raw() -> RawRoute {
+        RawRoute {
+            a: Point::new(0.0, 0.0),
+            b: Point::new(100.0, 20.0),
+            nodes: vec![],
+        }
+    }
+
+    fn solved_perp(out: &[(usize, usize, f64)], route: usize, seg: usize) -> f64 {
+        out.iter()
+            .find(|&&(ri, si, _)| ri == route && si == seg)
+            .map(|&(_, _, p)| p)
+            .expect("segment was solved")
+    }
+
+    #[test]
+    fn overlapping_channel_segments_spread_by_the_nudge_gap() {
+        let edge: Edge = (1, 2);
+        let shapes = vec![
+            Some(channel_route(10.0, edge, false)),
+            Some(channel_route(10.0, edge, false)),
+        ];
+        let channels = vec![Channel {
+            orientation: Orientation::Horizontal,
+            order: vec![0, 1],
+            edges: HashSet::from([edge]),
+        }];
+
+        let out = solve_axis(
+            &shapes,
+            &channels,
+            &[raw(), raw()],
+            &[],
+            Orientation::Horizontal,
+        );
+        let (y0, y1) = (solved_perp(&out, 0, 1), solved_perp(&out, 1, 1));
+
+        assert!((y1 - y0 - NUDGE_GAP).abs() < EPS, "gap was {}", y1 - y0);
+        assert!(
+            ((y0 + y1) / 2.0 - 10.0).abs() < EPS,
+            "not centred: {y0}, {y1}"
+        );
+    }
+
+    #[test]
+    fn a_pinned_channel_segment_holds_while_its_neighbour_yields() {
+        let edge: Edge = (1, 2);
+        let shapes = vec![
+            Some(channel_route(10.0, edge, true)), // route 0 pinned at its port
+            Some(channel_route(10.0, edge, false)),
+        ];
+        let channels = vec![Channel {
+            orientation: Orientation::Horizontal,
+            order: vec![0, 1],
+            edges: HashSet::from([edge]),
+        }];
+
+        let out = solve_axis(
+            &shapes,
+            &channels,
+            &[raw(), raw()],
+            &[],
+            Orientation::Horizontal,
+        );
+        let (y0, y1) = (solved_perp(&out, 0, 1), solved_perp(&out, 1, 1));
+
+        assert!((y0 - 10.0).abs() < 1e-3, "pinned segment moved to {y0}");
+        assert!((y1 - 16.0).abs() < 1e-3, "free segment didn't yield: {y1}");
     }
 }

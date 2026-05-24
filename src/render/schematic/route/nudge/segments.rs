@@ -27,14 +27,14 @@ pub(super) enum Orientation {
 }
 
 /// A maximal straight run of one route. `perp` is the fixed coordinate
-/// (y for horizontal, x for vertical) — the value §6.2 solves for; `lo`
-/// /`hi` bound the run along the other axis.
+/// (y for horizontal, x for vertical) — the value §6.2 solves for. The
+/// run's extent along the other axis is derived on demand from its
+/// neighbours' `perp` (`place::spans_of`), never stored, so it can't go
+/// stale as the solve moves segments.
 #[derive(Debug, Clone)]
 pub(super) struct Segment {
     pub(super) orientation: Orientation,
     pub(super) perp: f64,
-    pub(super) lo: f64,
-    pub(super) hi: f64,
     pub(super) edges: Vec<Edge>,
     /// Touches a port connection point — its `perp` is pinned there.
     pub(super) is_end: bool,
@@ -52,10 +52,10 @@ pub(super) fn segmentize(ovg: &Ovg, raw: &RawRoute) -> Vec<Segment> {
     let mut segments: Vec<Segment> = Vec::new();
     for i in 0..pts.len() - 1 {
         let (p, q) = (pts[i], pts[i + 1]);
-        let (orientation, perp, lo, hi) = if (p.y - q.y).abs() < EPS {
-            (Orientation::Horizontal, p.y, p.x.min(q.x), p.x.max(q.x))
+        let (orientation, perp) = if (p.y - q.y).abs() < EPS {
+            (Orientation::Horizontal, p.y)
         } else {
-            (Orientation::Vertical, p.x, p.y.min(q.y), p.y.max(q.y))
+            (Orientation::Vertical, p.x)
         };
         // Step `i` runs between node `i-1` and node `i`; the stub steps at
         // either end (i == 0, i == nodes.len()) carry no OVG edge.
@@ -63,15 +63,11 @@ pub(super) fn segmentize(ovg: &Ovg, raw: &RawRoute) -> Vec<Segment> {
 
         match segments.last_mut() {
             Some(seg) if seg.orientation == orientation && (seg.perp - perp).abs() < EPS => {
-                seg.lo = seg.lo.min(lo);
-                seg.hi = seg.hi.max(hi);
                 seg.edges.extend(edge);
             }
             _ => segments.push(Segment {
                 orientation,
                 perp,
-                lo,
-                hi,
                 edges: edge.into_iter().collect(),
                 is_end: false,
             }),
