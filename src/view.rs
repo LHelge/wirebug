@@ -188,20 +188,13 @@ impl View {
 
             for (_side, refs) in layout.sides() {
                 for cp in refs {
-                    let connector = component.connectors.get(&cp.connector).ok_or_else(|| {
+                    component.lookup(&cp.connector, &cp.port).ok_or_else(|| {
                         Error::UnknownViewPort {
                             component: component_id.to_string(),
                             connector: cp.connector.to_string(),
                             port: cp.port.to_string(),
                         }
                     })?;
-                    if !connector.ports.contains_key(&cp.port) {
-                        return Err(Error::UnknownViewPort {
-                            component: component_id.to_string(),
-                            connector: cp.connector.to_string(),
-                            port: cp.port.to_string(),
-                        });
-                    }
                 }
             }
         }

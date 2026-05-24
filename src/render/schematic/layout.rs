@@ -64,10 +64,9 @@ impl Placement {
                 for (k, cp) in refs.iter().enumerate() {
                     let pos = port_position(*origin, width, height, side, k, n);
                     let pin = component
-                        .connectors
-                        .get(&cp.connector)
-                        .and_then(|c| c.ports.get(&cp.port))
-                        .and_then(|p| p.clone());
+                        .lookup(&cp.connector, &cp.port)
+                        .and_then(|info| info.pin)
+                        .map(str::to_owned);
                     let label = cp.port.to_string();
                     port_index.insert(cp.clone(), ports.len());
                     ports.push(PlacedPort {

@@ -134,6 +134,19 @@ pub struct Component {
     pub connectors: IndexMap<ConnectorId, Connector>,
 }
 
+impl Component {
+    /// Resolve a `connector.port` within this component to its connector
+    /// and pin. Returns `None` if either segment is unknown.
+    pub fn lookup(&self, connector: &ConnectorId, port: &PortId) -> Option<PortInfo<'_>> {
+        let conn = self.connectors.get(connector)?;
+        let pin = conn.ports.get(port)?;
+        Some(PortInfo {
+            connector: conn,
+            pin: pin.as_deref(),
+        })
+    }
+}
+
 /// A physical connector attached to a component, with one or more
 /// ports.
 ///
@@ -167,9 +180,9 @@ impl FromStr for Model {
     }
 }
 
-/// Resolved view of a port reference against a [`Model`].
+/// A `connector.port` resolved within a [`Component`]: the connector it
+/// names and that port's pin, if any.
 pub struct PortInfo<'a> {
-    pub component: &'a Component,
     pub connector: &'a Connector,
     pub pin: Option<&'a str>,
 }
@@ -184,19 +197,6 @@ impl Model {
             source,
         })?;
         text.parse::<Self>().map_err(|err| err.with_path(path))
-    }
-
-    /// Look up a port reference. Returns `None` if any segment doesn't
-    /// resolve.
-    pub fn lookup(&self, port: &PortRef) -> Option<PortInfo<'_>> {
-        let component = self.components.get(&port.component)?;
-        let connector = component.connectors.get(&port.connector)?;
-        let pin = connector.ports.get(&port.port)?;
-        Some(PortInfo {
-            component,
-            connector,
-            pin: pin.as_deref(),
-        })
     }
 
     /// Check referential integrity of `connections` and report any
