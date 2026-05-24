@@ -8,11 +8,16 @@
 kind: schematic
 title: "HV Power Path"
 
+# x/y are the box CENTRE in grid units; the renderer multiplies by the
+# grid step. Ports sit two steps apart, so a box centres on a grid line
+# and ports line up across components. Omit `grid:` to take the default.
+grid: 20
+
 layout:
-  pack:      { x:   0, y: 0 }
-  contactor: { x: 280, y: 0 }
-  inverter:  { x: 560, y: 0 }
-  motor:     { x: 940, y: 0 }
+  pack:      { x:  4, y: 3 }
+  contactor: { x: 18, y: 2 }
+  inverter:  { x: 34, y: 3 }
+  motor:     { x: 52, y: 3 }
 
 ports:
   pack:

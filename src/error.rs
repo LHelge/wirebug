@@ -82,6 +82,28 @@ pub enum Error {
     #[error("unknown view kind {0:?}")]
     UnknownViewKind(String),
 
+    /// A view's `grid:` step was zero or negative.
+    #[error("grid step must be positive, got {grid}")]
+    NonPositiveGrid { grid: f64 },
+
+    /// A view's `grid:` step is smaller than one port (with its label)
+    /// needs. One grid step is the spacing between adjacent ports, so too
+    /// fine a grid would overlap labels.
+    #[error("grid step {grid} is too small; ports need at least {minimum} per step")]
+    GridTooSmall { grid: f64, minimum: f64 },
+
+    /// A component's explicit `width`/`height` in a view is smaller than
+    /// the space its ports and label need.
+    #[error(
+        "component {component:?} {axis} {given} (grid units) is below the minimum {minimum} its ports/label require"
+    )]
+    ComponentBoxTooSmall {
+        component: String,
+        axis: &'static str,
+        given: f64,
+        minimum: f64,
+    },
+
     /// Failure writing the output SVG to disk.
     #[error("failed to write {path}: {source}")]
     Write {

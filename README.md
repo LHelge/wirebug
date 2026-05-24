@@ -60,11 +60,24 @@ connections:
 # views/hv_overview.yaml
 kind: schematic
 title: "HV Power Path"
-include: [pack, inverter]
+grid: 20            # world units per grid step (optional)
 layout:
-  pack:     { x: 0,   y: 0 }
-  inverter: { x: 400, y: 0 }
+  # x/y are the box CENTRE in grid units (width/height optional).
+  pack:     { x: 5,  y: 5 }
+  inverter: { x: 20, y: 5 }
 ```
+
+Positions and sizes are expressed in **grid units**: the renderer
+multiplies by the grid step. `x`/`y` are the box **centre**. Ports sit two
+grid steps apart and are **centred** on each side (an even count straddles
+the centreline, an odd count puts the middle port on it). A box is always
+an even number of steps, so its centre lands on a grid line for any port
+count and every port lands on a grid line — line two components up and
+their ports line up so the wire between them runs straight. Omit `width`/`height` to let a box size itself from its
+busiest side's port count (with room for the title); omit `grid:` to take
+the default step. The routing clearance is one grid step. The grid must be
+positive and coarse enough that the two-step port pitch clears a label —
+too fine a grid errors rather than overlapping labels.
 
 ```sh
 wirebug render --model model.yaml --view views/hv_overview.yaml --out hv.svg

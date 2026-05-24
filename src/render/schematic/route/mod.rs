@@ -30,9 +30,6 @@ use super::layout::{PlacedPort, Placement};
 use crate::view::Point;
 
 const EPS: f64 = 1e-6;
-/// How far routes stay clear of component boxes. Also the length of the
-/// stub segment by which a wire leaves its port before joining the graph.
-const CLEARANCE: f64 = 16.0;
 /// World units → fixed-point cost. Keeps A\* costs integral and `Ord`.
 const SCALE: f64 = 100.0;
 /// Cost of one bend, in scaled units. Chosen far larger than any
@@ -55,13 +52,16 @@ pub(super) struct RawRoute {
 pub(super) struct Router {
     ovg: Ovg,
     obstacles: Vec<Rect>,
+    /// How far routes stay clear of component boxes, and the length of
+    /// the stub a wire leaves its port by — one grid step.
+    clearance: f64,
 }
 
 impl Router {
-    pub(super) fn build(placement: &Placement) -> Self {
+    pub(super) fn build(placement: &Placement, clearance: f64) -> Self {
         let obstacles: Vec<Rect> = placement
             .component_bounds()
-            .map(|b| Rect::from(b).inflated(CLEARANCE))
+            .map(|b| Rect::from(b).inflated(clearance))
             .collect();
 
         // Each port contributes its connection point and its stub (one
@@ -70,12 +70,13 @@ impl Router {
         let mut extra = Vec::new();
         for port in placement.ports() {
             extra.push(port.pos);
-            extra.push(stub(port));
+            extra.push(stub(port, clearance));
         }
 
         Self {
             ovg: Ovg::build(&obstacles, &extra),
             obstacles,
+            clearance,
         }
     }
 
@@ -86,7 +87,10 @@ impl Router {
         let out_a = Dir::from(a.side);
         let in_b = Dir::from(b.side).opposite();
 
-        let nodes = match (self.ovg.node_at(stub(a)), self.ovg.node_at(stub(b))) {
+        let nodes = match (
+            self.ovg.node_at(stub(a, self.clearance)),
+            self.ovg.node_at(stub(b, self.clearance)),
+        ) {
             (Some(stub_a), Some(stub_b)) => {
                 astar::find_route(&self.ovg, a.pos, out_a, stub_a, b.pos, in_b, stub_b)
                     .unwrap_or_default()
@@ -102,17 +106,23 @@ impl Router {
     }
 
     /// Route every connection, then nudge shared channels apart (paper
-    /// §6). Returns one polyline per input pair, in order.
-    pub(super) fn route_all(&self, pairs: &[(&PlacedPort, &PlacedPort)]) -> Vec<Vec<Point>> {
+    /// §6). Returns one polyline per input pair, in order. `gap` is the
+    /// minimum spacing between parallel wires in a shared channel — the
+    /// view's grid step, so a nudged bundle stays grid-aligned.
+    pub(super) fn route_all(
+        &self,
+        pairs: &[(&PlacedPort, &PlacedPort)],
+        gap: f64,
+    ) -> Vec<Vec<Point>> {
         let raws: Vec<RawRoute> = pairs.iter().map(|(a, b)| self.route_one(a, b)).collect();
-        nudge::run(&self.ovg, &self.obstacles, &raws)
+        nudge::run(&self.ovg, &self.obstacles, &raws, gap)
     }
 }
 
-/// The point one [`CLEARANCE`] outward from a port along its normal.
-fn stub(p: &PlacedPort) -> Point {
+/// The point one `clearance` outward from a port along its normal.
+fn stub(p: &PlacedPort, clearance: f64) -> Point {
     let (dx, dy) = Dir::from(p.side).unit();
-    Point::new(p.pos.x + dx * CLEARANCE, p.pos.y + dy * CLEARANCE)
+    Point::new(p.pos.x + dx * clearance, p.pos.y + dy * clearance)
 }
 
 /// Drop coincident points and merge consecutive collinear segments so
@@ -169,10 +179,11 @@ connections:
 "#
         .parse()
         .unwrap();
-        // `a` and `c` face each other across `b`, which is placed dead
-        // centre between them.
+        // `a` and `c` face each other across `b`, whose centre sits dead
+        // between them. `grid: 1` keeps grid units equal to world units.
         let view: View = r#"
 kind: schematic
+grid: 1
 layout:
   a: { x: 0, y: 0 }
   b: { x: 200, y: 0 }
@@ -184,16 +195,19 @@ ports:
         .parse()
         .unwrap();
 
-        let placement = Placement::compute(&model, &view);
-        let router = Router::build(&placement);
+        let grid = crate::render::schematic::layout::Grid::new(view.grid_step());
+        let placement = Placement::compute(&model, &view, grid).expect("places");
+        let router = Router::build(&placement, view.grid_step());
         let conn = &model.connections[0];
         let a = placement.endpoint(&conn.from).expect("a placed");
         let c = placement.endpoint(&conn.to).expect("c placed");
 
-        let path = router.route_all(&[(a, c)]).remove(0);
+        // `b`'s drawn box (un-inflated) — taken from the placement, since
+        // its world position depends on the centre-based layout.
+        let b = Rect::from(placement.component_bounds().nth(1).expect("b placed"));
 
-        // `b`'s drawn box (un-inflated). The route must clear it.
-        let b = Rect::new(200.0, 0.0, 160.0, 100.0);
+        let path = router.route_all(&[(a, c)], view.grid_step()).remove(0);
+
         assert!(path.len() > 2, "expected a detour, got {path:?}");
         assert!(
             !path.windows(2).any(|w| b.blocks_segment(w[0], w[1])),

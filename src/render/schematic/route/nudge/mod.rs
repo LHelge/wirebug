@@ -26,13 +26,11 @@ use segments::Segment;
 
 /// Coordinate tolerance shared across the nudge submodules.
 pub(super) const EPS: f64 = 1e-6;
-/// Minimum spacing between parallel wires in a shared channel. Kept below
-/// `CLEARANCE` so a modest bundle stays clear of component boxes.
-pub(super) const NUDGE_GAP: f64 = 6.0;
 
 /// Run the full §6 pipeline, returning one finished polyline per route in
-/// the input order.
-pub(super) fn run(ovg: &Ovg, obstacles: &[Rect], raws: &[RawRoute]) -> Vec<Vec<Point>> {
+/// the input order. `gap` is the minimum spacing between parallel wires
+/// in a shared channel (the view's grid step).
+pub(super) fn run(ovg: &Ovg, obstacles: &[Rect], raws: &[RawRoute], gap: f64) -> Vec<Vec<Point>> {
     let node_paths: Vec<Vec<usize>> = raws.iter().map(|r| r.nodes.clone()).collect();
 
     // Routes with no node path failed to route — keep them as a straight
@@ -43,7 +41,7 @@ pub(super) fn run(ovg: &Ovg, obstacles: &[Rect], raws: &[RawRoute]) -> Vec<Vec<P
         .collect();
 
     let channels = order::channels(ovg, &node_paths);
-    place::place(&mut shapes, &channels, raws, obstacles);
+    place::place(&mut shapes, &channels, raws, obstacles, gap);
 
     raws.iter()
         .zip(shapes.iter())

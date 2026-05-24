@@ -143,6 +143,68 @@ fn segment_enters_rect(a: (f64, f64), b: (f64, f64), x: f64, y: f64, w: f64, h: 
     }
 }
 
+/// With a grid set, every port centre lands on a grid line, and ports on
+/// facing components at the same row line up — so the wire between them is
+/// a single straight segment. One grid step is the port pitch.
+#[test]
+fn example_ports_align_on_the_grid() {
+    let step = View::load(VIEW).expect("view parses").grid_step();
+    let svg = wirebug::render_paths(MODEL, VIEW).expect("renders").svg;
+
+    for (cx, cy) in port_centres(&svg) {
+        assert_eq!(cx % step, 0.0, "port x {cx} is off the {step} grid");
+        assert_eq!(cy % step, 0.0, "port y {cy} is off the {step} grid");
+    }
+
+    // pack.hv.pos and contactor.power.in sit on the same grid row, so at
+    // least one wire is a straight two-point horizontal run.
+    let straight = polyline_points(&svg)
+        .iter()
+        .any(|p| p.len() == 2 && (p[0].1 - p[1].1).abs() < 1e-6);
+    assert!(
+        straight,
+        "expected a straight horizontal wire between aligned ports"
+    );
+}
+
+/// The canvas must enclose every wire. The resolver bundle joins two
+/// south-facing ports, so it dives below the boxes and gets nudged into a
+/// fan — regression against sizing the viewBox from component bounds only,
+/// which clipped all but the top wire.
+#[test]
+fn example_wires_stay_inside_the_viewbox() {
+    let svg = wirebug::render_paths(MODEL, VIEW).expect("renders").svg;
+
+    let vb = svg
+        .split_once("viewBox=\"")
+        .and_then(|(_, rest)| rest.split_once('"'))
+        .map(|(v, _)| v)
+        .expect("viewBox present");
+    let n: Vec<f64> = vb.split_whitespace().map(|s| s.parse().unwrap()).collect();
+    let (minx, miny, maxx, maxy) = (n[0], n[1], n[0] + n[2], n[1] + n[3]);
+
+    for pts in polyline_points(&svg) {
+        for (x, y) in pts {
+            assert!(
+                x >= minx && x <= maxx && y >= miny && y <= maxy,
+                "wire point ({x},{y}) is outside viewBox {n:?}"
+            );
+        }
+    }
+}
+
+/// Pull every port `<circle>` centre as `(cx, cy)`.
+fn port_centres(svg: &str) -> Vec<(f64, f64)> {
+    svg.match_indices("<circle")
+        .filter_map(|(start, _)| {
+            let tag = &svg[start..];
+            let end = tag.find("/>").or_else(|| tag.find('>'))?;
+            let tag = &tag[..end];
+            Some((attr(tag, "cx")?, attr(tag, "cy")?))
+        })
+        .collect()
+}
+
 /// Pull every component `<rect>` as `(x, y, width, height)`.
 fn component_rects(svg: &str) -> Vec<(f64, f64, f64, f64)> {
     svg.match_indices("<rect")

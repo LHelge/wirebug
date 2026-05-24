@@ -16,17 +16,20 @@ use svg::Document;
 use svg::node::element::{Group, Style, Text};
 
 use super::Renderer;
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::model::Model;
 use crate::view::View;
 
-use layout::Placement;
+use layout::{Grid, Placement};
 use route::Router;
 
 pub(super) const MIN_WIDTH: f64 = 160.0;
 pub(super) const MIN_HEIGHT: f64 = 100.0;
-pub(super) const PORT_SPACING: f64 = 28.0;
-pub(super) const SIDE_MARGIN: f64 = 26.0;
+/// Tightest spacing between adjacent ports at which their labels and pin
+/// numbers still clear each other (labels are 11px, pins 10px). Ports sit
+/// two grid steps apart, so the grid step must be at least half this; a
+/// finer grid errors rather than overlapping labels.
+pub(super) const MIN_PORT_PITCH: f64 = 15.0;
 pub(super) const LABEL_INSET: f64 = 10.0;
 pub(super) const PIN_INSET: f64 = 6.0;
 pub(super) const PORT_RADIUS: f64 = 4.0;
@@ -51,13 +54,38 @@ pub struct SchematicRenderer;
 
 impl Renderer for SchematicRenderer {
     fn render(&self, model: &Model, view: &View) -> Result<String> {
-        let placement = Placement::compute(model, view);
+        let step = view.grid_step();
+        if step <= 0.0 {
+            return Err(Error::NonPositiveGrid { grid: step });
+        }
+        // Ports sit two steps apart, so that pitch must clear a port
+        // label or adjacent labels would overlap.
+        let min_step = MIN_PORT_PITCH / 2.0;
+        if step < min_step {
+            return Err(Error::GridTooSmall {
+                grid: step,
+                minimum: min_step,
+            });
+        }
+        let grid = Grid::new(step);
+        let placement = Placement::compute(model, view, grid)?;
+
+        // Route before sizing the canvas: wires can detour outside the
+        // component bounds (e.g. a bundle dropping below two south-facing
+        // ports), so the viewBox has to enclose them too.
+        let router = Router::build(&placement, step);
+        let pairs: Vec<_> = model
+            .connections
+            .iter()
+            .filter_map(|c| Some((placement.endpoint(&c.from)?, placement.endpoint(&c.to)?)))
+            .collect();
+        let wires = router.route_all(&pairs, step);
 
         let mut doc = Document::new()
             .set("xmlns", "http://www.w3.org/2000/svg")
             .add(Style::new(STYLE));
 
-        let viewbox = placement.viewbox(view.title.is_some());
+        let viewbox = placement.viewbox(view.title.is_some(), &wires);
         doc = doc.set(
             "viewBox",
             format!(
@@ -81,16 +109,9 @@ impl Renderer for SchematicRenderer {
         }
         doc = doc.add(components_group);
 
-        let router = Router::build(&placement);
-        let pairs: Vec<_> = model
-            .connections
-            .iter()
-            .filter_map(|c| Some((placement.endpoint(&c.from)?, placement.endpoint(&c.to)?)))
-            .collect();
-
         let mut wires_group = Group::new().set("class", "wires");
-        for polyline in router.route_all(&pairs) {
-            wires_group = wires_group.add(draw::render_wire(&polyline));
+        for polyline in &wires {
+            wires_group = wires_group.add(draw::render_wire(polyline));
         }
         doc = doc.add(wires_group);
 
@@ -139,6 +160,34 @@ ports:
         .unwrap();
 
         (model, view)
+    }
+
+    #[test]
+    fn grid_finer_than_min_port_pitch_errors() {
+        let model: Model = r#"
+components:
+  a:
+    connectors: { j: { ports: { out: "1" } } }
+connections: []
+"#
+        .parse()
+        .unwrap();
+        // Pitch is 2 steps, so a step of 5 gives pitch 10 < MIN_PORT_PITCH.
+        let view: View = r#"
+kind: schematic
+grid: 5
+layout:
+  a: { x: 0, y: 0 }
+ports:
+  a: { east: [j.out] }
+"#
+        .parse()
+        .unwrap();
+
+        assert!(matches!(
+            SchematicRenderer.render(&model, &view),
+            Err(Error::GridTooSmall { .. })
+        ));
     }
 
     #[test]

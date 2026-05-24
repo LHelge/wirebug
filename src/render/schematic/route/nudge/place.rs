@@ -12,10 +12,10 @@
 
 use super::super::RawRoute;
 use super::super::geometry::Rect;
+use super::EPS;
 use super::order::Channel;
 use super::segments::{Orientation, Segment};
 use super::vpsc::{self, Constraint, Var};
-use super::{EPS, NUDGE_GAP};
 use crate::view::Point;
 
 /// Weight that pins a port-touching segment to its connection point.
@@ -32,10 +32,25 @@ pub(super) fn place(
     channels: &[Channel],
     raws: &[RawRoute],
     obstacles: &[Rect],
+    gap: f64,
 ) {
-    let horizontal = solve_axis(shapes, channels, raws, obstacles, Orientation::Horizontal);
+    let horizontal = solve_axis(
+        shapes,
+        channels,
+        raws,
+        obstacles,
+        Orientation::Horizontal,
+        gap,
+    );
     apply(shapes, &horizontal);
-    let vertical = solve_axis(shapes, channels, raws, obstacles, Orientation::Vertical);
+    let vertical = solve_axis(
+        shapes,
+        channels,
+        raws,
+        obstacles,
+        Orientation::Vertical,
+        gap,
+    );
     apply(shapes, &vertical);
 }
 
@@ -57,6 +72,7 @@ fn solve_axis(
     raws: &[RawRoute],
     obstacles: &[Rect],
     orientation: Orientation,
+    gap: f64,
 ) -> Vec<(usize, usize, f64)> {
     // Each segment's extent along its parallel axis, from its neighbours'
     // current `perp`. A segment of this orientation runs between two of
@@ -112,7 +128,7 @@ fn solve_axis(
                 cons.push(Constraint {
                     left: var_of[&(pr, psi)],
                     right: var_of[&(r, si)],
-                    gap: NUDGE_GAP,
+                    gap,
                 });
             }
             prev = Some((r, si));
@@ -352,16 +368,18 @@ mod tests {
             edges: HashSet::from([edge]),
         }];
 
+        let gap = 7.0;
         let out = solve_axis(
             &shapes,
             &channels,
             &[raw(), raw()],
             &[],
             Orientation::Horizontal,
+            gap,
         );
         let (y0, y1) = (solved_perp(&out, 0, 1), solved_perp(&out, 1, 1));
 
-        assert!((y1 - y0 - NUDGE_GAP).abs() < EPS, "gap was {}", y1 - y0);
+        assert!((y1 - y0 - gap).abs() < EPS, "gap was {}", y1 - y0);
         assert!(
             ((y0 + y1) / 2.0 - 10.0).abs() < EPS,
             "not centred: {y0}, {y1}"
@@ -381,12 +399,14 @@ mod tests {
             edges: HashSet::from([edge]),
         }];
 
+        let gap = 6.0;
         let out = solve_axis(
             &shapes,
             &channels,
             &[raw(), raw()],
             &[],
             Orientation::Horizontal,
+            gap,
         );
         let (y0, y1) = (solved_perp(&out, 0, 1), solved_perp(&out, 1, 1));
 

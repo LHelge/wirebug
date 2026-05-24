@@ -26,6 +26,24 @@ future work on the codebase. Keep it short; don't restate the README.
   its component. Unlisted ports are silently hidden — that's the
   subsetting mechanism.
 - A connection is drawn iff both endpoints are in the view.
+- A view has a `grid:` step (world units; optional, `DEFAULT_GRID` when
+  omitted). `layout:` `x`/`y` (the box **centre**) and the optional
+  per-component `width`/`height` are **grid units** — the renderer
+  multiplies by the step. Ports sit a fixed **two steps** apart and are
+  **centred** on each side (even count straddles the centreline, odd count
+  puts the middle port on it). A box is always an even number of steps, so
+  its centre lands on a grid line for any port count and every port lands
+  on a grid line. The side margin (corner to first port) is a full pitch
+  (two steps). Box sizes snap up to even step counts (keeping the centre on
+  the grid); omitting `width`/`height` sizes the box from the busiest
+  side's port count — the width also respects a text minimum (`MIN_WIDTH`),
+  while the height only needs room for its ports (one port plus margins at
+  the floor). The routing
+  clearance and the nudge gap (parallel-wire spacing) are one grid step,
+  so wire bundles stay grid-integral. Routing is otherwise untouched: it
+  sees only the resulting world geometry. Because the port pitch is two
+  steps, the grid must be at least `MIN_PORT_PITCH / 2` (the pitch must
+  clear a label); a finer grid errors.
 
 ## Validation
 
@@ -37,6 +55,10 @@ future work on the codebase. Keep it short; don't restate the README.
   this is a warning, not an error.
 - Nothing else. "Validation beyond referential integrity" is explicitly
   out of scope for MVP.
+- The schematic renderer additionally errors (at render time, not in
+  `validate`) on a non-positive `grid:`, a `grid:` finer than a port
+  label needs, or an explicit component `width`/`height` smaller than its
+  ports/label need.
 
 ## Out of scope for the MVP — resist drift
 

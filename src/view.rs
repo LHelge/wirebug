@@ -16,13 +16,23 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 use crate::model::{ComponentId, ConnectorId, Model, PortId, ValidationReport};
 
+/// Grid step (in SVG world units) used when a view doesn't specify one.
+/// Ports sit two steps apart, so the default port pitch is twice this.
+pub const DEFAULT_GRID: f64 = 15.0;
+
 /// A renderable description of part (or all) of a model.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct View {
     pub kind: ViewKind,
     #[serde(default)]
     pub title: Option<String>,
-    pub layout: IndexMap<ComponentId, Point>,
+    /// Grid step in world units. Component positions and sizes in
+    /// `layout:` are expressed in whole grid units; the renderer snaps
+    /// boxes, margins, and port pitch to this step so ports line up
+    /// across components. Omitted ⇒ [`DEFAULT_GRID`].
+    #[serde(default)]
+    pub grid: Option<f64>,
+    pub layout: IndexMap<ComponentId, ComponentBox>,
     #[serde(default)]
     pub ports: IndexMap<ComponentId, ComponentPortLayout>,
 }
@@ -47,6 +57,20 @@ impl Point {
     pub const fn new(x: f64, y: f64) -> Self {
         Self { x, y }
     }
+}
+
+/// A component's placement in a view: the box centre, plus an optional
+/// box size. All four fields are in grid units (multiplied by the view's
+/// grid step to reach world coordinates). When `width`/`height` are
+/// omitted the renderer sizes the box from the component's port counts.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct ComponentBox {
+    pub x: f64,
+    pub y: f64,
+    #[serde(default)]
+    pub width: Option<f64>,
+    #[serde(default)]
+    pub height: Option<f64>,
 }
 
 /// Per-component placement of ports on the four sides of its rectangle.
@@ -154,6 +178,12 @@ impl View {
         text.parse::<Self>().map_err(|err| err.with_path(path))
     }
 
+    /// The grid step this view uses, falling back to [`DEFAULT_GRID`]
+    /// when none is given.
+    pub fn grid_step(&self) -> f64 {
+        self.grid.unwrap_or(DEFAULT_GRID)
+    }
+
     /// Components included in this view, in their layout-declaration
     /// order.
     pub fn component_ids(&self) -> impl Iterator<Item = &ComponentId> {
@@ -234,6 +264,29 @@ connections: []
             "hv.pos.extra".parse::<ConnectorPortRef>(),
             Err(Error::MalformedConnectorPortRef { .. })
         ));
+    }
+
+    #[test]
+    fn grid_defaults_when_omitted() {
+        let view: View = "kind: schematic\nlayout: {}\n".parse().expect("parses");
+        assert_eq!(view.grid, None);
+        assert_eq!(view.grid_step(), DEFAULT_GRID);
+    }
+
+    #[test]
+    fn grid_and_explicit_box_size_parse() {
+        let view: View = r#"
+kind: schematic
+grid: 20
+layout:
+  pack: { x: 2, y: 3, width: 16, height: 8 }
+"#
+        .parse()
+        .expect("parses");
+        assert_eq!(view.grid_step(), 20.0);
+        let b = view.layout.values().next().expect("one component");
+        assert_eq!((b.x, b.y), (2.0, 3.0));
+        assert_eq!((b.width, b.height), (Some(16.0), Some(8.0)));
     }
 
     #[test]
