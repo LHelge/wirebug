@@ -42,6 +42,15 @@ pub(super) struct ViewBox {
     pub(super) height: f64,
 }
 
+/// A component's axis-aligned box in world coordinates — the geometry the
+/// router needs, without the rest of a `PlacedComponent`. Keeps "a box is
+/// origin + size" a fact of `layout`, not of whoever consumes it.
+pub(super) struct Bounds {
+    pub(super) origin: Point,
+    pub(super) width: f64,
+    pub(super) height: f64,
+}
+
 impl Placement {
     pub(super) fn compute(model: &Model, view: &View) -> Self {
         let mut components = IndexMap::new();
@@ -103,6 +112,20 @@ impl Placement {
         };
         let idx = comp.port_index.get(&cp)?;
         Some(&comp.ports[*idx])
+    }
+
+    /// The bounding box of every placed component, in layout order.
+    pub(super) fn component_bounds(&self) -> impl Iterator<Item = Bounds> + '_ {
+        self.components.values().map(|pc| Bounds {
+            origin: pc.origin,
+            width: pc.width,
+            height: pc.height,
+        })
+    }
+
+    /// Every placed port across all components, in layout order.
+    pub(super) fn ports(&self) -> impl Iterator<Item = &PlacedPort> + '_ {
+        self.components.values().flat_map(|pc| pc.ports.iter())
     }
 
     pub(super) fn viewbox(&self, has_title: bool) -> ViewBox {

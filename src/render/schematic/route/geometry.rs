@@ -1,6 +1,7 @@
 //! Rectilinear geometry primitives for connector routing: axis-aligned
 //! obstacle rectangles and the four compass directions a route travels.
 
+use super::super::layout::Bounds;
 use crate::view::{Point, Side};
 
 /// Axis-aligned rectangle in SVG world coordinates.
@@ -10,6 +11,12 @@ pub(super) struct Rect {
     pub(super) y: f64,
     pub(super) w: f64,
     pub(super) h: f64,
+}
+
+impl From<Bounds> for Rect {
+    fn from(b: Bounds) -> Rect {
+        Rect::new(b.origin.x, b.origin.y, b.width, b.height)
+    }
 }
 
 impl Rect {

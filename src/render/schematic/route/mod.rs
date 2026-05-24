@@ -60,20 +60,17 @@ pub(super) struct Router {
 impl Router {
     pub(super) fn build(placement: &Placement) -> Self {
         let obstacles: Vec<Rect> = placement
-            .components
-            .values()
-            .map(|pc| Rect::new(pc.origin.x, pc.origin.y, pc.width, pc.height).inflated(CLEARANCE))
+            .component_bounds()
+            .map(|b| Rect::from(b).inflated(CLEARANCE))
             .collect();
 
         // Each port contributes its connection point and its stub (one
         // clearance out along the normal) as interesting points, so the
         // stub always lands exactly on a grid node.
         let mut extra = Vec::new();
-        for pc in placement.components.values() {
-            for port in &pc.ports {
-                extra.push(port.pos);
-                extra.push(stub(port));
-            }
+        for port in placement.ports() {
+            extra.push(port.pos);
+            extra.push(stub(port));
         }
 
         Self {
