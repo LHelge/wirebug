@@ -1,0 +1,55 @@
+//! Connector nudging — paper §6.
+//!
+//! Routing (§4–5) sends every connector through the same visibility
+//! graph, so wires that run along a common channel land exactly on top
+//! of one another. This pass pulls them apart for legibility:
+//!
+//! - `segments` collapses each route into maximal H/V segments and finds
+//!   the OVG edges shared by two or more connectors.
+//! - `order` (§6.1) fixes the order of connectors within each shared
+//!   channel so a bundle fans out without crossing itself.
+//! - `place` (§6.2) assigns every segment its final coordinate via the
+//!   `vpsc` separation-constraint solver: shared segments are nudged a
+//!   minimum distance apart, port-touching segments stay pinned.
+
+mod order;
+mod place;
+mod segments;
+mod vpsc;
+
+use super::RawRoute;
+use super::collapse_collinear;
+use super::geometry::Rect;
+use super::visibility::Ovg;
+use crate::view::Point;
+use segments::Segment;
+
+/// Coordinate tolerance shared across the nudge submodules.
+pub(super) const EPS: f64 = 1e-6;
+/// Minimum spacing between parallel wires in a shared channel. Kept below
+/// `CLEARANCE` so a modest bundle stays clear of component boxes.
+pub(super) const NUDGE_GAP: f64 = 6.0;
+
+/// Run the full §6 pipeline, returning one finished polyline per route in
+/// the input order.
+pub(super) fn run(ovg: &Ovg, obstacles: &[Rect], raws: &[RawRoute]) -> Vec<Vec<Point>> {
+    let node_paths: Vec<Vec<usize>> = raws.iter().map(|r| r.nodes.clone()).collect();
+
+    // Routes with no node path failed to route — keep them as a straight
+    // segment and out of the nudging.
+    let mut shapes: Vec<Option<Vec<Segment>>> = raws
+        .iter()
+        .map(|r| (!r.nodes.is_empty()).then(|| segments::segmentize(ovg, r)))
+        .collect();
+
+    let channels = order::channels(ovg, &node_paths);
+    place::place(&mut shapes, &channels, raws, obstacles);
+
+    raws.iter()
+        .zip(shapes.iter())
+        .map(|(r, shape)| match shape {
+            Some(segs) => place::rebuild(r, segs),
+            None => collapse_collinear(vec![r.a, r.b]),
+        })
+        .collect()
+}

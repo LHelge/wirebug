@@ -100,10 +100,9 @@ connector routing behind [libavoid](https://www.adaptagrams.org/documentation/li
 > pp. 219–231. Springer, 2010.
 > [[PDF]](https://people.eng.unimelb.edu.au/pstuckey/papers/gd09.pdf)
 
-wirebug implements its first two stages — building an orthogonal
-visibility graph and finding minimum-bend routes through it with A\*.
-Nudging apart wires that share a channel (the paper's third stage) is not
-done yet.
+wirebug implements all three stages — building an orthogonal visibility
+graph, finding minimum-bend routes through it with A\*, and nudging apart
+wires that share a channel so a bundle draws as distinct parallel lines.
 
 ## Build
 

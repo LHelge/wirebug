@@ -23,8 +23,10 @@ const EPS: f64 = 1e-6;
 /// Find a minimal-cost orthogonal route from a source connection point
 /// (leaving along `start_dir`) to a target connection point (entered
 /// along `goal_in_dir`), via the stub nodes `start_stub` / `goal_stub`.
-/// Returns the polyline including both connection points, or `None` if
-/// the graph offers no route.
+/// Returns the base OVG node-id path (`start_stub` … `goal_stub`,
+/// excluding the synthetic port nodes), or `None` if the graph offers no
+/// route. Geometry — the port connection points and the collinear
+/// collapse — is reconstructed by the caller.
 pub(super) fn find_route(
     ovg: &Ovg,
     start_pos: Point,
@@ -33,7 +35,7 @@ pub(super) fn find_route(
     goal_pos: Point,
     goal_in_dir: Dir,
     goal_stub: usize,
-) -> Option<Vec<Point>> {
+) -> Option<Vec<usize>> {
     let search = Search {
         ovg,
         start_pos,
@@ -53,8 +55,12 @@ pub(super) fn find_route(
         |&(id, _)| id == search.port_b,
     )?;
 
-    let pts = path.iter().map(|&(id, _)| search.pos(id)).collect();
-    Some(collapse(pts))
+    let nodes = path
+        .iter()
+        .map(|&(id, _)| id)
+        .filter(|&id| id != search.port_a && id != search.port_b)
+        .collect();
+    Some(nodes)
 }
 
 struct Search<'a> {
@@ -166,39 +172,30 @@ fn min_bends(dx: f64, dy: f64, dir: Dir) -> i64 {
     }
 }
 
-/// Drop coincident points and merge consecutive collinear segments so
-/// the polyline strictly alternates horizontal and vertical runs.
-fn collapse(pts: Vec<Point>) -> Vec<Point> {
-    let mut out: Vec<Point> = Vec::with_capacity(pts.len());
-    for p in pts {
-        match out.last() {
-            Some(last) if (last.x - p.x).abs() < EPS && (last.y - p.y).abs() < EPS => {}
-            _ => out.push(p),
-        }
-    }
-    if out.len() <= 2 {
-        return out;
-    }
-
-    let mut merged = vec![out[0]];
-    for i in 1..out.len() - 1 {
-        let a = *merged.last().unwrap();
-        let b = out[i];
-        let c = out[i + 1];
-        let collinear = ((a.y - b.y).abs() < EPS && (b.y - c.y).abs() < EPS)
-            || ((a.x - b.x).abs() < EPS && (b.x - c.x).abs() < EPS);
-        if !collinear {
-            merged.push(b);
-        }
-    }
-    merged.push(*out.last().unwrap());
-    merged
-}
-
 #[cfg(test)]
 mod tests {
+    use super::super::collapse_collinear;
     use super::super::geometry::Rect;
     use super::*;
+
+    /// Resolve a route to its collapsed polyline, the way the router does
+    /// for rendering — prepend/append the port points, map nodes to
+    /// positions, merge collinear runs.
+    fn route_points(
+        ovg: &Ovg,
+        a: Point,
+        da: Dir,
+        sa: usize,
+        b: Point,
+        db: Dir,
+        sb: usize,
+    ) -> Vec<Point> {
+        let nodes = find_route(ovg, a, da, sa, b, db, sb).expect("route");
+        let mut pts = vec![a];
+        pts.extend(nodes.iter().map(|&n| ovg.position(n)));
+        pts.push(b);
+        collapse_collinear(pts)
+    }
 
     fn segment_hits(rect: &Rect, path: &[Point]) -> bool {
         path.windows(2).any(|w| rect.blocks_segment(w[0], w[1]))
@@ -215,7 +212,7 @@ mod tests {
         let sb = ovg.node_at(b_stub).unwrap();
 
         // a faces East (outward), b faces West (outward) -> enters East.
-        let path = find_route(&ovg, a, Dir::East, sa, b, Dir::East, sb).expect("route");
+        let path = route_points(&ovg, a, Dir::East, sa, b, Dir::East, sb);
         assert_eq!(path, vec![a, b]);
     }
 
@@ -230,7 +227,7 @@ mod tests {
         let sa = ovg.node_at(a_stub).unwrap();
         let sb = ovg.node_at(b_stub).unwrap();
 
-        let path = find_route(&ovg, a, Dir::East, sa, b, Dir::East, sb).expect("route");
+        let path = route_points(&ovg, a, Dir::East, sa, b, Dir::East, sb);
 
         assert!(path.len() > 2, "detour should bend: {path:?}");
         assert!(
@@ -243,15 +240,16 @@ mod tests {
 
     #[test]
     fn route_leaves_and_enters_along_port_normals() {
+        let box_rect = Rect::new(150.0, 0.0, 100.0, 100.0);
         let a = Point::new(100.0, 50.0);
         let a_stub = Point::new(116.0, 50.0);
         let b = Point::new(300.0, 50.0);
         let b_stub = Point::new(284.0, 50.0);
-        let ovg = Ovg::build(&[], &[a, a_stub, b, b_stub]);
+        let ovg = Ovg::build(&[box_rect], &[a, a_stub, b, b_stub]);
         let sa = ovg.node_at(a_stub).unwrap();
         let sb = ovg.node_at(b_stub).unwrap();
 
-        let path = find_route(&ovg, a, Dir::East, sa, b, Dir::East, sb).expect("route");
+        let path = route_points(&ovg, a, Dir::East, sa, b, Dir::East, sb);
         // First step leaves `a` heading East (away from the box).
         assert!(path[1].x > a.x && (path[1].y - a.y).abs() < EPS);
         // Last step arrives at `b` from the West (heading East, inward).

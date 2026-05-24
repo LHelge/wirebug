@@ -82,15 +82,15 @@ impl Renderer for SchematicRenderer {
         doc = doc.add(components_group);
 
         let router = Router::build(&placement);
+        let pairs: Vec<_> = model
+            .connections
+            .iter()
+            .filter_map(|c| Some((placement.endpoint(&c.from)?, placement.endpoint(&c.to)?)))
+            .collect();
+
         let mut wires_group = Group::new().set("class", "wires");
-        for connection in &model.connections {
-            let Some(a) = placement.endpoint(&connection.from) else {
-                continue;
-            };
-            let Some(b) = placement.endpoint(&connection.to) else {
-                continue;
-            };
-            wires_group = wires_group.add(draw::render_wire(&router.route(a, b)));
+        for polyline in router.route_all(&pairs) {
+            wires_group = wires_group.add(draw::render_wire(&polyline));
         }
         doc = doc.add(wires_group);
 

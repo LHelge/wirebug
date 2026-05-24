@@ -49,9 +49,6 @@ redesign each when it lands.
 - Auto-layout
 - Non-rectangle component symbols
 - Visual grouping of ports by connector on a side (bracket + label)
-- Connector *nudging* — separating wires that share a channel and
-  centring them in "alleys" (paper §6). Routing already avoids
-  obstacles (§4–5); nudging is the next routing increment.
 - Per-port styling (input/output, voltage class, gauge, etc.)
 
 ## Architecture
@@ -70,11 +67,17 @@ src/
 │       ├── layout.rs    # Placement: boxes + ports in world coords
 │       ├── draw.rs      # SVG emission (named `draw`, not `svg`, to
 │       │                #   avoid clashing with the `svg` crate)
-│       └── route/       # orthogonal connector routing (paper §4–5)
-│           ├── mod.rs       # Router: build OVG once, route per wire
+│       └── route/       # orthogonal connector routing (paper §4–6)
+│           ├── mod.rs       # Router: build OVG once, route_all + nudge
 │           ├── geometry.rs  # Rect, Dir
-│           ├── visibility.rs# orthogonal visibility graph
-│           └── astar.rs     # A* via the `pathfinding` crate
+│           ├── visibility.rs# orthogonal visibility graph (§4)
+│           ├── astar.rs     # A* via the `pathfinding` crate (§5)
+│           └── nudge/       # separate wires sharing a channel (§6)
+│               ├── mod.rs       # pipeline: segments → order → place
+│               ├── segments.rs  # maximal segments + shared-edge detection
+│               ├── order.rs     # §6.1 order routes within a channel
+│               ├── place.rs     # §6.2 final placement (two axis passes)
+│               └── vpsc.rs      # separation-constraint solver
 └── error.rs         # thiserror types
 ```
 
@@ -167,6 +170,14 @@ files (errors carry the source path); `text.parse::<Model>()` via
   of user-supplied labels (a small but real foot-gun if hand-rolled)
   and gives a discoverable element-builder API. We still own structure,
   classes, and embedded `<style>`.
+- Connector routing follows the orthogonal-routing paper (§4–6).
+  Nudging (§6) is implemented for the case our router produces — wires
+  sharing *collinear* channels (straight bundles): §6.1 orders a channel
+  by where each route enters it, and §6.2 spreads segments with a VPSC
+  solver that pins port ends and adds wall constraints keeping interior
+  segments outside the clearance-inflated boxes. Not implemented: the
+  paper's general branching-tree ordering (pseudo-direction + split
+  points) and alley-midpoint recentring. Revisit if a view needs them.
 
 ### Dependencies
 

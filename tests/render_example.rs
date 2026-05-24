@@ -74,6 +74,99 @@ fn example_wires_are_orthogonal() {
     assert_eq!(wires, 12, "expected one polyline per connection");
 }
 
+/// Nudging (paper §6): wires that would share a channel are pulled apart.
+/// The 6-wire resolver bundle between inverter and motor is the stress
+/// case — before nudging all six collapsed onto one line. No two wires
+/// from different connectors may share an overlapping collinear segment.
+#[test]
+fn example_wires_do_not_overlap_after_nudging() {
+    let svg = wirebug::render_paths(MODEL, VIEW).expect("renders").svg;
+    let wires = polyline_points(&svg);
+
+    // (orientation, perp, lo, hi) for every wire segment, tagged by wire.
+    let mut segs: Vec<(usize, bool, f64, f64, f64)> = Vec::new();
+    for (wi, pts) in wires.iter().enumerate() {
+        for s in pts.windows(2) {
+            let (a, b) = (s[0], s[1]);
+            if (a.1 - b.1).abs() < 1e-6 {
+                segs.push((wi, true, a.1, a.0.min(b.0), a.0.max(b.0))); // horizontal
+            } else {
+                segs.push((wi, false, a.0, a.1.min(b.1), a.1.max(b.1))); // vertical
+            }
+        }
+    }
+
+    for (i, &(wi, hi, pi, loi, hii)) in segs.iter().enumerate() {
+        for &(wj, hj, pj, loj, hij) in &segs[i + 1..] {
+            if wi == wj || hi != hj || (pi - pj).abs() > 1e-6 {
+                continue;
+            }
+            let overlap = loi.max(loj) < hii.min(hij) - 1e-6;
+            assert!(
+                !overlap,
+                "wires {wi} and {wj} overlap on a collinear segment at {pi}"
+            );
+        }
+    }
+}
+
+/// Nudging must not push a wire into a component box. No wire segment may
+/// pass through any component rectangle's interior.
+#[test]
+fn example_wires_clear_component_boxes() {
+    let svg = wirebug::render_paths(MODEL, VIEW).expect("renders").svg;
+    let rects = component_rects(&svg);
+
+    for pts in polyline_points(&svg) {
+        for s in pts.windows(2) {
+            let (a, b) = (s[0], s[1]);
+            for &(x, y, w, h) in &rects {
+                assert!(
+                    !segment_enters_rect(a, b, x, y, w, h),
+                    "wire segment {a:?}->{b:?} crosses box at ({x},{y},{w},{h})"
+                );
+            }
+        }
+    }
+}
+
+/// True iff an axis-aligned segment passes through the rectangle's
+/// interior (touching an edge does not count).
+fn segment_enters_rect(a: (f64, f64), b: (f64, f64), x: f64, y: f64, w: f64, h: f64) -> bool {
+    let (right, bottom) = (x + w, y + h);
+    if (a.1 - b.1).abs() < 1e-6 {
+        let yy = a.1;
+        yy > y && yy < bottom && a.0.min(b.0) < right && a.0.max(b.0) > x
+    } else {
+        let xx = a.0;
+        xx > x && xx < right && a.1.min(b.1) < bottom && a.1.max(b.1) > y
+    }
+}
+
+/// Pull every component `<rect>` as `(x, y, width, height)`.
+fn component_rects(svg: &str) -> Vec<(f64, f64, f64, f64)> {
+    svg.match_indices("<rect")
+        .filter_map(|(start, _)| {
+            let tag = &svg[start..];
+            let end = tag.find("/>").or_else(|| tag.find('>'))?;
+            let tag = &tag[..end];
+            Some((
+                attr(tag, "x")?,
+                attr(tag, "y")?,
+                attr(tag, "width")?,
+                attr(tag, "height")?,
+            ))
+        })
+        .collect()
+}
+
+fn attr(tag: &str, name: &str) -> Option<f64> {
+    let key = format!("{name}=\"");
+    let i = tag.find(&key)? + key.len();
+    let j = tag[i..].find('"')? + i;
+    tag[i..j].parse().ok()
+}
+
 /// Pull the `points` of every `<polyline>` out of an SVG string.
 fn polyline_points(svg: &str) -> Vec<Vec<(f64, f64)>> {
     svg.match_indices("<polyline")
