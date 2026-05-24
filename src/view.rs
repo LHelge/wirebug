@@ -50,38 +50,42 @@ impl Point {
 }
 
 /// Per-component placement of ports on the four sides of its rectangle.
+///
+/// Sides are named by compass direction. In SVG coordinates y grows
+/// downward, so North is the top edge and South the bottom.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ComponentPortLayout {
     #[serde(default)]
-    pub left: Vec<ConnectorPortRef>,
+    pub west: Vec<ConnectorPortRef>,
     #[serde(default)]
-    pub right: Vec<ConnectorPortRef>,
+    pub east: Vec<ConnectorPortRef>,
     #[serde(default)]
-    pub top: Vec<ConnectorPortRef>,
+    pub north: Vec<ConnectorPortRef>,
     #[serde(default)]
-    pub bottom: Vec<ConnectorPortRef>,
+    pub south: Vec<ConnectorPortRef>,
 }
 
 impl ComponentPortLayout {
-    /// Iterate the four sides in a fixed order (Left, Right, Top,
-    /// Bottom). Useful for both validation and rendering.
+    /// Iterate the four sides in a fixed order (West, East, North,
+    /// South). Useful for both validation and rendering.
     pub fn sides(&self) -> [(Side, &Vec<ConnectorPortRef>); 4] {
         [
-            (Side::Left, &self.left),
-            (Side::Right, &self.right),
-            (Side::Top, &self.top),
-            (Side::Bottom, &self.bottom),
+            (Side::West, &self.west),
+            (Side::East, &self.east),
+            (Side::North, &self.north),
+            (Side::South, &self.south),
         ]
     }
 }
 
-/// Which side of a component rectangle a port sits on.
+/// Which side of a component rectangle a port sits on, named by compass
+/// direction (North is the top edge — SVG y grows downward).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Side {
-    Left,
-    Right,
-    Top,
-    Bottom,
+    West,
+    East,
+    North,
+    South,
 }
 
 /// Component-scoped port reference: `connector.port` (the component is
@@ -247,7 +251,7 @@ layout:
   pack: { x: 0, y: 0 }
 ports:
   pack:
-    right: [hv.pos, hv.neg]
+    east: [hv.pos, hv.neg]
 "#;
         let view: View = view_yaml.parse().expect("parses");
         let report = view.validate(&tiny_model()).expect("validates");
@@ -273,7 +277,7 @@ kind: schematic
 layout: {}
 ports:
   pack:
-    right: [hv.pos]
+    east: [hv.pos]
 "#;
         let view: View = view_yaml.parse().expect("parses");
         let err = view.validate(&tiny_model()).expect_err("ports w/o layout");
@@ -288,7 +292,7 @@ layout:
   pack: { x: 0, y: 0 }
 ports:
   pack:
-    right: [hv.ghost]
+    east: [hv.ghost]
 "#;
         let view: View = view_yaml.parse().expect("parses");
         let err = view.validate(&tiny_model()).expect_err("unknown port");

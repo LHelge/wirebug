@@ -49,7 +49,9 @@ redesign each when it lands.
 - Auto-layout
 - Non-rectangle component symbols
 - Visual grouping of ports by connector on a side (bracket + label)
-- Wire routing with collision avoidance
+- Connector *nudging* — separating wires that share a channel and
+  centring them in "alleys" (paper §6). Routing already avoids
+  obstacles (§4–5); nudging is the next routing increment.
 - Per-port styling (input/output, voltage class, gauge, etc.)
 
 ## Architecture
@@ -63,7 +65,16 @@ src/
 ├── view.rs          # View, ViewKind; View::load(path) + FromStr<View>
 ├── render/
 │   ├── mod.rs       # Renderer trait; dispatch on ViewKind
-│   └── schematic.rs # rectangle-based SVG renderer
+│   └── schematic/   # rectangle-based SVG renderer
+│       ├── mod.rs       # SchematicRenderer; render orchestration
+│       ├── layout.rs    # Placement: boxes + ports in world coords
+│       ├── draw.rs      # SVG emission (named `draw`, not `svg`, to
+│       │                #   avoid clashing with the `svg` crate)
+│       └── route/       # orthogonal connector routing (paper §4–5)
+│           ├── mod.rs       # Router: build OVG once, route per wire
+│           ├── geometry.rs  # Rect, Dir
+│           ├── visibility.rs# orthogonal visibility graph
+│           └── astar.rs     # A* via the `pathfinding` crate
 └── error.rs         # thiserror types
 ```
 
@@ -168,6 +179,8 @@ Runtime:
 - [`indexmap`] (serde feature) — order-preserving maps for the model.
 - [`clap`] (derive) — CLI parsing.
 - [`svg`] — SVG document emission with escaping handled.
+- [`pathfinding`] — A* over the orthogonal visibility graph for
+  object-avoiding connector routing.
 - [`thiserror`] — typed library error enums.
 - [`anyhow`] — error glue in `main` only.
 
@@ -182,6 +195,7 @@ Dev / test:
 [`indexmap`]: https://docs.rs/indexmap
 [`clap`]: https://docs.rs/clap
 [`svg`]: https://docs.rs/svg
+[`pathfinding`]: https://docs.rs/pathfinding
 [`thiserror`]: https://docs.rs/thiserror
 [`anyhow`]: https://docs.rs/anyhow
 [`insta`]: https://docs.rs/insta

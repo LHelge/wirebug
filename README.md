@@ -76,7 +76,7 @@ wirebug render --model model.yaml --view views/hv_overview.yaml --out hv.svg
 
 **Component** — a named block with named ports. For now, components render as labeled rectangles; later, hierarchical sub-systems will also be expressible as components.
 
-**Port** — a connection point on a component side (`left`, `right`, `top`, `bottom`). Referenced as `component.port`.
+**Port** — a connection point on a component side (`north`, `south`, `east`, `west`). Referenced as `component.port`.
 
 **Connection** — a link from one port to another. Will grow to carry gauge, color, harness assignment, and length.
 
@@ -88,6 +88,22 @@ wirebug render --model model.yaml --view views/hv_overview.yaml --out hv.svg
 - **One model, many views.** Define the system once; render it from many angles at different levels of detail.
 - **Manual layout, by choice.** Auto-layout produces auto-looking results. For a build log where each diagram is a deliberate artifact, manual coordinates win.
 - **Composable with other tools.** wirebug emits artifacts (SVGs plus a manifest); downstream tools — a static site generator, a BOM aggregator — can consume them without coupling.
+
+## Connector routing
+
+Wires are routed automatically so they avoid component boxes and use only
+right-angle bends. The algorithm is the object-avoiding orthogonal
+connector routing behind [libavoid](https://www.adaptagrams.org/documentation/libavoid.html):
+
+> Michael Wybrow, Kim Marriott, and Peter J. Stuckey. "Orthogonal
+> Connector Routing." In *Graph Drawing (GD 2009)*, LNCS 5849,
+> pp. 219–231. Springer, 2010.
+> [[PDF]](https://people.eng.unimelb.edu.au/pstuckey/papers/gd09.pdf)
+
+wirebug implements its first two stages — building an orthogonal
+visibility graph and finding minimum-bend routes through it with A\*.
+Nudging apart wires that share a channel (the paper's third stage) is not
+done yet.
 
 ## Build
 

@@ -1,0 +1,172 @@
+//! SVG emission: turning placed components, ports, and routed wires
+//! into `svg` crate elements.
+
+use svg::node::element::{Circle, Group, Polyline, Rectangle, Text};
+
+use super::layout::{PlacedComponent, PlacedPort};
+use super::{COMPONENT_TITLE_GAP, LABEL_INSET, PIN_INSET, PORT_RADIUS};
+use crate::model::ComponentId;
+use crate::view::{Point, Side};
+
+pub(super) fn render_component(cid: &ComponentId, pc: &PlacedComponent) -> Group {
+    let rect = Rectangle::new()
+        .set("x", pc.origin.x)
+        .set("y", pc.origin.y)
+        .set("width", pc.width)
+        .set("height", pc.height);
+
+    // Component title sits above the box (KiCad-style) so it doesn't
+    // collide with rotated port labels that extend inward from the
+    // top edge.
+    let label = Text::new(pc.label.clone())
+        .set("class", "component-label")
+        .set("x", pc.origin.x + pc.width / 2.0)
+        .set("y", pc.origin.y - COMPONENT_TITLE_GAP);
+
+    let mut ports_group = Group::new().set("class", "ports");
+    for port in &pc.ports {
+        ports_group = ports_group.add(render_port(port));
+    }
+
+    Group::new()
+        .set("class", "component")
+        .set("data-component", cid.to_string())
+        .add(rect)
+        .add(label)
+        .add(ports_group)
+}
+
+fn render_port(p: &PlacedPort) -> Group {
+    let circle = Circle::new()
+        .set("cx", p.pos.x)
+        .set("cy", p.pos.y)
+        .set("r", PORT_RADIUS);
+
+    let label = text_with_placement(p.label.clone(), "port-label", inside_label_placement(p));
+
+    let mut group = Group::new()
+        .set("class", "port")
+        .set("data-port", p.cp.to_string())
+        .add(circle)
+        .add(label);
+
+    if let Some(pin) = &p.pin {
+        let pin_text = text_with_placement(pin.clone(), "port-pin", outside_pin_placement(p));
+        group = group.add(pin_text);
+    }
+
+    group
+}
+
+/// Placement for a text label: anchor position, text-anchor,
+/// optional rotation, and optional dominant-baseline override.
+/// Rotation is in degrees, clockwise.
+struct LabelPlacement {
+    x: f64,
+    y: f64,
+    anchor: &'static str,
+    rotate: f64,
+    baseline: Option<&'static str>,
+}
+
+fn text_with_placement(content: String, class: &'static str, lp: LabelPlacement) -> Text {
+    let mut text = Text::new(content)
+        .set("class", class)
+        .set("text-anchor", lp.anchor)
+        .set("x", lp.x)
+        .set("y", lp.y);
+    if let Some(baseline) = lp.baseline {
+        text = text.set("dominant-baseline", baseline);
+    }
+    if lp.rotate != 0.0 {
+        text = text.set(
+            "transform",
+            format!("rotate({} {} {})", lp.rotate, lp.x, lp.y),
+        );
+    }
+    text
+}
+
+/// Port-name label placement. North/south labels are rotated 90° so
+/// adjacent ports don't overlap horizontally. All sides use
+/// `dominant-baseline="central"` so the text's cross-axis center
+/// aligns with the port — no manual half-glyph fudge.
+fn inside_label_placement(p: &PlacedPort) -> LabelPlacement {
+    match p.side {
+        Side::West => LabelPlacement {
+            x: p.pos.x + LABEL_INSET,
+            y: p.pos.y,
+            anchor: "start",
+            rotate: 0.0,
+            baseline: Some("central"),
+        },
+        Side::East => LabelPlacement {
+            x: p.pos.x - LABEL_INSET,
+            y: p.pos.y,
+            anchor: "end",
+            rotate: 0.0,
+            baseline: Some("central"),
+        },
+        Side::North => LabelPlacement {
+            x: p.pos.x,
+            y: p.pos.y + LABEL_INSET,
+            anchor: "start",
+            rotate: 90.0,
+            baseline: Some("central"),
+        },
+        Side::South => LabelPlacement {
+            x: p.pos.x,
+            y: p.pos.y - LABEL_INSET,
+            anchor: "start",
+            rotate: -90.0,
+            baseline: Some("central"),
+        },
+    }
+}
+
+/// Pin-number label placement (outside the box). Kept horizontal on
+/// all sides — pin numbers are short enough that they don't fight
+/// each other.
+fn outside_pin_placement(p: &PlacedPort) -> LabelPlacement {
+    match p.side {
+        Side::West => LabelPlacement {
+            x: p.pos.x - PIN_INSET,
+            y: p.pos.y - 5.0,
+            anchor: "end",
+            rotate: 0.0,
+            baseline: None,
+        },
+        Side::East => LabelPlacement {
+            x: p.pos.x + PIN_INSET,
+            y: p.pos.y - 5.0,
+            anchor: "start",
+            rotate: 0.0,
+            baseline: None,
+        },
+        Side::North => LabelPlacement {
+            x: p.pos.x + PIN_INSET,
+            y: p.pos.y - 5.0,
+            anchor: "start",
+            rotate: 0.0,
+            baseline: None,
+        },
+        Side::South => LabelPlacement {
+            x: p.pos.x + PIN_INSET,
+            y: p.pos.y + 13.0,
+            anchor: "start",
+            rotate: 0.0,
+            baseline: None,
+        },
+    }
+}
+
+/// Emit a routed connector as a `<polyline>`. `path` is the ordered list
+/// of points produced by [`super::route::Router::route`].
+pub(super) fn render_wire(path: &[Point]) -> Polyline {
+    let points = path
+        .iter()
+        .map(|p| format!("{},{}", p.x, p.y))
+        .collect::<Vec<_>>()
+        .join(" ");
+    Polyline::new().set("class", "wire").set("points", points)
+}

@@ -54,6 +54,45 @@ fn example_renders_with_expected_fragments() {
     }
 }
 
+/// Every routed wire is rectilinear: consecutive points share an x or a
+/// y, so the polyline contains only right-angle bends. This holds
+/// end-to-end through the renderer, across all 12 example connections.
+#[test]
+fn example_wires_are_orthogonal() {
+    let svg = wirebug::render_paths(MODEL, VIEW).expect("renders").svg;
+
+    let mut wires = 0;
+    for points in polyline_points(&svg) {
+        assert!(points.len() >= 2, "wire with too few points: {points:?}");
+        for seg in points.windows(2) {
+            let (a, b) = (seg[0], seg[1]);
+            let orthogonal = (a.0 - b.0).abs() < 1e-6 || (a.1 - b.1).abs() < 1e-6;
+            assert!(orthogonal, "diagonal wire segment {a:?} -> {b:?}");
+        }
+        wires += 1;
+    }
+    assert_eq!(wires, 12, "expected one polyline per connection");
+}
+
+/// Pull the `points` of every `<polyline>` out of an SVG string.
+fn polyline_points(svg: &str) -> Vec<Vec<(f64, f64)>> {
+    svg.match_indices("<polyline")
+        .filter_map(|(start, _)| {
+            let tag = &svg[start..];
+            let attr = tag.find("points=\"")? + "points=\"".len();
+            let end = tag[attr..].find('"')? + attr;
+            let pts = tag[attr..end]
+                .split_whitespace()
+                .filter_map(|p| {
+                    let (x, y) = p.split_once(',')?;
+                    Some((x.parse().ok()?, y.parse().ok()?))
+                })
+                .collect();
+            Some(pts)
+        })
+        .collect()
+}
+
 #[test]
 fn example_warns_about_unconnected_contactor_coil() {
     let model = Model::load(MODEL).expect("model parses");
