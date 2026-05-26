@@ -7,7 +7,7 @@
 //! is harmless — we load each file once). Logical hierarchy depends only
 //! on `use` paths and DSL nesting, never on directory layout.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use miette::NamedSource;
@@ -82,6 +82,7 @@ pub fn load(entry: &Path) -> (Option<Project>, Vec<Problem>) {
     let mut loader = Loader {
         files: Vec::new(),
         by_path: HashMap::new(),
+        attempted: HashSet::new(),
         problems: Vec::new(),
     };
     let entry = canonical(entry);
@@ -103,7 +104,12 @@ fn canonical(path: &Path) -> PathBuf {
 
 struct Loader {
     files: Vec<LoadedFile>,
+    /// Successfully loaded files, by canonical path.
     by_path: HashMap<PathBuf, FileId>,
+    /// Every path we've *started* loading, success or not — so a file
+    /// reached via two imports is processed (and its errors reported)
+    /// exactly once.
+    attempted: HashSet<PathBuf>,
     problems: Vec<Problem>,
 }
 
@@ -112,8 +118,10 @@ impl Loader {
     /// an already-loaded file. Returns `None` if the file can't be read or
     /// parsed into an AST.
     fn load_file(&mut self, path: &Path) -> Option<FileId> {
-        if let Some(id) = self.by_path.get(path) {
-            return Some(*id);
+        // Process each path once, whether or not it loads successfully —
+        // otherwise a file imported via two `use`s re-reports its errors.
+        if !self.attempted.insert(path.to_path_buf()) {
+            return self.by_path.get(path).copied();
         }
 
         let id = FileId(self.files.len());
@@ -242,6 +250,30 @@ mod tests {
                 .any(|p| matches!(p, Problem::UseNotFound { .. })),
             "expected a UseNotFound, got {problems:?}"
         );
+    }
+
+    #[test]
+    fn file_imported_twice_reports_its_error_once() {
+        // leaf.wb is broken and imported by both a.wb and b.wb, which
+        // main.wb imports — a diamond. The lex error must appear once.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let write = |name: &str, body: &str| {
+            std::fs::write(dir.path().join(name), body).expect("write");
+        };
+        write("leaf.wb", "component leaf { pub port a \"A\" @; }\n");
+        write("a.wb", "use leaf from \"leaf.wb\"\ncomponent a { leaf l; }\n");
+        write("b.wb", "use leaf from \"leaf.wb\"\ncomponent b { leaf l; }\n");
+        write(
+            "main.wb",
+            "use a from \"a.wb\"\nuse b from \"b.wb\"\ncomponent m { a x; b y; }\n",
+        );
+
+        let (_project, problems) = load(&dir.path().join("main.wb"));
+        let lex_errors = problems
+            .iter()
+            .filter(|p| matches!(p, Problem::Lex { .. }))
+            .count();
+        assert_eq!(lex_errors, 1, "diamond import should report once: {problems:?}");
     }
 
     #[test]
