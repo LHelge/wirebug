@@ -2,6 +2,7 @@
 
 use assert_cmd::Command;
 use predicates::prelude::*;
+use tempfile::tempdir;
 
 #[test]
 fn missing_model_reports_error() {
@@ -42,11 +43,28 @@ fn help_text_mentions_check() {
 }
 
 #[test]
-fn check_reports_not_yet_implemented() {
+fn check_accepts_the_example_project() {
     Command::cargo_bin("wirebug")
         .expect("binary present")
         .args(["check", "examples/main.wb"])
         .assert()
+        .success();
+}
+
+#[test]
+fn check_rejects_a_dangling_use() {
+    let tmp = tempdir().expect("tempdir");
+    let main = tmp.path().join("main.wb");
+    std::fs::write(
+        &main,
+        "use missing from \"nope.wb\"\ncomponent c { pub port a \"A\"; }\n",
+    )
+    .expect("write main.wb");
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", main.to_str().unwrap()])
+        .assert()
         .failure()
-        .stderr(predicate::str::contains("not yet implemented"));
+        .stderr(predicate::str::contains("cannot find imported file"));
 }

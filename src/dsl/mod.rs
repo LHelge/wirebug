@@ -3,17 +3,22 @@
 //! Stages: discover the project (the directory rooted at `main.wb`),
 //! load and lex/parse every reachable file, resolve names, elaborate the
 //! type/instance hierarchy into the [`ir`], then validate it. The
-//! terminal artifact is [`ir::Design`] — nothing here renders.
+//! terminal artifact is `ir::Design` — nothing here renders.
 //!
-//! The pipeline is built up across several changes; today it is a stub
-//! that reports it is not yet implemented.
+//! Built up across several changes. Today the pipeline discovers, loads,
+//! and parses the whole project, reporting lex/parse/import problems;
+//! resolution, elaboration, and validation land in later changes.
 
 pub mod ast;
+pub mod diagnostics;
 pub mod lex;
 pub mod parse;
+pub mod project;
 pub mod span;
 
 use std::path::Path;
+
+use diagnostics::Problem;
 
 /// Diagnostic output format for `wirebug check`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -25,29 +30,29 @@ pub enum Format {
     Json,
 }
 
-/// Tallied outcome of a check run. `errors == 0` means the project is
-/// well-formed (warnings alone don't fail unless `--strict` promoted
-/// them upstream).
+/// Everything a check run produced: the problems found and (later) the
+/// elaborated IR. The CLI renders the problems and derives an exit code.
 #[derive(Debug, Default)]
 #[must_use]
-pub struct Summary {
-    pub errors: usize,
-    pub warnings: usize,
-}
-
-impl Summary {
-    /// Whether the run found no errors.
-    pub fn is_ok(&self) -> bool {
-        self.errors == 0
-    }
+pub struct CheckReport {
+    pub problems: Vec<Problem>,
 }
 
 /// Run the parse-and-check pipeline against the project containing
 /// `target` (or the project discovered by walking up from the current
 /// directory when `target` is `None`).
-///
-/// Stub: returns an empty summary until the pipeline lands.
-pub fn check_project(target: Option<&Path>, strict: bool, format: Format) -> Summary {
-    let _ = (target, strict, format);
-    Summary::default()
+pub fn check_project(target: Option<&Path>) -> CheckReport {
+    let entry = match project::discover(target) {
+        Ok(entry) => entry,
+        Err(problem) => {
+            return CheckReport {
+                problems: vec![problem],
+            };
+        }
+    };
+
+    let (_project, problems) = project::load(&entry);
+    // Resolution, elaboration, and validation consume `_project` in later
+    // changes; for now the report is whatever loading/parsing turned up.
+    CheckReport { problems }
 }

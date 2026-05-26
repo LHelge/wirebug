@@ -71,7 +71,7 @@ enum Command {
 
 fn main() -> ExitCode {
     match run(Cli::parse()) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(code) => code,
         Err(err) => {
             eprintln!("error: {err:#}");
             ExitCode::FAILURE
@@ -79,23 +79,56 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(cli: Cli) -> Result<()> {
+fn run(cli: Cli) -> Result<ExitCode> {
     match cli.command {
-        Command::Render { model, view, out } => render_command(&model, &view, &out),
+        Command::Render { model, view, out } => {
+            render_command(&model, &view, &out)?;
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Check {
             target,
             strict,
             format,
-        } => check_command(target.as_deref(), strict, format.into()),
+        } => Ok(check_command(target.as_deref(), strict, format.into())),
     }
 }
 
-fn check_command(target: Option<&Path>, strict: bool, format: wirebug::dsl::Format) -> Result<()> {
-    let summary = wirebug::dsl::check_project(target, strict, format);
-    // The pipeline is a stub for now; surface that honestly rather than
-    // claiming a clean check.
-    let _ = &summary;
-    anyhow::bail!("`wirebug check` is not yet implemented");
+fn check_command(target: Option<&Path>, strict: bool, format: wirebug::dsl::Format) -> ExitCode {
+    use miette::{Diagnostic, GraphicalReportHandler, JSONReportHandler, Severity};
+
+    let report = wirebug::dsl::check_project(target);
+
+    let mut errors = 0usize;
+    let mut warnings = 0usize;
+    let mut rendered = String::new();
+    let graphical = GraphicalReportHandler::new();
+    let json = JSONReportHandler::new();
+    for problem in &report.problems {
+        match problem.severity() {
+            Some(Severity::Warning) => warnings += 1,
+            _ => errors += 1,
+        }
+        let _ = match format {
+            wirebug::dsl::Format::Human => graphical.render_report(&mut rendered, problem),
+            wirebug::dsl::Format::Json => json.render_report(&mut rendered, problem),
+        };
+    }
+    if !rendered.is_empty() {
+        eprint!("{rendered}");
+    }
+
+    let failed = errors > 0 || (strict && warnings > 0);
+    if report.problems.is_empty() {
+        eprintln!("ok");
+    } else {
+        eprintln!("{errors} error(s), {warnings} warning(s)");
+    }
+
+    if failed {
+        ExitCode::FAILURE
+    } else {
+        ExitCode::SUCCESS
+    }
 }
 
 fn render_command(model_path: &Path, view_path: &Path, out_path: &Path) -> Result<()> {
