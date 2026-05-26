@@ -18,6 +18,7 @@ pub mod parse;
 pub mod project;
 pub mod resolve;
 pub mod span;
+pub mod validate;
 
 use std::path::Path;
 
@@ -65,8 +66,8 @@ pub fn check_project(target: Option<&Path>) -> CheckReport {
         problems.append(&mut resolved.problems);
         let (elaborated, elab_problems) = elaborate::elaborate(&resolved);
         problems.extend(elab_problems);
+        problems.extend(validate::validate(&resolved));
         design = elaborated;
-        // Validation consumes `design`/`resolved` in a later change.
     }
     CheckReport { problems, design }
 }

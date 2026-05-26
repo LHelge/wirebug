@@ -222,6 +222,48 @@ pub enum Problem {
         #[label("this component")]
         at: SourceSpan,
     },
+
+    // --- Validation ---
+    /// A wire has fewer than two endpoints.
+    #[error("a wire needs at least two endpoints, found {count}")]
+    #[diagnostic(code(wirebug::wire_arity))]
+    WireArity {
+        count: usize,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("this wire")]
+        at: SourceSpan,
+    },
+
+    /// An imported component is never instantiated in the importing file.
+    #[error("unused import `{name}`")]
+    #[diagnostic(
+        severity(Warning),
+        code(wirebug::unused_import),
+        help("remove the `use`, or instantiate `{name}`")
+    )]
+    UnusedImport {
+        name: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("never instantiated")]
+        at: SourceSpan,
+    },
+
+    /// A pin assignment on a port that isn't inside a `connector` block.
+    #[error("pin assignment on `{port}`, which is not inside a connector")]
+    #[diagnostic(
+        severity(Warning),
+        code(wirebug::bare_port_pin),
+        help("pins are connector metadata; put the port inside a `connector` block")
+    )]
+    BarePortPin {
+        port: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("pin here has no connector")]
+        at: SourceSpan,
+    },
 }
 
 impl Problem {
