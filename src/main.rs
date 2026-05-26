@@ -8,9 +8,26 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 use wirebug::error::Error;
+
+/// Diagnostic output format for `check`, mirrored into [`wirebug::dsl::Format`].
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+enum OutputFormat {
+    #[default]
+    Human,
+    Json,
+}
+
+impl From<OutputFormat> for wirebug::dsl::Format {
+    fn from(f: OutputFormat) -> Self {
+        match f {
+            OutputFormat::Human => Self::Human,
+            OutputFormat::Json => Self::Json,
+        }
+    }
+}
 
 #[derive(Debug, Parser)]
 #[command(
@@ -37,6 +54,19 @@ enum Command {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Parse and validate a wirebug project, reporting any problems.
+    Check {
+        /// A `.wb` file or project directory. Defaults to the project
+        /// containing the current directory (found by walking up to
+        /// `main.wb`).
+        target: Option<PathBuf>,
+        /// Treat warnings as errors.
+        #[arg(long)]
+        strict: bool,
+        /// Diagnostic output format.
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        format: OutputFormat,
+    },
 }
 
 fn main() -> ExitCode {
@@ -52,7 +82,20 @@ fn main() -> ExitCode {
 fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Command::Render { model, view, out } => render_command(&model, &view, &out),
+        Command::Check {
+            target,
+            strict,
+            format,
+        } => check_command(target.as_deref(), strict, format.into()),
     }
+}
+
+fn check_command(target: Option<&Path>, strict: bool, format: wirebug::dsl::Format) -> Result<()> {
+    let summary = wirebug::dsl::check_project(target, strict, format);
+    // The pipeline is a stub for now; surface that honestly rather than
+    // claiming a clean check.
+    let _ = &summary;
+    anyhow::bail!("`wirebug check` is not yet implemented");
 }
 
 fn render_command(model_path: &Path, view_path: &Path, out_path: &Path) -> Result<()> {

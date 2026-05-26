@@ -5,6 +5,7 @@
 
 use std::path::Path;
 
+pub mod dsl;
 pub mod error;
 pub mod model;
 pub mod render;

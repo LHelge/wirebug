@@ -30,3 +30,23 @@ fn help_text_mentions_render() {
         .success()
         .stdout(predicate::str::contains("render"));
 }
+
+#[test]
+fn help_text_mentions_check() {
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("check"));
+}
+
+#[test]
+fn check_reports_not_yet_implemented() {
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "examples/main.wb"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not yet implemented"));
+}
