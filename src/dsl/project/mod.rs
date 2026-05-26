@@ -38,10 +38,25 @@ pub struct Project {
     pub files: Vec<LoadedFile>,
 }
 
+impl Project {
+    /// The file with the given id.
+    pub fn file(&self, id: FileId) -> &LoadedFile {
+        &self.files[id.0]
+    }
+
+    /// The source of `id`, wrapped for miette diagnostics.
+    pub fn source(&self, id: FileId) -> NamedSource<String> {
+        self.file(id).named_source()
+    }
+}
+
 /// Find the entry `.wb` file for `target`:
 /// - a file path is used directly as the entry;
 /// - a directory is searched for `main.wb` (then its parents);
 /// - `None` walks up from the current directory.
+// A `Problem` is large (it carries source text), but discovery is a
+// once-per-run path, so the size of the error variant doesn't matter.
+#[allow(clippy::result_large_err)]
 pub fn discover(target: Option<&Path>) -> Result<PathBuf, Problem> {
     match target {
         Some(p) if p.is_file() => Ok(p.to_path_buf()),
@@ -61,6 +76,7 @@ pub fn discover(target: Option<&Path>) -> Result<PathBuf, Problem> {
 }
 
 /// Walk up from `start`, returning the first `main.wb` found.
+#[allow(clippy::result_large_err)]
 fn walk_up(start: &Path) -> Result<PathBuf, Problem> {
     let mut dir = Some(start);
     while let Some(d) = dir {
@@ -261,8 +277,14 @@ mod tests {
             std::fs::write(dir.path().join(name), body).expect("write");
         };
         write("leaf.wb", "component leaf { pub port a \"A\" @; }\n");
-        write("a.wb", "use leaf from \"leaf.wb\"\ncomponent a { leaf l; }\n");
-        write("b.wb", "use leaf from \"leaf.wb\"\ncomponent b { leaf l; }\n");
+        write(
+            "a.wb",
+            "use leaf from \"leaf.wb\"\ncomponent a { leaf l; }\n",
+        );
+        write(
+            "b.wb",
+            "use leaf from \"leaf.wb\"\ncomponent b { leaf l; }\n",
+        );
         write(
             "main.wb",
             "use a from \"a.wb\"\nuse b from \"b.wb\"\ncomponent m { a x; b y; }\n",
@@ -273,7 +295,10 @@ mod tests {
             .iter()
             .filter(|p| matches!(p, Problem::Lex { .. }))
             .count();
-        assert_eq!(lex_errors, 1, "diamond import should report once: {problems:?}");
+        assert_eq!(
+            lex_errors, 1,
+            "diamond import should report once: {problems:?}"
+        );
     }
 
     #[test]

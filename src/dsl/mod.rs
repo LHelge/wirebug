@@ -11,9 +11,11 @@
 
 pub mod ast;
 pub mod diagnostics;
+pub mod ir;
 pub mod lex;
 pub mod parse;
 pub mod project;
+pub mod resolve;
 pub mod span;
 
 use std::path::Path;
@@ -51,8 +53,11 @@ pub fn check_project(target: Option<&Path>) -> CheckReport {
         }
     };
 
-    let (_project, problems) = project::load(&entry);
-    // Resolution, elaboration, and validation consume `_project` in later
-    // changes; for now the report is whatever loading/parsing turned up.
+    let (project, mut problems) = project::load(&entry);
+    if let Some(project) = project {
+        let resolved = resolve::resolve(&project);
+        problems.extend(resolved.problems);
+        // Elaboration and validation consume `resolved` in later changes.
+    }
     CheckReport { problems }
 }
