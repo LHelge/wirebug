@@ -68,6 +68,7 @@ pub struct Resolved<'a> {
     pub root: Option<DefId>,
     pub views: Vec<ViewBinding<'a>>,
     pub problems: Vec<Problem>,
+    pub project: &'a Project,
 }
 
 /// Resolve every name in `project`.
@@ -108,6 +109,7 @@ pub fn resolve(project: &Project) -> Resolved<'_> {
         root,
         views,
         problems: r.problems,
+        project,
     }
 }
 

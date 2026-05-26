@@ -11,6 +11,7 @@
 
 pub mod ast;
 pub mod diagnostics;
+pub mod elaborate;
 pub mod ir;
 pub mod lex;
 pub mod parse;
@@ -21,6 +22,7 @@ pub mod span;
 use std::path::Path;
 
 use diagnostics::Problem;
+use ir::Design;
 
 /// Diagnostic output format for `wirebug check`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -38,6 +40,8 @@ pub enum Format {
 #[must_use]
 pub struct CheckReport {
     pub problems: Vec<Problem>,
+    /// The elaborated design, when the project got far enough to build one.
+    pub design: Option<Design>,
 }
 
 /// Run the parse-and-check pipeline against the project containing
@@ -49,15 +53,20 @@ pub fn check_project(target: Option<&Path>) -> CheckReport {
         Err(problem) => {
             return CheckReport {
                 problems: vec![problem],
+                design: None,
             };
         }
     };
 
     let (project, mut problems) = project::load(&entry);
+    let mut design = None;
     if let Some(project) = project {
-        let resolved = resolve::resolve(&project);
-        problems.extend(resolved.problems);
-        // Elaboration and validation consume `resolved` in later changes.
+        let mut resolved = resolve::resolve(&project);
+        problems.append(&mut resolved.problems);
+        let (elaborated, elab_problems) = elaborate::elaborate(&resolved);
+        problems.extend(elab_problems);
+        design = elaborated;
+        // Validation consumes `design`/`resolved` in a later change.
     }
-    CheckReport { problems }
+    CheckReport { problems, design }
 }

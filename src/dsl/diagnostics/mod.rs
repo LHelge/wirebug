@@ -198,6 +198,30 @@ pub enum Problem {
         #[label("this view")]
         at: SourceSpan,
     },
+
+    // --- Elaboration ---
+    /// `main.wb` doesn't define exactly one top-level component to elaborate.
+    #[error("`main.wb` must define exactly one top-level component")]
+    #[diagnostic(
+        code(wirebug::no_root),
+        help("the design root is the single top-level component in `main.wb`")
+    )]
+    NoRoot,
+
+    /// A component instantiates itself, directly or transitively.
+    #[error("component `{name}` contains itself: {cycle}")]
+    #[diagnostic(
+        code(wirebug::containment_cycle),
+        help("a component cannot instantiate itself, directly or through its children")
+    )]
+    ContainmentCycle {
+        name: String,
+        cycle: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("this component")]
+        at: SourceSpan,
+    },
 }
 
 impl Problem {
