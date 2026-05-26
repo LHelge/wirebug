@@ -95,36 +95,53 @@ fn run(cli: Cli) -> Result<ExitCode> {
 
 fn check_command(target: Option<&Path>, strict: bool, format: wirebug::dsl::Format) -> ExitCode {
     use miette::{Diagnostic, GraphicalReportHandler, JSONReportHandler, Severity};
+    use wirebug::dsl::Format;
 
     let report = wirebug::dsl::check_project(target);
 
-    let mut errors = 0usize;
-    let mut warnings = 0usize;
-    let mut rendered = String::new();
-    let graphical = GraphicalReportHandler::new();
-    let json = JSONReportHandler::new();
-    for problem in &report.problems {
-        match problem.severity() {
-            Some(Severity::Warning) => warnings += 1,
-            _ => errors += 1,
+    let errors = report
+        .problems
+        .iter()
+        .filter(|p| !matches!(p.severity(), Some(Severity::Warning)))
+        .count();
+    let warnings = report.problems.len() - errors;
+
+    match format {
+        Format::Human => {
+            let handler = GraphicalReportHandler::new();
+            let mut out = String::new();
+            for problem in &report.problems {
+                let _ = handler.render_report(&mut out, problem);
+            }
+            eprint!("{out}");
+            // One summary line on stderr.
+            match &report.design {
+                Some(design) if report.problems.is_empty() => eprintln!(
+                    "ok — {} instances, {} views",
+                    design.instances.len(),
+                    design.views.len()
+                ),
+                _ if report.problems.is_empty() => eprintln!("ok"),
+                _ => eprintln!("{errors} error(s), {warnings} warning(s)"),
+            }
         }
-        let _ = match format {
-            wirebug::dsl::Format::Human => graphical.render_report(&mut rendered, problem),
-            wirebug::dsl::Format::Json => json.render_report(&mut rendered, problem),
-        };
-    }
-    if !rendered.is_empty() {
-        eprint!("{rendered}");
+        Format::Json => {
+            // A JSON array of diagnostics on stdout.
+            let handler = JSONReportHandler::new();
+            let items: Vec<String> = report
+                .problems
+                .iter()
+                .map(|problem| {
+                    let mut s = String::new();
+                    let _ = handler.render_report(&mut s, problem);
+                    s
+                })
+                .collect();
+            println!("[{}]", items.join(","));
+        }
     }
 
-    let failed = errors > 0 || (strict && warnings > 0);
-    if report.problems.is_empty() {
-        eprintln!("ok");
-    } else {
-        eprintln!("{errors} error(s), {warnings} warning(s)");
-    }
-
-    if failed {
+    if errors > 0 || (strict && warnings > 0) {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
