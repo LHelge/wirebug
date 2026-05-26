@@ -3,7 +3,38 @@
 User-facing intro is in `README.md`. This file is for context that helps
 future work on the codebase. Keep it short; don't restate the README.
 
-## Mental model
+## Two pipelines
+
+The primary input is the **`.wb` DSL** (spec: `.github/skills/wirebug-dsl/`).
+There are two pipelines in the tree:
+
+- **`check` (current focus, `src/dsl/`)** — lex → parse → load project →
+  resolve → elaborate → validate. Turns a multi-file `.wb` project into an
+  elaborated IR (`ir::Design`) and reports problems via miette. The IR is
+  the terminal artifact; nothing renders yet.
+- **`render` (legacy, `src/model.rs` + `src/view.rs` + `src/render/`)** —
+  the original YAML→SVG path. Still compiles and works for YAML input. A
+  future change re-points the renderer at `ir::Design` and retires the
+  YAML loader. Don't extend the YAML path; build on the DSL pipeline.
+
+## DSL mental model
+
+- **AST** — a faithful parse of one `.wb` file. `Definition` (a component
+  *type*) holds `Port`/`Connector`/`Instance`/`Wire`/nested-`Definition`
+  members; `View`s are top-level siblings. Every node carries a `Span`;
+  type/instance/port references are *unresolved* `Spanned<Ident>`.
+- **Resolved registry** — every definition (top-level and nested) keyed by
+  `DefId`, with flattened ports (connectors are grouping metadata, not a
+  namespace — port names are unique per component), per-file type scopes
+  (own defs + `use` imports), and resolved instance/endpoint/include refs.
+- **IR (`ir::Design`)** — the elaboration: a flat
+  `IndexMap<InstancePath, Instance>` (hierarchical semantics, no recursive
+  ownership; the tree lives in `children` links). One node per placement,
+  addressed by a dotted path (`vehicle.front.module_1.pack`), with
+  materialized ports and wires rewritten to `WireEnd::Own`/`Child`.
+  Definitions vanish here; only concrete instances flow to the IR.
+
+## Legacy render mental model (YAML path)
 
 - **Model** — facts about the physical system. `Component` → `Connector`
   → `Port`, plus `Connection`s between ports. Pin numbers, part numbers,
@@ -14,7 +45,7 @@ future work on the codebase. Keep it short; don't restate the README.
   over one model is the whole point; resist anything that pushes
   presentation back into the model.
 
-## Schema essentials
+## Render schema essentials (legacy YAML path)
 
 - Port refs in `connections:` are three-part: `component.connector.port`.
   Names cannot contain `.`.
@@ -45,16 +76,33 @@ future work on the codebase. Keep it short; don't restate the README.
   steps, the grid must be at least `MIN_PORT_PITCH / 2` (the pitch must
   clear a label); a finer grid errors.
 
-## Validation
+## DSL validation (`check`)
+
+Problems are miette `Diagnostic`s (`dsl::diagnostics::Problem`), collected
+so one run reports many. Errors fail the run; warnings fail only under
+`--strict`. The checks, by phase:
+
+- **Load** — file not found for a `use`; no `main.wb`; IO.
+- **Parse/lex** — syntax and lexical errors (with expected-token sets).
+- **Resolve** — undefined type, unresolved import, duplicate
+  type/instance/port, unknown instance/port in a wire endpoint,
+  private-port access (a non-`pub` port referenced from outside), unknown
+  view include, ambiguous view subject.
+- **Elaborate** — `main.wb` lacks a single top-level component (no root);
+  containment cycle (a component instantiating itself transitively).
+- **Validate** — wire arity (fewer than two endpoints, error); unused
+  import and bare-port pin (warnings).
+
+Not done on purpose: **unconnected-port** detection. It needs per-instance
+tree analysis and floods intentional unused-pin warnings on a real
+component library — a separate, opt-in concern. See `dsl/validate/mod.rs`.
+
+## Render validation (legacy YAML path)
 
 - **Error**: any port ref that doesn't resolve to a real
   component/connector/port (in connections or in a view).
 - **Error**: duplicate component / connector / port keys.
 - **Warning**: a port defined in the model that no connection touches.
-  Components have terminals that a given schematic may not exercise, so
-  this is a warning, not an error.
-- Nothing else. "Validation beyond referential integrity" is explicitly
-  out of scope for MVP.
 - The schematic renderer additionally errors (at render time, not in
   `validate`) on a non-positive `grid:`, a `grid:` finer than a port
   label needs, or an explicit component `width`/`height` smaller than its
@@ -77,11 +125,28 @@ redesign each when it lands.
 
 ```
 src/
-├── main.rs          # clap CLI; thin shim over render_paths
-├── lib.rs           # re-exports + render_paths orchestration
-├── model.rs         # Model, Component, Connector, Port, Connection;
-│                    # Model::load(path) + FromStr<Model>
-├── view.rs          # View, ViewKind; View::load(path) + FromStr<View>
+├── main.rs          # clap CLI: `check` (DSL) and `render` (legacy YAML)
+├── lib.rs           # re-exports; dsl::check_project + legacy render_paths
+│
+│  # ── DSL parse-and-check pipeline (primary input: .wb) ──
+├── dsl/
+│   ├── mod.rs           # check_project: discover→load→resolve→elaborate→validate
+│   ├── span.rs          # FileId, Span, Spanned<T>; Span→miette + chumsky::Span impl
+│   ├── lex/
+│   │   ├── mod.rs       # lex() → Vec<SpannedLexeme>; significant() = the trivia dial
+│   │   └── token.rs     # Token, Trivia, Lexeme
+│   ├── ast/mod.rs       # spanned AST; refs are unresolved Spanned<Ident>
+│   ├── parse/mod.rs     # chumsky parser over &[(Token, Span)] → ast::File
+│   ├── project/mod.rs   # walk-up discovery + transitive `use` loading → Project
+│   ├── resolve/mod.rs   # DefId registry, scopes, flattened ports, reference checks
+│   ├── elaborate/mod.rs # AST/registry → ir::Design; containment-cycle guard
+│   ├── ir/mod.rs        # id newtypes + elaborated Design/Instance/Port/Wire/View
+│   ├── validate/mod.rs  # wire arity (error) + --strict warnings
+│   └── diagnostics/mod.rs # miette `Problem` enum (one variant per failure class)
+│
+│  # ── legacy YAML → SVG renderer (to be re-pointed at ir::Design) ──
+├── model.rs         # Model, Component, Connector, Port, Connection (YAML)
+├── view.rs          # View, ViewKind (YAML)
 ├── render/
 │   ├── mod.rs       # Renderer trait; dispatch on ViewKind
 │   └── schematic/   # rectangle-based SVG renderer
@@ -100,12 +165,25 @@ src/
 │               ├── order.rs     # §6.1 order routes within a channel
 │               ├── place.rs     # §6.2 final placement (two axis passes)
 │               └── vpsc.rs      # separation-constraint solver
-└── error.rs         # thiserror types
+└── error.rs         # thiserror types (render path)
 ```
 
-Parsing is on the types — `Model::load(path)` / `View::load(path)` for
-files (errors carry the source path); `text.parse::<Model>()` via
-`FromStr` for strings. There is no separate `parse` module.
+DSL pipeline notes:
+
+- The lexer recognises trivia (whitespace, comments) as first-class spanned
+  lexemes; `lex::significant()` is the *dial* that drops them today — a
+  future `fmt` swaps it for a trivia collector without touching the parser.
+- `chumsky` parses a `(Token, Span)` slice; our `Span` implements
+  `chumsky::span::Span` (context = `FileId`), so `e.span()` yields
+  file-tagged spans directly. `Rich` errors become owned `ParseError`s.
+- Files are loaded once each (by canonical path), so a `use` cycle or a
+  diamond import is harmless and never double-reports. Directory layout
+  never affects logical hierarchy — only `use` paths and DSL nesting do.
+- Wire endpoints are at most two-part (`inst.port` or bare `port`); the
+  deep dotted form is an IR *path*, not surface syntax.
+
+Legacy parsing is on the types — `Model::load(path)` / `View::load(path)`,
+`text.parse::<Model>()` via `FromStr`.
 
 ## Coding practices
 
@@ -128,8 +206,9 @@ files (errors carry the source path); `text.parse::<Model>()` via
 
 ### Type system — make illegal states unrepresentable
 
-- Newtypes for "string with meaning" — `ComponentId`, `ConnectorId`,
-  `PortId`, `Pin`. Cheap, and the compiler stops you mixing them.
+- Newtypes for "string with meaning" — `TypeName`, `InstanceName`,
+  `PortName`, `Pin` in the DSL IR (`ComponentId`/`ConnectorId`/`PortId` in
+  the legacy model). Cheap, and the compiler stops you mixing them.
 - Enums where two fields can't both be set, or where a value has a
   closed set of variants (`Side`, `ViewKind`).
 - Typestate where it earns its keep — e.g. `Model<Unvalidated>` vs
@@ -207,15 +286,20 @@ Add with `cargo add` so versions stay current.
 
 Runtime:
 
-- [`serde`] (derive) — model and view (de)serialisation.
-- [`serde_yml`] — YAML parser; preserves line/column on errors.
-- [`indexmap`] (serde feature) — order-preserving maps for the model.
+- [`chumsky`] — parser combinators (span-carrying `Rich` errors) for the
+  `.wb` DSL. The lexer is hand-written; chumsky is confined to `dsl/parse/`.
+- [`miette`] (feature `fancy`) — `Diagnostic` derives plus the pretty
+  terminal renderer for `check` (`--format json` uses `JSONReportHandler`).
+- [`indexmap`] (serde feature) — order-preserving maps (DSL registry/IR
+  and the legacy model).
 - [`clap`] (derive) — CLI parsing.
-- [`svg`] — SVG document emission with escaping handled.
-- [`pathfinding`] — A* over the orthogonal visibility graph for
-  object-avoiding connector routing.
-- [`thiserror`] — typed library error enums.
+- [`thiserror`] — typed library error enums; underpins the `Diagnostic`s.
 - [`anyhow`] — error glue in `main` only.
+- [`serde`] (derive) — *legacy* model/view (de)serialisation.
+- [`serde_yml`] — *legacy* YAML parser; preserves line/column on errors.
+- [`svg`] — SVG document emission with escaping handled (render path).
+- [`pathfinding`] — A* over the orthogonal visibility graph for
+  object-avoiding connector routing (render path).
 
 Dev / test:
 
@@ -223,6 +307,8 @@ Dev / test:
 - [`assert_cmd`] — black-box CLI tests.
 - [`predicates`] — assertions for `assert_cmd`.
 
+[`chumsky`]: https://docs.rs/chumsky
+[`miette`]: https://docs.rs/miette
 [`serde`]: https://docs.rs/serde
 [`serde_yml`]: https://docs.rs/serde_yml
 [`indexmap`]: https://docs.rs/indexmap
@@ -242,6 +328,12 @@ cargo build
 cargo test
 cargo fmt
 cargo clippy -- -D warnings
+
+# check a .wb project (primary input)
+cargo run -- check examples/main.wb        # or just `check` from inside the project
+cargo run -- check --strict --format json examples/main.wb
+
+# render (legacy YAML path; being re-pointed at the DSL IR)
 cargo run --release -- render \
   --model examples/model.yaml \
   --view  examples/views/hv_overview.yaml \

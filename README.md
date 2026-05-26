@@ -2,7 +2,9 @@
 
 Text-defined electrical schematics and wiring harnesses.
 
-**wirebug** reads a YAML description of an electrical system and renders it as SVG schematics and (eventually) wiring harness drawings. One model, many views — inspired by [Structurizr](https://structurizr.com/) / [LikeC4](https://likec4.dev/) for system architecture and [WireViz](https://github.com/wireviz/WireViz) for wiring harnesses.
+**wirebug** describes an electrical system in a small text DSL (`.wb` files) and turns it into SVG schematics and (eventually) wiring harness drawings. One model, many views — inspired by [Structurizr](https://structurizr.com/) / [LikeC4](https://likec4.dev/) for system architecture and [WireViz](https://github.com/wireviz/WireViz) for wiring harnesses.
+
+A project is a directory rooted at a `main.wb`. Components are *types* with `pub` ports; you instantiate them, wire the instances together, and split a system across files with `use`. The full language is documented in `.github/skills/wirebug-dsl/`.
 
 ## Why
 
@@ -14,86 +16,90 @@ Early and experimental. Expect breaking changes.
 
 What works today:
 
-- Parsing a YAML model (components, ports, connections)
-- Parsing a schematic view (which components to show, where to place them)
-- Rendering rectangle-style component blocks with labeled ports
-- Drawing wires between ports
-- Emitting a single SVG
+- The `.wb` DSL front end, end to end via `wirebug check`:
+  - a lexer and [`chumsky`](https://github.com/zesterer/chumsky) parser for the DSL;
+  - multi-file projects — discover `main.wb`, resolve `use` imports transitively;
+  - name resolution (types, instances, ports, view includes);
+  - elaboration of the type/instance hierarchy into a flat, addressable IR;
+  - validation (undefined names, duplicates, private-port access, containment cycles, …);
+  - rich diagnostics via [`miette`](https://github.com/zkat/miette) — source snippets, carets, `--format json`.
+- A schematic renderer (rectangle blocks, labeled ports, auto-routed wires, single SVG out).
 
-Not yet:
+In transition / not yet:
 
+- **Rendering from the DSL.** The renderer currently still consumes a legacy YAML model; a future change re-points it at the elaborated IR so `.wb` projects render directly.
 - Harness drawings (WireViz-style via Graphviz)
 - BOM views
 - View composition / `extends`
-- Validation beyond referential integrity
-- Theming
-- Manifest emission for downstream tools
+- Unconnected-port linting, theming, manifest emission
 
 ## Example
 
-A minimal model and view:
+A leaf component (one file), and a top-level component that wires two instances together:
 
-```yaml
-# model.yaml
-components:
-  pack:
-    label: "Aphid 96V Pack"
-    ports:
-      hv_pos: right
-      hv_neg: right
-
-  inverter:
-    label: "Curtis 1238"
-    ports:
-      dc_pos: left
-      dc_neg: left
-      u: right
-      v: right
-      w: right
-
-connections:
-  - { from: pack.hv_pos, to: inverter.dc_pos }
-  - { from: pack.hv_neg, to: inverter.dc_neg }
+```
+// components/battery.wb
+component battery {
+    pub port hv_pos "HV+";
+    pub port hv_neg "HV-";
+}
 ```
 
-```yaml
-# views/hv_overview.yaml
-kind: schematic
-title: "HV Power Path"
-grid: 20            # world units per grid step (optional)
-layout:
-  # x/y are the box CENTRE in grid units (width/height optional).
-  pack:     { x: 5,  y: 5 }
-  inverter: { x: 20, y: 5 }
+```
+// main.wb
+use battery  from "components/battery.wb"
+use inverter from "components/inverter.wb"
+
+component vehicle {
+    battery  pack "HV Battery";
+    inverter inv  "Motor Controller";
+
+    // shared HV bus: a multi-endpoint wire is a shared rail
+    wire orange 50 [pack.hv_pos, inv.dc_pos];
+    wire orange 50 [pack.hv_neg, inv.dc_neg];
+}
+
+// a view lives next to the component it documents
+view schematic "HV Power Path" {
+    grid 20;
+    include pack at (5, 5);
+    include inv  at (20, 5);
+}
 ```
 
-Positions and sizes are expressed in **grid units**: the renderer
-multiplies by the grid step. `x`/`y` are the box **centre**. Ports sit two
-grid steps apart and are **centred** on each side (an even count straddles
-the centreline, an odd count puts the middle port on it). A box is always
-an even number of steps, so its centre lands on a grid line for any port
-count and every port lands on a grid line — line two components up and
-their ports line up so the wire between them runs straight. Omit `width`/`height` to let a box size itself from its
-busiest side's port count (with room for the title); omit `grid:` to take
-the default step. The routing clearance is one grid step. The grid must be
-positive and coarse enough that the two-step port pitch clears a label —
-too fine a grid errors rather than overlapping labels.
+Check the project — parse, resolve, elaborate, and validate the whole `use` graph:
+
+```sh
+wirebug check                 # discovers main.wb by walking up from the CWD
+wirebug check examples/main.wb
+wirebug check --strict --format json examples/main.wb
+```
+
+Problems are reported with source snippets and carets (via miette); a clean run exits 0.
+
+## Concepts
+
+**Component** — a *type*, not an instance: a named definition with `pub` ports (its interface) and, optionally, instances of other components plus the wires between them (its implementation). Components can nest; nested definitions are private to their parent.
+
+**Port** — a named connection point with a human-readable label. `pub` exposes it to instantiators; visibility does not propagate automatically — a parent re-exports by declaring its own `pub` port and wiring it through.
+
+**Connector** — physical grouping metadata (a part description and pin assignments). It is *not* a namespace: a port `c0` inside a connector is still referenced as `instance.c0`, and port names are unique across the whole component.
+
+**Instance** — a placement of a component type, with a name (used in wires) and an optional label (shown in diagrams).
+
+**Wire** — a colour, a gauge (mm²), and two or more endpoints (`instance.port`, or a bare `port` for the enclosing component's own port). Multi-endpoint wires model shared rails and T-junctions.
+
+**View** — a rendering target that documents a component: a kind (`schematic` for now), a grid, and which instances to place where. Wires are derived from the model, never listed in views.
+
+**Project** — a directory rooted at `main.wb`. Logical hierarchy comes only from `use` imports and DSL nesting, never from directory layout.
+
+## Rendering (legacy YAML path)
+
+Rendering still runs off the original YAML model/view format and is being migrated to consume the DSL. Positions and sizes in a view are in **grid units**: the renderer multiplies by the grid step. `x`/`y` are the box **centre**; ports sit two grid steps apart and are centred on each side, so lining two components up makes the wire between them run straight. Omit `width`/`height` to size a box from its busiest side; omit `grid:` for the default. The grid must be coarse enough that the two-step port pitch clears a label — too fine a grid errors rather than overlapping labels.
 
 ```sh
 wirebug render --model model.yaml --view views/hv_overview.yaml --out hv.svg
 ```
-
-## Concepts
-
-**Model** — the source of truth. Components, their ports, and connections between them. Lives in one or more YAML files.
-
-**Component** — a named block with named ports. For now, components render as labeled rectangles; later, hierarchical sub-systems will also be expressible as components.
-
-**Port** — a connection point on a component side (`north`, `south`, `east`, `west`). Referenced as `component.port`.
-
-**Connection** — a link from one port to another. Will grow to carry gauge, color, harness assignment, and length.
-
-**View** — a renderable subset of the model with a layout and a chosen renderer. Different view kinds (`schematic`, eventually `harness` and `bom`) use different renderers; all consume the same underlying model.
 
 ## Design principles
 
