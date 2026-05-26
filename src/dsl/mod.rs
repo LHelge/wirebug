@@ -8,7 +8,9 @@
 //! The pipeline is built up across several changes; today it is a stub
 //! that reports it is not yet implemented.
 
+pub mod ast;
 pub mod lex;
+pub mod parse;
 pub mod span;
 
 use std::path::Path;
