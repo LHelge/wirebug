@@ -8,6 +8,9 @@
 //! The pipeline is built up across several changes; today it is a stub
 //! that reports it is not yet implemented.
 
+pub mod lex;
+pub mod span;
+
 use std::path::Path;
 
 /// Diagnostic output format for `wirebug check`.
