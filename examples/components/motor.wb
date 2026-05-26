@@ -1,0 +1,18 @@
+// Electric drive motor with resolver position feedback
+
+component motor {
+    connector "Power 3p" {
+        pub port phase_u "U" pin 1;
+        pub port phase_v "V" pin 2;
+        pub port phase_w "W" pin 3;
+    }
+
+    connector "Resolver 6p" {
+        pub port res_exc_p "EXC+" pin 1;
+        pub port res_exc_n "EXC-" pin 2;
+        pub port res_sin_p "SIN+" pin 3;
+        pub port res_sin_n "SIN-" pin 4;
+        pub port res_cos_p "COS+" pin 5;
+        pub port res_cos_n "COS-" pin 6;
+    }
+}

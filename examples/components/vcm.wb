@@ -1,0 +1,35 @@
+// Vehicle Control Module
+// Central controller: manages drive logic, safety monitoring,
+// and contactor enable via safe power output.
+// Interlock terminates here — VCM uses it internally to gate
+// the high-side switch that sources safe power.
+
+component vcm {
+    connector "CAN 4p" {
+        pub port can_h "CAN H" pin 1;
+        pub port can_l "CAN L" pin 2;
+    }
+
+    connector "12V 2p" {
+        pub port b_pos "B+" pin 1;
+        pub port gnd   "GND" pin 2;
+    }
+
+    connector "Accelerator 4p" {
+        pub port accel_1   "ACCEL 1" pin 1;
+        pub port accel_2   "ACCEL 2" pin 2;
+        pub port accel_gnd "ACCEL GND" pin 3;
+        pub port accel_5v  "ACCEL 5V" pin 4;
+    }
+
+    connector "Brake 2p" {
+        pub port brake_1 "BRAKE 1" pin 1;
+        pub port brake_2 "BRAKE 2" pin 2;
+    }
+
+    // Interlock termination — single input, no output
+    pub port interlock "INTLK";
+
+    // Safe power output — enabled when interlock + safety OK
+    pub port safe_pwr "SAFE PWR";
+}

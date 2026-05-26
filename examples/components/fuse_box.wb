@@ -1,0 +1,17 @@
+// 12V fuse distribution box
+// Positive-only — chassis ground is implicit.
+// Each output is an individually fused +12V feed.
+
+component fuse_box {
+    // Input from DC-DC converter
+    pub port batt_in "BATT IN";
+
+    // Fused outputs
+    pub port vcm       "VCM";
+    pub port inv       "INV";
+    pub port bms_front "BMS F";
+    pub port bms_rear  "BMS R";
+
+    // Fused 12V feed that sources the HV interlock loop
+    pub port interlock "INTLK";
+}

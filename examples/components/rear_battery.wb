@@ -1,0 +1,116 @@
+// Rear battery pack
+// 6 cell modules in series, BMS master, 2 main contactors (pos + neg),
+// plus a precharge contactor and resistor in parallel with the main
+// positive contactor.
+
+use cell_module from "cell_module.wb"
+use bms_master  from "bms_master.wb"
+use contactor   from "contactor.wb"
+use resistor    from "resistor.wb"
+
+component rear_battery {
+    // --- Instances ---
+
+    cell_module module_1 "Module 1";
+    cell_module module_2 "Module 2";
+    cell_module module_3 "Module 3";
+    cell_module module_4 "Module 4";
+    cell_module module_5 "Module 5";
+    cell_module module_6 "Module 6";
+
+    bms_master bms "BMS Master";
+
+    contactor c_pos "Contactor +";
+    contactor c_neg "Contactor -";
+    contactor c_pre "Precharge";
+    resistor  r_pre "Precharge R";
+
+    // --- External interface ---
+
+    pub port hv_pos "HV+";
+    pub port hv_neg "HV-";
+
+    pub port b_pos "B+";
+    pub port gnd   "GND";
+
+    pub port safe_pwr "SAFE PWR";
+
+    pub port can_h "CAN H";
+    pub port can_l "CAN L";
+
+    pub port interlock_in  "INTLK IN";
+    pub port interlock_out "INTLK OUT";
+
+    // --- HV series chain with precharge ---
+    // Positive side: hv_pos splits to c_pos (main) and c_pre→r_pre (precharge)
+    // Both paths merge at module_1.hv_pos
+    // Negative side: module_6 → c_neg → hv_neg
+
+    wire orange 50 [hv_pos, c_pos.in, c_pre.in];
+    wire orange 50 [c_pos.out, r_pre.b, module_1.hv_pos];
+    wire orange 50 [c_pre.out, r_pre.a];
+
+    wire orange 50 [module_1.hv_neg, module_2.hv_pos];
+    wire orange 50 [module_2.hv_neg, module_3.hv_pos];
+    wire orange 50 [module_3.hv_neg, module_4.hv_pos];
+    wire orange 50 [module_4.hv_neg, module_5.hv_pos];
+    wire orange 50 [module_5.hv_neg, module_6.hv_pos];
+    wire orange 50 [module_6.hv_neg, c_neg.in];
+    wire orange 50 [c_neg.out, hv_neg];
+
+    // --- ISO-SPI daisy chain ---
+
+    wire black 0.25 [bms.iso_spi_h, module_1.iso_spi_up_h];
+    wire black 0.25 [bms.iso_spi_l, module_1.iso_spi_up_l];
+    wire black 0.25 [module_1.iso_spi_down_h, module_2.iso_spi_up_h];
+    wire black 0.25 [module_1.iso_spi_down_l, module_2.iso_spi_up_l];
+    wire black 0.25 [module_2.iso_spi_down_h, module_3.iso_spi_up_h];
+    wire black 0.25 [module_2.iso_spi_down_l, module_3.iso_spi_up_l];
+    wire black 0.25 [module_3.iso_spi_down_h, module_4.iso_spi_up_h];
+    wire black 0.25 [module_3.iso_spi_down_l, module_4.iso_spi_up_l];
+    wire black 0.25 [module_4.iso_spi_down_h, module_5.iso_spi_up_h];
+    wire black 0.25 [module_4.iso_spi_down_l, module_5.iso_spi_up_l];
+    wire black 0.25 [module_5.iso_spi_down_h, module_6.iso_spi_up_h];
+    wire black 0.25 [module_5.iso_spi_down_l, module_6.iso_spi_up_l];
+
+    // --- Contactor control ---
+    // Safe power feeds coil high side of all 3 contactors
+    // BMS low-side drivers control coil ground
+
+    wire red 1.0 [safe_pwr, c_pos.coil_p, c_neg.coil_p, c_pre.coil_p];
+    wire black 1.0 [bms.cont_1_n, c_pos.coil_n];
+    wire black 1.0 [bms.cont_2_n, c_neg.coil_n];
+    wire black 1.0 [bms.cont_3_n, c_pre.coil_n];
+
+    // --- CAN bus ---
+
+    wire blue 0.5 [can_h, bms.can_h];
+    wire blue 0.5 [can_l, bms.can_l];
+
+    // --- 12V power ---
+
+    wire red 2.5 [b_pos, bms.b_pos];
+    wire black 2.5 [gnd, bms.gnd];
+
+    // --- Interlock pass-through ---
+
+    wire green 0.5 [interlock_in, interlock_out];
+}
+
+// --- View: Rear Battery Detail ---
+
+view schematic "Rear Battery" {
+    grid 20;
+
+    include c_pos    at (2, 6);
+    include c_pre    at (2, 10);
+    include r_pre    at (5, 10);
+    include module_1 at (8, 6);
+    include module_2 at (12, 6);
+    include module_3 at (16, 6);
+    include module_4 at (20, 6);
+    include module_5 at (24, 6);
+    include module_6 at (28, 6);
+    include c_neg    at (32, 6);
+    include bms      at (18, 2);
+}

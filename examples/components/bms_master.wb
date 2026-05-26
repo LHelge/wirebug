@@ -1,0 +1,26 @@
+// Battery Management System — master board
+// Communicates with slaves via daisy-chained ISO-SPI,
+// controls up to 3 contactors (low-side drivers),
+// reports on CAN bus.
+
+component bms_master {
+    connector "ISO-SPI 2p" {
+        pub port iso_spi_h "ISO SPI+" pin 1;
+        pub port iso_spi_l "ISO SPI-" pin 2;
+    }
+
+    connector "CAN 4p" {
+        pub port can_h "CAN H" pin 1;
+        pub port can_l "CAN L" pin 2;
+    }
+
+    connector "Power 4p" {
+        pub port b_pos "B+" pin 1;
+        pub port gnd   "GND" pins (2, 3, 4);
+    }
+
+    // Low-side contactor drivers
+    pub port cont_1_n "CONT1-";
+    pub port cont_2_n "CONT2-";
+    pub port cont_3_n "CONT3-";
+}

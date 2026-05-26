@@ -1,0 +1,7 @@
+// Emergency stop button
+// Normally-closed series switch in the HV interlock loop
+
+component e_stop {
+    pub port interlock_in  "INTLK IN";
+    pub port interlock_out "INTLK OUT";
+}

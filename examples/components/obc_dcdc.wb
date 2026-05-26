@@ -1,0 +1,31 @@
+// Combined On-Board Charger and DC-DC converter
+// Self-powered from HV bus. Charges from 1-phase AC inlet.
+// Provides 12V output to the vehicle electrical system.
+
+component obc_dcdc {
+    connector "HV DC 2p" {
+        pub port dc_pos "DC+" pin 1;
+        pub port dc_neg "DC-" pin 2;
+    }
+
+    connector "AC inlet 3p" {
+        pub port ac_l  "AC L" pin 1;
+        pub port ac_n  "AC N" pin 2;
+        pub port ac_pe "AC PE" pin 3;
+    }
+
+    connector "12V output 4p" {
+        pub port out_pos "12V OUT+" pins (1, 2);
+        pub port out_neg "12V OUT-" pins (3, 4);
+    }
+
+    connector "CAN 4p" {
+        pub port can_h "CAN H" pin 1;
+        pub port can_l "CAN L" pin 2;
+    }
+
+    connector "Interlock 2p" {
+        pub port interlock_in  "INTLK IN" pin 1;
+        pub port interlock_out "INTLK OUT" pin 2;
+    }
+}

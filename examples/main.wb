@@ -1,0 +1,85 @@
+// Aphid EV conversion — top-level vehicle wiring
+
+use front_battery from "components/front_battery.wb"
+use rear_battery  from "components/rear_battery.wb"
+use inverter      from "components/inverter.wb"
+use motor         from "components/motor.wb"
+use obc_dcdc      from "components/obc_dcdc.wb"
+use vcm           from "components/vcm.wb"
+use fuse_box      from "components/fuse_box.wb"
+use e_stop        from "components/e_stop.wb"
+
+component vehicle {
+    // --- Instances ---
+
+    front_battery front   "Front Battery";
+    rear_battery  rear    "Rear Battery";
+    inverter      inv     "Inverter";
+    motor         mot     "Motor";
+    obc_dcdc      charger "OBC/DC-DC";
+    vcm           vcm     "VCM";
+    fuse_box      fuses   "Fuse Box";
+    e_stop        e_stop  "E-Stop";
+
+    // --- HV bus ---
+    // Shared positive and negative rails connecting all HV components
+
+    wire orange 50 [front.hv_pos, rear.hv_pos, inv.dc_pos, charger.dc_pos];
+    wire orange 50 [front.hv_neg, rear.hv_neg, inv.dc_neg, charger.dc_neg];
+
+    // --- Motor phases ---
+
+    wire orange 35 [inv.phase_u, mot.phase_u];
+    wire orange 35 [inv.phase_v, mot.phase_v];
+    wire orange 35 [inv.phase_w, mot.phase_w];
+
+    // --- CAN bus ---
+
+    wire blue 0.5 [vcm.can_h, front.can_h, rear.can_h, inv.can_h, charger.can_h];
+    wire blue 0.5 [vcm.can_l, front.can_l, rear.can_l, inv.can_l, charger.can_l];
+
+    // --- HV interlock chain ---
+    // Fuse box sources 12V → front → rear → inverter → OBC → e-stop → VCM (terminates)
+
+    wire green 0.5 [fuses.interlock, front.interlock_in];
+    wire green 0.5 [front.interlock_out, rear.interlock_in];
+    wire green 0.5 [rear.interlock_out, inv.interlock_in];
+    wire green 0.5 [inv.interlock_out, charger.interlock_in];
+    wire green 0.5 [charger.interlock_out, e_stop.interlock_in];
+    wire green 0.5 [e_stop.interlock_out, vcm.interlock];
+
+    // --- Safe power ---
+    // VCM enables safe power when interlock OK + safety checks pass
+    // Feeds contactor high-side in both battery packs
+
+    wire red 2.5 [vcm.safe_pwr, front.safe_pwr, rear.safe_pwr];
+
+    // --- 12V system ---
+    // OBC/DC-DC output feeds fuse box; fuse box distributes to subsystems
+
+    wire red 6.0 [charger.out_pos, fuses.batt_in];
+
+    wire red 2.5 [fuses.vcm, vcm.b_pos];
+    wire red 2.5 [fuses.inv, inv.b_pos];
+    wire red 2.5 [fuses.bms_front, front.b_pos];
+    wire red 2.5 [fuses.bms_rear, rear.b_pos];
+
+    // --- Chassis ground bus ---
+
+    wire black 6.0 [charger.out_neg, vcm.gnd, inv.gnd, front.gnd, rear.gnd];
+}
+
+// --- View: HV System Overview ---
+
+view schematic "HV System Overview" {
+    grid 20;
+
+    include front   at (3, 4);
+    include rear    at (3, 10);
+    include inv     at (14, 4);
+    include mot     at (22, 4);
+    include charger at (14, 10);
+    include vcm     at (14, 16);
+    include fuses   at (22, 16);
+    include e_stop  at (22, 10);
+}

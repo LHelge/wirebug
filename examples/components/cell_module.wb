@@ -1,0 +1,115 @@
+// Battery cell module
+// Contains a cell pack (13 series cells with measurement taps + NTC sensors)
+// and a BMS slave board that monitors the cells and communicates via ISO-SPI.
+
+component cell_module {
+    // --- Nested private types ---
+
+    component cell_pack {
+        pub port hv_pos "HV+";
+        pub port hv_neg "HV-";
+
+        connector "Measurement 17p" {
+            pub port c0  "C0" pin 1;
+            pub port c1  "C1" pin 2;
+            pub port c2  "C2" pin 3;
+            pub port c3  "C3" pin 4;
+            pub port c4  "C4" pin 5;
+            pub port c5  "C5" pin 6;
+            pub port c6  "C6" pin 7;
+            pub port c7  "C7" pin 8;
+            pub port c8  "C8" pin 9;
+            pub port c9  "C9" pin 10;
+            pub port c10 "C10" pin 11;
+            pub port c11 "C11" pin 12;
+            pub port c12 "C12" pin 13;
+            pub port ntc1_p "NTC1+" pin 14;
+            pub port ntc1_n "NTC1-" pin 15;
+            pub port ntc2_p "NTC2+" pin 16;
+            pub port ntc2_n "NTC2-" pin 17;
+        }
+    }
+
+    component bms_slave {
+        connector "Cell taps 13p" {
+            pub port c0  "C0" pin 1;
+            pub port c1  "C1" pin 2;
+            pub port c2  "C2" pin 3;
+            pub port c3  "C3" pin 4;
+            pub port c4  "C4" pin 5;
+            pub port c5  "C5" pin 6;
+            pub port c6  "C6" pin 7;
+            pub port c7  "C7" pin 8;
+            pub port c8  "C8" pin 9;
+            pub port c9  "C9" pin 10;
+            pub port c10 "C10" pin 11;
+            pub port c11 "C11" pin 12;
+            pub port c12 "C12" pin 13;
+        }
+
+        connector "Temperature 4p" {
+            pub port ntc1_p "NTC1+" pin 1;
+            pub port ntc1_n "NTC1-" pin 2;
+            pub port ntc2_p "NTC2+" pin 3;
+            pub port ntc2_n "NTC2-" pin 4;
+        }
+
+        connector "ISO-SPI up 2p" {
+            pub port iso_spi_up_h "ISO UP+" pin 1;
+            pub port iso_spi_up_l "ISO UP-" pin 2;
+        }
+
+        connector "ISO-SPI down 2p" {
+            pub port iso_spi_down_h "ISO DN+" pin 1;
+            pub port iso_spi_down_l "ISO DN-" pin 2;
+        }
+    }
+
+    // --- Instances ---
+
+    cell_pack pack;
+    bms_slave slave;
+
+    // --- External interface ---
+
+    pub port hv_pos "HV+";
+    pub port hv_neg "HV-";
+
+    pub port iso_spi_up_h   "ISO UP+";
+    pub port iso_spi_up_l   "ISO UP-";
+    pub port iso_spi_down_h "ISO DN+";
+    pub port iso_spi_down_l "ISO DN-";
+
+    // --- Internal wiring ---
+
+    // HV power
+    wire orange 50 [hv_pos, pack.hv_pos];
+    wire orange 50 [hv_neg, pack.hv_neg];
+
+    // Cell measurement taps — pack to slave
+    wire black 0.25 [pack.c0,  slave.c0];
+    wire black 0.25 [pack.c1,  slave.c1];
+    wire black 0.25 [pack.c2,  slave.c2];
+    wire black 0.25 [pack.c3,  slave.c3];
+    wire black 0.25 [pack.c4,  slave.c4];
+    wire black 0.25 [pack.c5,  slave.c5];
+    wire black 0.25 [pack.c6,  slave.c6];
+    wire black 0.25 [pack.c7,  slave.c7];
+    wire black 0.25 [pack.c8,  slave.c8];
+    wire black 0.25 [pack.c9,  slave.c9];
+    wire black 0.25 [pack.c10, slave.c10];
+    wire black 0.25 [pack.c11, slave.c11];
+    wire black 0.25 [pack.c12, slave.c12];
+
+    // Temperature sensors — pack to slave
+    wire black 0.25 [pack.ntc1_p, slave.ntc1_p];
+    wire black 0.25 [pack.ntc1_n, slave.ntc1_n];
+    wire black 0.25 [pack.ntc2_p, slave.ntc2_p];
+    wire black 0.25 [pack.ntc2_n, slave.ntc2_n];
+
+    // ISO-SPI daisy chain — external ports to slave
+    wire black 0.25 [iso_spi_up_h,   slave.iso_spi_up_h];
+    wire black 0.25 [iso_spi_up_l,   slave.iso_spi_up_l];
+    wire black 0.25 [iso_spi_down_h, slave.iso_spi_down_h];
+    wire black 0.25 [iso_spi_down_l, slave.iso_spi_down_l];
+}
