@@ -2,7 +2,7 @@
 //! obstacle rectangles and the four compass directions a route travels.
 
 use super::super::layout::Bounds;
-use crate::view::{Point, Side};
+use crate::render::geometry::{Point, Side};
 
 /// Axis-aligned rectangle in SVG world coordinates.
 #[derive(Debug, Clone, Copy, PartialEq)]

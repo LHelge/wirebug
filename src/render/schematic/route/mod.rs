@@ -27,7 +27,7 @@ use geometry::{Dir, Rect};
 use visibility::Ovg;
 
 use super::layout::{PlacedPort, Placement};
-use crate::view::Point;
+use crate::render::geometry::Point;
 
 const EPS: f64 = 1e-6;
 /// World units → fixed-point cost. Keeps A\* costs integral and `Ord`.
@@ -157,8 +157,8 @@ pub(super) fn collapse_collinear(pts: Vec<Point>) -> Vec<Point> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::Model;
-    use crate::view::View;
+    use crate::render::schematic::layout::Grid;
+    use crate::render::schematic::tests::{design_from, view_of};
 
     /// Regression for the whole point of this module: a connection whose
     /// endpoints share a y would, under the old `manhattan_route`, run
@@ -166,47 +166,42 @@ mod tests {
     /// must detour around it.
     #[test]
     fn route_detours_around_an_intervening_component() {
-        let model: Model = r#"
-components:
-  a:
-    connectors: { j: { ports: { out: "1" } } }
-  b:
-    connectors: { j: { ports: { p: "1" } } }
-  c:
-    connectors: { j: { ports: { in: "1" } } }
-connections:
-  - { from: a.j.out, to: c.j.in }
-"#
-        .parse()
-        .unwrap();
-        // `a` and `c` face each other across `b`, whose centre sits dead
-        // between them. `grid: 1` keeps grid units equal to world units.
-        let view: View = r#"
-kind: schematic
-grid: 1
-layout:
-  a: { x: 0, y: 0 }
-  b: { x: 200, y: 0 }
-  c: { x: 400, y: 0 }
-ports:
-  a: { east: [j.out] }
-  c: { west: [j.in] }
-"#
-        .parse()
-        .unwrap();
+        // `a` and `c` face each other across `b` — unwired, so it shows no
+        // ports, but is still a box routes must avoid — whose centre sits
+        // dead between them. `b` is the second include.
+        let design = design_from(
+            r#"
+component sys {
+    node a;
+    node b;
+    node c;
+    wire red 1 [a.p, c.p];
+    component node {
+        pub port p "P";
+    }
+}
+"#,
+        );
+        // grid 1 keeps grid units equal to world units; `compute` bypasses
+        // the renderer's grid-floor check.
+        let view = view_of(
+            "sys",
+            &[("a", 0.0, 0.0), ("b", 200.0, 0.0), ("c", 400.0, 0.0)],
+        );
+        let step = 1.0;
 
-        let grid = crate::render::schematic::layout::Grid::new(view.grid_step());
-        let placement = Placement::compute(&model, &view, grid).expect("places");
-        let router = Router::build(&placement, view.grid_step());
-        let conn = &model.connections[0];
-        let a = placement.endpoint(&conn.from).expect("a placed");
-        let c = placement.endpoint(&conn.to).expect("c placed");
+        let subject = design.get(&design.root).unwrap();
+        let placement =
+            Placement::compute(&design, subject, &view, Grid::new(step)).expect("places");
+        let router = Router::build(&placement, step);
+        let pairs = placement.connection_pairs();
+        let (a, c) = pairs[0];
 
         // `b`'s drawn box (un-inflated) — taken from the placement, since
         // its world position depends on the centre-based layout.
         let b = Rect::from(placement.component_bounds().nth(1).expect("b placed"));
 
-        let path = router.route_all(&[(a, c)], view.grid_step()).remove(0);
+        let path = router.route_all(&[(a, c)], step).remove(0);
 
         assert!(path.len() > 2, "expected a detour, got {path:?}");
         assert!(

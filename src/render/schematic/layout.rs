@@ -1,34 +1,36 @@
-//! Component/port placement: walking a model + view once to produce
+//! Component/port placement: walking a design's view once to produce
 //! positioned boxes and ports in SVG world coordinates.
+//!
+//! The DSL view gives only a box centre per included instance; it carries
+//! no per-port side placement. So sides are *derived* here: a port faces
+//! the neighbour box it wires to (sum the unit vectors toward every
+//! connected neighbour; the dominant axis picks the side). A box shows
+//! only the ports a drawn wire touches — the rest are hidden, which
+//! reproduces legacy subsetting without an explicit list.
 
 use std::collections::HashMap;
 
 use indexmap::IndexMap;
 
 use super::{CHAR_WIDTH, LABEL_INSET, MIN_HEIGHT, MIN_WIDTH, SVG_MARGIN};
-use crate::error::{Error, Result};
-use crate::model::{Component, ComponentId, Model, PortRef};
-use crate::view::{ComponentPortLayout, ConnectorPortRef, Point, Side, View};
+use crate::dsl::ir::{Design, Instance, InstanceName, Pin, Port, PortName};
+use crate::error::Result;
+use crate::render::geometry::{Point, Side};
 
-/// Tolerance for comparing an author-supplied box size against the
-/// derived minimum, in world units.
-const TOL: f64 = 1e-6;
+/// A port's identity within a view: which included instance, which port.
+type PortKey = (InstanceName, PortName);
 
 /// The view's grid: one step in world units. Coordinates (component
-/// centres) and sizes given in grid units reach world space by
-/// multiplying. Ports sit two steps apart, centred on each side, and a box
-/// is always an even number of steps — so its centre, and every port,
-/// lands on a grid line for any port count.
+/// centres) given in grid units reach world space by multiplying. Ports
+/// sit two steps apart, centred on each side, and a box is always an even
+/// number of steps — so its centre, and every port, lands on a grid line
+/// for any port count.
 #[derive(Clone, Copy)]
 pub(super) struct Grid(f64);
 
 impl Grid {
     pub(super) fn new(step: f64) -> Self {
         Self(step)
-    }
-
-    fn step(self) -> f64 {
-        self.0
     }
 
     fn to_world(self, units: f64) -> f64 {
@@ -45,7 +47,6 @@ impl Grid {
 
     /// Side margin (edge-to-first-port): two grid steps — a full port
     /// pitch, so ports sit at least their own spacing in from the corner.
-    /// Keeps the box an even number of steps, so centring stays on-grid.
     fn margin(self) -> f64 {
         2.0 * self.0
     }
@@ -66,20 +67,26 @@ pub(super) struct PlacedComponent {
     pub(super) height: f64,
     pub(super) label: String,
     pub(super) ports: Vec<PlacedPort>,
-    port_index: HashMap<ConnectorPortRef, usize>,
+    /// Port name → index into `ports`. Port names are unique per
+    /// component in the DSL, so the name alone keys a port.
+    port_index: HashMap<PortName, usize>,
 }
 
 pub(super) struct PlacedPort {
-    pub(super) cp: ConnectorPortRef,
+    pub(super) port: PortName,
     pub(super) side: Side,
     pub(super) pos: Point,
     pub(super) pin: Option<String>,
     pub(super) label: String,
 }
 
-/// Everything the renderer needs after walking the model + view once.
+/// Everything the renderer needs after walking the design's view once:
+/// the placed boxes plus the wire segments to route between their ports.
 pub(super) struct Placement {
-    pub(super) components: IndexMap<ComponentId, PlacedComponent>,
+    pub(super) components: IndexMap<InstanceName, PlacedComponent>,
+    /// Chain-decomposed wire segments, both ends resolving to a placed
+    /// port (see [`Placement::compute`]).
+    connections: Vec<(PortKey, PortKey)>,
 }
 
 pub(super) struct ViewBox {
@@ -90,61 +97,135 @@ pub(super) struct ViewBox {
 }
 
 /// A component's axis-aligned box in world coordinates — the geometry the
-/// router needs, without the rest of a `PlacedComponent`. Keeps "a box is
-/// origin + size" a fact of `layout`, not of whoever consumes it.
+/// router needs, without the rest of a `PlacedComponent`.
 pub(super) struct Bounds {
     pub(super) origin: Point,
     pub(super) width: f64,
     pub(super) height: f64,
 }
 
-impl Placement {
-    pub(super) fn compute(model: &Model, view: &View, grid: Grid) -> Result<Self> {
-        let mut components = IndexMap::new();
-        let empty_layout = ComponentPortLayout::default();
-        let pitch = grid.pitch();
+/// The four sides of one box, each holding its ports in render order.
+#[derive(Default)]
+struct SidePorts<'a> {
+    west: Vec<(&'a PortName, &'a Port)>,
+    east: Vec<(&'a PortName, &'a Port)>,
+    north: Vec<(&'a PortName, &'a Port)>,
+    south: Vec<(&'a PortName, &'a Port)>,
+}
 
-        for (cid, bx) in &view.layout {
-            let Some(component) = model.components.get(cid) else {
+impl<'a> SidePorts<'a> {
+    fn push(&mut self, side: Side, entry: (&'a PortName, &'a Port)) {
+        match side {
+            Side::West => self.west.push(entry),
+            Side::East => self.east.push(entry),
+            Side::North => self.north.push(entry),
+            Side::South => self.south.push(entry),
+        }
+    }
+
+    fn sides(&self) -> [(Side, &Vec<(&'a PortName, &'a Port)>); 4] {
+        [
+            (Side::West, &self.west),
+            (Side::East, &self.east),
+            (Side::North, &self.north),
+            (Side::South, &self.south),
+        ]
+    }
+}
+
+impl Placement {
+    /// Walk `view` over `design`: resolve included child instances,
+    /// decompose the subject's wires into drawable segments, derive a side
+    /// for every connected port, then place boxes and ports on the grid.
+    pub(super) fn compute(
+        design: &Design,
+        subject: &Instance,
+        view: &crate::dsl::ir::View,
+        grid: Grid,
+    ) -> Result<Self> {
+        // Resolve each include to its child instance and world centre,
+        // preserving include order.
+        let mut boxes: IndexMap<InstanceName, (Point, &Instance)> = IndexMap::new();
+        for inc in &view.includes {
+            let Some(child_path) = subject.children.get(&inc.instance) else {
                 continue;
             };
-            let port_layout = view.ports.get(cid).unwrap_or(&empty_layout);
+            let Some(child) = design.get(child_path) else {
+                continue;
+            };
+            let centre = Point::new(grid.to_world(inc.x), grid.to_world(inc.y));
+            boxes.insert(inc.instance.clone(), (centre, child));
+        }
 
-            let (min_w, min_h) = box_dimensions(component, cid, port_layout, grid);
-            let width = resolve_size(cid, "width", bx.width, min_w, grid)?;
-            let height = resolve_size(cid, "height", bx.height, min_h, grid)?;
-            // `bx.x`/`bx.y` are the box centre in grid units. Box sizes are
-            // even multiples of the step, so the top-left origin stays on
-            // the grid and every port lands on a grid line.
-            let centre = Point::new(grid.to_world(bx.x), grid.to_world(bx.y));
+        // Chain-decompose the subject's wires into segments whose ends are
+        // both ports on included boxes; drop the rest (subject-own ends and
+        // ends on excluded instances) — the same silent drop the legacy
+        // renderer applied to unplaced ports.
+        let mut connections: Vec<(PortKey, PortKey)> = Vec::new();
+        for wire in &subject.wires {
+            for pair in wire.endpoints.windows(2) {
+                let (Some(a), Some(b)) = (child_key(&pair[0]), child_key(&pair[1])) else {
+                    continue;
+                };
+                if boxes.contains_key(&a.0) && boxes.contains_key(&b.0) {
+                    connections.push((a, b));
+                }
+            }
+        }
+
+        // Accumulate, per connected port, the summed unit vector toward
+        // each neighbour box centre — the dominant axis picks its side.
+        let mut dirs: HashMap<PortKey, (f64, f64)> = HashMap::new();
+        for (a, b) in &connections {
+            let ca = boxes[&a.0].0;
+            let cb = boxes[&b.0].0;
+            accumulate(&mut dirs, a, cb.x - ca.x, cb.y - ca.y);
+            accumulate(&mut dirs, b, ca.x - cb.x, ca.y - cb.y);
+        }
+        let side_of: HashMap<PortKey, Side> = dirs
+            .into_iter()
+            .map(|(key, (dx, dy))| (key, side_from_vector(dx, dy)))
+            .collect();
+
+        let pitch = grid.pitch();
+        let mut components = IndexMap::new();
+
+        for (name, (centre, inst)) in &boxes {
+            // Group connected ports onto their sides, in declaration order.
+            let mut side_ports = SidePorts::default();
+            for (port_name, port) in &inst.ports {
+                let key = (name.clone(), port_name.clone());
+                if let Some(&side) = side_of.get(&key) {
+                    side_ports.push(side, (port_name, port));
+                }
+            }
+
+            let label = inst
+                .label
+                .clone()
+                .unwrap_or_else(|| inst.type_name.to_string());
+            let (width, height) = box_dimensions(&label, &side_ports, grid);
             let origin = Point::new(centre.x - width / 2.0, centre.y - height / 2.0);
-            let label = component.label.clone().unwrap_or_else(|| cid.to_string());
 
             let mut ports = Vec::new();
             let mut port_index = HashMap::new();
-
-            for (side, refs) in port_layout.sides() {
+            for (side, refs) in side_ports.sides() {
                 let n = refs.len();
-                for (k, cp) in refs.iter().enumerate() {
+                for (k, (port_name, port)) in refs.iter().enumerate() {
                     let pos = port_position(origin, width, height, side, k, n, pitch);
-                    let pin = component
-                        .lookup(&cp.connector, &cp.port)
-                        .and_then(|info| info.pin)
-                        .map(str::to_owned);
-                    let label = cp.port.to_string();
-                    port_index.insert(cp.clone(), ports.len());
+                    port_index.insert((*port_name).clone(), ports.len());
                     ports.push(PlacedPort {
-                        cp: cp.clone(),
+                        port: (*port_name).clone(),
                         side,
                         pos,
-                        pin,
-                        label,
+                        pin: format_pins(&port.pins),
+                        label: port.label.clone(),
                     });
                 }
             }
 
             components.insert(
-                cid.clone(),
+                name.clone(),
                 PlacedComponent {
                     origin,
                     width,
@@ -156,20 +237,27 @@ impl Placement {
             );
         }
 
-        Ok(Self { components })
+        Ok(Self {
+            components,
+            connections,
+        })
     }
 
-    pub(super) fn endpoint(&self, port: &PortRef) -> Option<&PlacedPort> {
-        let comp = self.components.get(&port.component)?;
-        let cp = ConnectorPortRef {
-            connector: port.connector.clone(),
-            port: port.port.clone(),
-        };
-        let idx = comp.port_index.get(&cp)?;
+    fn endpoint(&self, key: &PortKey) -> Option<&PlacedPort> {
+        let comp = self.components.get(&key.0)?;
+        let idx = comp.port_index.get(&key.1)?;
         Some(&comp.ports[*idx])
     }
 
-    /// The bounding box of every placed component, in layout order.
+    /// The wire segments to route, each resolved to its two placed ports.
+    pub(super) fn connection_pairs(&self) -> Vec<(&PlacedPort, &PlacedPort)> {
+        self.connections
+            .iter()
+            .filter_map(|(a, b)| Some((self.endpoint(a)?, self.endpoint(b)?)))
+            .collect()
+    }
+
+    /// The bounding box of every placed component, in include order.
     pub(super) fn component_bounds(&self) -> impl Iterator<Item = Bounds> + '_ {
         self.components.values().map(|pc| Bounds {
             origin: pc.origin,
@@ -178,7 +266,7 @@ impl Placement {
         })
     }
 
-    /// Every placed port across all components, in layout order.
+    /// Every placed port across all components, in include order.
     pub(super) fn ports(&self) -> impl Iterator<Item = &PlacedPort> + '_ {
         self.components.values().flat_map(|pc| pc.ports.iter())
     }
@@ -226,20 +314,62 @@ impl Placement {
     }
 }
 
+/// A wire endpoint's `(instance, port)` key, or `None` for an endpoint on
+/// the subject's own boundary (which has no drawn box).
+fn child_key(end: &crate::dsl::ir::WireEnd) -> Option<PortKey> {
+    match end {
+        crate::dsl::ir::WireEnd::Child { instance, port } => Some((instance.clone(), port.clone())),
+        crate::dsl::ir::WireEnd::Own(_) => None,
+    }
+}
+
+/// Add a neighbour direction (normalised to a unit vector) to a port's
+/// running sum. A zero-length vector (a neighbour at the same centre)
+/// contributes nothing.
+fn accumulate(dirs: &mut HashMap<PortKey, (f64, f64)>, key: &PortKey, dx: f64, dy: f64) {
+    let len = dx.hypot(dy);
+    let entry = dirs.entry(key.clone()).or_insert((0.0, 0.0));
+    if len > f64::EPSILON {
+        entry.0 += dx / len;
+        entry.1 += dy / len;
+    }
+}
+
+/// Pick a side from a summed direction vector: the dominant axis wins, and
+/// a zero vector defaults to East. SVG y grows downward, so positive y is
+/// South.
+fn side_from_vector(dx: f64, dy: f64) -> Side {
+    if dx.abs() >= dy.abs() {
+        if dx < 0.0 { Side::West } else { Side::East }
+    } else if dy < 0.0 {
+        Side::North
+    } else {
+        Side::South
+    }
+}
+
+/// Render a port's pins as a comma-joined string, or `None` when it has
+/// no pin assignment.
+fn format_pins(pins: &[Pin]) -> Option<String> {
+    if pins.is_empty() {
+        return None;
+    }
+    Some(
+        pins.iter()
+            .map(Pin::to_string)
+            .collect::<Vec<_>>()
+            .join(","),
+    )
+}
+
 /// The minimum box size (width, height) in world units that fits this
 /// component's ports and label on the given grid. Both dimensions are
 /// rounded up to an even number of steps (so the box centres on the grid),
 /// and margins/port pitch are the same values [`port_position`] places
 /// ports at — so the box always contains its ports.
-fn box_dimensions(
-    component: &Component,
-    cid: &ComponentId,
-    layout: &ComponentPortLayout,
-    grid: Grid,
-) -> (f64, f64) {
+fn box_dimensions(label: &str, sides: &SidePorts, grid: Grid) -> (f64, f64) {
     let (margin, pitch) = (grid.margin(), grid.pitch());
 
-    let label = component.label.as_deref().unwrap_or(cid.as_ref());
     let label_w = label.chars().count() as f64 * CHAR_WIDTH + 2.0 * margin;
 
     // Span a side needs for `n` ports: nothing when empty, otherwise the
@@ -251,61 +381,33 @@ fn box_dimensions(
 
     let width = MIN_WIDTH
         .max(label_w)
-        .max(side_extent(layout.north.len()))
-        .max(side_extent(layout.south.len()));
+        .max(side_extent(sides.north.len()))
+        .max(side_extent(sides.south.len()));
 
     // North/south labels are drawn vertically (rotated 90°), each reaching
     // in only from the edge it sits on. The box must fit both without them
     // colliding, plus a margin of clearance between them.
-    let top_label_h = vertical_label_extent(&layout.north);
-    let bot_label_h = vertical_label_extent(&layout.south);
+    let top_label_h = vertical_label_extent(&sides.north);
+    let bot_label_h = vertical_label_extent(&sides.south);
     let vertical_label_h = top_label_h + bot_label_h + margin;
 
     // No fixed height floor — the box need only fit its ports and any
     // north/south labels, but always at least one port with its margins.
-    let height = side_extent(layout.west.len())
-        .max(side_extent(layout.east.len()))
+    let height = side_extent(sides.west.len())
+        .max(side_extent(sides.east.len()))
         .max(vertical_label_h)
         .max(2.0 * margin);
 
     (grid.snap_box(width), grid.snap_box(height))
 }
 
-/// Resolve a box dimension: an author-supplied size (in grid units) must
-/// be at least the derived minimum, otherwise its ports wouldn't fit. An
-/// omitted size falls back to that minimum. The result is rounded up to
-/// an even number of steps so the box still centres on the grid.
-fn resolve_size(
-    cid: &ComponentId,
-    axis: &'static str,
-    given: Option<f64>,
-    minimum: f64,
-    grid: Grid,
-) -> Result<f64> {
-    match given {
-        None => Ok(minimum),
-        Some(units) => {
-            let world = grid.to_world(units);
-            if world + TOL < minimum {
-                return Err(Error::ComponentBoxTooSmall {
-                    component: cid.to_string(),
-                    axis,
-                    given: units,
-                    minimum: minimum / grid.step(),
-                });
-            }
-            Ok(grid.snap_box(world))
-        }
-    }
-}
-
-/// Vertical span (in user units) that a rotated label needs from the
-/// box edge inward, given the longest port name on the side. Returns
-/// 0 when the side has no ports.
-fn vertical_label_extent(refs: &[ConnectorPortRef]) -> f64 {
+/// Vertical span (in user units) that a rotated label needs from the box
+/// edge inward, given the longest port name on the side. Returns 0 when
+/// the side has no ports.
+fn vertical_label_extent(refs: &[(&PortName, &Port)]) -> f64 {
     let max_chars = refs
         .iter()
-        .map(|cp| cp.port.as_ref().chars().count())
+        .map(|(_, port)| port.label.chars().count())
         .max()
         .unwrap_or(0);
     if max_chars == 0 {
@@ -342,20 +444,7 @@ fn port_position(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn model_with_ports() -> Model {
-        r#"
-components:
-  a:
-    label: "A"
-    connectors:
-      j:
-        ports: { p1: "1", p2: "2", p3: "3" }
-connections: []
-"#
-        .parse()
-        .expect("model parses")
-    }
+    use crate::render::schematic::tests::{design_from, view_of};
 
     #[test]
     fn port_position_centres_ports_about_the_box() {
@@ -363,113 +452,128 @@ connections: []
         let (h, pitch) = (200.0, 40.0);
         let mid = h / 2.0;
 
-        // Two ports straddle the centreline, half a pitch either side.
         let p0 = port_position(origin, 100.0, h, Side::West, 0, 2, pitch);
         let p1 = port_position(origin, 100.0, h, Side::West, 1, 2, pitch);
         assert_eq!(p0.x, 0.0);
         assert_eq!(p0.y, mid - pitch / 2.0);
         assert_eq!(p1.y, mid + pitch / 2.0);
 
-        // Three ports: the middle one sits on the centreline.
         let q = port_position(origin, 100.0, h, Side::West, 1, 3, pitch);
         assert_eq!(q.y, mid);
     }
 
     #[test]
-    fn ports_land_on_grid_lines() {
-        let grid = Grid::new(10.0);
-        let model = model_with_ports();
-        let view: View = r#"
-kind: schematic
-grid: 10
-layout:
-  a: { x: 2, y: 3 }
-ports:
-  a: { east: [j.p1, j.p2, j.p3] }
-"#
-        .parse()
-        .unwrap();
+    fn side_from_vector_picks_the_dominant_axis() {
+        assert_eq!(side_from_vector(1.0, 0.2), Side::East);
+        assert_eq!(side_from_vector(-1.0, 0.2), Side::West);
+        assert_eq!(side_from_vector(0.2, 1.0), Side::South);
+        assert_eq!(side_from_vector(0.2, -1.0), Side::North);
+        assert_eq!(side_from_vector(0.0, 0.0), Side::East);
+    }
 
-        let placement = Placement::compute(&model, &view, grid).expect("places");
+    #[test]
+    fn a_port_faces_the_neighbour_it_wires_to() {
+        // `a` at the origin wired to `b` to its east: a.out faces East,
+        // b.in faces West.
+        let design = design_from(
+            r#"
+component sys {
+    blk a;
+    blk b;
+    wire red 1 [a.p, b.p];
+    component blk {
+        pub port p "P";
+    }
+}
+"#,
+        );
+        let view = view_of("sys", &[("a", 0.0, 0.0), ("b", 10.0, 0.0)]);
+        let subject = design.get(&design.root).unwrap();
+        let placement = Placement::compute(&design, subject, &view, Grid::new(20.0)).unwrap();
+
+        let a_port = &placement.components[&InstanceName::from("a")].ports[0];
+        let b_port = &placement.components[&InstanceName::from("b")].ports[0];
+        assert_eq!(a_port.side, Side::East);
+        assert_eq!(b_port.side, Side::West);
+    }
+
+    #[test]
+    fn chain_net_yields_consecutive_segments() {
+        // A three-endpoint net decomposes into two segments (a-b, b-c).
+        let design = design_from(
+            r#"
+component sys {
+    blk a;
+    blk b;
+    blk c;
+    wire red 1 [a.p, b.p, c.p];
+    component blk {
+        pub port p "P";
+    }
+}
+"#,
+        );
+        let view = view_of(
+            "sys",
+            &[("a", 0.0, 0.0), ("b", 10.0, 0.0), ("c", 20.0, 0.0)],
+        );
+        let subject = design.get(&design.root).unwrap();
+        let placement = Placement::compute(&design, subject, &view, Grid::new(20.0)).unwrap();
+        assert_eq!(placement.connection_pairs().len(), 2);
+    }
+
+    #[test]
+    fn unconnected_ports_are_hidden() {
+        // `b.spare` is never wired, so it isn't placed.
+        let design = design_from(
+            r#"
+component sys {
+    blk a;
+    pad b;
+    wire red 1 [a.p, b.p];
+    component blk {
+        pub port p "P";
+    }
+    component pad {
+        pub port p "P";
+        pub port spare "Spare";
+    }
+}
+"#,
+        );
+        let view = view_of("sys", &[("a", 0.0, 0.0), ("b", 10.0, 0.0)]);
+        let subject = design.get(&design.root).unwrap();
+        let placement = Placement::compute(&design, subject, &view, Grid::new(20.0)).unwrap();
+        let b = &placement.components[&InstanceName::from("b")];
+        assert_eq!(b.ports.len(), 1);
+        assert_eq!(b.ports[0].port, PortName::from("p"));
+    }
+
+    #[test]
+    fn ports_land_on_grid_lines() {
+        let design = design_from(
+            r#"
+component sys {
+    blk a;
+    blk b;
+    wire red 1 [a.p1, b.p];
+    wire red 1 [a.p2, b.p];
+    wire red 1 [a.p3, b.p];
+    component blk {
+        pub port p1 "P1";
+        pub port p2 "P2";
+        pub port p3 "P3";
+        pub port p "P";
+    }
+}
+"#,
+        );
+        let view = view_of("sys", &[("a", 0.0, 5.0), ("b", 12.0, 5.0)]);
+        let subject = design.get(&design.root).unwrap();
+        let placement = Placement::compute(&design, subject, &view, Grid::new(10.0)).unwrap();
         for port in placement.ports() {
             assert_eq!(port.pos.x % 10.0, 0.0, "x off-grid: {:?}", port.pos);
             assert_eq!(port.pos.y % 10.0, 0.0, "y off-grid: {:?}", port.pos);
         }
-    }
-
-    #[test]
-    fn even_port_box_centres_on_the_grid() {
-        // The point of the 2-step pitch: an even number of ports still
-        // leaves the box an even number of steps, so its centre — the
-        // layout coordinate — lands exactly on a grid line, and the ports
-        // stay on grid lines too.
-        let grid = Grid::new(20.0);
-        let model = model_with_ports();
-        let view: View = r#"
-kind: schematic
-grid: 20
-layout:
-  a: { x: 5, y: 5 }
-ports:
-  a: { west: [j.p1, j.p2] }
-"#
-        .parse()
-        .unwrap();
-
-        let placement = Placement::compute(&model, &view, grid).expect("places");
-        let pc = placement.components.values().next().unwrap();
-        // Box centre equals the specified centre (5,5) * step 20.
-        assert_eq!(pc.origin.x + pc.width / 2.0, 100.0);
-        assert_eq!(pc.origin.y + pc.height / 2.0, 100.0);
-        for port in placement.ports() {
-            assert_eq!(port.pos.x % 20.0, 0.0);
-            assert_eq!(port.pos.y % 20.0, 0.0);
-        }
-    }
-
-    #[test]
-    fn omitted_size_derives_from_port_count() {
-        // Grid 40 so three ports clearly exceed the title/text minimum
-        // (MIN_HEIGHT snapped up to an even step count).
-        let grid = Grid::new(40.0);
-        let model = model_with_ports();
-        let view: View = r#"
-kind: schematic
-grid: 40
-layout:
-  a: { x: 0, y: 0 }
-ports:
-  a: { west: [j.p1, j.p2, j.p3] }
-"#
-        .parse()
-        .unwrap();
-
-        let placement = Placement::compute(&model, &view, grid).expect("places");
-        let pc = placement.components.values().next().unwrap();
-        // 3 west ports => 2*pitch + 2*margin = 160 + 160 = 320 (margin is
-        // a full pitch, 2 steps = 80 at grid 40).
-        assert_eq!(pc.height, 320.0);
-    }
-
-    #[test]
-    fn explicit_size_below_minimum_errors() {
-        let grid = Grid::new(10.0);
-        let model = model_with_ports();
-        // height: 1 grid unit (10 world) can't hold three west ports.
-        let view: View = r#"
-kind: schematic
-grid: 10
-layout:
-  a: { x: 0, y: 0, height: 1 }
-ports:
-  a: { west: [j.p1, j.p2, j.p3] }
-"#
-        .parse()
-        .unwrap();
-
-        assert!(matches!(
-            Placement::compute(&model, &view, grid),
-            Err(Error::ComponentBoxTooSmall { axis: "height", .. })
-        ));
     }
 }

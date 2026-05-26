@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use super::super::RawRoute;
 use super::super::visibility::Ovg;
 use super::EPS;
-use crate::view::Point;
+use crate::render::geometry::Point;
 
 /// An OVG edge in canonical (low, high) node-id form.
 pub(super) type Edge = (usize, usize);

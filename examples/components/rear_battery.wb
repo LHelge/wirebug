@@ -102,15 +102,15 @@ component rear_battery {
 view schematic "Rear Battery" {
     grid 20;
 
-    include c_pos    at (2, 6);
-    include c_pre    at (2, 10);
-    include r_pre    at (5, 10);
-    include module_1 at (8, 6);
-    include module_2 at (12, 6);
-    include module_3 at (16, 6);
-    include module_4 at (20, 6);
-    include module_5 at (24, 6);
-    include module_6 at (28, 6);
-    include c_neg    at (32, 6);
-    include bms      at (18, 2);
+    include c_pos    at (4, 30);
+    include module_1 at (15, 30);
+    include module_2 at (26, 30);
+    include module_3 at (37, 30);
+    include module_4 at (48, 30);
+    include module_5 at (59, 30);
+    include module_6 at (70, 30);
+    include c_neg    at (81, 30);
+    include bms      at (42, 8);
+    include c_pre    at (15, 52);
+    include r_pre    at (26, 52);
 }

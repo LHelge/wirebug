@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 
 use super::geometry::{Dir, Rect};
-use crate::view::Point;
+use crate::render::geometry::Point;
 
 const EPS: f64 = 1e-6;
 

@@ -23,11 +23,10 @@ What works today:
   - elaboration of the type/instance hierarchy into a flat, addressable IR;
   - validation (undefined names, duplicates, private-port access, containment cycles, …);
   - rich diagnostics via [`miette`](https://github.com/zkat/miette) — source snippets, carets, `--format json`.
-- A schematic renderer (rectangle blocks, labeled ports, auto-routed wires, single SVG out).
+- A schematic renderer (rectangle blocks, labeled ports, auto-routed wires, single SVG out) driven straight off the elaborated IR — `.wb` projects render directly.
 
 In transition / not yet:
 
-- **Rendering from the DSL.** The renderer currently still consumes a legacy YAML model; a future change re-points it at the elaborated IR so `.wb` projects render directly.
 - Harness drawings (WireViz-style via Graphviz)
 - BOM views
 - View composition / `extends`
@@ -93,12 +92,15 @@ Problems are reported with source snippets and carets (via miette); a clean run 
 
 **Project** — a directory rooted at `main.wb`. Logical hierarchy comes only from `use` imports and DSL nesting, never from directory layout.
 
-## Rendering (legacy YAML path)
+## Rendering
 
-Rendering still runs off the original YAML model/view format and is being migrated to consume the DSL. Positions and sizes in a view are in **grid units**: the renderer multiplies by the grid step. `x`/`y` are the box **centre**; ports sit two grid steps apart and are centred on each side, so lining two components up makes the wire between them run straight. Omit `width`/`height` to size a box from its busiest side; omit `grid:` for the default. The grid must be coarse enough that the two-step port pitch clears a label — too fine a grid errors rather than overlapping labels.
+`render` runs the same DSL pipeline as `check`, then draws every view in the design to its own SVG. Each `include` position is in **grid units**: the renderer multiplies by the grid step, and `x`/`y` are the box **centre**. Ports sit two grid steps apart and are centred on each side, so lining two components up makes the wire between them run straight. A box sizes itself from its busiest side (there is no explicit size in the DSL); omit `grid:` for the default. The grid must be coarse enough that the two-step port pitch clears a label — too fine a grid errors rather than overlapping labels.
+
+The DSL view carries no per-port side placement, so the renderer **derives** it: a port faces the neighbour box it wires to, and a box shows only the ports a drawn wire actually touches.
 
 ```sh
-wirebug render --model model.yaml --view views/hv_overview.yaml --out hv.svg
+wirebug render                       # discovers main.wb by walking up from the CWD
+wirebug render examples/main.wb --out out/   # one SVG per view, into out/
 ```
 
 ## Design principles

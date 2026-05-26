@@ -21,7 +21,7 @@ use super::RawRoute;
 use super::collapse_collinear;
 use super::geometry::Rect;
 use super::visibility::Ovg;
-use crate::view::Point;
+use crate::render::geometry::Point;
 use segments::Segment;
 
 /// Coordinate tolerance shared across the nudge submodules.

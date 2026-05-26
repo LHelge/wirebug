@@ -16,7 +16,7 @@ use super::EPS;
 use super::order::Channel;
 use super::segments::{Orientation, Segment};
 use super::vpsc::{self, Constraint, Var};
-use crate::view::Point;
+use crate::render::geometry::Point;
 
 /// Weight that pins a port-touching segment to its connection point.
 const PIN_WEIGHT: f64 = 1e6;

@@ -100,7 +100,7 @@ fn entry_key(ovg: &Ovg, nodes: &[usize], edges: &HashSet<Edge>, orientation: Ori
 mod tests {
     use super::super::super::geometry::Rect;
     use super::*;
-    use crate::view::Point;
+    use crate::render::geometry::Point;
 
     #[test]
     fn collinear_shared_edges_form_one_channel_ordered_by_entry() {

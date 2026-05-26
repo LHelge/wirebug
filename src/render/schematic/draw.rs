@@ -5,10 +5,10 @@ use svg::node::element::{Circle, Group, Polyline, Rectangle, Text};
 
 use super::layout::{PlacedComponent, PlacedPort};
 use super::{COMPONENT_TITLE_GAP, LABEL_INSET, PIN_INSET, PORT_RADIUS};
-use crate::model::ComponentId;
-use crate::view::{Point, Side};
+use crate::dsl::ir::InstanceName;
+use crate::render::geometry::{Point, Side};
 
-pub(super) fn render_component(cid: &ComponentId, pc: &PlacedComponent) -> Group {
+pub(super) fn render_component(cid: &InstanceName, pc: &PlacedComponent) -> Group {
     let rect = Rectangle::new()
         .set("x", pc.origin.x)
         .set("y", pc.origin.y)
@@ -46,7 +46,7 @@ fn render_port(p: &PlacedPort) -> Group {
 
     let mut group = Group::new()
         .set("class", "port")
-        .set("data-port", p.cp.to_string())
+        .set("data-port", p.port.to_string())
         .add(circle)
         .add(label);
 

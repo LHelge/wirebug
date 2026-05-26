@@ -1,27 +1,29 @@
 //! Rectangle-based SVG schematic renderer.
 //!
-//! Each component becomes a box with ports distributed evenly along the
-//! sides the view places them on, and every connection becomes an
+//! Each included instance becomes a box with ports distributed along the
+//! sides the layout derives for them, and every wire segment becomes an
 //! orthogonal polyline between two ports.
 //!
-//! - `layout` turns a model + view into positioned boxes and ports.
+//! - `layout` turns a design's view into positioned boxes and ports.
 //! - `draw` emits the SVG for those boxes, ports, and wires.
 //! - `route` finds object-avoiding orthogonal paths for the wires.
 
 mod draw;
-mod layout;
+pub(super) mod layout;
 mod route;
 
 use svg::Document;
 use svg::node::element::{Group, Style, Text};
 
-use super::Renderer;
+use crate::dsl::ir::{Design, Instance, View};
 use crate::error::{Error, Result};
-use crate::model::Model;
-use crate::view::View;
 
 use layout::{Grid, Placement};
 use route::Router;
+
+/// Grid step (world units) used when a view doesn't specify one. Ports
+/// sit two steps apart, so the default port pitch is twice this.
+pub(super) const DEFAULT_GRID: f64 = 15.0;
 
 pub(super) const MIN_WIDTH: f64 = 160.0;
 pub(super) const MIN_HEIGHT: f64 = 100.0;
@@ -52,9 +54,16 @@ const STYLE: &str = "\
 #[derive(Default)]
 pub struct SchematicRenderer;
 
-impl Renderer for SchematicRenderer {
-    fn render(&self, model: &Model, view: &View) -> Result<String> {
-        let step = view.grid_step();
+impl SchematicRenderer {
+    /// Render `view` (documenting `subject`) against `design` to an SVG
+    /// string. Wire segments are routed against the placed boxes.
+    pub(super) fn render(
+        &self,
+        design: &Design,
+        subject: &Instance,
+        view: &View,
+    ) -> Result<String> {
+        let step = view.grid.unwrap_or(DEFAULT_GRID);
         if step <= 0.0 {
             return Err(Error::NonPositiveGrid { grid: step });
         }
@@ -68,24 +77,20 @@ impl Renderer for SchematicRenderer {
             });
         }
         let grid = Grid::new(step);
-        let placement = Placement::compute(model, view, grid)?;
+        let placement = Placement::compute(design, subject, view, grid)?;
 
         // Route before sizing the canvas: wires can detour outside the
-        // component bounds (e.g. a bundle dropping below two south-facing
-        // ports), so the viewBox has to enclose them too.
+        // component bounds, so the viewBox has to enclose them too.
         let router = Router::build(&placement, step);
-        let pairs: Vec<_> = model
-            .connections
-            .iter()
-            .filter_map(|c| Some((placement.endpoint(&c.from)?, placement.endpoint(&c.to)?)))
-            .collect();
+        let pairs = placement.connection_pairs();
         let wires = router.route_all(&pairs, step);
 
         let mut doc = Document::new()
             .set("xmlns", "http://www.w3.org/2000/svg")
             .add(Style::new(STYLE));
 
-        let viewbox = placement.viewbox(view.title.is_some(), &wires);
+        let has_title = !view.title.is_empty();
+        let viewbox = placement.viewbox(has_title, &wires);
         doc = doc.set(
             "viewBox",
             format!(
@@ -94,9 +99,9 @@ impl Renderer for SchematicRenderer {
             ),
         );
 
-        if let Some(title) = &view.title {
+        if has_title {
             doc = doc.add(
-                Text::new(title.clone())
+                Text::new(view.title.clone())
                     .set("class", "title")
                     .set("x", viewbox.x + SVG_MARGIN)
                     .set("y", viewbox.y + SVG_MARGIN - TITLE_GAP),
@@ -104,8 +109,8 @@ impl Renderer for SchematicRenderer {
         }
 
         let mut components_group = Group::new().set("class", "components");
-        for (cid, pc) in &placement.components {
-            components_group = components_group.add(draw::render_component(cid, pc));
+        for (name, pc) in &placement.components {
+            components_group = components_group.add(draw::render_component(name, pc));
         }
         doc = doc.add(components_group);
 
@@ -120,123 +125,103 @@ impl Renderer for SchematicRenderer {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    use crate::dsl::ir::{Include, InstanceName, TypeName};
 
-    fn tiny() -> (Model, View) {
-        let model: Model = r#"
-components:
-  a:
-    label: "Alpha"
-    connectors:
-      j:
-        ports:
-          out: "1"
-  b:
-    label: "Beta"
-    connectors:
-      j:
-        ports:
-          in: "1"
-connections:
-  - { from: a.j.out, to: b.j.in }
-"#
-        .parse()
-        .unwrap();
+    /// Elaborate a single-file `.wb` source into a [`Design`]. The source
+    /// must have a single top-level component (the views are built
+    /// separately with [`view_of`]).
+    pub(crate) fn design_from(src: &str) -> Design {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("main.wb"), src).expect("write");
+        let (project, _) = crate::dsl::project::load(&dir.path().join("main.wb"));
+        let project = project.expect("loads");
+        let resolved = crate::dsl::resolve::resolve(&project);
+        let (design, problems) = crate::dsl::elaborate::elaborate(&resolved);
+        assert!(problems.is_empty(), "elaboration problems: {problems:?}");
+        design.expect("a design")
+    }
 
-        let view: View = r#"
-kind: schematic
-title: "Tiny"
-layout:
-  a: { x: 0, y: 0 }
-  b: { x: 300, y: 0 }
-ports:
-  a:
-    east: [j.out]
-  b:
-    west: [j.in]
-"#
-        .parse()
-        .unwrap();
+    /// A schematic view over `subject`, including the named instances at
+    /// the given grid coordinates.
+    pub(crate) fn view_of(subject: &str, includes: &[(&str, f64, f64)]) -> View {
+        View {
+            kind: "schematic".to_string(),
+            title: "T".to_string(),
+            grid: None,
+            subject: TypeName::from(subject),
+            includes: includes
+                .iter()
+                .map(|(name, x, y)| Include {
+                    instance: InstanceName::from(*name),
+                    x: *x,
+                    y: *y,
+                })
+                .collect(),
+        }
+    }
 
-        (model, view)
+    fn render(design: &Design, view: &View) -> Result<String> {
+        let subject = design
+            .instances
+            .values()
+            .find(|i| i.type_name == view.subject)
+            .expect("subject instance");
+        SchematicRenderer.render(design, subject, view)
+    }
+
+    fn two_box_design() -> Design {
+        design_from(
+            r#"
+component sys {
+    alpha a;
+    beta b;
+    wire red 1 [a.p, b.p];
+    component alpha {
+        pub port p "Out" pin 1;
+    }
+    component beta {
+        pub port p "In" pin 1;
+    }
+}
+"#,
+        )
     }
 
     #[test]
-    fn grid_finer_than_min_port_pitch_errors() {
-        let model: Model = r#"
-components:
-  a:
-    connectors: { j: { ports: { out: "1" } } }
-connections: []
-"#
-        .parse()
-        .unwrap();
-        // Pitch is 2 steps, so a step of 5 gives pitch 10 < MIN_PORT_PITCH.
-        let view: View = r#"
-kind: schematic
-grid: 5
-layout:
-  a: { x: 0, y: 0 }
-ports:
-  a: { east: [j.out] }
-"#
-        .parse()
-        .unwrap();
-
-        assert!(matches!(
-            SchematicRenderer.render(&model, &view),
-            Err(Error::GridTooSmall { .. })
-        ));
-    }
-
-    #[test]
-    fn tiny_render_contains_expected_fragments() {
-        let (model, view) = tiny();
-        let svg = SchematicRenderer.render(&model, &view).expect("renders");
+    fn render_contains_expected_fragments() {
+        let design = two_box_design();
+        let view = view_of("sys", &[("a", 0.0, 0.0), ("b", 16.0, 0.0)]);
+        let svg = render(&design, &view).expect("renders");
 
         assert!(svg.contains("<svg"));
         assert!(svg.contains("viewBox="));
-        assert!(svg.contains("Alpha"));
-        assert!(svg.contains("Beta"));
+        assert!(svg.contains("alpha"));
+        assert!(svg.contains("beta"));
         assert!(svg.contains("class=\"wire\""));
         assert!(svg.contains("class=\"component\""));
         assert!(svg.contains("class=\"port\""));
     }
 
     #[test]
-    fn unplaced_port_is_silently_dropped_from_wires() {
-        let model: Model = r#"
-components:
-  a:
-    connectors:
-      j:
-        ports:
-          out: "1"
-  b:
-    connectors:
-      j:
-        ports:
-          in: "1"
-connections:
-  - { from: a.j.out, to: b.j.in }
-"#
-        .parse()
-        .unwrap();
-        // View places `a` only; the connection's `b` endpoint is hidden.
-        let view: View = r#"
-kind: schematic
-layout:
-  a: { x: 0, y: 0 }
-ports:
-  a:
-    east: [j.out]
-"#
-        .parse()
-        .unwrap();
+    fn grid_finer_than_min_port_pitch_errors() {
+        let design = two_box_design();
+        // Pitch is 2 steps, so a step of 5 gives pitch 10 < MIN_PORT_PITCH.
+        let mut view = view_of("sys", &[("a", 0.0, 0.0)]);
+        view.grid = Some(5.0);
+        assert!(matches!(
+            render(&design, &view),
+            Err(Error::GridTooSmall { .. })
+        ));
+    }
 
-        let svg = SchematicRenderer.render(&model, &view).unwrap();
-        // No wire group should contain a polyline since b isn't placed.
+    #[test]
+    fn wire_to_excluded_box_is_dropped() {
+        let design = two_box_design();
+        // Only `a` is included; the wire's `b` end isn't placed.
+        let view = view_of("sys", &[("a", 0.0, 0.0)]);
+        let svg = render(&design, &view).unwrap();
         assert!(!svg.contains("class=\"wire\""));
     }
 }

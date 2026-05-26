@@ -16,7 +16,7 @@ use pathfinding::prelude::astar;
 use super::geometry::Dir;
 use super::visibility::Ovg;
 use super::{BEND_PENALTY, SCALE};
-use crate::view::Point;
+use crate::render::geometry::Point;
 
 const EPS: f64 = 1e-6;
 

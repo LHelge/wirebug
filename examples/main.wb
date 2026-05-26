@@ -74,12 +74,12 @@ component vehicle {
 view schematic "HV System Overview" {
     grid 20;
 
-    include front   at (3, 4);
-    include rear    at (3, 10);
-    include inv     at (14, 4);
-    include mot     at (22, 4);
-    include charger at (14, 10);
-    include vcm     at (14, 16);
-    include fuses   at (22, 16);
-    include e_stop  at (22, 10);
+    include front   at (10, 10);
+    include rear    at (10, 30);
+    include inv     at (38, 10);
+    include charger at (38, 30);
+    include vcm     at (38, 50);
+    include mot     at (66, 10);
+    include e_stop  at (66, 30);
+    include fuses   at (66, 50);
 }

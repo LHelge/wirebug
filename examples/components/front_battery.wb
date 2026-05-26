@@ -93,13 +93,13 @@ component front_battery {
 view schematic "Front Battery" {
     grid 20;
 
-    include c_pos    at (2, 6);
-    include module_1 at (6, 6);
-    include module_2 at (10, 6);
-    include module_3 at (14, 6);
-    include module_4 at (18, 6);
-    include module_5 at (22, 6);
-    include module_6 at (26, 6);
-    include c_neg    at (30, 6);
-    include bms      at (16, 2);
+    include c_pos    at (4, 30);
+    include module_1 at (15, 30);
+    include module_2 at (26, 30);
+    include module_3 at (37, 30);
+    include module_4 at (48, 30);
+    include module_5 at (59, 30);
+    include module_6 at (70, 30);
+    include c_neg    at (81, 30);
+    include bms      at (42, 8);
 }
