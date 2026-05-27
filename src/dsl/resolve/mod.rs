@@ -17,7 +17,7 @@ use crate::dsl::ast::{self, Item, Member};
 use crate::dsl::diagnostics::Problem;
 use crate::dsl::ir::{InstanceName, Pin, PortName, Side};
 use crate::dsl::project::Project;
-use crate::dsl::span::{FileId, Span};
+use crate::dsl::span::{FileId, Span, Spanned};
 
 /// Index of a definition in [`Resolved::defs`].
 pub type DefId = usize;
@@ -484,22 +484,135 @@ impl<'a> Resolver<'a> {
             }
 
             let Some(tid) = type_id else { continue }; // undefined type already reported
-            match self.defs[tid].ports.get(&PortName::from(port)) {
-                None => problems.push(Problem::UnknownPort {
+            self.check_port_visibility(tid, port, placement.port.span, file, problems);
+        }
+    }
+
+    /// Validate that `port` exists and is `pub` on the type `tid`, pushing the
+    /// matching problem otherwise. Shared by include and enclosure checks.
+    fn check_port_visibility(
+        &self,
+        tid: DefId,
+        port: &str,
+        span: Span,
+        file: FileId,
+        problems: &mut Vec<Problem>,
+    ) {
+        match self.defs[tid].ports.get(&PortName::from(port)) {
+            None => problems.push(Problem::UnknownPort {
+                port: port.to_string(),
+                on: format!(" on `{}`", self.defs[tid].name),
+                src: self.project.source(file),
+                at: span.into(),
+            }),
+            Some(facts) if facts.visibility != ast::Visibility::Public => {
+                problems.push(Problem::PrivatePort {
                     port: port.to_string(),
-                    on: format!(" on `{}`", self.defs[tid].name),
+                    ty: self.defs[tid].name.to_string(),
                     src: self.project.source(file),
-                    at: placement.port.span.into(),
-                }),
-                Some(facts) if facts.visibility != ast::Visibility::Public => {
-                    problems.push(Problem::PrivatePort {
-                        port: port.to_string(),
-                        ty: self.defs[tid].name.to_string(),
+                    at: span.into(),
+                });
+            }
+            Some(_) => {}
+        }
+    }
+
+    /// Validate the view's `enclosure { }` block against the subject type:
+    /// each `<port> at (x, y)` must name exactly one side (west/east in the x
+    /// slot, north/south in the y slot) and one coordinate, the port must
+    /// exist and be `pub` on the subject, and no port is placed twice.
+    fn check_enclosure(
+        &self,
+        view: &ast::View,
+        subject: DefId,
+        file: FileId,
+        problems: &mut Vec<Problem>,
+    ) {
+        let mut seen: HashMap<&str, Span> = HashMap::new();
+        for ep in &view.enclosure {
+            self.check_enclosure_anchor(ep, file, problems);
+
+            let port = ep.port.node.as_str();
+            if let Some(&first) = seen.get(port) {
+                problems.push(Problem::DuplicateViewPort {
+                    port: port.to_string(),
+                    src: self.project.source(file),
+                    at: ep.port.span.into(),
+                    first: first.into(),
+                });
+            } else {
+                seen.insert(port, ep.port.span);
+            }
+
+            self.check_port_visibility(subject, port, ep.port.span, file, problems);
+        }
+    }
+
+    /// Check an enclosure port's `(x, y)` anchor: exactly one slot is a side
+    /// and one a coordinate, and the side sits in the slot for its axis.
+    fn check_enclosure_anchor(
+        &self,
+        ep: &ast::EnclosurePort,
+        file: FileId,
+        problems: &mut Vec<Problem>,
+    ) {
+        use ast::Anchor::{Coord, Edge};
+        match (&ep.x, &ep.y) {
+            (Edge(s), Coord(_)) => self.check_edge_slot(s, true, file, problems),
+            (Coord(_), Edge(s)) => self.check_edge_slot(s, false, file, problems),
+            (Coord(_), Coord(_)) => problems.push(Problem::EnclosureAnchor {
+                message: "an enclosure port anchor must name one side; neither slot is a side"
+                    .to_string(),
+                src: self.project.source(file),
+                at: ep.span.into(),
+            }),
+            (Edge(_), Edge(_)) => problems.push(Problem::EnclosureAnchor {
+                message:
+                    "an enclosure port anchor names one side and one coordinate, not two sides"
+                        .to_string(),
+                src: self.project.source(file),
+                at: ep.span.into(),
+            }),
+        }
+    }
+
+    /// Validate a side keyword found in an anchor slot. `x_slot` is true for
+    /// the first slot (which takes west/east), false for the second
+    /// (north/south).
+    fn check_edge_slot(
+        &self,
+        side: &Spanned<ast::Ident>,
+        x_slot: bool,
+        file: FileId,
+        problems: &mut Vec<Problem>,
+    ) {
+        let s = side.node.as_str();
+        match s.parse::<Side>() {
+            Err(()) => problems.push(Problem::UnknownPortSide {
+                found: s.to_string(),
+                src: self.project.source(file),
+                at: side.span.into(),
+            }),
+            Ok(parsed) => {
+                let fits = if x_slot {
+                    matches!(parsed, Side::West | Side::East)
+                } else {
+                    matches!(parsed, Side::North | Side::South)
+                };
+                if !fits {
+                    let message = if x_slot {
+                        format!(
+                            "`{s}` is a horizontal edge; put it in the second slot: `(<x>, {s})`"
+                        )
+                    } else {
+                        format!("`{s}` is a vertical edge; put it in the first slot: `({s}, <y>)`")
+                    };
+                    problems.push(Problem::EnclosureAnchor {
+                        message,
                         src: self.project.source(file),
-                        at: placement.port.span.into(),
+                        at: side.span.into(),
                     });
                 }
-                Some(_) => {}
             }
         }
     }
@@ -576,6 +689,13 @@ impl<'a> Resolver<'a> {
             let roots = &roots_by_file[fi];
             for item in &file.ast.items {
                 let Item::View(view) = item else { continue };
+                for dup in &view.duplicate_items {
+                    problems.push(Problem::DuplicateViewItem {
+                        kind: dup.node.to_string(),
+                        src: self.project.source(FileId(fi)),
+                        at: dup.span.into(),
+                    });
+                }
                 let subject = if roots.len() == 1 {
                     Some(roots[0])
                 } else {
@@ -586,6 +706,7 @@ impl<'a> Resolver<'a> {
                     None
                 };
                 if let Some(s) = subject {
+                    self.check_enclosure(view, s, FileId(fi), &mut problems);
                     let is_harness = view.kind.node.as_str() == "harness";
                     for inc in &view.includes {
                         let name = inc.instance.node.as_str();
@@ -773,6 +894,90 @@ mod tests {
     fn duplicate_port_in_view_is_reported() {
         let p = view_with_ports("pub port a \"A\";", "west: a; east: a;");
         assert!(has(&p, "wirebug::duplicate_view_port"), "{:?}", codes(&p));
+    }
+
+    /// Single top-level `m` (a `leaf l` child, a `pub` port `a`, a private
+    /// `secret`, wired to the child) with a schematic view carrying the given
+    /// `enclosure { }` body. `leaf` lives in `leaf.wb` so `m` is the lone root.
+    fn view_with_enclosure(enclosure_body: &str) -> Vec<Problem> {
+        problems(&[
+            (
+                "main.wb",
+                &format!(
+                    "use leaf from \"leaf.wb\"\ncomponent m {{ leaf l; pub port a \"A\"; port secret \"S\"; wire red 1 [a, l.p]; }}\nview schematic \"V\" {{ enclosure {{ {enclosure_body} }} include l at (0, 0) ports {{ west: p; }}; }}\n"
+                ),
+            ),
+            ("leaf.wb", "component leaf { pub port p \"P\"; }\n"),
+        ])
+    }
+
+    #[test]
+    fn enclosure_anchor_without_a_side_is_reported() {
+        let p = view_with_enclosure("a at (1, 2);");
+        assert!(has(&p, "wirebug::enclosure_anchor"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn enclosure_side_in_the_wrong_slot_is_reported() {
+        // north names a horizontal edge, so it belongs in the second slot.
+        let p = view_with_enclosure("a at (north, 2);");
+        assert!(has(&p, "wirebug::enclosure_anchor"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn enclosure_unknown_side_is_reported() {
+        let p = view_with_enclosure("a at (up, 2);");
+        assert!(has(&p, "wirebug::unknown_port_side"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn enclosure_unknown_subject_port_is_reported() {
+        let p = view_with_enclosure("nope at (west, 2);");
+        assert!(has(&p, "wirebug::unknown_port"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn enclosure_private_subject_port_is_reported() {
+        let p = view_with_enclosure("secret at (west, 2);");
+        assert!(has(&p, "wirebug::private_port"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn well_formed_enclosure_resolves_cleanly() {
+        let p = view_with_enclosure("a at (west, 2);");
+        assert!(p.is_empty(), "unexpected problems: {:?}", codes(&p));
+    }
+
+    #[test]
+    fn view_body_items_may_appear_in_any_order() {
+        // include first, then enclosure, then grid — the reverse of the
+        // canonical order — still parses and resolves cleanly.
+        let p = problems(&[
+            (
+                "main.wb",
+                "use leaf from \"leaf.wb\"\ncomponent m { leaf l; pub port a \"A\"; wire red 1 [a, l.p]; }\nview schematic \"V\" { include l at (0,0) ports { west: p; }; enclosure { a at (west, 2); } grid 10; }\n",
+            ),
+            ("leaf.wb", "component leaf { pub port p \"P\"; }\n"),
+        ]);
+        assert!(p.is_empty(), "unexpected problems: {:?}", codes(&p));
+    }
+
+    #[test]
+    fn duplicate_grid_in_view_is_reported() {
+        let p = problems(&[(
+            "main.wb",
+            "component m { } view schematic \"V\" { grid 10; grid 20; }\n",
+        )]);
+        assert!(has(&p, "wirebug::duplicate_view_item"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn duplicate_enclosure_in_view_is_reported() {
+        let p = problems(&[(
+            "main.wb",
+            "component m { pub port a \"A\"; } view schematic \"V\" { enclosure { a at (west, 0); } enclosure { } }\n",
+        )]);
+        assert!(has(&p, "wirebug::duplicate_view_item"), "{:?}", codes(&p));
     }
 
     #[test]

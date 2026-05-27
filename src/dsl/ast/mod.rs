@@ -196,14 +196,53 @@ impl CablePropertyValue {
     }
 }
 
-/// `view <kind> "<title>" { [grid N;] <includes> }`
+/// `view <kind> "<title>" { <item>* }` where each item is a `grid N;`, an
+/// `enclosure { ... }` block, or an `include`, in any order.
 #[derive(Debug, Clone)]
 pub struct View {
     pub kind: Spanned<Ident>,
     pub title: Spanned<String>,
     pub grid: Option<Spanned<f64>>,
+    /// The subject component's own ports drawn on the enclosure boundary.
+    /// Empty when the `enclosure { }` block is absent. Refs and anchor shape
+    /// are left unresolved; resolve validates them.
+    pub enclosure: Vec<EnclosurePort>,
     pub includes: Vec<Include>,
+    /// Spans of any `grid`/`enclosure` declared beyond the first (tagged with
+    /// the item's kind). First-wins; resolve reports each as a duplicate.
+    pub duplicate_items: Vec<Spanned<&'static str>>,
     pub span: Span,
+}
+
+/// One `<port> at (<x>, <y>)` placement inside the `enclosure { }` block,
+/// where exactly one of `x`/`y` is a side keyword (west/east in the x slot,
+/// north/south in the y slot) and the other a grid coordinate. The side names
+/// the edge; the coordinate positions the port along the free axis. Resolve
+/// enforces the shape.
+#[derive(Debug, Clone)]
+pub struct EnclosurePort {
+    pub port: Spanned<Ident>,
+    pub x: Anchor,
+    pub y: Anchor,
+    pub span: Span,
+}
+
+/// One slot of an enclosure port's `at (x, y)` anchor: a grid coordinate or
+/// a side keyword pinning that axis to the enclosure edge.
+#[derive(Debug, Clone)]
+pub enum Anchor {
+    Coord(Spanned<f64>),
+    Edge(Spanned<Ident>),
+}
+
+impl Anchor {
+    /// The slot's span, for diagnostics.
+    pub fn span(&self) -> Span {
+        match self {
+            Anchor::Coord(c) => c.span,
+            Anchor::Edge(e) => e.span,
+        }
+    }
 }
 
 /// `include <instance>[.<connector>] at (x, y) [ports { ... }] ;`

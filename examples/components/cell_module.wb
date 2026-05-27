@@ -113,3 +113,32 @@ component cell_module {
     wire black 0.25 [iso_spi_down_h, slave.iso_spi_down_h];
     wire black 0.25 [iso_spi_down_l, slave.iso_spi_down_l];
 }
+
+// --- View: Cell Module Detail ---
+// Pack ↔ slave wiring drawn inside; the module's external interface (HV
+// terminals and the ISO-SPI daisy chain) leaves on the wrapping enclosure.
+
+view schematic "Cell Module" {
+    grid 20;
+
+    enclosure {
+        hv_pos at (west, 7);
+        hv_neg at (west, 9);
+
+        iso_spi_up_h   at (19, north);
+        iso_spi_up_l   at (21, north);
+        iso_spi_down_h at (19, south);
+        iso_spi_down_l at (21, south);
+    }
+
+    include pack at (6, 8) ports {
+        west: hv_pos, hv_neg;
+        east: c0, c6, c12, ntc1_p, ntc2_p;
+    };
+
+    include slave at (20, 8) ports {
+        west:  c0, c6, c12, ntc1_p, ntc2_p;
+        north: iso_spi_up_h, iso_spi_up_l;
+        south: iso_spi_down_h, iso_spi_down_l;
+    };
+}

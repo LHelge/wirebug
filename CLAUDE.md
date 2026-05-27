@@ -75,10 +75,21 @@ adds no inference (`src/render/schematic/layout.rs`):
   mechanism — explicit, not derived from wires.)
 - **Connections** — each subject wire (a multi-endpoint net) is
   **chain-decomposed** into consecutive pairs in the order written
-  (`[a,b,c]` → `a–b, b–c`). A pair is drawn only when both ends are
-  `WireEnd::Child` on *listed* ports of *included* instances; `Own` ends,
-  excluded instances, and unlisted ports drop silently. So a listed port
-  whose wire lands on an unlisted/own end shows as a bare stub.
+  (`[a,b,c]` → `a–b, b–c`). A pair is drawn only when both ends resolve to a
+  placed port: a *listed* `WireEnd::Child` port of an *included* instance, or
+  a `WireEnd::Own` port *listed in the enclosure* (below). Excluded instances,
+  unlisted ports, and own ports without an enclosure placement drop silently —
+  a listed port whose wire lands on such an end shows as a bare stub.
+- **Enclosure** — an optional `enclosure { }` block draws the subject itself
+  as a dashed box *wrapping* the schematic, with the subject's own ports on its
+  boundary as **inverted** ports (facing inward, so an `Own` end's wire routes
+  to the interior). Each port is placed `<port> at (x, y)` where one slot is a
+  side keyword (`west`/`east` in x, `north`/`south` in y) pinning that axis to
+  the edge, the other a grid coordinate along the free axis. The box
+  auto-wraps the child boxes (`Grid::enclosure_inset` standoff); it is a
+  routing endpoint set but never an obstacle (`Placement::component_bounds`
+  excludes it). An inverted port labels like a normal port on the *opposite*
+  side, so its name sits outside the boundary and its pin number inside.
 
 Box geometry is unchanged from before, minus author-supplied sizes: a
 view's `grid:` step (world units; `DEFAULT_GRID` when omitted), `include`
@@ -96,28 +107,38 @@ Because the pitch is two steps, the grid must be at least
 
 ### Harness views (`render/harness/`)
 
-The dual of the schematic, WireViz-style. An include names a **connector**
-(`include <inst>.<connector> at (x,y)`); that whole connector becomes a
-**pin table** (header = instance label + `<designator> · <part>`, one row
-per pin = number + label, ordered by pin). Cables are the *same*
-chain-decomposed subject wires, kept only when both ends land on *included*
-connectors — a port's connector is found via `ir::ConnectorRef.name`, so a
-connectorless / excluded / `Own` end drops silently (like an unlisted port
-in a schematic). The kept conductors then split by `Wire.cable`: a conductor
-tagged with a declared cable draws as a **cable box** (`CableBox`/`render_cable_box`)
-— a titled table (label + `type · length`) centred between the two
-connectors it spans, one coloured strand per row, leading in from one
-connector and out to the other. Untagged loose wires between the same node
-pair keep the plain **bundle** (`Cable`/`render_cable`). Either way each
-strand is coloured by `wire.color` (used directly as the SVG `stroke`) and
-annotated `<label> · <gauge>mm²`.
+The dual of the schematic, WireViz-style — a **trunk-and-bezier** layout. An
+include names a **connector** (`include <inst>.<connector> at (x,y)`), placed
+at its authored centre; that whole connector becomes a **pin table** (header =
+instance label + `<designator> · <part>`, one row per pin = number + label,
+ordered by pin). The renderer derives a vertical **spine** at the x-midpoint of
+the connectors (`layout.rs::spine_x`); each node faces the spine
+(`face_spine` — left of it faces East, right faces West, replacing the old
+per-node vote). Connections are the *same* chain-decomposed subject wires, kept
+only when both ends land on *included* connectors — a port's connector is found
+via `ir::ConnectorRef.name`, so a connectorless / excluded / `Own` end drops
+silently (like an unlisted port in a schematic).
 
-Two deliberate differences from the schematic's no-inference rule: pin
-**facing** is *auto-oriented* (East/West, from the net horizontal direction
-to connected nodes — `layout.rs::orient_nodes`), and cable routing is the
-simple **parallel-offset bundle** (`layout.rs::cable_path`: per-strand
-channel offset, no object avoidance) rather than the schematic's orthogonal
-router. Reusing that router is a noted future refinement.
+Kept conductors split by `Wire.cable`. A **declared cable** draws as a
+**cable box** (`CableBox`/`render_cable_box`) on the spine: a titled table
+(label + `type · length · ×count`), one coloured strand per row. Rows are
+ordered by each conductor's endpoint-y midpoint (the 1D occupancy step), the
+box's vertical centre is its strands' centroid, and multiple boxes are pushed
+apart along the spine (`build_cable_boxes`, gap `CABLE_GAP`). **Loose wires**
+(`LooseWire`/`render_loose`) draw as a single bezier pin-to-pin, no box.
+
+Every wire segment is one horizontally-flexed cubic bezier (`bezier.rs::flex`,
+`FLEX = 0.4`): a cabled conductor is lead-in → straight box run → lead-out;
+a loose wire is one curve. Control points share each endpoint's y and stay
+within the endpoints' x-span, so the curve never overshoots its bounding box
+(no viewbox padding needed). Each strand is stroked with `wire.color` (the SVG
+`stroke`) and annotated `<label> · <gauge>mm²`.
+
+Two deliberate departures from the schematic's no-inference rule: pin
+**facing** is derived from the spine (above), and wire routing is the bezier
+flex above — no object avoidance, unlike the schematic's orthogonal router.
+**Shields/drain wires are not drawn** (the IR carries no shield flag); reusing
+the orthogonal router and adding shields are noted future refinements.
 
 ## DSL validation (`check`)
 
@@ -139,7 +160,10 @@ so one run reports many. Errors fail the run; warnings fail only under
   (`duplicate_view_port`). Includes are checked per view kind: a `harness`
   include must name an existing connector (`unknown_connector`) and carry no
   `ports { }`; a `schematic` include must not name a connector — violations
-  are `wrong_include_form`.
+  are `wrong_include_form`. A view's `enclosure { }` ports resolve against the
+  *subject*: each anchor must name exactly one side in the slot for its axis
+  (`enclosure_anchor`) and an existing `pub` subject port (`unknown_port` /
+  `private_port`), with the same duplicate guard (`duplicate_view_port`).
 - **Elaborate** — `main.wb` lacks a single top-level component (no root);
   containment cycle (a component instantiating itself transitively).
 - **Validate** — wire arity (fewer than two endpoints, error); cable wire
@@ -229,11 +253,12 @@ src/
 │   │           ├── order.rs     # §6.1 order routes within a channel
 │   │           ├── place.rs     # §6.2 final placement (two axis passes)
 │   │           └── vpsc.rs      # separation-constraint solver
-│   └── harness/     # WireViz-style harness renderer (kind: harness)
+│   └── harness/     # WireViz-style trunk-and-bezier renderer (kind: harness)
 │       ├── mod.rs       # HarnessRenderer; render orchestration + STYLE
-│       ├── layout.rs    # connector pin-table nodes, auto-orient facing,
-│       │                #   chain-decomposed cables, parallel-offset routing
-│       └── draw.rs      # SVG emission: pin tables + coloured cable bundles
+│       ├── layout.rs    # pin-table nodes, spine + facing, cable boxes
+│       │                #   (centroid placement + de-overlap), loose wires
+│       ├── bezier.rs    # horizontally-flexed cubic bezier math (FLEX)
+│       └── draw.rs      # SVG emission: pin tables, cable boxes, bezier wires
 │
 │  # ── live-reloading dev server (`serve`) ──
 ├── serve/

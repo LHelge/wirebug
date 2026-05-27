@@ -44,9 +44,11 @@ const STYLE: &str = "\
 .component rect { fill: white; stroke: black; stroke-width: 1.5; }
 .component-label { font: bold 13px sans-serif; text-anchor: middle; }
 .port circle { fill: black; }
-.port-label { font: 11px sans-serif; }
+.port-label { font: 11px sans-serif; paint-order: stroke; stroke: white; stroke-width: 3px; stroke-linejoin: round; }
 .port-pin { font: italic 10px sans-serif; fill: #555; }
 .wire { fill: none; stroke: black; stroke-width: 1.25; }
+.enclosure rect { fill: none; stroke: #888; stroke-width: 1.5; stroke-dasharray: 6 4; }
+.enclosure-label { font: bold 13px sans-serif; text-anchor: middle; fill: #555; }
 .title { font: bold 14px sans-serif; }\
 ";
 
@@ -108,6 +110,12 @@ impl SchematicRenderer {
             );
         }
 
+        // The enclosure is the subject's boundary; draw it behind the
+        // components so its dashed wrapper reads as a backdrop.
+        if let Some(enclosure) = placement.enclosure() {
+            doc = doc.add(draw::render_enclosure(enclosure));
+        }
+
         let mut components_group = Group::new().set("class", "components");
         for (name, pc) in &placement.components {
             components_group = components_group.add(draw::render_component(name, pc));
@@ -153,6 +161,7 @@ pub(crate) mod tests {
             title: "T".to_string(),
             grid: None,
             subject: TypeName::from(subject),
+            enclosure: Vec::new(),
             includes: includes
                 .iter()
                 .map(|(name, x, y, ports)| Include {

@@ -10,7 +10,13 @@
     section { background: #fff; border: 1px solid #ddd; border-radius: 6px; margin: 1.5rem 0; padding: 1rem 1.5rem; }
     section h2 { margin: 0 0 .75rem; font-size: 1.1rem; }
     img { max-width: 100%; height: auto; }
+    section img { cursor: zoom-in; }
     p.empty { color: #777; }
+    /* Pure-CSS lightbox: a :target overlay shows the SVG full width.
+       Hash-driven, so a websocket reload preserves the open state. */
+    .lightbox { display: none; position: fixed; inset: 0; z-index: 100; padding: 1.5rem; background: rgba(0,0,0,.85); overflow: auto; }
+    .lightbox:target { display: block; }
+    .lightbox img { display: block; width: 100%; max-width: none; margin: 0 auto; background: #fff; border-radius: 6px; cursor: zoom-out; }
     /* Pure-CSS tabs: hidden radios drive the panel and label state. */
     .tabs input[name="tab"] { position: absolute; opacity: 0; pointer-events: none; }
     .tabbar { display: flex; gap: .5rem; border-bottom: 1px solid #ddd; margin-top: 1rem; }
@@ -48,8 +54,9 @@
 {% if view.kind == "schematic" %}
       <section>
         <h2>{{ view.title }}</h2>
-        <img src="{{ view.filename }}" alt="{{ view.title }}">
+        <a href="#lb-{{ view.filename }}"><img src="{{ view.filename }}" alt="{{ view.title }}"></a>
       </section>
+      <a href="#" class="lightbox" id="lb-{{ view.filename }}"><img src="{{ view.filename }}" alt="{{ view.title }}"></a>
 {% endif %}
 {% endfor %}
     </div>
@@ -60,8 +67,9 @@
 {% if view.kind == "harness" %}
       <section>
         <h2>{{ view.title }}</h2>
-        <img src="{{ view.filename }}" alt="{{ view.title }}">
+        <a href="#lb-{{ view.filename }}"><img src="{{ view.filename }}" alt="{{ view.title }}"></a>
       </section>
+      <a href="#" class="lightbox" id="lb-{{ view.filename }}"><img src="{{ view.filename }}" alt="{{ view.title }}"></a>
 {% endif %}
 {% endfor %}
     </div>

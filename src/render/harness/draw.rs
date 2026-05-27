@@ -1,11 +1,20 @@
-//! SVG emission for harness drawings: connector pin tables and the cable
-//! bundles between them.
+//! SVG emission for harness drawings: connector pin tables, cable boxes on
+//! the spine, and the bezier wires that flex between them.
 
-use svg::node::element::{Circle, Group, Line, Polyline, Rectangle, Text};
+use svg::node::element::{Circle, Group, Line, Path, Rectangle, Text};
 
-use super::layout::{Cable, CableBox, ConnectorNode, cable_label_anchor, cable_path};
+use super::bezier::{FLEX, flex};
+use super::layout::{CableBox, ConnectorNode, LooseWire};
 use super::{HEADER_HEIGHT, NODE_PAD, PIN_COL_WIDTH, PIN_DOT_RADIUS, ROW_HEIGHT};
 use crate::render::geometry::{Point, Side};
+
+/// A `cable-wire` path with the given SVG path data, stroked in `color`.
+fn wire_path(d: String, color: &str) -> Path {
+    Path::new()
+        .set("class", "cable-wire")
+        .set("stroke", color)
+        .set("d", d)
+}
 
 /// A connector as a titled pin table: header (instance + connector), then
 /// one row per pin (number + label), with an attach dot on the facing edge.
@@ -97,38 +106,9 @@ pub(super) fn render_node(node: &ConnectorNode) -> Group {
     group
 }
 
-/// A cable as a bundle of colored, gauged, optionally-labelled wires.
-pub(super) fn render_cable(cable: &Cable) -> Group {
-    let mut group = Group::new().set("class", "cable");
-    let n = cable.wires.len();
-    for (k, w) in cable.wires.iter().enumerate() {
-        let pts = cable_path(w.from, w.to, k, n);
-        let points = pts
-            .iter()
-            .map(|p| format!("{},{}", p.x, p.y))
-            .collect::<Vec<_>>()
-            .join(" ");
-        group = group.add(
-            Polyline::new()
-                .set("class", "cable-wire")
-                .set("stroke", w.color.clone())
-                .set("points", points),
-        );
-
-        let anchor = cable_label_anchor(w.from, w.to, k, n);
-        group = group.add(
-            Text::new(wire_annotation(w.label.as_deref(), w.gauge))
-                .set("class", "cable-label")
-                .set("x", anchor.x)
-                .set("y", anchor.y - 2.0),
-        );
-    }
-    group
-}
-
 /// A declared cable as a titled box with one coloured strand per row: each
-/// strand leads in from its left connector, runs straight across the box, and
-/// leads out to its right connector.
+/// strand flexes in from its left connector, runs straight across the box, and
+/// flexes out to its right connector.
 pub(super) fn render_cable_box(cb: &CableBox) -> Group {
     let (ox, oy) = (cb.origin.x, cb.origin.y);
 
@@ -164,39 +144,21 @@ pub(super) fn render_cable_box(cb: &CableBox) -> Group {
         );
     }
 
-    let left_edge = ox;
-    let right_edge = ox + cb.width;
+    let left_edge = Point::new(ox, 0.0);
+    let right_edge = Point::new(ox + cb.width, 0.0);
     for strand in &cb.strands {
-        let lead_in = cable_path(
-            strand.left_attach,
-            Point::new(left_edge, strand.row_y),
-            0,
-            1,
-        );
-        let through = [
-            Point::new(left_edge, strand.row_y),
-            Point::new(right_edge, strand.row_y),
-        ];
-        let lead_out = cable_path(
-            Point::new(right_edge, strand.row_y),
-            strand.right_attach,
-            0,
-            1,
-        );
+        let entry = Point::new(left_edge.x, strand.row_y);
+        let exit = Point::new(right_edge.x, strand.row_y);
 
-        for pts in [lead_in.as_slice(), through.as_slice(), lead_out.as_slice()] {
-            let points = pts
-                .iter()
-                .map(|p| format!("{},{}", p.x, p.y))
-                .collect::<Vec<_>>()
-                .join(" ");
-            group = group.add(
-                Polyline::new()
-                    .set("class", "cable-wire")
-                    .set("stroke", strand.color.clone())
-                    .set("points", points),
-            );
-        }
+        let lead_in = flex(strand.left_attach, entry, FLEX);
+        let lead_out = flex(exit, strand.right_attach, FLEX);
+        group = group
+            .add(wire_path(lead_in.path_d(), &strand.color))
+            .add(wire_path(
+                format!("M{},{} L{},{}", entry.x, entry.y, exit.x, exit.y),
+                &strand.color,
+            ))
+            .add(wire_path(lead_out.path_d(), &strand.color));
 
         group = group.add(
             Text::new(wire_annotation(strand.label.as_deref(), strand.gauge))
@@ -207,6 +169,22 @@ pub(super) fn render_cable_box(cb: &CableBox) -> Group {
     }
 
     group
+}
+
+/// A loose wire (no cable): a single flexed bezier pin-to-pin, annotated at
+/// its midpoint.
+pub(super) fn render_loose(wire: &LooseWire) -> Group {
+    let curve = flex(wire.from, wire.to, FLEX);
+    let mid = curve.point_at(0.5);
+    Group::new()
+        .set("class", "cable")
+        .add(wire_path(curve.path_d(), &wire.color))
+        .add(
+            Text::new(wire_annotation(wire.label.as_deref(), wire.gauge))
+                .set("class", "cable-label")
+                .set("x", mid.x)
+                .set("y", mid.y - 2.0),
+        )
 }
 
 /// The text shown along a wire: `<label> · <gauge>mm²`, or just the gauge

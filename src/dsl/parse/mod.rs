@@ -61,6 +61,20 @@ impl Parsed {
     }
 }
 
+/// One member of a view body, parsed in any order and folded into a [`View`].
+enum ViewItem {
+    Grid(Spanned<f64>),
+    Enclosure(Spanned<Vec<EnclosurePort>>),
+    Include(Include),
+}
+
+/// One member of a cable body, parsed in any order and folded into a
+/// [`Cable`]: a property (`type`/`length`) or a conductor wire.
+enum CableItem {
+    Property(CableProperty),
+    Wire(Wire),
+}
+
 /// Parse the significant token stream of one file into an [`ast::File`].
 pub fn parse_file(tokens: Vec<(Token, Span)>, file: FileId, src_len: usize) -> Parsed {
     let eoi = Span {
@@ -219,22 +233,38 @@ where
             span: e.span(),
         });
 
+    // Properties and conductor wires may interleave in any order; the fold
+    // partitions them, each keeping its source order.
+    let cable_item = choice((
+        cable_property.map(CableItem::Property),
+        wire.clone().map(CableItem::Wire),
+    ));
+
     let cable = just(Token::Cable)
         .ignore_then(ident)
         .then(string.or_not())
         .then(
-            cable_property
+            cable_item
                 .repeated()
-                .collect::<Vec<_>>()
-                .then(wire.clone().repeated().collect::<Vec<_>>())
+                .collect::<Vec<CableItem>>()
                 .delimited_by(just(Token::LBrace), just(Token::RBrace)),
         )
-        .map_with(|((name, label), (properties, wires)), e| Cable {
-            name,
-            label,
-            properties,
-            wires,
-            span: e.span(),
+        .map_with(|((name, label), items), e| {
+            let mut properties = Vec::new();
+            let mut wires = Vec::new();
+            for item in items {
+                match item {
+                    CableItem::Property(p) => properties.push(p),
+                    CableItem::Wire(w) => wires.push(w),
+                }
+            }
+            Cable {
+                name,
+                label,
+                properties,
+                wires,
+                span: e.span(),
+            }
         });
 
     // --- Views ---
@@ -271,6 +301,36 @@ where
         )
         .map(|lines| lines.into_iter().flatten().collect::<Vec<PortPlacement>>());
 
+    // One anchor slot: a grid coordinate or a side keyword. Resolve checks
+    // that exactly one of an enclosure port's two slots is a side.
+    let anchor = choice((number.map(Anchor::Coord), ident.map(Anchor::Edge)));
+
+    // `<port> at (<x>, <y>);` — a subject port placed on the enclosure edge.
+    let enclosure_port = ident
+        .then_ignore(just(Token::At))
+        .then(
+            anchor
+                .then_ignore(just(Token::Comma))
+                .then(anchor)
+                .delimited_by(just(Token::LParen), just(Token::RParen)),
+        )
+        .then_ignore(just(Token::Semicolon))
+        .map_with(|(port, (x, y)), e| EnclosurePort {
+            port,
+            x,
+            y,
+            span: e.span(),
+        });
+
+    let enclosure_block = just(Token::Enclosure)
+        .ignore_then(
+            enclosure_port
+                .repeated()
+                .collect::<Vec<EnclosurePort>>()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+        )
+        .map_with(|ports, e| Spanned::new(ports, e.span()));
+
     let include = just(Token::Include)
         .ignore_then(ident)
         .then(just(Token::Dot).ignore_then(ident).or_not())
@@ -296,20 +356,50 @@ where
         .ignore_then(number)
         .then_ignore(just(Token::Semicolon));
 
+    // The view body is a free-order list of these; the fold below keeps the
+    // first `grid`/`enclosure` and records any extras for a duplicate report.
+    let view_item = choice((
+        grid.map(ViewItem::Grid),
+        enclosure_block.map(ViewItem::Enclosure),
+        include.map(ViewItem::Include),
+    ));
+
     let view = just(Token::View)
         .ignore_then(ident)
         .then(string)
         .then(
-            grid.or_not()
-                .then(include.repeated().collect::<Vec<_>>())
+            view_item
+                .repeated()
+                .collect::<Vec<ViewItem>>()
                 .delimited_by(just(Token::LBrace), just(Token::RBrace)),
         )
-        .map_with(|((kind, title), (grid, includes)), e| View {
-            kind,
-            title,
-            grid,
-            includes,
-            span: e.span(),
+        .map_with(|((kind, title), items), e| {
+            let mut grid = None;
+            let mut enclosure = None;
+            let mut includes = Vec::new();
+            let mut duplicate_items = Vec::new();
+            for item in items {
+                match item {
+                    ViewItem::Grid(g) if grid.is_some() => {
+                        duplicate_items.push(Spanned::new("grid", g.span));
+                    }
+                    ViewItem::Grid(g) => grid = Some(g),
+                    ViewItem::Enclosure(block) if enclosure.is_some() => {
+                        duplicate_items.push(Spanned::new("enclosure", block.span));
+                    }
+                    ViewItem::Enclosure(block) => enclosure = Some(block.node),
+                    ViewItem::Include(inc) => includes.push(inc),
+                }
+            }
+            View {
+                kind,
+                title,
+                grid,
+                enclosure: enclosure.unwrap_or_default(),
+                includes,
+                duplicate_items,
+                span: e.span(),
+            }
         });
 
     // --- Definitions (recursive: components nest) ---
@@ -497,6 +587,30 @@ mod tests {
             CablePropertyValue::Number(_)
         ));
         assert_eq!(cable.wires.len(), 2);
+    }
+
+    #[test]
+    fn cable_properties_and_wires_may_interleave() {
+        // A wire before a property, and a property between wires — the fold
+        // partitions them, each side keeping source order.
+        let file = parse_ok(
+            r#"component c {
+                cable can_bus {
+                    wire yellow 0.5 [vcu.can_h, inv.can_h];
+                    type:   "Twisted pair";
+                    wire green  0.5 [vcu.can_l, inv.can_l];
+                    length: 2.5;
+                }
+            }"#,
+        );
+        let Member::Cable(cable) = &members(&file)[0] else {
+            panic!("expected a cable");
+        };
+        assert_eq!(cable.properties.len(), 2);
+        assert_eq!(cable.properties[0].key.node.as_str(), "type");
+        assert_eq!(cable.wires.len(), 2);
+        assert_eq!(cable.wires[0].color.node.as_str(), "yellow");
+        assert_eq!(cable.wires[1].color.node.as_str(), "green");
     }
 
     #[test]

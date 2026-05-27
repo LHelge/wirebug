@@ -344,6 +344,37 @@ pub enum Problem {
         at: SourceSpan,
     },
 
+    /// A view declares `grid` or `enclosure` more than once. The body takes
+    /// items in any order, but at most one of each.
+    #[error("view declares `{kind}` more than once")]
+    #[diagnostic(
+        code(wirebug::duplicate_view_item),
+        help("a view takes at most one `grid` and one `enclosure` block")
+    )]
+    DuplicateViewItem {
+        kind: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("declared again here")]
+        at: SourceSpan,
+    },
+
+    /// An enclosure port's `at (x, y)` anchor isn't exactly one side keyword
+    /// and one coordinate: two coordinates, two sides, or a side in the
+    /// wrong slot (west/east must be the x slot, north/south the y slot).
+    #[error("{message}")]
+    #[diagnostic(
+        code(wirebug::enclosure_anchor),
+        help("place a port as `<port> at (west|east, <y>)` or `<port> at (<x>, north|south)`")
+    )]
+    EnclosureAnchor {
+        message: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("here")]
+        at: SourceSpan,
+    },
+
     // --- Elaboration ---
     /// `main.wb` doesn't define exactly one top-level component to elaborate.
     #[error("`main.wb` must define exactly one top-level component")]
