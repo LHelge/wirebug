@@ -74,12 +74,41 @@ component vehicle {
 view schematic "HV System Overview" {
     grid 20;
 
-    include front   at (10, 10);
-    include rear    at (10, 30);
-    include inv     at (38, 10);
-    include charger at (38, 30);
-    include vcm     at (38, 50);
-    include mot     at (66, 10);
-    include e_stop  at (66, 30);
-    include fuses   at (66, 50);
+    include front at (10, 10) ports {
+        east:  hv_pos, hv_neg, can_h, can_l, b_pos, safe_pwr, gnd;
+        south: interlock_in, interlock_out;
+    };
+
+    include rear at (10, 30) ports {
+        east:  hv_pos, hv_neg, can_h, can_l, b_pos, safe_pwr, gnd;
+        north: interlock_in, interlock_out;
+    };
+
+    include inv at (38, 10) ports {
+        west:  dc_pos, dc_neg, can_h, can_l, b_pos, gnd;
+        east:  phase_u, phase_v, phase_w;
+        south: interlock_in, interlock_out;
+    };
+
+    include charger at (38, 30) ports {
+        west:  dc_pos, dc_neg, can_h, can_l, out_pos, out_neg;
+        south: interlock_in, interlock_out;
+    };
+
+    include vcm at (38, 50) ports {
+        west:  can_h, can_l, b_pos, gnd, safe_pwr;
+        north: interlock;
+    };
+
+    include mot at (66, 10) ports {
+        west: phase_u, phase_v, phase_w;
+    };
+
+    include e_stop at (66, 30) ports {
+        west: interlock_in, interlock_out;
+    };
+
+    include fuses at (66, 50) ports {
+        west: batt_in, vcm, inv, bms_front, bms_rear, interlock;
+    };
 }

@@ -61,8 +61,12 @@ component vehicle {
 // a view lives next to the component it documents
 view schematic "HV Power Path" {
     grid 20;
-    include pack at (5, 5);
-    include inv  at (20, 5);
+    include pack at (5, 5) ports {
+        east: hv_pos, hv_neg;
+    };
+    include inv at (20, 5) ports {
+        west: dc_pos, dc_neg;
+    };
 }
 ```
 
@@ -88,7 +92,7 @@ Problems are reported with source snippets and carets (via miette); a clean run 
 
 **Wire** — a colour, a gauge (mm²), and two or more endpoints (`instance.port`, or a bare `port` for the enclosing component's own port). Multi-endpoint wires model shared rails and T-junctions.
 
-**View** — a rendering target that documents a component: a kind (`schematic` for now), a grid, and which instances to place where. Wires are derived from the model, never listed in views.
+**View** — a rendering target that documents a component: a kind (`schematic` for now), a grid, and which instances to place where, each with the ports to show on each side. Wires are derived from the model, never listed in views — a wire draws only between ports both views list.
 
 **Project** — a directory rooted at `main.wb`. Logical hierarchy comes only from `use` imports and DSL nesting, never from directory layout.
 
@@ -96,7 +100,7 @@ Problems are reported with source snippets and carets (via miette); a clean run 
 
 `render` runs the same DSL pipeline as `check`, then draws every view in the design to its own SVG. Each `include` position is in **grid units**: the renderer multiplies by the grid step, and `x`/`y` are the box **centre**. Ports sit two grid steps apart and are centred on each side, so lining two components up makes the wire between them run straight. A box sizes itself from its busiest side (there is no explicit size in the DSL); omit `grid:` for the default. The grid must be coarse enough that the two-step port pitch clears a label — too fine a grid errors rather than overlapping labels.
 
-The DSL view carries no per-port side placement, so the renderer **derives** it: a port faces the neighbour box it wires to, and a box shows only the ports a drawn wire actually touches.
+The view authors each port's side and order directly in its `ports` block, and that listing is also the scope: a box shows exactly the ports it lists, and a wire draws only where both ends are listed. Place a port on the side facing the box it connects to.
 
 ```sh
 wirebug render                       # discovers main.wb by walking up from the CWD

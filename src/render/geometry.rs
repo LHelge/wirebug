@@ -1,6 +1,7 @@
-//! Shared rendering geometry: a world-space point and the four sides of a
-//! component box. These are presentation concepts, owned by the renderer
-//! (the DSL IR knows nothing about where anything is drawn).
+//! Shared rendering geometry: a world-space point. The point is a pure
+//! presentation concept (the DSL IR knows nothing about where anything is
+//! drawn); [`Side`] is now authored in the view and carried in the IR, so
+//! we re-export it here for the renderer's convenience.
 
 /// 2D point in SVG user-space units.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -17,13 +18,4 @@ impl Point {
     }
 }
 
-/// Which side of a component rectangle a port sits on, named by compass
-/// direction. In SVG coordinates y grows downward, so North is the top
-/// edge and South the bottom.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Side {
-    West,
-    East,
-    North,
-    South,
-}
+pub use crate::dsl::ir::Side;

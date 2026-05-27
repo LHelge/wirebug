@@ -199,6 +199,33 @@ pub enum Problem {
         at: SourceSpan,
     },
 
+    /// A view port placement names a side that isn't a compass direction.
+    #[error("unknown side `{found}`")]
+    #[diagnostic(
+        code(wirebug::unknown_port_side),
+        help("a port side is one of `north`, `east`, `south`, `west`")
+    )]
+    UnknownPortSide {
+        found: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("not a side")]
+        at: SourceSpan,
+    },
+
+    /// A view places the same port twice in one include's `ports { }` block.
+    #[error("duplicate port `{port}` in view")]
+    #[diagnostic(code(wirebug::duplicate_view_port))]
+    DuplicateViewPort {
+        port: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("placed again here")]
+        at: SourceSpan,
+        #[label("first placed here")]
+        first: SourceSpan,
+    },
+
     // --- Elaboration ---
     /// `main.wb` doesn't define exactly one top-level component to elaborate.
     #[error("`main.wb` must define exactly one top-level component")]

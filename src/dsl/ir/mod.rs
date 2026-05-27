@@ -178,10 +178,37 @@ pub struct View {
     pub includes: Vec<Include>,
 }
 
-/// A view placement: an instance at grid coordinates.
+/// A view placement: an instance at grid coordinates, with its ports placed
+/// on authored sides in declaration order. `ports` is empty for a bare box.
 #[derive(Debug)]
 pub struct Include {
     pub instance: InstanceName,
     pub x: f64,
     pub y: f64,
+    pub ports: Vec<(PortName, Side)>,
+}
+
+/// Which side of a component box a port sits on, named by compass direction.
+/// Authored in the view's `ports { }` block. In SVG coordinates y grows
+/// downward, so North is the top edge and South the bottom.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Side {
+    West,
+    East,
+    North,
+    South,
+}
+
+impl std::str::FromStr for Side {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "west" => Side::West,
+            "east" => Side::East,
+            "north" => Side::North,
+            "south" => Side::South,
+            _ => return Err(()),
+        })
+    }
 }

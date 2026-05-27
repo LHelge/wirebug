@@ -1,12 +1,12 @@
 //! Component/port placement: walking a design's view once to produce
 //! positioned boxes and ports in SVG world coordinates.
 //!
-//! The DSL view gives only a box centre per included instance; it carries
-//! no per-port side placement. So sides are *derived* here: a port faces
-//! the neighbour box it wires to (sum the unit vectors toward every
-//! connected neighbour; the dominant axis picks the side). A box shows
-//! only the ports a drawn wire touches — the rest are hidden, which
-//! reproduces legacy subsetting without an explicit list.
+//! The DSL view authors each include's ports explicitly: which side a port
+//! sits on, and in what order (the `ports { }` block). A box shows exactly
+//! the ports listed for it — that list is both the layout and the scope.
+//! A wire segment is drawn only when both its ends are listed ports on
+//! included boxes; an unlisted or own end drops silently, so a listed port
+//! with no surviving wire shows as a bare labelled stub.
 
 use std::collections::HashMap;
 
@@ -19,6 +19,10 @@ use crate::render::geometry::{Point, Side};
 
 /// A port's identity within a view: which included instance, which port.
 type PortKey = (InstanceName, PortName);
+
+/// A resolved include: its world centre, the child instance it places, and
+/// the authored port placements (side + order) to lay out for it.
+type BoxEntry<'a> = (Point, &'a Instance, &'a [(PortName, Side)]);
 
 /// The view's grid: one step in world units. Coordinates (component
 /// centres) given in grid units reach world space by multiplying. Ports
@@ -134,18 +138,19 @@ impl<'a> SidePorts<'a> {
 }
 
 impl Placement {
-    /// Walk `view` over `design`: resolve included child instances,
-    /// decompose the subject's wires into drawable segments, derive a side
-    /// for every connected port, then place boxes and ports on the grid.
+    /// Walk `view` over `design`: resolve included child instances, read
+    /// each one's authored port placements (side + order), decompose the
+    /// subject's wires into segments between listed ports, then place boxes
+    /// and ports on the grid.
     pub(super) fn compute(
         design: &Design,
         subject: &Instance,
         view: &crate::dsl::ir::View,
         grid: Grid,
     ) -> Result<Self> {
-        // Resolve each include to its child instance and world centre,
-        // preserving include order.
-        let mut boxes: IndexMap<InstanceName, (Point, &Instance)> = IndexMap::new();
+        // Resolve each include to its child instance, world centre, and
+        // authored port placements, preserving include order.
+        let mut boxes: IndexMap<InstanceName, BoxEntry> = IndexMap::new();
         for inc in &view.includes {
             let Some(child_path) = subject.children.get(&inc.instance) else {
                 continue;
@@ -154,49 +159,43 @@ impl Placement {
                 continue;
             };
             let centre = Point::new(grid.to_world(inc.x), grid.to_world(inc.y));
-            boxes.insert(inc.instance.clone(), (centre, child));
+            boxes.insert(inc.instance.clone(), (centre, child, inc.ports.as_slice()));
+        }
+
+        // A port is shown iff the view lists it; that listing also fixes its
+        // side. Build the lookup from the authored placements of every
+        // resolved box.
+        let mut side_of: HashMap<PortKey, Side> = HashMap::new();
+        for (name, (_, _, ports)) in &boxes {
+            for (port, side) in ports.iter() {
+                side_of.insert((name.clone(), port.clone()), *side);
+            }
         }
 
         // Chain-decompose the subject's wires into segments whose ends are
-        // both ports on included boxes; drop the rest (subject-own ends and
-        // ends on excluded instances) — the same silent drop the legacy
-        // renderer applied to unplaced ports.
+        // both listed ports on included boxes; drop the rest (subject-own
+        // ends, ends on excluded instances, and unlisted ports) silently.
         let mut connections: Vec<(PortKey, PortKey)> = Vec::new();
         for wire in &subject.wires {
             for pair in wire.endpoints.windows(2) {
                 let (Some(a), Some(b)) = (child_key(&pair[0]), child_key(&pair[1])) else {
                     continue;
                 };
-                if boxes.contains_key(&a.0) && boxes.contains_key(&b.0) {
+                if side_of.contains_key(&a) && side_of.contains_key(&b) {
                     connections.push((a, b));
                 }
             }
         }
 
-        // Accumulate, per connected port, the summed unit vector toward
-        // each neighbour box centre — the dominant axis picks its side.
-        let mut dirs: HashMap<PortKey, (f64, f64)> = HashMap::new();
-        for (a, b) in &connections {
-            let ca = boxes[&a.0].0;
-            let cb = boxes[&b.0].0;
-            accumulate(&mut dirs, a, cb.x - ca.x, cb.y - ca.y);
-            accumulate(&mut dirs, b, ca.x - cb.x, ca.y - cb.y);
-        }
-        let side_of: HashMap<PortKey, Side> = dirs
-            .into_iter()
-            .map(|(key, (dx, dy))| (key, side_from_vector(dx, dy)))
-            .collect();
-
         let pitch = grid.pitch();
         let mut components = IndexMap::new();
 
-        for (name, (centre, inst)) in &boxes {
-            // Group connected ports onto their sides, in declaration order.
+        for (name, (centre, inst, ports)) in &boxes {
+            // Place ports onto their authored sides, in authored order.
             let mut side_ports = SidePorts::default();
-            for (port_name, port) in &inst.ports {
-                let key = (name.clone(), port_name.clone());
-                if let Some(&side) = side_of.get(&key) {
-                    side_ports.push(side, (port_name, port));
+            for (port_name, side) in ports.iter() {
+                if let Some(port) = inst.ports.get(port_name) {
+                    side_ports.push(*side, (port_name, port));
                 }
             }
 
@@ -323,31 +322,6 @@ fn child_key(end: &crate::dsl::ir::WireEnd) -> Option<PortKey> {
     }
 }
 
-/// Add a neighbour direction (normalised to a unit vector) to a port's
-/// running sum. A zero-length vector (a neighbour at the same centre)
-/// contributes nothing.
-fn accumulate(dirs: &mut HashMap<PortKey, (f64, f64)>, key: &PortKey, dx: f64, dy: f64) {
-    let len = dx.hypot(dy);
-    let entry = dirs.entry(key.clone()).or_insert((0.0, 0.0));
-    if len > f64::EPSILON {
-        entry.0 += dx / len;
-        entry.1 += dy / len;
-    }
-}
-
-/// Pick a side from a summed direction vector: the dominant axis wins, and
-/// a zero vector defaults to East. SVG y grows downward, so positive y is
-/// South.
-fn side_from_vector(dx: f64, dy: f64) -> Side {
-    if dx.abs() >= dy.abs() {
-        if dx < 0.0 { Side::West } else { Side::East }
-    } else if dy < 0.0 {
-        Side::North
-    } else {
-        Side::South
-    }
-}
-
 /// Render a port's pins as a comma-joined string, or `None` when it has
 /// no pin assignment.
 fn format_pins(pins: &[Pin]) -> Option<String> {
@@ -463,18 +437,8 @@ mod tests {
     }
 
     #[test]
-    fn side_from_vector_picks_the_dominant_axis() {
-        assert_eq!(side_from_vector(1.0, 0.2), Side::East);
-        assert_eq!(side_from_vector(-1.0, 0.2), Side::West);
-        assert_eq!(side_from_vector(0.2, 1.0), Side::South);
-        assert_eq!(side_from_vector(0.2, -1.0), Side::North);
-        assert_eq!(side_from_vector(0.0, 0.0), Side::East);
-    }
-
-    #[test]
-    fn a_port_faces_the_neighbour_it_wires_to() {
-        // `a` at the origin wired to `b` to its east: a.out faces East,
-        // b.in faces West.
+    fn ports_take_their_authored_side() {
+        // Sides come straight from the view; the geometry just honours them.
         let design = design_from(
             r#"
 component sys {
@@ -487,7 +451,13 @@ component sys {
 }
 "#,
         );
-        let view = view_of("sys", &[("a", 0.0, 0.0), ("b", 10.0, 0.0)]);
+        let view = view_of(
+            "sys",
+            &[
+                ("a", 0.0, 0.0, &[("p", Side::East)]),
+                ("b", 10.0, 0.0, &[("p", Side::West)]),
+            ],
+        );
         let subject = design.get(&design.root).unwrap();
         let placement = Placement::compute(&design, subject, &view, Grid::new(20.0)).unwrap();
 
@@ -515,7 +485,11 @@ component sys {
         );
         let view = view_of(
             "sys",
-            &[("a", 0.0, 0.0), ("b", 10.0, 0.0), ("c", 20.0, 0.0)],
+            &[
+                ("a", 0.0, 0.0, &[("p", Side::East)]),
+                ("b", 10.0, 0.0, &[("p", Side::East)]),
+                ("c", 20.0, 0.0, &[("p", Side::West)]),
+            ],
         );
         let subject = design.get(&design.root).unwrap();
         let placement = Placement::compute(&design, subject, &view, Grid::new(20.0)).unwrap();
@@ -523,8 +497,8 @@ component sys {
     }
 
     #[test]
-    fn unconnected_ports_are_hidden() {
-        // `b.spare` is never wired, so it isn't placed.
+    fn unlisted_port_is_hidden() {
+        // `b.spare` isn't listed in the view, so it isn't placed.
         let design = design_from(
             r#"
 component sys {
@@ -541,12 +515,53 @@ component sys {
 }
 "#,
         );
-        let view = view_of("sys", &[("a", 0.0, 0.0), ("b", 10.0, 0.0)]);
+        let view = view_of(
+            "sys",
+            &[
+                ("a", 0.0, 0.0, &[("p", Side::East)]),
+                ("b", 10.0, 0.0, &[("p", Side::West)]),
+            ],
+        );
         let subject = design.get(&design.root).unwrap();
         let placement = Placement::compute(&design, subject, &view, Grid::new(20.0)).unwrap();
         let b = &placement.components[&InstanceName::from("b")];
         assert_eq!(b.ports.len(), 1);
         assert_eq!(b.ports[0].port, PortName::from("p"));
+    }
+
+    #[test]
+    fn listed_unconnected_port_is_shown() {
+        // `b.spare` is listed but never wired: it shows as a bare stub.
+        let design = design_from(
+            r#"
+component sys {
+    blk a;
+    pad b;
+    wire red 1 [a.p, b.p];
+    component blk {
+        pub port p "P";
+    }
+    component pad {
+        pub port p "P";
+        pub port spare "Spare";
+    }
+}
+"#,
+        );
+        let view = view_of(
+            "sys",
+            &[
+                ("a", 0.0, 0.0, &[("p", Side::East)]),
+                ("b", 10.0, 0.0, &[("p", Side::West), ("spare", Side::East)]),
+            ],
+        );
+        let subject = design.get(&design.root).unwrap();
+        let placement = Placement::compute(&design, subject, &view, Grid::new(20.0)).unwrap();
+        let b = &placement.components[&InstanceName::from("b")];
+        assert_eq!(b.ports.len(), 2);
+        assert!(b.ports.iter().any(|p| p.port == PortName::from("spare")));
+        // The unconnected port draws no wire.
+        assert_eq!(placement.connection_pairs().len(), 1);
     }
 
     #[test]
@@ -568,7 +583,18 @@ component sys {
 }
 "#,
         );
-        let view = view_of("sys", &[("a", 0.0, 5.0), ("b", 12.0, 5.0)]);
+        let view = view_of(
+            "sys",
+            &[
+                (
+                    "a",
+                    0.0,
+                    5.0,
+                    &[("p1", Side::East), ("p2", Side::East), ("p3", Side::East)],
+                ),
+                ("b", 12.0, 5.0, &[("p", Side::West)]),
+            ],
+        );
         let subject = design.get(&design.root).unwrap();
         let placement = Placement::compute(&design, subject, &view, Grid::new(10.0)).unwrap();
         for port in placement.ports() {

@@ -136,6 +136,7 @@ pub fn lex(src: &str, file: FileId) -> Result<Vec<SpannedLexeme>, LexError> {
                     b',' => Some(Token::Comma),
                     b';' => Some(Token::Semicolon),
                     b'.' => Some(Token::Dot),
+                    b':' => Some(Token::Colon),
                     _ => None,
                 };
                 match token {

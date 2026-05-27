@@ -202,6 +202,38 @@ where
 
     // --- Views ---
 
+    // A `<side>: <port>, <port>;` line, flattened to one placement per port
+    // (all sharing the line's side and span).
+    let port_line = ident
+        .then_ignore(just(Token::Colon))
+        .then(
+            ident
+                .separated_by(just(Token::Comma))
+                .at_least(1)
+                .collect::<Vec<_>>(),
+        )
+        .then_ignore(just(Token::Semicolon))
+        .map_with(|(side, ports), e| {
+            let span = e.span();
+            ports
+                .into_iter()
+                .map(move |port| PortPlacement {
+                    side: side.clone(),
+                    port,
+                    span,
+                })
+                .collect::<Vec<_>>()
+        });
+
+    let ports_block = just(Token::Ports)
+        .ignore_then(
+            port_line
+                .repeated()
+                .collect::<Vec<Vec<PortPlacement>>>()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+        )
+        .map(|lines| lines.into_iter().flatten().collect::<Vec<PortPlacement>>());
+
     let include = just(Token::Include)
         .ignore_then(ident)
         .then_ignore(just(Token::At))
@@ -211,11 +243,13 @@ where
                 .then(number)
                 .delimited_by(just(Token::LParen), just(Token::RParen)),
         )
+        .then(ports_block.or_not())
         .then_ignore(just(Token::Semicolon))
-        .map_with(|(instance, (x, y)), e| Include {
+        .map_with(|((instance, (x, y)), ports), e| Include {
             instance,
             x,
             y,
+            ports: ports.unwrap_or_default(),
             span: e.span(),
         });
 
@@ -444,6 +478,27 @@ mod tests {
             panic!("expected view");
         };
         assert!(v.grid.is_none());
+        assert!(v.includes[0].ports.is_empty(), "bare include has no ports");
+    }
+
+    #[test]
+    fn include_ports_block_flattens_in_order() {
+        let file = parse_ok(
+            r#"view schematic "V" { include a at (1, 2) ports { west: p, q; east: r; }; }"#,
+        );
+        let Item::View(v) = &file.items[0] else {
+            panic!("expected view");
+        };
+        let placements = &v.includes[0].ports;
+        let got: Vec<(&str, &str)> = placements
+            .iter()
+            .map(|pl| (pl.side.node.as_str(), pl.port.node.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            vec![("west", "p"), ("west", "q"), ("east", "r")],
+            "placements keep their declaration order, one per port"
+        );
     }
 
     #[test]

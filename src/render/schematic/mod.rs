@@ -1,8 +1,8 @@
 //! Rectangle-based SVG schematic renderer.
 //!
-//! Each included instance becomes a box with ports distributed along the
-//! sides the layout derives for them, and every wire segment becomes an
-//! orthogonal polyline between two ports.
+//! Each included instance becomes a box with its ports on the sides the
+//! view authors for them, and every wire segment becomes an orthogonal
+//! polyline between two ports.
 //!
 //! - `layout` turns a design's view into positioned boxes and ports.
 //! - `draw` emits the SVG for those boxes, ports, and wires.
@@ -127,7 +127,7 @@ impl SchematicRenderer {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::dsl::ir::{Include, InstanceName, TypeName};
+    use crate::dsl::ir::{Include, InstanceName, PortName, Side, TypeName};
 
     /// Elaborate a single-file `.wb` source into a [`Design`]. The source
     /// must have a single top-level component (the views are built
@@ -144,8 +144,10 @@ pub(crate) mod tests {
     }
 
     /// A schematic view over `subject`, including the named instances at
-    /// the given grid coordinates.
-    pub(crate) fn view_of(subject: &str, includes: &[(&str, f64, f64)]) -> View {
+    /// the given grid coordinates, each with its authored port placements
+    /// `(port, side)` in order.
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn view_of(subject: &str, includes: &[(&str, f64, f64, &[(&str, Side)])]) -> View {
         View {
             kind: "schematic".to_string(),
             title: "T".to_string(),
@@ -153,10 +155,14 @@ pub(crate) mod tests {
             subject: TypeName::from(subject),
             includes: includes
                 .iter()
-                .map(|(name, x, y)| Include {
+                .map(|(name, x, y, ports)| Include {
                     instance: InstanceName::from(*name),
                     x: *x,
                     y: *y,
+                    ports: ports
+                        .iter()
+                        .map(|(p, side)| (PortName::from(*p), *side))
+                        .collect(),
                 })
                 .collect(),
         }
@@ -192,7 +198,13 @@ component sys {
     #[test]
     fn render_contains_expected_fragments() {
         let design = two_box_design();
-        let view = view_of("sys", &[("a", 0.0, 0.0), ("b", 16.0, 0.0)]);
+        let view = view_of(
+            "sys",
+            &[
+                ("a", 0.0, 0.0, &[("p", Side::East)]),
+                ("b", 16.0, 0.0, &[("p", Side::West)]),
+            ],
+        );
         let svg = render(&design, &view).expect("renders");
 
         assert!(svg.contains("<svg"));
@@ -208,7 +220,7 @@ component sys {
     fn grid_finer_than_min_port_pitch_errors() {
         let design = two_box_design();
         // Pitch is 2 steps, so a step of 5 gives pitch 10 < MIN_PORT_PITCH.
-        let mut view = view_of("sys", &[("a", 0.0, 0.0)]);
+        let mut view = view_of("sys", &[("a", 0.0, 0.0, &[("p", Side::East)])]);
         view.grid = Some(5.0);
         assert!(matches!(
             render(&design, &view),
@@ -220,7 +232,7 @@ component sys {
     fn wire_to_excluded_box_is_dropped() {
         let design = two_box_design();
         // Only `a` is included; the wire's `b` end isn't placed.
-        let view = view_of("sys", &[("a", 0.0, 0.0)]);
+        let view = view_of("sys", &[("a", 0.0, 0.0, &[("p", Side::East)])]);
         let svg = render(&design, &view).unwrap();
         assert!(!svg.contains("class=\"wire\""));
     }

@@ -15,7 +15,7 @@ use indexmap::IndexMap;
 
 use crate::dsl::ast::{self, Item, Member};
 use crate::dsl::diagnostics::Problem;
-use crate::dsl::ir::{InstanceName, Pin, PortName};
+use crate::dsl::ir::{InstanceName, Pin, PortName, Side};
 use crate::dsl::project::Project;
 use crate::dsl::span::{FileId, Span};
 
@@ -420,6 +420,60 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    /// Validate one include's `ports { }` placements against the included
+    /// instance's type: side names, duplicate ports, port existence, and
+    /// `pub` visibility (mirroring the wire-endpoint rule).
+    fn check_view_ports(
+        &self,
+        inc: &ast::Include,
+        type_id: Option<DefId>,
+        file: FileId,
+        problems: &mut Vec<Problem>,
+    ) {
+        let mut seen: HashMap<&str, Span> = HashMap::new();
+        for placement in &inc.ports {
+            let side = placement.side.node.as_str();
+            if side.parse::<Side>().is_err() {
+                problems.push(Problem::UnknownPortSide {
+                    found: side.to_string(),
+                    src: self.project.source(file),
+                    at: placement.side.span.into(),
+                });
+            }
+
+            let port = placement.port.node.as_str();
+            if let Some(&first) = seen.get(port) {
+                problems.push(Problem::DuplicateViewPort {
+                    port: port.to_string(),
+                    src: self.project.source(file),
+                    at: placement.port.span.into(),
+                    first: first.into(),
+                });
+            } else {
+                seen.insert(port, placement.port.span);
+            }
+
+            let Some(tid) = type_id else { continue }; // undefined type already reported
+            match self.defs[tid].ports.get(&PortName::from(port)) {
+                None => problems.push(Problem::UnknownPort {
+                    port: port.to_string(),
+                    on: format!(" on `{}`", self.defs[tid].name),
+                    src: self.project.source(file),
+                    at: placement.port.span.into(),
+                }),
+                Some(facts) if facts.visibility != ast::Visibility::Public => {
+                    problems.push(Problem::PrivatePort {
+                        port: port.to_string(),
+                        ty: self.defs[tid].name.to_string(),
+                        src: self.project.source(file),
+                        at: placement.port.span.into(),
+                    });
+                }
+                Some(_) => {}
+            }
+        }
+    }
+
     fn resolve_views(&mut self, roots_by_file: &[Vec<DefId>]) -> Vec<ViewBinding<'a>> {
         let mut bindings = Vec::new();
         let mut problems = Vec::new();
@@ -439,15 +493,15 @@ impl<'a> Resolver<'a> {
                 if let Some(s) = subject {
                     for inc in &view.includes {
                         let name = inc.instance.node.as_str();
-                        if !self.defs[s]
-                            .instances
-                            .contains_key(&InstanceName::from(name))
-                        {
-                            problems.push(Problem::UnknownInclude {
+                        match self.defs[s].instances.get(&InstanceName::from(name)) {
+                            None => problems.push(Problem::UnknownInclude {
                                 name: name.to_string(),
                                 src: self.project.source(FileId(fi)),
                                 at: inc.instance.span.into(),
-                            });
+                            }),
+                            Some(facts) => {
+                                self.check_view_ports(inc, facts.type_id, FileId(fi), &mut problems)
+                            }
                         }
                     }
                 }
@@ -575,5 +629,44 @@ mod tests {
             "component m { } view schematic \"V\" { include ghost at (0, 0); }\n",
         )]);
         assert!(has(&p, "wirebug::unknown_include"), "{:?}", codes(&p));
+    }
+
+    /// A two-file project whose `main.wb` is a single top-level component
+    /// `m` holding one `leaf` instance `l`, plus a view placing `l` with the
+    /// given `ports { }` body. `leaf` lives in `leaf.wb`.
+    fn view_with_ports(leaf_body: &str, ports_body: &str) -> Vec<Problem> {
+        problems(&[
+            (
+                "main.wb",
+                &format!(
+                    "use leaf from \"leaf.wb\"\ncomponent m {{ leaf l; }}\nview schematic \"V\" {{ include l at (0, 0) ports {{ {ports_body} }}; }}\n"
+                ),
+            ),
+            ("leaf.wb", &format!("component leaf {{ {leaf_body} }}\n")),
+        ])
+    }
+
+    #[test]
+    fn unknown_port_side_in_view_is_reported() {
+        let p = view_with_ports("pub port a \"A\";", "up: a;");
+        assert!(has(&p, "wirebug::unknown_port_side"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn unknown_port_in_view_is_reported() {
+        let p = view_with_ports("pub port a \"A\";", "west: nope;");
+        assert!(has(&p, "wirebug::unknown_port"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn private_port_in_view_is_reported() {
+        let p = view_with_ports("port secret \"S\";", "west: secret;");
+        assert!(has(&p, "wirebug::private_port"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn duplicate_port_in_view_is_reported() {
+        let p = view_with_ports("pub port a \"A\";", "west: a; east: a;");
+        assert!(has(&p, "wirebug::duplicate_view_port"), "{:?}", codes(&p));
     }
 }

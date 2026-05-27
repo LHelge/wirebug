@@ -10,8 +10,8 @@
 use crate::dsl::ast::{self, Member};
 use crate::dsl::diagnostics::Problem;
 use crate::dsl::ir::{
-    ConnectorRef, Design, Include, Instance, InstanceName, InstancePath, Port, PortName, TypeName,
-    View, Visibility, Wire, WireEnd,
+    ConnectorRef, Design, Include, Instance, InstanceName, InstancePath, Port, PortName, Side,
+    TypeName, View, Visibility, Wire, WireEnd,
 };
 use crate::dsl::resolve::{DefId, Resolved};
 
@@ -175,6 +175,16 @@ impl Elaborator<'_> {
                             instance: InstanceName::from(inc.instance.node.as_str()),
                             x: inc.x.node,
                             y: inc.y.node,
+                            // Sides that failed to parse were already reported
+                            // by resolve; drop them here.
+                            ports: inc
+                                .ports
+                                .iter()
+                                .filter_map(|p| {
+                                    let side = p.side.node.as_str().parse::<Side>().ok()?;
+                                    Some((PortName::from(p.port.node.as_str()), side))
+                                })
+                                .collect(),
                         })
                         .collect(),
                 })

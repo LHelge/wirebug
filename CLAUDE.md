@@ -42,20 +42,23 @@ component *type* and is rendered against the first instance of that type
 (the root for a top-level view). The subject instance's **direct children**
 are the includable boxes; the subject's own **wires** are the connections.
 
-The DSL view declares only `include <inst> at (x, y)` plus `kind`/`title`/
-`grid` — it carries **no per-port side placement**. So the renderer derives
-everything presentational (`src/render/schematic/layout.rs`):
+The DSL view authors each include's ports: `include <inst> at (x, y) ports {
+<side>: <port>, ...; }`. That `ports` block is the single source of both
+**layout** (side + order) and **scope** (which ports show). The renderer
+adds no inference (`src/render/schematic/layout.rs`):
 
+- **Sides** — read straight from the include's authored placements
+  (`ir::Include.ports`, a `Vec<(PortName, Side)>`). Ports keep their authored
+  order within a side. No vector-summing, no defaulting.
+- **Visible ports** — a box shows exactly the ports it lists, in order; an
+  include with no `ports` block is a bare box. (Listing is the subsetting
+  mechanism — explicit, not derived from wires.)
 - **Connections** — each subject wire (a multi-endpoint net) is
   **chain-decomposed** into consecutive pairs in the order written
   (`[a,b,c]` → `a–b, b–c`). A pair is drawn only when both ends are
-  `WireEnd::Child` on *included* instances; `Own` ends and excluded
-  instances drop silently (the old "unplaced port" behaviour).
-- **Visible ports** — a box shows only the ports a drawn wire touches; the
-  rest are hidden (the subsetting mechanism, now derived not listed).
-- **Sides** — a port faces the neighbour box it wires to: sum the unit
-  vectors toward every connected neighbour's centre, dominant axis wins
-  (zero → East). Ports keep their declaration order within a side.
+  `WireEnd::Child` on *listed* ports of *included* instances; `Own` ends,
+  excluded instances, and unlisted ports drop silently. So a listed port
+  whose wire lands on an unlisted/own end shows as a bare stub.
 
 Box geometry is unchanged from before, minus author-supplied sizes: a
 view's `grid:` step (world units; `DEFAULT_GRID` when omitted), `include`
@@ -82,7 +85,10 @@ so one run reports many. Errors fail the run; warnings fail only under
 - **Resolve** — undefined type, unresolved import, duplicate
   type/instance/port, unknown instance/port in a wire endpoint,
   private-port access (a non-`pub` port referenced from outside), unknown
-  view include, ambiguous view subject.
+  view include, ambiguous view subject. View `ports { }` placements get the
+  same treatment as wire endpoints: unknown side (`unknown_port_side`),
+  unknown/private port, and a duplicate-port-in-one-include guard
+  (`duplicate_view_port`).
 - **Elaborate** — `main.wb` lacks a single top-level component (no root);
   containment cycle (a component instantiating itself transitively).
 - **Validate** — wire arity (fewer than two endpoints, error); unused
@@ -146,7 +152,7 @@ src/
 │  # ── ir::Design → SVG renderer ──
 ├── render/
 │   ├── mod.rs       # render_views: subject lookup + per-view dispatch + slug
-│   ├── geometry.rs  # Point, Side (presentation, not in the IR)
+│   ├── geometry.rs  # Point; re-exports ir::Side (sides are authored)
 │   └── schematic/   # rectangle-based SVG renderer
 │       ├── mod.rs       # SchematicRenderer; render orchestration
 │       ├── layout.rs    # Placement: derive sides + boxes/ports in world coords

@@ -102,15 +102,52 @@ component rear_battery {
 view schematic "Rear Battery" {
     grid 20;
 
-    include c_pos    at (4, 30);
-    include module_1 at (15, 30);
-    include module_2 at (26, 30);
-    include module_3 at (37, 30);
-    include module_4 at (48, 30);
-    include module_5 at (59, 30);
-    include module_6 at (70, 30);
-    include c_neg    at (81, 30);
-    include bms      at (42, 8);
-    include c_pre    at (15, 52);
-    include r_pre    at (26, 52);
+    include c_pos at (4, 30) ports {
+        east:  out;
+        north: coil_n;
+        south: in;
+    };
+
+    include module_1 at (15, 30) ports {
+        west: hv_pos, iso_spi_up_h, iso_spi_up_l;
+        east: hv_neg, iso_spi_down_h, iso_spi_down_l;
+    };
+    include module_2 at (26, 30) ports {
+        west: hv_pos, iso_spi_up_h, iso_spi_up_l;
+        east: hv_neg, iso_spi_down_h, iso_spi_down_l;
+    };
+    include module_3 at (37, 30) ports {
+        west: hv_pos, iso_spi_up_h, iso_spi_up_l;
+        east: hv_neg, iso_spi_down_h, iso_spi_down_l;
+    };
+    include module_4 at (48, 30) ports {
+        west: hv_pos, iso_spi_up_h, iso_spi_up_l;
+        east: hv_neg, iso_spi_down_h, iso_spi_down_l;
+    };
+    include module_5 at (59, 30) ports {
+        west: hv_pos, iso_spi_up_h, iso_spi_up_l;
+        east: hv_neg, iso_spi_down_h, iso_spi_down_l;
+    };
+    include module_6 at (70, 30) ports {
+        west: hv_pos, iso_spi_up_h, iso_spi_up_l;
+        east: hv_neg, iso_spi_down_h, iso_spi_down_l;
+    };
+
+    include c_neg at (81, 30) ports {
+        west:  in;
+        north: coil_n;
+    };
+
+    include bms at (42, 8) ports {
+        south: cont_1_n, iso_spi_h, iso_spi_l, cont_2_n, cont_3_n;
+    };
+
+    include c_pre at (15, 52) ports {
+        north: in, coil_n;
+        east:  out;
+    };
+    include r_pre at (26, 52) ports {
+        west:  a;
+        north: b;
+    };
 }

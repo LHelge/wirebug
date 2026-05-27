@@ -157,6 +157,7 @@ pub(super) fn collapse_collinear(pts: Vec<Point>) -> Vec<Point> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::render::geometry::Side;
     use crate::render::schematic::layout::Grid;
     use crate::render::schematic::tests::{design_from, view_of};
 
@@ -186,7 +187,12 @@ component sys {
         // the renderer's grid-floor check.
         let view = view_of(
             "sys",
-            &[("a", 0.0, 0.0), ("b", 200.0, 0.0), ("c", 400.0, 0.0)],
+            &[
+                ("a", 0.0, 0.0, &[("p", Side::East)]),
+                // `b` has no listed ports — a bare box routes must avoid.
+                ("b", 200.0, 0.0, &[]),
+                ("c", 400.0, 0.0, &[("p", Side::West)]),
+            ],
         );
         let step = 1.0;
 

@@ -24,6 +24,7 @@ pub enum Token {
     Include,
     At,
     Grid,
+    Ports,
 
     // Punctuation.
     LBrace,
@@ -35,6 +36,7 @@ pub enum Token {
     Comma,
     Semicolon,
     Dot,
+    Colon,
 
     // Leaves. Raw text is preserved so a future `fmt` can round-trip and
     // so the parser can interpret a [`Number`](Token::Number) as either a
@@ -63,6 +65,7 @@ impl Token {
             "include" => Token::Include,
             "at" => Token::At,
             "grid" => Token::Grid,
+            "ports" => Token::Ports,
             _ => return None,
         })
     }
@@ -85,6 +88,7 @@ impl fmt::Display for Token {
             Token::Include => "include",
             Token::At => "at",
             Token::Grid => "grid",
+            Token::Ports => "ports",
             Token::LBrace => "{",
             Token::RBrace => "}",
             Token::LBracket => "[",
@@ -94,6 +98,7 @@ impl fmt::Display for Token {
             Token::Comma => ",",
             Token::Semicolon => ";",
             Token::Dot => ".",
+            Token::Colon => ":",
             Token::Ident(name) => name,
             Token::Str(s) => return write!(f, "{s:?}"),
             Token::Number(n) => n,

@@ -202,17 +202,23 @@ Multi-endpoint wires model shared rails (HV power bus, enable signals to paralle
 
 ## Views
 
-A view declares a rendering target — what to render, at what positions, with what grid scale.
+A view declares a rendering target — what to render, at what positions, with what grid scale. Each include also says which of that component's ports to show, on which side, and in what order.
 
 ```
 view schematic "System Overview" {
     grid 20;
 
-    include pack    at (2, 5);
-    include inv     at (15, 2);
-    include m       at (28, 2);
-    include charger at (15, 12);
-    include conv    at (15, 18);
+    include pack at (2, 5) ports {
+        east: hv_pos, hv_neg, can_h, can_l;
+    };
+
+    include inv at (15, 2) ports {
+        west:  dc_pos, dc_neg, can_h, can_l;
+        east:  phase_u, phase_v, phase_w;
+        south: enable;
+    };
+
+    include conv at (15, 18);   // bare box: no ports shown
 }
 ```
 
@@ -220,9 +226,14 @@ Format:
 
 - `view <kind> "<title>" { ... }` — `kind` is currently always `schematic`. Other kinds (`harness`, `bom`, etc.) will be added later.
 - `grid <n>;` — pixels per grid cell. Optional; a sensible default applies.
-- `include <name> at (x, y);` — list components by their instance name in the surrounding scope, with grid-cell coordinates.
+- `include <name> at (x, y) [ports { ... }];` — place a component by its instance name in the surrounding scope, at grid-cell coordinates. The trailing `;` is always required.
+- `ports { <side>: <port>, <port>; ... }` — optional. Each line lists the ports on one `side` (`north`, `east`, `south`, `west`), in the order they should appear on that edge. A `west: a, b;` line puts `a` above `b` on the west edge. List the same side more than once and the lines concatenate.
 
-**Wires are NOT listed in views.** They're auto-derived from the model: a wire renders if all its endpoints reference ports on included components.
+**The `ports` block controls both layout and scope.** A port is drawn only if it's listed; everything else is hidden. An include with no `ports` block is a bare labelled box.
+
+**Wires are NOT listed in views.** A wire from the model is drawn only when *both* of a segment's endpoints are listed ports on included components; otherwise that segment drops silently. So a listed port whose wire goes to an unlisted (or excluded) port shows as a bare stub with no line.
+
+Sides are authored, never guessed: place a port on the side facing the box it wires to, and line the two boxes up so the wire runs straight (ports sit two grid steps apart, centred on each side). Private (non-`pub`) ports cannot be placed in a view, the same as they cannot be wired from outside.
 
 Views live in the same file as the component they primarily document — like unit tests in Rust source. A view of the system overview belongs in `main.wb` where `vehicle` is defined. A view of the battery pack detail belongs in the file where `battery_pack` is defined. This keeps views close to the data they describe.
 
@@ -271,7 +282,8 @@ wire orange 50 [pack.hv_neg, inv.dc_neg, charger.hv_neg, conv.hv_neg];
 
 ## Do not
 
-- **Do not** include wires in views. They're derived from the model.
+- **Do not** include wires in views. They're derived from the model; you control which show by listing their ports.
+- **Do not** expect a port to appear in a view unless you list it in that include's `ports` block. Listing is the scope.
 - **Do not** rely on filesystem structure for hierarchy. Only `use` and nesting matter.
 - **Do not** reference unexposed (non-`pub`) ports of nested components from outside. Private is private.
 - **Do not** introduce new keywords or option fields that aren't documented in this skill or already used in the project's `.wb` files. If something is awkward to express, raise it with the user rather than inventing syntax.

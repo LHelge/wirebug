@@ -162,11 +162,24 @@ pub struct View {
     pub span: Span,
 }
 
-/// `include <instance> at (x, y) ;`
+/// `include <instance> at (x, y) [ports { <side>: <port>, ...; ... }] ;`
 #[derive(Debug, Clone)]
 pub struct Include {
     pub instance: Spanned<Ident>,
     pub x: Spanned<f64>,
     pub y: Spanned<f64>,
+    /// Authored port placements, flattened across the `ports { }` lines in
+    /// declaration order. Empty when the block is absent. Side and port are
+    /// left unresolved (`Spanned<Ident>`); resolve validates them.
+    pub ports: Vec<PortPlacement>,
+    pub span: Span,
+}
+
+/// One `<side>: <port>` placement inside an include's `ports { }` block. A
+/// line `west: a, b;` expands to one placement per port, each tagged `west`.
+#[derive(Debug, Clone)]
+pub struct PortPlacement {
+    pub side: Spanned<Ident>,
+    pub port: Spanned<Ident>,
     pub span: Span,
 }
