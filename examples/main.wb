@@ -24,14 +24,20 @@ component vehicle {
     // --- HV bus ---
     // Shared positive and negative rails connecting all HV components
 
-    wire orange 50 [front.hv_pos, rear.hv_pos, inv.dc_pos, charger.dc_pos];
-    wire orange 50 [front.hv_neg, rear.hv_neg, inv.dc_neg, charger.dc_neg];
+    wire orange 50 "HV+" [front.hv_pos, rear.hv_pos, inv.dc_pos, charger.dc_pos];
+    wire orange 50 "HV-" [front.hv_neg, rear.hv_neg, inv.dc_neg, charger.dc_neg];
 
     // --- Motor phases ---
+    // A real point-to-point cable: three conductors, inverter to motor.
 
-    wire orange 35 [inv.phase_u, mot.phase_u];
-    wire orange 35 [inv.phase_v, mot.phase_v];
-    wire orange 35 [inv.phase_w, mot.phase_w];
+    cable motor_phases "Motor phases" {
+        type:   "Shielded 3-core";
+        length: 1.2;
+
+        wire orange 35 "U" [inv.phase_u, mot.phase_u];
+        wire orange 35 "V" [inv.phase_v, mot.phase_v];
+        wire orange 35 "W" [inv.phase_w, mot.phase_w];
+    }
 
     // --- CAN bus ---
 
@@ -111,4 +117,28 @@ view schematic "HV System Overview" {
     include fuses at (66, 50) ports {
         west: batt_in, vcm, inv, bms_front, bms_rear, interlock;
     };
+}
+
+// --- View: Main HV harness ---
+// The HV bus as a wiring harness: each box's HV connector as a pin table,
+// the shared positive/negative rails as cable bundles between them.
+
+view harness "Main HV harness" {
+    grid 20;
+
+    include front.hv   at (4, 8);
+    include rear.hv     at (4, 22);
+    include inv.hv      at (34, 8);
+    include charger.hv  at (40, 22);
+}
+
+// --- View: Motor phase harness ---
+// The `motor_phases` cable drawn WireViz-style: the inverter and motor
+// phase connectors as pin tables, the cable as a labelled box between them.
+
+view harness "Motor phase harness" {
+    grid 20;
+
+    include inv.phases at (4, 10);
+    include mot.power  at (32, 10);
 }

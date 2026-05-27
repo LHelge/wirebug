@@ -23,6 +23,19 @@ fn render_writes_an_svg_per_view() {
     assert!(svg.contains("<svg"));
     assert!(svg.contains("HV System Overview"));
     assert!(svg.contains("class=\"wire\""));
+
+    // The harness view renders connectors as pin tables with labelled,
+    // gauged cable bundles between them.
+    let harness =
+        std::fs::read_to_string(out.join("main_hv_harness.svg")).expect("harness view rendered");
+    assert!(harness.contains("class=\"connector\""));
+    assert!(harness.contains("class=\"cable-wire\""));
+    assert!(harness.contains("HV+ · 50mm²"));
+
+    // The index groups the two view kinds into tabs.
+    let index = std::fs::read_to_string(out.join("index.html")).expect("index rendered");
+    assert!(index.contains("id=\"tab-schematic\""));
+    assert!(index.contains("id=\"tab-harness\""));
 }
 
 #[test]

@@ -22,8 +22,10 @@ component front_battery {
 
     // --- External interface ---
 
-    pub port hv_pos "HV+";
-    pub port hv_neg "HV-";
+    connector hv "HV pack 2p" {
+        pub port hv_pos "HV+" pin 1;
+        pub port hv_neg "HV-" pin 2;
+    }
 
     pub port b_pos "B+";
     pub port gnd   "GND";

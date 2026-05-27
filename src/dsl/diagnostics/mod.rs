@@ -226,6 +226,124 @@ pub enum Problem {
         first: SourceSpan,
     },
 
+    /// Two connectors in one component share a designator.
+    #[error("duplicate connector designator `{name}`")]
+    #[diagnostic(
+        code(wirebug::duplicate_connector_name),
+        help("connector designators must be unique within a component")
+    )]
+    DuplicateConnectorName {
+        name: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("reused here")]
+        at: SourceSpan,
+        #[label("first used here")]
+        first: SourceSpan,
+    },
+
+    /// Two cables in one component share a designator.
+    #[error("duplicate cable designator `{name}`")]
+    #[diagnostic(
+        code(wirebug::duplicate_cable_name),
+        help("cable designators must be unique within a component")
+    )]
+    DuplicateCableName {
+        name: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("reused here")]
+        at: SourceSpan,
+        #[label("first used here")]
+        first: SourceSpan,
+    },
+
+    /// A wire inside a `cable` block does not have exactly two endpoints.
+    /// A cable conductor is point-to-point; shared rails stay loose wires.
+    #[error("a cable wire must connect exactly two endpoints, found {count}")]
+    #[diagnostic(
+        code(wirebug::cable_wire_arity),
+        help("split a shared rail into one loose `wire` per net, or add a junction")
+    )]
+    CableWireArity {
+        count: usize,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("this cable wire")]
+        at: SourceSpan,
+    },
+
+    /// A cable property uses a key other than `type` or `length`.
+    #[error("unknown cable property `{key}`")]
+    #[diagnostic(
+        code(wirebug::unknown_cable_property),
+        help("a cable supports `type: \"...\";` and `length: <number>;`")
+    )]
+    UnknownCableProperty {
+        key: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("no such property")]
+        at: SourceSpan,
+    },
+
+    /// A cable sets the same property key twice.
+    #[error("duplicate cable property `{key}`")]
+    #[diagnostic(code(wirebug::duplicate_cable_property))]
+    DuplicateCableProperty {
+        key: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("set again here")]
+        at: SourceSpan,
+        #[label("first set here")]
+        first: SourceSpan,
+    },
+
+    /// A cable property's value is the wrong kind (e.g. `length: "x"`).
+    #[error("cable property `{key}` expects {expected}")]
+    #[diagnostic(code(wirebug::cable_property_type))]
+    CablePropertyType {
+        key: String,
+        /// e.g. "a number" or "a string".
+        expected: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("wrong value type")]
+        at: SourceSpan,
+    },
+
+    /// A harness include names a connector designator that the included
+    /// instance's type doesn't declare.
+    #[error("unknown connector `{name}`{on}")]
+    #[diagnostic(
+        code(wirebug::unknown_connector),
+        help("give the connector a designator: `connector {name} \"...\" {{ ... }}`")
+    )]
+    UnknownConnector {
+        name: String,
+        /// e.g. " on `obc_dcdc`".
+        on: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("no such connector")]
+        at: SourceSpan,
+    },
+
+    /// An include uses the wrong shape for its view kind: a harness include
+    /// without a connector or with a `ports { }` block, or a schematic
+    /// include carrying a connector segment.
+    #[error("{message}")]
+    #[diagnostic(code(wirebug::wrong_include_form), help("{help}"))]
+    WrongIncludeForm {
+        message: String,
+        help: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("here")]
+        at: SourceSpan,
+    },
+
     // --- Elaboration ---
     /// `main.wb` doesn't define exactly one top-level component to elaborate.
     #[error("`main.wb` must define exactly one top-level component")]

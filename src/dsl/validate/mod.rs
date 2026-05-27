@@ -12,10 +12,12 @@
 //! per-instance tree analysis and, on a full component library, floods
 //! intentional unused-pin warnings — a separate, opt-in concern.)
 
-use crate::dsl::ast::Member;
+use std::collections::HashMap;
+
+use crate::dsl::ast::{CablePropertyValue, Member};
 use crate::dsl::diagnostics::Problem;
 use crate::dsl::resolve::Resolved;
-use crate::dsl::span::FileId;
+use crate::dsl::span::{FileId, Span};
 
 /// Validate the resolved registry, returning any problems.
 pub fn validate(resolved: &Resolved) -> Vec<Problem> {
@@ -38,6 +40,52 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
                         src: src(),
                         at: port.name.span.into(),
                     });
+                }
+                Member::Cable(cable) => {
+                    // A conductor is point-to-point: shared rails stay loose.
+                    for wire in &cable.wires {
+                        if wire.endpoints.len() != 2 {
+                            problems.push(Problem::CableWireArity {
+                                count: wire.endpoints.len(),
+                                src: src(),
+                                at: wire.span.into(),
+                            });
+                        }
+                    }
+                    let mut seen: HashMap<&str, Span> = HashMap::new();
+                    for p in &cable.properties {
+                        let key = p.key.node.as_str();
+                        if let Some(&first) = seen.get(key) {
+                            problems.push(Problem::DuplicateCableProperty {
+                                key: key.to_string(),
+                                src: src(),
+                                at: p.key.span.into(),
+                                first: first.into(),
+                            });
+                        } else {
+                            seen.insert(key, p.key.span);
+                        }
+                        let wrong = |expected: &str| Problem::CablePropertyType {
+                            key: key.to_string(),
+                            expected: expected.to_string(),
+                            src: src(),
+                            at: p.value.span().into(),
+                        };
+                        match key {
+                            "type" if !matches!(p.value, CablePropertyValue::Str(_)) => {
+                                problems.push(wrong("a string"));
+                            }
+                            "length" if !matches!(p.value, CablePropertyValue::Number(_)) => {
+                                problems.push(wrong("a number"));
+                            }
+                            "type" | "length" => {}
+                            _ => problems.push(Problem::UnknownCableProperty {
+                                key: key.to_string(),
+                                src: src(),
+                                at: p.key.span.into(),
+                            }),
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -109,6 +157,61 @@ mod tests {
         )]);
         assert!(
             codes.iter().any(|c| c == "wirebug::wire_arity"),
+            "{codes:?}"
+        );
+    }
+
+    /// A single component with the given cable body, plus three own ports the
+    /// cable wires can land on.
+    fn cable(body: &str) -> Vec<String> {
+        validate_files(&[(
+            "main.wb",
+            &format!(
+                "component m {{ pub port a \"A\"; pub port b \"B\"; pub port c \"C\"; cable cab {{ {body} }} }}\n"
+            ),
+        )])
+    }
+
+    #[test]
+    fn cable_wire_with_three_endpoints_errors() {
+        let codes = cable("wire red 1 [a, b, c];");
+        assert!(
+            codes.iter().any(|c| c == "wirebug::cable_wire_arity"),
+            "{codes:?}"
+        );
+    }
+
+    #[test]
+    fn two_endpoint_cable_wire_is_clean() {
+        let codes = cable("type: \"Twisted pair\"; length: 2.5; wire red 1 [a, b];");
+        assert!(codes.is_empty(), "{codes:?}");
+    }
+
+    #[test]
+    fn unknown_cable_property_errors() {
+        let codes = cable("color: \"red\"; wire red 1 [a, b];");
+        assert!(
+            codes.iter().any(|c| c == "wirebug::unknown_cable_property"),
+            "{codes:?}"
+        );
+    }
+
+    #[test]
+    fn cable_length_must_be_a_number_errors() {
+        let codes = cable("length: \"long\"; wire red 1 [a, b];");
+        assert!(
+            codes.iter().any(|c| c == "wirebug::cable_property_type"),
+            "{codes:?}"
+        );
+    }
+
+    #[test]
+    fn duplicate_cable_property_errors() {
+        let codes = cable("length: 1; length: 2; wire red 1 [a, b];");
+        assert!(
+            codes
+                .iter()
+                .any(|c| c == "wirebug::duplicate_cable_property"),
             "{codes:?}"
         );
     }

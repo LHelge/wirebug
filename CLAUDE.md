@@ -13,9 +13,11 @@ Three CLI commands share it:
   elaborated IR (`ir::Design`) and reports problems via miette.
 - **`render` (`src/render/`)** — runs the same DSL pipeline, then draws
   every view in the resulting `ir::Design` to SVG (one file per view) plus
-  an `index.html` (`render::index_html`) that embeds them all for browsing.
-  The legacy YAML model/view loader has been removed; `ir::Design` is the
-  only thing the renderer consumes.
+  an `index.html` (`render::index_html`) that embeds them all for browsing,
+  grouped into **Schematics** / **Harnesses** tabs by view kind. Two view
+  kinds render today: `schematic` (`render/schematic/`) and `harness`
+  (`render/harness/`). The legacy YAML model/view loader has been removed;
+  `ir::Design` is the only thing the renderer consumes.
 - **`serve` (`src/serve/`)** — a live-reloading dev server. Renders the
   project into memory (the same `render_views` + `index_html` pipeline,
   `live_reload` on), serves it over axum, and watches the project tree for
@@ -44,6 +46,12 @@ rendered by `render::index_html(views, live_reload)` — shared by `render`
   addressed by a dotted path (`vehicle.front.module_1.pack`), with
   materialized ports and wires rewritten to `WireEnd::Own`/`Child`.
   Definitions vanish here; only concrete instances flow to the IR.
+  A `cable` is flat too: its metadata lands in `Instance.cables`
+  (`CableMeta`, keyed by designator) and each conductor stays a `Wire` in
+  `Instance.wires` tagged with `Wire.cable = Some(name)`; loose wires are
+  `None`. So the schematic renderer ignores cables for free, and only the
+  harness renderer reads the tag. Cable conductors are 2-endpoint by
+  rule; shared rails stay loose multi-endpoint wires.
 
 ## Render mental model (IR → SVG)
 
@@ -51,7 +59,8 @@ The renderer consumes `ir::Design` directly — there is no separate model.
 `render::render_views` walks `design.views`; each view documents a
 component *type* and is rendered against the first instance of that type
 (the root for a top-level view). The subject instance's **direct children**
-are the includable boxes; the subject's own **wires** are the connections.
+are the includable things; the subject's own **wires** are the connections.
+`view.kind` dispatches: `schematic` (below) or `harness` (after it).
 
 The DSL view authors each include's ports: `include <inst> at (x, y) ports {
 <side>: <port>, ...; }`. That `ports` block is the single source of both
@@ -85,6 +94,31 @@ bundles stay grid-integral; routing otherwise sees only world geometry.
 Because the pitch is two steps, the grid must be at least
 `MIN_PORT_PITCH / 2`; a finer grid errors.
 
+### Harness views (`render/harness/`)
+
+The dual of the schematic, WireViz-style. An include names a **connector**
+(`include <inst>.<connector> at (x,y)`); that whole connector becomes a
+**pin table** (header = instance label + `<designator> · <part>`, one row
+per pin = number + label, ordered by pin). Cables are the *same*
+chain-decomposed subject wires, kept only when both ends land on *included*
+connectors — a port's connector is found via `ir::ConnectorRef.name`, so a
+connectorless / excluded / `Own` end drops silently (like an unlisted port
+in a schematic). The kept conductors then split by `Wire.cable`: a conductor
+tagged with a declared cable draws as a **cable box** (`CableBox`/`render_cable_box`)
+— a titled table (label + `type · length`) centred between the two
+connectors it spans, one coloured strand per row, leading in from one
+connector and out to the other. Untagged loose wires between the same node
+pair keep the plain **bundle** (`Cable`/`render_cable`). Either way each
+strand is coloured by `wire.color` (used directly as the SVG `stroke`) and
+annotated `<label> · <gauge>mm²`.
+
+Two deliberate differences from the schematic's no-inference rule: pin
+**facing** is *auto-oriented* (East/West, from the net horizontal direction
+to connected nodes — `layout.rs::orient_nodes`), and cable routing is the
+simple **parallel-offset bundle** (`layout.rs::cable_path`: per-strand
+channel offset, no object avoidance) rather than the schematic's orthogonal
+router. Reusing that router is a noted future refinement.
+
 ## DSL validation (`check`)
 
 Problems are miette `Diagnostic`s (`dsl::diagnostics::Problem`), collected
@@ -96,14 +130,25 @@ so one run reports many. Errors fail the run; warnings fail only under
 - **Resolve** — undefined type, unresolved import, duplicate
   type/instance/port, unknown instance/port in a wire endpoint,
   private-port access (a non-`pub` port referenced from outside), unknown
-  view include, ambiguous view subject. View `ports { }` placements get the
+  view include, ambiguous view subject, duplicate connector designator
+  (`duplicate_connector_name`), duplicate cable designator
+  (`duplicate_cable_name`). A cable's wire endpoints resolve exactly like a
+  loose wire's. View `ports { }` placements get the
   same treatment as wire endpoints: unknown side (`unknown_port_side`),
   unknown/private port, and a duplicate-port-in-one-include guard
-  (`duplicate_view_port`).
+  (`duplicate_view_port`). Includes are checked per view kind: a `harness`
+  include must name an existing connector (`unknown_connector`) and carry no
+  `ports { }`; a `schematic` include must not name a connector — violations
+  are `wrong_include_form`.
 - **Elaborate** — `main.wb` lacks a single top-level component (no root);
   containment cycle (a component instantiating itself transitively).
-- **Validate** — wire arity (fewer than two endpoints, error); unused
-  import and bare-port pin (warnings).
+- **Validate** — wire arity (fewer than two endpoints, error); cable wire
+  arity (a cable conductor that isn't exactly two endpoints,
+  `cable_wire_arity`); cable property checks (`unknown_cable_property`,
+  `duplicate_cable_property`, `cable_property_type` — `type` wants a string,
+  `length` a number); unused import and bare-port pin (warnings). Cable
+  property/arity checks live here (not elaborate) so a type instantiated
+  many times reports each once.
 
 Not done on purpose: **unconnected-port** detection. It needs per-instance
 tree analysis and floods intentional unused-pin warnings on a real
@@ -116,7 +161,7 @@ phases above). Render adds only geometry/dispatch errors, in the slim
 `error::Error` enum (`src/error.rs` — render-path only; DSL problems are
 miette `Diagnostic`s):
 
-- an unknown view `kind:` (only `schematic` today);
+- an unknown view `kind:` (`schematic` and `harness` render today);
 - a view subject type with no instance in the design;
 - a non-positive `grid:`, or a `grid:` finer than a port label needs;
 - file IO when writing the SVGs.
@@ -129,13 +174,16 @@ has errors (or, under `--strict`, warnings).
 These land later, one at a time. Don't pre-bake hooks for them; we'll
 redesign each when it lands.
 
-- Harness/Graphviz renderer, BOM views, manifest emission
+- Graphviz/object-avoiding harness routing, BOM views, manifest emission
+  (a basic SVG harness renderer has landed; see `render/harness/`)
 - View composition / `extends`
 - Theming, colour
 - Auto-layout
 - Non-rectangle component symbols
 - Visual grouping of ports by connector on a side (bracket + label)
 - Per-port styling (input/output, voltage class, gauge, etc.)
+- Explicit `junction`/`splice` elements (shared rails stay loose
+  multi-endpoint wires for now; `cable` conductors are point-to-point)
 
 ## Architecture
 
@@ -162,24 +210,30 @@ src/
 │
 │  # ── ir::Design → SVG renderer ──
 ├── render/
-│   ├── mod.rs       # render_views: subject lookup + per-view dispatch + slug
+│   ├── mod.rs       # render_views: subject lookup + per-view dispatch + slug;
+│   │                #   RenderedView{title,filename,kind,svg} + index_html (tabs)
 │   ├── geometry.rs  # Point; re-exports ir::Side (sides are authored)
-│   └── schematic/   # rectangle-based SVG renderer
-│       ├── mod.rs       # SchematicRenderer; render orchestration
-│       ├── layout.rs    # Placement: derive sides + boxes/ports in world coords
-│       ├── draw.rs      # SVG emission (named `draw`, not `svg`, to
-│       │                #   avoid clashing with the `svg` crate)
-│       └── route/       # orthogonal connector routing (paper §4–6)
-│           ├── mod.rs       # Router: build OVG once, route_all + nudge
-│           ├── geometry.rs  # Rect, Dir
-│           ├── visibility.rs# orthogonal visibility graph (§4)
-│           ├── astar.rs     # A* via the `pathfinding` crate (§5)
-│           └── nudge/       # separate wires sharing a channel (§6)
-│               ├── mod.rs       # pipeline: segments → order → place
-│               ├── segments.rs  # maximal segments + shared-edge detection
-│               ├── order.rs     # §6.1 order routes within a channel
-│               ├── place.rs     # §6.2 final placement (two axis passes)
-│               └── vpsc.rs      # separation-constraint solver
+│   ├── schematic/   # rectangle-based SVG renderer (kind: schematic)
+│   │   ├── mod.rs       # SchematicRenderer; render orchestration
+│   │   ├── layout.rs    # Placement: derive sides + boxes/ports in world coords
+│   │   ├── draw.rs      # SVG emission (named `draw`, not `svg`, to
+│   │   │                #   avoid clashing with the `svg` crate)
+│   │   └── route/       # orthogonal connector routing (paper §4–6)
+│   │       ├── mod.rs       # Router: build OVG once, route_all + nudge
+│   │       ├── geometry.rs  # Rect, Dir
+│   │       ├── visibility.rs# orthogonal visibility graph (§4)
+│   │       ├── astar.rs     # A* via the `pathfinding` crate (§5)
+│   │       └── nudge/       # separate wires sharing a channel (§6)
+│   │           ├── mod.rs       # pipeline: segments → order → place
+│   │           ├── segments.rs  # maximal segments + shared-edge detection
+│   │           ├── order.rs     # §6.1 order routes within a channel
+│   │           ├── place.rs     # §6.2 final placement (two axis passes)
+│   │           └── vpsc.rs      # separation-constraint solver
+│   └── harness/     # WireViz-style harness renderer (kind: harness)
+│       ├── mod.rs       # HarnessRenderer; render orchestration + STYLE
+│       ├── layout.rs    # connector pin-table nodes, auto-orient facing,
+│       │                #   chain-decomposed cables, parallel-offset routing
+│       └── draw.rs      # SVG emission: pin tables + coloured cable bundles
 │
 │  # ── live-reloading dev server (`serve`) ──
 ├── serve/

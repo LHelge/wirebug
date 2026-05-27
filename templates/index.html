@@ -11,6 +11,15 @@
     section h2 { margin: 0 0 .75rem; font-size: 1.1rem; }
     img { max-width: 100%; height: auto; }
     p.empty { color: #777; }
+    /* Pure-CSS tabs: hidden radios drive the panel and label state. */
+    .tabs input[name="tab"] { position: absolute; opacity: 0; pointer-events: none; }
+    .tabbar { display: flex; gap: .5rem; border-bottom: 1px solid #ddd; margin-top: 1rem; }
+    .tabbar label { cursor: pointer; padding: .5rem .9rem; font-weight: 500; color: #666; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+    .panel { display: none; }
+    #tab-schematic:checked ~ .tabbar label[for="tab-schematic"],
+    #tab-harness:checked ~ .tabbar label[for="tab-harness"] { color: #1a1a1a; border-bottom-color: #1a1a1a; }
+    #tab-schematic:checked ~ .panel-schematic,
+    #tab-harness:checked ~ .panel-harness { display: block; }
   </style>
 </head>
 <body>
@@ -18,12 +27,46 @@
 {% if views.is_empty() %}
   <p class="empty">This design has no views.</p>
 {% else %}
+  <div class="tabs">
+{% if has_schematic %}
+    <input type="radio" name="tab" id="tab-schematic" checked>
+{% endif %}
+{% if has_harness %}
+    <input type="radio" name="tab" id="tab-harness"{% if !has_schematic %} checked{% endif %}>
+{% endif %}
+    <div class="tabbar">
+{% if has_schematic %}
+      <label for="tab-schematic">Schematics</label>
+{% endif %}
+{% if has_harness %}
+      <label for="tab-harness">Harnesses</label>
+{% endif %}
+    </div>
+{% if has_schematic %}
+    <div class="panel panel-schematic">
 {% for view in views %}
-  <section>
-    <h2>{{ view.title }}</h2>
-    <img src="{{ view.filename }}" alt="{{ view.title }}">
-  </section>
+{% if view.kind == "schematic" %}
+      <section>
+        <h2>{{ view.title }}</h2>
+        <img src="{{ view.filename }}" alt="{{ view.title }}">
+      </section>
+{% endif %}
 {% endfor %}
+    </div>
+{% endif %}
+{% if has_harness %}
+    <div class="panel panel-harness">
+{% for view in views %}
+{% if view.kind == "harness" %}
+      <section>
+        <h2>{{ view.title }}</h2>
+        <img src="{{ view.filename }}" alt="{{ view.title }}">
+      </section>
+{% endif %}
+{% endfor %}
+    </div>
+{% endif %}
+  </div>
 {% endif %}
 {% if live_reload %}
   <script>(function(){var ws=new WebSocket("ws://"+location.host+"/ws");ws.onmessage=function(){location.reload()};ws.onclose=function(){setTimeout(function(){location.reload()},1000)}})()</script>

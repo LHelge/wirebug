@@ -10,16 +10,19 @@ use crate::dsl::ir::{Design, Instance, View};
 use crate::error::{Error, Result};
 
 pub mod geometry;
+pub mod harness;
 pub mod schematic;
 
 /// One rendered view: the SVG document, the file name it should be
-/// written to (a slug of the view title, without a directory), and the
-/// human title it was rendered from (for the HTML index).
+/// written to (a slug of the view title, without a directory), the human
+/// title it was rendered from, and the view `kind` (so the HTML index can
+/// group views into tabs).
 #[derive(Debug)]
 #[must_use]
 pub struct RenderedView {
     pub title: String,
     pub filename: String,
+    pub kind: String,
     pub svg: String,
 }
 
@@ -37,11 +40,13 @@ pub fn render_views(design: &Design) -> Result<Vec<RenderedView>> {
             let subject = subject_instance(design, view)?;
             let svg = match view.kind.as_str() {
                 "schematic" => schematic::SchematicRenderer.render(design, subject, view)?,
+                "harness" => harness::HarnessRenderer.render(design, subject, view)?,
                 other => return Err(Error::UnknownViewKind(other.to_string())),
             };
             Ok(RenderedView {
                 title: view.title.clone(),
                 filename: format!("{}.svg", slug(&view.title)),
+                kind: view.kind.clone(),
                 svg,
             })
         })
@@ -64,14 +69,24 @@ pub const INDEX_FILENAME: &str = "index.html";
 struct IndexTemplate<'a> {
     views: &'a [RenderedView],
     live_reload: bool,
+    /// Whether either tab has any views, so the template can hide an empty
+    /// tab and pick a sensible default selection.
+    has_schematic: bool,
+    has_harness: bool,
 }
 
 /// Render the HTML index for `views`. Shared by `render` (static, no
-/// live-reload) and `serve` (in-memory, live-reload on).
+/// live-reload) and `serve` (in-memory, live-reload on). Views are grouped
+/// into Schematics/Harnesses tabs by their `kind`.
 pub fn index_html(views: &[RenderedView], live_reload: bool) -> Result<String> {
-    IndexTemplate { views, live_reload }
-        .render()
-        .map_err(Error::Template)
+    IndexTemplate {
+        views,
+        live_reload,
+        has_schematic: views.iter().any(|v| v.kind == "schematic"),
+        has_harness: views.iter().any(|v| v.kind == "harness"),
+    }
+    .render()
+    .map_err(Error::Template)
 }
 
 /// The instance a view renders against: the first one whose type matches
@@ -121,19 +136,20 @@ mod tests {
         assert_eq!(slug("!!!"), "view");
     }
 
+    fn view(title: &str, filename: &str, kind: &str) -> RenderedView {
+        RenderedView {
+            title: title.to_string(),
+            filename: filename.to_string(),
+            kind: kind.to_string(),
+            svg: String::new(),
+        }
+    }
+
     #[test]
     fn index_references_each_view_by_title_and_file() {
         let views = vec![
-            RenderedView {
-                title: "HV Overview".to_string(),
-                filename: "hv_overview.svg".to_string(),
-                svg: String::new(),
-            },
-            RenderedView {
-                title: "Pack Detail".to_string(),
-                filename: "pack_detail.svg".to_string(),
-                svg: String::new(),
-            },
+            view("HV Overview", "hv_overview.svg", "schematic"),
+            view("Pack Detail", "pack_detail.svg", "schematic"),
         ];
         let html = index_html(&views, false).unwrap();
         assert!(html.contains("<h2>HV Overview</h2>"));
@@ -142,12 +158,30 @@ mod tests {
     }
 
     #[test]
+    fn index_groups_views_into_kind_tabs() {
+        let views = vec![
+            view("Overview", "overview.svg", "schematic"),
+            view("Main Harness", "main_harness.svg", "harness"),
+        ];
+        let html = index_html(&views, false).unwrap();
+        // Both tab controls present when both kinds exist.
+        assert!(html.contains("Schematics"));
+        assert!(html.contains("Harnesses"));
+        assert!(html.contains("id=\"tab-schematic\""));
+        assert!(html.contains("id=\"tab-harness\""));
+    }
+
+    #[test]
+    fn index_omits_a_tab_with_no_views() {
+        let views = vec![view("Overview", "overview.svg", "schematic")];
+        let html = index_html(&views, false).unwrap();
+        assert!(html.contains("id=\"tab-schematic\""));
+        assert!(!html.contains("id=\"tab-harness\""));
+    }
+
+    #[test]
     fn index_escapes_author_supplied_titles() {
-        let views = vec![RenderedView {
-            title: "A & B <hv>".to_string(),
-            filename: "a_b_hv.svg".to_string(),
-            svg: String::new(),
-        }];
+        let views = vec![view("A & B <hv>", "a_b_hv.svg", "schematic")];
         let html = index_html(&views, false).unwrap();
         // Askama auto-escapes (with numeric entities); the author-supplied
         // angle brackets must not survive as a literal tag.

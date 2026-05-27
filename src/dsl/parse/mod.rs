@@ -139,14 +139,16 @@ where
         });
 
     let connector = just(Token::Connector)
-        .ignore_then(string)
+        .ignore_then(ident.or_not())
+        .then(string)
         .then(
             port.clone()
                 .repeated()
                 .collect::<Vec<_>>()
                 .delimited_by(just(Token::LBrace), just(Token::RBrace)),
         )
-        .map_with(|(part, ports), e| Connector {
+        .map_with(|((name, part), ports), e| Connector {
+            name,
             part,
             ports,
             span: e.span(),
@@ -185,6 +187,7 @@ where
     let wire = just(Token::Wire)
         .ignore_then(ident)
         .then(number)
+        .then(string.or_not())
         .then(
             endpoint
                 .separated_by(just(Token::Comma))
@@ -193,10 +196,44 @@ where
                 .delimited_by(just(Token::LBracket), just(Token::RBracket)),
         )
         .then_ignore(just(Token::Semicolon))
-        .map_with(|((color, gauge), endpoints), e| Wire {
+        .map_with(|(((color, gauge), label), endpoints), e| Wire {
             color,
             gauge,
+            label,
             endpoints,
+            span: e.span(),
+        });
+
+    // --- Cables ---
+
+    let cable_property = ident
+        .then_ignore(just(Token::Colon))
+        .then(choice((
+            string.map(CablePropertyValue::Str),
+            number.map(CablePropertyValue::Number),
+        )))
+        .then_ignore(just(Token::Semicolon))
+        .map_with(|(key, value), e| CableProperty {
+            key,
+            value,
+            span: e.span(),
+        });
+
+    let cable = just(Token::Cable)
+        .ignore_then(ident)
+        .then(string.or_not())
+        .then(
+            cable_property
+                .repeated()
+                .collect::<Vec<_>>()
+                .then(wire.clone().repeated().collect::<Vec<_>>())
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+        )
+        .map_with(|((name, label), (properties, wires)), e| Cable {
+            name,
+            label,
+            properties,
+            wires,
             span: e.span(),
         });
 
@@ -236,6 +273,7 @@ where
 
     let include = just(Token::Include)
         .ignore_then(ident)
+        .then(just(Token::Dot).ignore_then(ident).or_not())
         .then_ignore(just(Token::At))
         .then(
             number
@@ -245,8 +283,9 @@ where
         )
         .then(ports_block.or_not())
         .then_ignore(just(Token::Semicolon))
-        .map_with(|((instance, (x, y)), ports), e| Include {
+        .map_with(|(((instance, connector), (x, y)), ports), e| Include {
             instance,
+            connector,
             x,
             y,
             ports: ports.unwrap_or_default(),
@@ -280,6 +319,7 @@ where
             port.map(Member::Port),
             connector.map(Member::Connector),
             wire.map(Member::Wire),
+            cable.map(Member::Cable),
             definition.map(Member::Definition),
             instance.map(Member::Instance),
         ));
@@ -400,6 +440,87 @@ mod tests {
         };
         assert_eq!(conn.part.node, "CAN 4p");
         assert_eq!(conn.ports.len(), 2);
+        assert!(conn.name.is_none(), "connector designator is optional");
+    }
+
+    #[test]
+    fn connector_carries_designator() {
+        let file =
+            parse_ok(r#"component c { connector hv "HV DC 2p" { pub port p "DC+" pin 1; } }"#);
+        let Member::Connector(conn) = &members(&file)[0] else {
+            panic!("expected a connector");
+        };
+        assert_eq!(conn.name.as_ref().map(|n| n.node.as_str()), Some("hv"));
+        assert_eq!(conn.part.node, "HV DC 2p");
+    }
+
+    #[test]
+    fn wire_carries_label() {
+        let file = parse_ok(r#"component c { wire orange 50 "HV+" [a.p, b.p]; }"#);
+        let Member::Wire(w) = &members(&file)[0] else {
+            panic!("expected wire");
+        };
+        assert_eq!(w.label.as_ref().map(|l| l.node.as_str()), Some("HV+"));
+        assert_eq!(w.endpoints.len(), 2);
+        // Unlabelled wires still parse.
+        let bare = parse_ok(r#"component c { wire orange 50 [a.p, b.p]; }"#);
+        let Member::Wire(w) = &members(&bare)[0] else {
+            panic!("expected wire");
+        };
+        assert!(w.label.is_none());
+    }
+
+    #[test]
+    fn cable_groups_wires_with_properties() {
+        let file = parse_ok(
+            r#"component c {
+                cable can_bus "Vehicle CAN" {
+                    type:   "Twisted pair";
+                    length: 2.5;
+                    wire yellow 0.5 "CAN H" [vcu.can_h, inv.can_h];
+                    wire green  0.5 "CAN L" [vcu.can_l, inv.can_l];
+                }
+            }"#,
+        );
+        let Member::Cable(cable) = &members(&file)[0] else {
+            panic!("expected a cable");
+        };
+        assert_eq!(cable.name.node.as_str(), "can_bus");
+        assert_eq!(
+            cable.label.as_ref().map(|l| l.node.as_str()),
+            Some("Vehicle CAN")
+        );
+        assert_eq!(cable.properties.len(), 2);
+        assert_eq!(cable.properties[0].key.node.as_str(), "type");
+        assert!(matches!(
+            cable.properties[1].value,
+            CablePropertyValue::Number(_)
+        ));
+        assert_eq!(cable.wires.len(), 2);
+    }
+
+    #[test]
+    fn cable_without_label_or_properties_parses() {
+        let file = parse_ok(r#"component c { cable cab { wire red 1.0 [a.p, b.p]; } }"#);
+        let Member::Cable(cable) = &members(&file)[0] else {
+            panic!("expected a cable");
+        };
+        assert!(cable.label.is_none());
+        assert!(cable.properties.is_empty());
+        assert_eq!(cable.wires.len(), 1);
+    }
+
+    #[test]
+    fn harness_include_references_connector() {
+        let file = parse_ok(r#"view harness "H" { include charger.hv at (2, 4); }"#);
+        let Item::View(v) = &file.items[0] else {
+            panic!("expected view");
+        };
+        assert_eq!(v.kind.node.as_str(), "harness");
+        let inc = &v.includes[0];
+        assert_eq!(inc.instance.node.as_str(), "charger");
+        assert_eq!(inc.connector.as_ref().map(|c| c.node.as_str()), Some("hv"));
+        assert!(inc.ports.is_empty());
     }
 
     #[test]
