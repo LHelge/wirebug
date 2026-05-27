@@ -175,7 +175,19 @@ fn render_command(target: Option<&Path>, out_dir: &Path, strict: bool) -> Result
         })?;
     }
 
-    eprintln!("rendered {} view(s) to {}", views.len(), out_dir.display());
+    // An index page that embeds every rendered SVG, for browsing the views.
+    let index_path = out_dir.join(wirebug::render::INDEX_FILENAME);
+    fs::write(&index_path, wirebug::index_html(&views)).map_err(|source| Error::Write {
+        path: index_path.clone(),
+        source,
+    })?;
+
+    eprintln!(
+        "rendered {} view(s) to {} ({})",
+        views.len(),
+        out_dir.display(),
+        index_path.display(),
+    );
     Ok(ExitCode::SUCCESS)
 }
 

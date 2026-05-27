@@ -12,4 +12,4 @@ pub mod error;
 pub mod render;
 
 pub use error::{Error, Result};
-pub use render::{RenderedView, render_views};
+pub use render::{RenderedView, index_html, render_views};

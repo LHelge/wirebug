@@ -12,9 +12,10 @@ Two CLI commands share it:
   elaborate → validate. Turns a multi-file `.wb` project into an
   elaborated IR (`ir::Design`) and reports problems via miette.
 - **`render` (`src/render/`)** — runs the same DSL pipeline, then draws
-  every view in the resulting `ir::Design` to SVG (one file per view). The
-  legacy YAML model/view loader has been removed; `ir::Design` is the only
-  thing the renderer consumes.
+  every view in the resulting `ir::Design` to SVG (one file per view) plus
+  an `index.html` (`render::index_html`) that embeds them all for browsing.
+  The legacy YAML model/view loader has been removed; `ir::Design` is the
+  only thing the renderer consumes.
 
 ## DSL mental model
 
