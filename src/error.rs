@@ -46,6 +46,10 @@ pub enum Error {
         #[source]
         source: std::io::Error,
     },
+
+    /// Rendering the HTML index template failed.
+    #[error("failed to render HTML index: {0}")]
+    Template(#[from] askama::Error),
 }
 
 /// Convenience alias used throughout the crate.

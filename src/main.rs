@@ -11,6 +11,7 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use miette::{Diagnostic, GraphicalReportHandler, JSONReportHandler, Severity};
+use tracing_subscriber::EnvFilter;
 
 use wirebug::dsl::{self, CheckReport, Format};
 use wirebug::error::Error;
@@ -71,6 +72,16 @@ enum Command {
         #[arg(long)]
         strict: bool,
     },
+    /// Serve a project with live reload, re-rendering on every change.
+    Serve {
+        /// A `.wb` file or project directory. Defaults to the project
+        /// containing the current directory (found by walking up to
+        /// `main.wb`).
+        target: Option<PathBuf>,
+        /// Port to listen on.
+        #[arg(short, long, default_value_t = 3000)]
+        port: u16,
+    },
 }
 
 fn main() -> ExitCode {
@@ -95,7 +106,22 @@ fn run(cli: Cli) -> Result<ExitCode> {
             out,
             strict,
         } => render_command(target.as_deref(), &out, strict),
+        Command::Serve { target, port } => serve_command(target.as_deref(), port),
     }
+}
+
+/// Run the live-reloading dev server. `serve` is the only async command, so
+/// it spins up a Tokio runtime locally rather than making all of `main`
+/// async; `check` and `render` stay synchronous.
+fn serve_command(target: Option<&Path>, port: u16) -> Result<ExitCode> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .init();
+    let runtime = tokio::runtime::Runtime::new().context("starting the async runtime")?;
+    runtime.block_on(wirebug::serve::serve(target, port))?;
+    Ok(ExitCode::SUCCESS)
 }
 
 /// Count a report's errors and warnings (warnings are the only
@@ -177,7 +203,8 @@ fn render_command(target: Option<&Path>, out_dir: &Path, strict: bool) -> Result
 
     // An index page that embeds every rendered SVG, for browsing the views.
     let index_path = out_dir.join(wirebug::render::INDEX_FILENAME);
-    fs::write(&index_path, wirebug::index_html(&views)).map_err(|source| Error::Write {
+    let index = wirebug::index_html(&views, false).context("rendering HTML index")?;
+    fs::write(&index_path, index).map_err(|source| Error::Write {
         path: index_path.clone(),
         source,
     })?;

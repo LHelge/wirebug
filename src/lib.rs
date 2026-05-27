@@ -10,6 +10,7 @@
 pub mod dsl;
 pub mod error;
 pub mod render;
+pub mod serve;
 
 pub use error::{Error, Result};
 pub use render::{RenderedView, index_html, render_views};

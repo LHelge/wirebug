@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>wirebug views</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 70rem; color: #1a1a1a; background: #fafafa; }
+    h1 { font-weight: 600; }
+    section { background: #fff; border: 1px solid #ddd; border-radius: 6px; margin: 1.5rem 0; padding: 1rem 1.5rem; }
+    section h2 { margin: 0 0 .75rem; font-size: 1.1rem; }
+    img { max-width: 100%; height: auto; }
+    p.empty { color: #777; }
+  </style>
+</head>
+<body>
+  <h1>wirebug views</h1>
+{% if views.is_empty() %}
+  <p class="empty">This design has no views.</p>
+{% else %}
+{% for view in views %}
+  <section>
+    <h2>{{ view.title }}</h2>
+    <img src="{{ view.filename }}" alt="{{ view.title }}">
+  </section>
+{% endfor %}
+{% endif %}
+{% if live_reload %}
+  <script>(function(){var ws=new WebSocket("ws://"+location.host+"/ws");ws.onmessage=function(){location.reload()};ws.onclose=function(){setTimeout(function(){location.reload()},1000)}})()</script>
+{% endif %}
+</body>
+</html>

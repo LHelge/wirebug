@@ -66,6 +66,26 @@ fn help_text_mentions_check() {
 }
 
 #[test]
+fn help_text_mentions_serve() {
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("serve"));
+}
+
+#[test]
+fn serve_help_documents_the_port_flag() {
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["serve", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--port"));
+}
+
+#[test]
 fn check_accepts_the_example_project() {
     Command::cargo_bin("wirebug")
         .expect("binary present")

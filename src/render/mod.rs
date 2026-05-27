@@ -4,6 +4,8 @@
 //! view in the design, resolves each to its subject instance, and
 //! dispatches to the renderer named by the view's `kind`.
 
+use askama::Template;
+
 use crate::dsl::ir::{Design, Instance, View};
 use crate::error::{Error, Result};
 
@@ -49,57 +51,27 @@ pub fn render_views(design: &Design) -> Result<Vec<RenderedView>> {
 /// File name for the HTML index page written alongside the per-view SVGs.
 pub const INDEX_FILENAME: &str = "index.html";
 
-const INDEX_STYLE: &str = "\
-    body { font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 70rem; \
-color: #1a1a1a; background: #fafafa; }\n\
-    h1 { font-weight: 600; }\n\
-    section { background: #fff; border: 1px solid #ddd; border-radius: 6px; \
-margin: 1.5rem 0; padding: 1rem 1.5rem; }\n\
-    section h2 { margin: 0 0 .75rem; font-size: 1.1rem; }\n\
-    img { max-width: 100%; height: auto; }\n\
-    p.empty { color: #777; }\n";
-
-/// Build a self-contained HTML index that embeds every rendered view, in
-/// render order, each under its title. The SVGs are referenced by their
-/// sibling file names, so the page expects to live in the same directory.
-#[must_use]
-pub fn index_html(views: &[RenderedView]) -> String {
-    let mut body = String::new();
-    if views.is_empty() {
-        body.push_str("    <p class=\"empty\">This design has no views.</p>\n");
-    }
-    for view in views {
-        let title = escape_html(&view.title);
-        let src = escape_html(&view.filename);
-        body.push_str(&format!(
-            "    <section>\n      <h2>{title}</h2>\n      \
-             <img src=\"{src}\" alt=\"{title}\">\n    </section>\n",
-        ));
-    }
-    format!(
-        "<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n  <meta charset=\"utf-8\">\n  \
-         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n  \
-         <title>wirebug views</title>\n  <style>\n{INDEX_STYLE}  </style>\n</head>\n\
-         <body>\n  <h1>wirebug views</h1>\n{body}</body>\n</html>\n",
-    )
+/// The HTML index that embeds every rendered view, in render order, each
+/// under its title. The SVGs are referenced by their sibling file names, so
+/// the page expects to live in the same directory as them (or be served with
+/// each SVG reachable at its file name).
+///
+/// `live_reload` injects the `serve` websocket client script; `render` leaves
+/// it off for a self-contained static page. The template auto-escapes the
+/// author-supplied titles and the slugged file names.
+#[derive(Template)]
+#[template(path = "index.html")]
+struct IndexTemplate<'a> {
+    views: &'a [RenderedView],
+    live_reload: bool,
 }
 
-/// Escape the five characters that are unsafe in HTML text and double-quoted
-/// attribute values. View titles and slugged file names both flow into the
-/// index, and titles are author-supplied.
-fn escape_html(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            _ => out.push(ch),
-        }
-    }
-    out
+/// Render the HTML index for `views`. Shared by `render` (static, no
+/// live-reload) and `serve` (in-memory, live-reload on).
+pub fn index_html(views: &[RenderedView], live_reload: bool) -> Result<String> {
+    IndexTemplate { views, live_reload }
+        .render()
+        .map_err(Error::Template)
 }
 
 /// The instance a view renders against: the first one whose type matches
@@ -163,7 +135,7 @@ mod tests {
                 svg: String::new(),
             },
         ];
-        let html = index_html(&views);
+        let html = index_html(&views, false).unwrap();
         assert!(html.contains("<h2>HV Overview</h2>"));
         assert!(html.contains("<img src=\"hv_overview.svg\" alt=\"HV Overview\">"));
         assert!(html.contains("<img src=\"pack_detail.svg\" alt=\"Pack Detail\">"));
@@ -176,13 +148,21 @@ mod tests {
             filename: "a_b_hv.svg".to_string(),
             svg: String::new(),
         }];
-        let html = index_html(&views);
-        assert!(html.contains("<h2>A &amp; B &lt;hv&gt;</h2>"));
+        let html = index_html(&views, false).unwrap();
+        // Askama auto-escapes (with numeric entities); the author-supplied
+        // angle brackets must not survive as a literal tag.
         assert!(!html.contains("<hv>"));
+        assert!(!html.contains("A & B"));
     }
 
     #[test]
     fn index_notes_a_design_with_no_views() {
-        assert!(index_html(&[]).contains("no views"));
+        assert!(index_html(&[], false).unwrap().contains("no views"));
+    }
+
+    #[test]
+    fn live_reload_flag_toggles_the_websocket_script() {
+        assert!(index_html(&[], true).unwrap().contains("new WebSocket"));
+        assert!(!index_html(&[], false).unwrap().contains("new WebSocket"));
     }
 }

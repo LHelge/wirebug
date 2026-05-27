@@ -6,7 +6,7 @@ future work on the codebase. Keep it short; don't restate the README.
 ## One pipeline
 
 The only input is the **`.wb` DSL** (spec: `.github/skills/wirebug-dsl/`).
-Two CLI commands share it:
+Three CLI commands share it:
 
 - **`check` (`src/dsl/`)** — lex → parse → load project → resolve →
   elaborate → validate. Turns a multi-file `.wb` project into an
@@ -16,6 +16,17 @@ Two CLI commands share it:
   an `index.html` (`render::index_html`) that embeds them all for browsing.
   The legacy YAML model/view loader has been removed; `ir::Design` is the
   only thing the renderer consumes.
+- **`serve` (`src/serve/`)** — a live-reloading dev server. Renders the
+  project into memory (the same `render_views` + `index_html` pipeline,
+  `live_reload` on), serves it over axum, and watches the project tree for
+  `.wb` changes; each save re-renders and pushes a websocket reload. Nothing
+  hits disk. A failing `check` serves a diagnostics page that still
+  live-reloads, so it recovers once fixed. `serve` is the only async command:
+  `main` stays synchronous and spins a Tokio runtime just for this arm.
+
+The `index.html` is an [`askama`] compile-time template (`templates/`),
+rendered by `render::index_html(views, live_reload)` — shared by `render`
+(static, `false`) and `serve` (`true`, injects the reload script).
 
 ## DSL mental model
 
@@ -130,7 +141,7 @@ redesign each when it lands.
 
 ```
 src/
-├── main.rs          # clap CLI: `check` and `render` (both over the .wb DSL)
+├── main.rs          # clap CLI: `check`, `render`, `serve` (all over the .wb DSL)
 ├── lib.rs           # re-exports; dsl::check_project + render::render_views
 │
 │  # ── DSL parse-and-check pipeline (the only input: .wb) ──
@@ -169,8 +180,20 @@ src/
 │               ├── order.rs     # §6.1 order routes within a channel
 │               ├── place.rs     # §6.2 final placement (two axis passes)
 │               └── vpsc.rs      # separation-constraint solver
-└── error.rs         # thiserror types (render path)
+│
+│  # ── live-reloading dev server (`serve`) ──
+├── serve/
+│   ├── mod.rs        # serve(): discover root, build site, router, watcher, shutdown
+│   ├── build.rs      # build_site: check→render→index_html; diagnostics page on error
+│   ├── state.rs      # AppState (RwLock<Site> + broadcast + Notify); Site = index + svgs
+│   ├── server.rs     # axum router: GET / (index), /ws, fallback SVG-by-name
+│   ├── livereload.rs # websocket handler broadcasting "reload"
+│   └── watcher.rs    # notify watcher, 200ms debounce, .wb-only filter → rebuild+swap
+└── error.rs         # thiserror types (render path; incl. askama Template)
 ```
+
+The `serve` module renders into memory only; `templates/index.html` (askama)
+is the shared index template for both `render` and `serve`.
 
 DSL pipeline notes:
 
@@ -298,6 +321,13 @@ Runtime:
 - [`svg`] — SVG document emission with escaping handled (render path).
 - [`pathfinding`] — A* over the orthogonal visibility graph for
   object-avoiding connector routing (render path).
+- [`askama`] — compile-time HTML templates (`templates/`); the `index.html`
+  shared by `render` and `serve`.
+- [`axum`] (feature `ws`) — the `serve` HTTP server + live-reload websocket.
+- [`tokio`] — async runtime, built only for `serve`'s command arm.
+- [`tower-http`] (feature `set-header`) — `no-store` dev cache header.
+- [`notify`] — filesystem watcher behind `serve`'s rebuild loop.
+- [`tracing`] / [`tracing-subscriber`] (feature `env-filter`) — `serve` logs.
 
 Dev / test:
 
@@ -311,6 +341,13 @@ Dev / test:
 [`clap`]: https://docs.rs/clap
 [`svg`]: https://docs.rs/svg
 [`pathfinding`]: https://docs.rs/pathfinding
+[`askama`]: https://docs.rs/askama
+[`axum`]: https://docs.rs/axum
+[`tokio`]: https://docs.rs/tokio
+[`tower-http`]: https://docs.rs/tower-http
+[`notify`]: https://docs.rs/notify
+[`tracing`]: https://docs.rs/tracing
+[`tracing-subscriber`]: https://docs.rs/tracing-subscriber
 [`thiserror`]: https://docs.rs/thiserror
 [`anyhow`]: https://docs.rs/anyhow
 [`insta`]: https://docs.rs/insta
@@ -331,6 +368,9 @@ cargo run -- check --strict --format json examples/main.wb
 
 # render every view in a .wb project to SVG (one file per view, into --out)
 cargo run --release -- render examples/main.wb --out out/
+
+# serve a project with live reload (re-renders on every .wb save)
+cargo run -- serve examples/main.wb --port 3000   # then open http://localhost:3000
 ```
 
 ## Done definition for the MVP
