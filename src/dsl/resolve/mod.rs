@@ -32,8 +32,11 @@ pub struct PortFacts<'a> {
     pub span: Span,
 }
 
-/// A port's connector grouping: the part description and its order index.
+/// A port's connector grouping: the optional designator, part description,
+/// and its order index among the component's connectors.
+#[derive(Clone, Copy)]
 pub struct ConnectorRef<'a> {
+    pub name: Option<&'a str>,
     pub part: &'a str,
     pub index: usize,
 }
@@ -138,26 +141,34 @@ impl<'a> Resolver<'a> {
         let mut instances: IndexMap<InstanceName, InstFacts<'a>> = IndexMap::new();
         let mut nested = Vec::new();
         let mut connector_index = 0;
+        let mut connector_names: HashMap<&str, Span> = HashMap::new();
+        let mut cable_names: HashMap<&str, Span> = HashMap::new();
 
         for member in &def.members {
             match member {
                 Member::Port(port) => self.add_port(&mut ports, port, None, file),
                 Member::Connector(conn) => {
+                    let name = conn.name.as_ref().map(|n| n.node.as_str());
+                    if let (Some(n), Some(named)) = (name, conn.name.as_ref()) {
+                        if let Some(&first) = connector_names.get(n) {
+                            self.problems.push(Problem::DuplicateConnectorName {
+                                name: n.to_string(),
+                                src: self.project.source(file),
+                                at: named.span.into(),
+                                first: first.into(),
+                            });
+                        } else {
+                            connector_names.insert(n, named.span);
+                        }
+                    }
                     let cref = ConnectorRef {
+                        name,
                         part: conn.part.node.as_str(),
                         index: connector_index,
                     };
                     connector_index += 1;
                     for port in &conn.ports {
-                        self.add_port(
-                            &mut ports,
-                            port,
-                            Some(ConnectorRef {
-                                part: cref.part,
-                                index: cref.index,
-                            }),
-                            file,
-                        );
+                        self.add_port(&mut ports, port, Some(cref), file);
                     }
                 }
                 Member::Instance(inst) => {
@@ -180,6 +191,20 @@ impl<'a> Resolver<'a> {
                     }
                 }
                 Member::Wire(_) => {} // endpoints resolved in pass 2
+                Member::Cable(cable) => {
+                    // endpoints resolved in pass 2; here, guard the designator.
+                    let n = cable.name.node.as_str();
+                    if let Some(&first) = cable_names.get(n) {
+                        self.problems.push(Problem::DuplicateCableName {
+                            name: n.to_string(),
+                            src: self.project.source(file),
+                            at: cable.name.span.into(),
+                            first: first.into(),
+                        });
+                    } else {
+                        cable_names.insert(n, cable.name.span);
+                    }
+                }
                 Member::Definition(child) => {
                     let child_id = self.register(child, file, Some(id));
                     nested.push(child_id);
@@ -361,7 +386,12 @@ impl<'a> Resolver<'a> {
         for d in 0..self.defs.len() {
             let ast = self.defs[d].ast;
             for member in &ast.members {
-                if let Member::Wire(wire) = member {
+                let wires: &[ast::Wire] = match member {
+                    Member::Wire(wire) => std::slice::from_ref(wire),
+                    Member::Cable(cable) => &cable.wires,
+                    _ => continue,
+                };
+                for wire in wires {
                     for ep in &wire.endpoints {
                         if let Some(problem) = self.check_endpoint(d, ep) {
                             problems.push(problem);
@@ -474,6 +504,71 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    /// A schematic include names a bare instance and authors `ports`
+    /// placements; naming a connector here is the wrong form.
+    fn check_schematic_include(
+        &self,
+        inc: &ast::Include,
+        type_id: Option<DefId>,
+        file: FileId,
+        problems: &mut Vec<Problem>,
+    ) {
+        if let Some(conn) = &inc.connector {
+            problems.push(Problem::WrongIncludeForm {
+                message: "a schematic include names a bare instance, not a connector".to_string(),
+                help: "drop the `.connector`; schematic boxes show ports via a `ports { }` block"
+                    .to_string(),
+                src: self.project.source(file),
+                at: conn.span.into(),
+            });
+        }
+        self.check_view_ports(inc, type_id, file, problems);
+    }
+
+    /// A harness include names `instance.connector` and draws that whole
+    /// connector. It must carry a connector, must not carry a `ports { }`
+    /// block, and the connector must exist on the instance's type.
+    fn check_harness_include(
+        &self,
+        inc: &ast::Include,
+        type_id: Option<DefId>,
+        file: FileId,
+        problems: &mut Vec<Problem>,
+    ) {
+        let Some(conn) = &inc.connector else {
+            problems.push(Problem::WrongIncludeForm {
+                message: "a harness include must name a connector".to_string(),
+                help: "write `include <instance>.<connector> at (x, y);`".to_string(),
+                src: self.project.source(file),
+                at: inc.instance.span.into(),
+            });
+            return;
+        };
+        if let Some(first) = inc.ports.first() {
+            problems.push(Problem::WrongIncludeForm {
+                message: "a harness include draws a whole connector, not selected ports"
+                    .to_string(),
+                help: "remove the `ports { }` block from this harness include".to_string(),
+                src: self.project.source(file),
+                at: first.span.into(),
+            });
+        }
+        let Some(tid) = type_id else { return }; // undefined type already reported
+        let wanted = conn.node.as_str();
+        let exists = self.defs[tid]
+            .ports
+            .values()
+            .any(|p| p.connector.and_then(|c| c.name) == Some(wanted));
+        if !exists {
+            problems.push(Problem::UnknownConnector {
+                name: wanted.to_string(),
+                on: format!(" on `{}`", self.defs[tid].name),
+                src: self.project.source(file),
+                at: conn.span.into(),
+            });
+        }
+    }
+
     fn resolve_views(&mut self, roots_by_file: &[Vec<DefId>]) -> Vec<ViewBinding<'a>> {
         let mut bindings = Vec::new();
         let mut problems = Vec::new();
@@ -491,6 +586,7 @@ impl<'a> Resolver<'a> {
                     None
                 };
                 if let Some(s) = subject {
+                    let is_harness = view.kind.node.as_str() == "harness";
                     for inc in &view.includes {
                         let name = inc.instance.node.as_str();
                         match self.defs[s].instances.get(&InstanceName::from(name)) {
@@ -499,9 +595,18 @@ impl<'a> Resolver<'a> {
                                 src: self.project.source(FileId(fi)),
                                 at: inc.instance.span.into(),
                             }),
-                            Some(facts) => {
-                                self.check_view_ports(inc, facts.type_id, FileId(fi), &mut problems)
-                            }
+                            Some(facts) if is_harness => self.check_harness_include(
+                                inc,
+                                facts.type_id,
+                                FileId(fi),
+                                &mut problems,
+                            ),
+                            Some(facts) => self.check_schematic_include(
+                                inc,
+                                facts.type_id,
+                                FileId(fi),
+                                &mut problems,
+                            ),
                         }
                     }
                 }
@@ -668,5 +773,94 @@ mod tests {
     fn duplicate_port_in_view_is_reported() {
         let p = view_with_ports("pub port a \"A\";", "west: a; east: a;");
         assert!(has(&p, "wirebug::duplicate_view_port"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn duplicate_connector_name_errors() {
+        let p = problems(&[(
+            "main.wb",
+            "component m { connector x \"A\" { pub port a \"A\" pin 1; } connector x \"B\" { pub port b \"B\" pin 1; } }\n",
+        )]);
+        assert!(
+            has(&p, "wirebug::duplicate_connector_name"),
+            "{:?}",
+            codes(&p)
+        );
+    }
+
+    #[test]
+    fn duplicate_cable_name_errors() {
+        let p = problems(&[(
+            "main.wb",
+            "component m { pub port a \"A\"; pub port b \"B\"; cable c { wire red 1 [a, b]; } cable c { wire red 1 [a, b]; } }\n",
+        )]);
+        assert!(has(&p, "wirebug::duplicate_cable_name"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn cable_endpoints_resolve_like_loose_wires() {
+        // An unknown port inside a cable wire is caught just like a loose wire.
+        let p = problems(&[(
+            "main.wb",
+            "component m { pub port a \"A\"; cable c { wire red 1 [a, ghost]; } }\n",
+        )]);
+        assert!(has(&p, "wirebug::unknown_port"), "{:?}", codes(&p));
+    }
+
+    /// A two-file project whose `main.wb` holds one `leaf` instance `l` and a
+    /// harness view with the given include body. `leaf` (in `leaf.wb`) has a
+    /// connector designated `hv`.
+    fn harness_view(include: &str) -> Vec<Problem> {
+        problems(&[
+            (
+                "main.wb",
+                &format!(
+                    "use leaf from \"leaf.wb\"\ncomponent m {{ leaf l; }}\nview harness \"H\" {{ {include} }}\n"
+                ),
+            ),
+            (
+                "leaf.wb",
+                "component leaf { connector hv \"HV 2p\" { pub port hv_pos \"HV+\" pin 1; pub port hv_neg \"HV-\" pin 2; } }\n",
+            ),
+        ])
+    }
+
+    #[test]
+    fn harness_include_resolves_cleanly() {
+        let p = harness_view("include l.hv at (0, 0);");
+        assert!(p.is_empty(), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn unknown_connector_errors() {
+        let p = harness_view("include l.nope at (0, 0);");
+        assert!(has(&p, "wirebug::unknown_connector"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn harness_include_without_connector_errors() {
+        let p = harness_view("include l at (0, 0);");
+        assert!(has(&p, "wirebug::wrong_include_form"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn ports_block_on_harness_include_errors() {
+        let p = harness_view("include l.hv at (0, 0) ports { west: hv_pos; };");
+        assert!(has(&p, "wirebug::wrong_include_form"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn connector_on_schematic_include_errors() {
+        let p = problems(&[
+            (
+                "main.wb",
+                "use leaf from \"leaf.wb\"\ncomponent m { leaf l; }\nview schematic \"S\" { include l.hv at (0, 0); }\n",
+            ),
+            (
+                "leaf.wb",
+                "component leaf { connector hv \"HV 2p\" { pub port hv_pos \"HV+\" pin 1; } }\n",
+            ),
+        ]);
+        assert!(has(&p, "wirebug::wrong_include_form"), "{:?}", codes(&p));
     }
 }

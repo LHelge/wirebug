@@ -44,6 +44,12 @@ fn seed_project_checks_clean_and_elaborates() {
         "rear_battery"
     );
 
-    // Three views came through (overview + two battery details).
-    assert_eq!(design.views.len(), 3);
+    // Five views came through (schematic overview + two battery details,
+    // plus the HV harness and the motor-phase cable harness).
+    assert_eq!(design.views.len(), 5);
+    assert_eq!(
+        design.views.iter().filter(|v| v.kind == "harness").count(),
+        2,
+        "the HV harness and motor-phase harness views are present"
+    );
 }

@@ -157,6 +157,7 @@ pub(crate) mod tests {
                 .iter()
                 .map(|(name, x, y, ports)| Include {
                     instance: InstanceName::from(*name),
+                    connector: None,
                     x: *x,
                     y: *y,
                     ports: ports

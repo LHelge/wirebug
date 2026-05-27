@@ -43,6 +43,14 @@ macro_rules! name_newtype {
 name_newtype!(TypeName, "The name of a component definition (a type).");
 name_newtype!(InstanceName, "The name of an instance within a component.");
 name_newtype!(PortName, "The name of a port within a component.");
+name_newtype!(
+    ConnectorName,
+    "A connector's reference designator (its addressable name in a view)."
+);
+name_newtype!(
+    CableName,
+    "A cable's designator, grouping its conductor wires."
+);
 
 /// A physical connector pin (a positive integer in the DSL).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -80,8 +88,23 @@ pub struct Instance {
     pub ports: IndexMap<PortName, Port>,
     /// Local child name → its key into [`Design::instances`].
     pub children: IndexMap<InstanceName, InstancePath>,
-    /// Wires declared at this level, resolved against this scope.
+    /// Wires declared at this level, resolved against this scope. Wires that
+    /// belong to a cable carry its name in [`Wire::cable`]; loose wires don't.
     pub wires: Vec<Wire>,
+    /// Cable metadata declared at this level, keyed by designator. The cable's
+    /// conductors live in `wires`, each tagged with this name.
+    pub cables: IndexMap<CableName, CableMeta>,
+}
+
+/// Physical metadata for a declared cable. Its conductor wires live in
+/// [`Instance::wires`], each tagged with the cable's [`CableName`].
+#[derive(Debug, Clone)]
+pub struct CableMeta {
+    pub label: Option<String>,
+    /// Free-text construction note, e.g. `"Twisted pair"`.
+    pub r#type: Option<String>,
+    /// Length in metres.
+    pub length: Option<f64>,
 }
 
 /// A materialized port on an instance.
@@ -101,9 +124,11 @@ pub enum Visibility {
     Private,
 }
 
-/// A port's connector grouping: the part description and its order index.
+/// A port's connector grouping: the optional designator, part description,
+/// and its order index among the component's connectors.
 #[derive(Debug, Clone)]
 pub struct ConnectorRef {
+    pub name: Option<ConnectorName>,
     pub part: String,
     pub index: usize,
 }
@@ -113,7 +138,11 @@ pub struct ConnectorRef {
 pub struct Wire {
     pub color: String,
     pub gauge: f64,
+    /// Optional signal name, shown on each wire in a harness drawing.
+    pub label: Option<String>,
     pub endpoints: Vec<WireEnd>,
+    /// The cable this conductor belongs to, if any. Loose wires are `None`.
+    pub cable: Option<CableName>,
 }
 
 /// A resolved wire endpoint.
@@ -178,11 +207,17 @@ pub struct View {
     pub includes: Vec<Include>,
 }
 
-/// A view placement: an instance at grid coordinates, with its ports placed
-/// on authored sides in declaration order. `ports` is empty for a bare box.
+/// A view placement at grid coordinates.
+///
+/// A schematic include names a bare instance and authors port placements
+/// in `ports` (side + order; empty for a bare box). A harness include names
+/// a connector (`connector` is `Some`) and leaves `ports` empty; the whole
+/// connector's pins are drawn.
 #[derive(Debug)]
 pub struct Include {
     pub instance: InstanceName,
+    /// The connector designator for a harness include; `None` for schematic.
+    pub connector: Option<ConnectorName>,
     pub x: f64,
     pub y: f64,
     pub ports: Vec<(PortName, Side)>,

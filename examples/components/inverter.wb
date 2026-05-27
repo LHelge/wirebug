@@ -2,28 +2,28 @@
 // Converts DC from HV bus to 3-phase AC for the drive motor
 
 component inverter {
-    connector "HV DC 2p" {
+    connector hv "HV DC 2p" {
         pub port dc_pos "DC+" pin 1;
         pub port dc_neg "DC-" pin 2;
     }
 
-    connector "Motor phases 3p" {
+    connector phases "Motor phases 3p" {
         pub port phase_u "U" pin 1;
         pub port phase_v "V" pin 2;
         pub port phase_w "W" pin 3;
     }
 
-    connector "CAN 4p" {
+    connector can "CAN 4p" {
         pub port can_h "CAN H" pin 1;
         pub port can_l "CAN L" pin 2;
     }
 
-    connector "12V 4p" {
+    connector lv "12V 4p" {
         pub port b_pos "B+" pin 1;
         pub port gnd   "GND" pins (2, 3, 4);
     }
 
-    connector "Interlock 2p" {
+    connector intlk "Interlock 2p" {
         pub port interlock_in  "INTLK IN" pin 1;
         pub port interlock_out "INTLK OUT" pin 2;
     }

@@ -7,11 +7,11 @@
 //! its children. Definitions vanish here; only instances flow to the IR.
 //! A type stack guards against containment cycles.
 
-use crate::dsl::ast::{self, Member};
+use crate::dsl::ast::{self, CablePropertyValue, Member};
 use crate::dsl::diagnostics::Problem;
 use crate::dsl::ir::{
-    ConnectorRef, Design, Include, Instance, InstanceName, InstancePath, Port, PortName, Side,
-    TypeName, View, Visibility, Wire, WireEnd,
+    CableMeta, CableName, ConnectorName, ConnectorRef, Design, Include, Instance, InstanceName,
+    InstancePath, Port, PortName, Side, TypeName, View, Visibility, Wire, WireEnd,
 };
 use crate::dsl::resolve::{DefId, Resolved};
 
@@ -101,6 +101,7 @@ impl Elaborator<'_> {
                             ast::Visibility::Private => Visibility::Private,
                         },
                         connector: facts.connector.as_ref().map(|c| ConnectorRef {
+                            name: c.name.map(ConnectorName::from),
                             part: c.part.to_string(),
                             index: c.index,
                         }),
@@ -110,15 +111,25 @@ impl Elaborator<'_> {
             })
             .collect();
 
-        let wires = info
-            .ast
-            .members
-            .iter()
-            .filter_map(|m| match m {
-                Member::Wire(w) => Some(rewrite_wire(w)),
-                _ => None,
-            })
-            .collect();
+        // Loose wires keep `cable: None`; a cable's conductors are tagged with
+        // its designator and its metadata recorded separately. Property and
+        // arity problems are reported once per def in `validate`, so this pass
+        // is best-effort: it takes well-typed values and ignores the rest.
+        let mut wires = Vec::new();
+        let mut cables: IndexMap<CableName, CableMeta> = IndexMap::new();
+        for m in &info.ast.members {
+            match m {
+                Member::Wire(w) => wires.push(rewrite_wire(w, None)),
+                Member::Cable(c) => {
+                    let name = CableName::from(c.name.node.as_str());
+                    cables.insert(name.clone(), cable_meta(c));
+                    for w in &c.wires {
+                        wires.push(rewrite_wire(w, Some(name.clone())));
+                    }
+                }
+                _ => {}
+            }
+        }
 
         // Resolve child placements (skip instances whose type didn't
         // resolve — that error is already reported).
@@ -145,6 +156,7 @@ impl Elaborator<'_> {
                 ports,
                 children,
                 wires,
+                cables,
             },
         );
 
@@ -173,6 +185,10 @@ impl Elaborator<'_> {
                         .iter()
                         .map(|inc| Include {
                             instance: InstanceName::from(inc.instance.node.as_str()),
+                            connector: inc
+                                .connector
+                                .as_ref()
+                                .map(|c| ConnectorName::from(c.node.as_str())),
                             x: inc.x.node,
                             y: inc.y.node,
                             // Sides that failed to parse were already reported
@@ -197,10 +213,11 @@ impl Elaborator<'_> {
     }
 }
 
-fn rewrite_wire(w: &ast::Wire) -> Wire {
+fn rewrite_wire(w: &ast::Wire, cable: Option<CableName>) -> Wire {
     Wire {
         color: w.color.node.as_str().to_string(),
         gauge: w.gauge.node,
+        label: w.label.as_ref().map(|l| l.node.clone()),
         endpoints: w
             .endpoints
             .iter()
@@ -212,7 +229,26 @@ fn rewrite_wire(w: &ast::Wire) -> Wire {
                 },
             })
             .collect(),
+        cable,
     }
+}
+
+/// Map a cable's faithful AST properties to typed [`CableMeta`]. Unknown keys
+/// and wrong value types are reported in `validate`; here they are dropped.
+fn cable_meta(c: &ast::Cable) -> CableMeta {
+    let mut meta = CableMeta {
+        label: c.label.as_ref().map(|l| l.node.clone()),
+        r#type: None,
+        length: None,
+    };
+    for p in &c.properties {
+        match (p.key.node.as_str(), &p.value) {
+            ("type", CablePropertyValue::Str(s)) => meta.r#type = Some(s.node.clone()),
+            ("length", CablePropertyValue::Number(n)) => meta.length = Some(n.node),
+            _ => {}
+        }
+    }
+    meta
 }
 
 #[cfg(test)]
@@ -279,6 +315,40 @@ mod tests {
 
         // Views came through, bound to their type.
         assert!(design.views.iter().any(|v| v.subject.as_str() == "vehicle"));
+    }
+
+    #[test]
+    fn cable_tags_its_wires_and_records_metadata() {
+        let (design, problems) = elaborate_files(&[(
+            "main.wb",
+            "component m {
+                pub port a \"A\"; pub port b \"B\"; pub port x \"X\"; pub port y \"Y\";
+                wire black 1 [a, b];
+                cable feed \"Power feed\" {
+                    type: \"2-core\";
+                    length: 0.8;
+                    wire red 1 [x, y];
+                }
+            }\n",
+        )]);
+        assert!(problems.is_empty(), "{problems:?}");
+        let m = design.unwrap();
+        let root = m.get(&m.root).unwrap();
+
+        // The loose wire is untagged; the cable's conductor carries its name.
+        let loose = root.wires.iter().find(|w| w.color == "black").unwrap();
+        assert!(loose.cable.is_none());
+        let conductor = root.wires.iter().find(|w| w.color == "red").unwrap();
+        assert_eq!(conductor.cable.as_ref().map(|c| c.as_str()), Some("feed"));
+
+        // The metadata is recorded once, typed, keyed by designator.
+        let meta = root
+            .cables
+            .get(&CableName::from("feed"))
+            .expect("cable meta");
+        assert_eq!(meta.label.as_deref(), Some("Power feed"));
+        assert_eq!(meta.r#type.as_deref(), Some("2-core"));
+        assert_eq!(meta.length, Some(0.8));
     }
 
     #[test]

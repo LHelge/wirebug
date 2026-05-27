@@ -83,6 +83,7 @@ pub enum Member {
     Connector(Connector),
     Instance(Instance),
     Wire(Wire),
+    Cable(Cable),
     /// A nested (private) definition.
     Definition(Definition),
 }
@@ -94,6 +95,7 @@ impl Member {
             Member::Connector(c) => c.span,
             Member::Instance(i) => i.span,
             Member::Wire(w) => w.span,
+            Member::Cable(c) => c.span,
             Member::Definition(d) => d.span,
         }
     }
@@ -117,9 +119,12 @@ pub struct Port {
     pub span: Span,
 }
 
-/// `connector "<part>" { <ports> }` — physical grouping metadata.
+/// `connector [<name>] "<part>" { <ports> }` — physical grouping metadata.
+/// The optional name is a reference designator addressing the connector in
+/// a harness view (`include <inst>.<name>`); ports stay flat regardless.
 #[derive(Debug, Clone)]
 pub struct Connector {
+    pub name: Option<Spanned<Ident>>,
     pub part: Spanned<String>,
     pub ports: Vec<Port>,
     pub span: Span,
@@ -134,11 +139,13 @@ pub struct Instance {
     pub span: Span,
 }
 
-/// `wire <colour> <gauge> [ <endpoint>, … ] ;`
+/// `wire <colour> <gauge> ["<label>"] [ <endpoint>, … ] ;`
 #[derive(Debug, Clone)]
 pub struct Wire {
     pub color: Spanned<Ident>,
     pub gauge: Spanned<f64>,
+    /// Optional signal name, shown on each wire in a harness drawing.
+    pub label: Option<Spanned<String>>,
     pub endpoints: Vec<Endpoint>,
     pub span: Span,
 }
@@ -152,6 +159,43 @@ pub struct Endpoint {
     pub span: Span,
 }
 
+/// `cable <name> ["<label>"] { <property>* <wire>* }` — a named bundle of
+/// point-to-point conductors carrying physical metadata (`type`, `length`).
+/// Each inner wire is a single conductor; arity (exactly two endpoints) and
+/// property keys are checked later, so the parse stays faithful.
+#[derive(Debug, Clone)]
+pub struct Cable {
+    pub name: Spanned<Ident>,
+    pub label: Option<Spanned<String>>,
+    pub properties: Vec<CableProperty>,
+    pub wires: Vec<Wire>,
+    pub span: Span,
+}
+
+/// `<key>: <value>;` inside a `cable` body. Keys are validated in elaboration.
+#[derive(Debug, Clone)]
+pub struct CableProperty {
+    pub key: Spanned<Ident>,
+    pub value: CablePropertyValue,
+    pub span: Span,
+}
+
+/// The right-hand side of a cable property — a quoted string or a number.
+#[derive(Debug, Clone)]
+pub enum CablePropertyValue {
+    Str(Spanned<String>),
+    Number(Spanned<f64>),
+}
+
+impl CablePropertyValue {
+    pub fn span(&self) -> Span {
+        match self {
+            CablePropertyValue::Str(s) => s.span,
+            CablePropertyValue::Number(n) => n.span,
+        }
+    }
+}
+
 /// `view <kind> "<title>" { [grid N;] <includes> }`
 #[derive(Debug, Clone)]
 pub struct View {
@@ -162,10 +206,16 @@ pub struct View {
     pub span: Span,
 }
 
-/// `include <instance> at (x, y) [ports { <side>: <port>, ...; ... }] ;`
+/// `include <instance>[.<connector>] at (x, y) [ports { ... }] ;`
+///
+/// A schematic include names a bare instance and carries `ports`
+/// placements; a harness include names `instance.connector` and carries no
+/// `ports` block. Resolve enforces the per-kind shape.
 #[derive(Debug, Clone)]
 pub struct Include {
     pub instance: Spanned<Ident>,
+    /// The connector designator for a harness include; `None` for schematic.
+    pub connector: Option<Spanned<Ident>>,
     pub x: Spanned<f64>,
     pub y: Spanned<f64>,
     /// Authored port placements, flattened across the `ports { }` lines in

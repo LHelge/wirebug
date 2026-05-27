@@ -134,11 +134,11 @@ This is more verbose than implicit propagation but does useful work: documents t
 
 ## Connector blocks
 
-A `connector` block groups ports that physically belong to a single connector part (a JST XH 15p, a Deutsch DT06-12S, etc.). The block carries the part description as a string and contains port declarations with optional pin assignments.
+A `connector` block groups ports that physically belong to a single connector part (a JST XH 15p, a Deutsch DT06-12S, etc.). The block carries an **optional designator** (a snake_case reference name) and the part description as a string, and contains port declarations with optional pin assignments.
 
 ```
 component cell_monitor {
-    connector "JST XH 15p" {
+    connector cells "JST XH 15p" {       // `cells` is the designator
         port c0 "C0" pin 1;
         port c1 "C1" pin 2;
         // ... c2..c12
@@ -146,14 +146,16 @@ component cell_monitor {
         port ntc_n "NTC-" pin 15;
     }
 
-    connector "JST XH 2p" {
+    connector iso_spi "JST XH 2p" {
         pub port iso_spi_p "ISO SPI+" pin 1;
         pub port iso_spi_n "ISO SPI-" pin 2;
     }
 }
 ```
 
-Connectors are **structural metadata, not a namespace**. A port `c0` inside a connector is still referenced as `cell_monitor_instance.c0`, not `cell_monitor_instance.connector1.c0`. The `connector` block carries physical-grouping info (including pin assignments) for the harness renderer and BOM. `pub` is independent — a connector can mix `pub` and non-`pub` ports freely.
+The designator is **optional** but required to address the connector in a harness view (`include <inst>.<designator>`, see Views). Designators must be unique within a component.
+
+Connectors are **structural metadata, not a namespace**. A port `c0` inside a connector is still referenced as `cell_monitor_instance.c0`, not `cell_monitor_instance.cells.c0` — the designator names the *connector*, not a port scope. The `connector` block carries physical-grouping info (including pin assignments) for the harness renderer and BOM. `pub` is independent — a connector can mix `pub` and non-`pub` ports freely.
 
 ## Instantiation
 
@@ -180,16 +182,20 @@ The instance name (`pack`, `inv`) is what wires reference. The label (`"HV Batte
 ## Wires
 
 ```
-wire <color> <gauge_mm2> [<endpoint>, <endpoint>, ...];
+wire <color> <gauge_mm2> ["<label>"] [<endpoint>, <endpoint>, ...];
 ```
 
-- `color` — bare identifier (e.g., `orange`, `black`, `red`, `yellow`).
+- `color` — bare identifier (e.g., `orange`, `black`, `red`, `yellow`). Use CSS colour names; the harness renderer draws each strand in this colour.
 - `gauge_mm2` — number in mm² (e.g., `50`, `4`, `0.5`, `0.25`).
+- `"<label>"` — optional signal name (e.g., `"HV+"`, `"CAN H"`), shown on the wire in a harness drawing. Omit it when the net name adds nothing.
 - The bracketed list contains two or more endpoints. Each endpoint is `instance.port` or just `port` if referencing the enclosing component's own port (a `pub` port being wired to internals).
 
 ```
 // two-endpoint wire
 wire orange 50 [pack.hv_pos, inv.dc_pos];
+
+// labelled wire (the label shows on harness cables)
+wire orange 50 "HV+" [pack.hv_pos, inv.dc_pos];
 
 // multi-endpoint wire (T-junction / shared rail)
 wire orange 50 [pack.hv_pos, inv.dc_pos, charger.hv_pos, conv.hv_pos];
@@ -200,29 +206,93 @@ wire orange 50 [hv_pos, c_main_pos.out];
 
 Multi-endpoint wires model shared rails (HV power bus, enable signals to parallel coils). The renderer derives junction dots from the topology — don't try to add junction nodes manually.
 
-## Views
+## Cables
 
-A view declares a rendering target — what to render, at what positions, with what grid scale.
+A `cable` groups point-to-point wires that travel together as one physical bundle (a twisted pair, a shielded multi-core, a motor-phase loom) and carries its construction metadata. It's the WireViz "cable": connector pin tables on the sides, a labelled cable box in the middle.
 
 ```
-view schematic "System Overview" {
-    grid 20;
+cable motor_phases "Motor phases" {
+    type:   "Shielded 3-core";
+    length: 1.2;
 
-    include pack    at (2, 5);
-    include inv     at (15, 2);
-    include m       at (28, 2);
-    include charger at (15, 12);
-    include conv    at (15, 18);
+    wire orange 35 "U" [inv.phase_u, mot.phase_u];
+    wire orange 35 "V" [inv.phase_v, mot.phase_v];
+    wire orange 35 "W" [inv.phase_w, mot.phase_w];
 }
 ```
 
 Format:
 
-- `view <kind> "<title>" { ... }` — `kind` is currently always `schematic`. Other kinds (`harness`, `bom`, etc.) will be added later.
-- `grid <n>;` — pixels per grid cell. Optional; a sensible default applies.
-- `include <name> at (x, y);` — list components by their instance name in the surrounding scope, with grid-cell coordinates.
+- `cable <name> ["<label>"] { <properties> <wires> }` — `name` is a snake_case designator (unique within the component, like a connector's); the optional quoted label is shown on the cable box (the designator is used when omitted).
+- Properties are `key: value;` lines, before the wires. Two keys are supported:
+  - `type: "<string>";` — a free-text construction note (e.g. `"Twisted pair"`).
+  - `length: <number>;` — length in **metres** (a bare number, e.g. `2.5`; no unit suffix).
+- Each `wire` uses the exact same syntax as a loose wire, **but must have exactly two endpoints** — a cable conductor is one physical run from one pin to another. (A shared rail that fans out to three+ pins is not a single conductor; keep it a loose multi-endpoint `wire`, outside any cable.)
 
-**Wires are NOT listed in views.** They're auto-derived from the model: a wire renders if all its endpoints reference ports on included components.
+A cable's wires are still ordinary connections: they show in schematic views like any other wire. The cable grouping adds the harness box and the BOM metadata.
+
+**Cables vs. shared rails.** Use a `cable` for a real bundle of two-pin conductors. Use a loose multi-endpoint `wire` for a bus/rail that branches to many pins. Explicit junction elements are not in the language yet.
+
+## Views
+
+A view declares a rendering target — what to render, at what positions, with what grid scale. There are two kinds: **`schematic`** (component boxes with ports on authored sides) and **`harness`** (WireViz-style connector pin tables with cable bundles). Both document the file's single top-level component and render its direct children; they differ in what an `include` selects.
+
+### Schematic views
+
+Each `schematic` include also says which of that component's ports to show, on which side, and in what order.
+
+```
+view schematic "System Overview" {
+    grid 20;
+
+    include pack at (2, 5) ports {
+        east: hv_pos, hv_neg, can_h, can_l;
+    };
+
+    include inv at (15, 2) ports {
+        west:  dc_pos, dc_neg, can_h, can_l;
+        east:  phase_u, phase_v, phase_w;
+        south: enable;
+    };
+
+    include conv at (15, 18);   // bare box: no ports shown
+}
+```
+
+Format:
+
+- `view <kind> "<title>" { ... }` — `kind` is `schematic` or `harness`.
+- `grid <n>;` — pixels per grid cell. Optional; a sensible default applies.
+- `include <name> at (x, y) [ports { ... }];` — place a component by its instance name in the surrounding scope, at grid-cell coordinates. The trailing `;` is always required.
+- `ports { <side>: <port>, <port>; ... }` — optional. Each line lists the ports on one `side` (`north`, `east`, `south`, `west`), in the order they should appear on that edge. A `west: a, b;` line puts `a` above `b` on the west edge. List the same side more than once and the lines concatenate.
+
+**The `ports` block controls both layout and scope.** A port is drawn only if it's listed; everything else is hidden. An include with no `ports` block is a bare labelled box.
+
+**Wires are NOT listed in views.** A wire from the model is drawn only when *both* of a segment's endpoints are listed ports on included components; otherwise that segment drops silently. So a listed port whose wire goes to an unlisted (or excluded) port shows as a bare stub with no line.
+
+Sides are authored, never guessed: place a port on the side facing the box it wires to, and line the two boxes up so the wire runs straight (ports sit two grid steps apart, centred on each side). Private (non-`pub`) ports cannot be placed in a view, the same as they cannot be wired from outside.
+
+### Harness views
+
+A `harness` include selects a whole **connector** by its designator and draws it as a pin table. Cables between connectors are derived from the model's wires.
+
+```
+view harness "Main HV harness" {
+    grid 20;
+
+    include front.hv   at (4, 8);     // <instance>.<connector designator>
+    include rear.hv     at (4, 22);
+    include inv.hv      at (34, 8);
+    include charger.hv  at (40, 22);
+}
+```
+
+- `include <instance>.<connector> at (x, y);` — the target is `instance.connector` (the connector's designator on that instance's type). The whole connector is drawn: every pin, in pin order. **No `ports { }` block** (it's a whole-connector view), and **no side/facing** — pin facing is auto-oriented from where the cables go.
+- A connector must have a designator to be included (see Connector blocks). Including the same instance's other connectors is just more `include` lines.
+
+**Cables are derived, like schematic wires.** A wire renders as a cable strand only when *both* of its endpoints land on *included* connectors; ends on connectorless ports, excluded connectors, or the parent's own ports drop silently. So connectorize the external `pub port`s you want to see in a harness (wrap them in a named `connector` block).
+
+A wire that belongs to a declared `cable` (see Cables) draws WireViz-style: a labelled cable box sits between the two connectors it spans, titled with the cable's label and its `type · length`, one coloured strand per conductor. Loose wires between the same connector pair instead bundle into a plain strand group, each strand drawn in its `color` and annotated with its `label` and gauge.
 
 Views live in the same file as the component they primarily document — like unit tests in Rust source. A view of the system overview belongs in `main.wb` where `vehicle` is defined. A view of the battery pack detail belongs in the file where `battery_pack` is defined. This keeps views close to the data they describe.
 
@@ -271,10 +341,12 @@ wire orange 50 [pack.hv_neg, inv.dc_neg, charger.hv_neg, conv.hv_neg];
 
 ## Do not
 
-- **Do not** include wires in views. They're derived from the model.
+- **Do not** include wires in views. They're derived from the model; you control which show by listing their ports.
+- **Do not** expect a port to appear in a view unless you list it in that include's `ports` block. Listing is the scope.
 - **Do not** rely on filesystem structure for hierarchy. Only `use` and nesting matter.
 - **Do not** reference unexposed (non-`pub`) ports of nested components from outside. Private is private.
 - **Do not** introduce new keywords or option fields that aren't documented in this skill or already used in the project's `.wb` files. If something is awkward to express, raise it with the user rather than inventing syntax.
 - **Do not** add junction nodes by hand — multi-endpoint wires imply junctions automatically.
+- **Do not** put a multi-endpoint wire inside a `cable` — cable conductors are point-to-point (exactly two endpoints). Keep fan-out rails as loose wires.
 - **Do not** use block comments (`/* */`). Line comments (`//`) only.
 - **Do not** mix grid coordinates with pixel coordinates. View positions are in grid cells.
