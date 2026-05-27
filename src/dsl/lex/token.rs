@@ -26,6 +26,7 @@ pub enum Token {
     At,
     Grid,
     Ports,
+    Enclosure,
 
     // Punctuation.
     LBrace,
@@ -68,6 +69,7 @@ impl Token {
             "at" => Token::At,
             "grid" => Token::Grid,
             "ports" => Token::Ports,
+            "enclosure" => Token::Enclosure,
             _ => return None,
         })
     }
@@ -92,6 +94,7 @@ impl fmt::Display for Token {
             Token::At => "at",
             Token::Grid => "grid",
             Token::Ports => "ports",
+            Token::Enclosure => "enclosure",
             Token::LBrace => "{",
             Token::RBrace => "}",
             Token::LBracket => "[",

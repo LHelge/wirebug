@@ -10,8 +10,8 @@
 use crate::dsl::ast::{self, CablePropertyValue, Member};
 use crate::dsl::diagnostics::Problem;
 use crate::dsl::ir::{
-    CableMeta, CableName, ConnectorName, ConnectorRef, Design, Include, Instance, InstanceName,
-    InstancePath, Port, PortName, Side, TypeName, View, Visibility, Wire, WireEnd,
+    CableMeta, CableName, ConnectorName, ConnectorRef, Design, EnclosurePort, Include, Instance,
+    InstanceName, InstancePath, Port, PortName, Side, TypeName, View, Visibility, Wire, WireEnd,
 };
 use crate::dsl::resolve::{DefId, Resolved};
 
@@ -180,6 +180,12 @@ impl Elaborator<'_> {
                     title: v.title.node.clone(),
                     grid: v.grid.as_ref().map(|g| g.node),
                     subject: TypeName::from(self.resolved.defs[subject].name),
+                    // Anchors whose shape resolve already rejected drop here.
+                    enclosure: v
+                        .enclosure
+                        .iter()
+                        .filter_map(elaborate_enclosure_port)
+                        .collect(),
                     includes: v
                         .includes
                         .iter()
@@ -211,6 +217,33 @@ impl Elaborator<'_> {
     fn resolved_source(&self, def: DefId) -> miette::NamedSource<String> {
         self.resolved.project.source(self.resolved.defs[def].file)
     }
+}
+
+/// Resolve an enclosure port's `(x, y)` anchor to a `(side, coord)` pair:
+/// the side names the edge, the coordinate positions the port along the free
+/// axis. Returns `None` for an anchor whose shape resolve already rejected.
+fn elaborate_enclosure_port(ep: &ast::EnclosurePort) -> Option<EnclosurePort> {
+    use ast::Anchor::{Coord, Edge};
+    let (side, coord) = match (&ep.x, &ep.y) {
+        (Edge(s), Coord(c)) => (s.node.as_str().parse::<Side>().ok()?, c.node),
+        (Coord(c), Edge(s)) => (s.node.as_str().parse::<Side>().ok()?, c.node),
+        _ => return None,
+    };
+    // West/east belong in the x slot, north/south in the y slot; a mismatch
+    // was reported by resolve, so drop it rather than place it on the wrong edge.
+    let x_slot = matches!(ep.x, Edge(_));
+    let fits = match side {
+        Side::West | Side::East => x_slot,
+        Side::North | Side::South => !x_slot,
+    };
+    if !fits {
+        return None;
+    }
+    Some(EnclosurePort {
+        port: PortName::from(ep.port.node.as_str()),
+        side,
+        coord,
+    })
 }
 
 fn rewrite_wire(w: &ast::Wire, cable: Option<CableName>) -> Wire {

@@ -204,7 +204,21 @@ pub struct View {
     pub title: String,
     pub grid: Option<f64>,
     pub subject: TypeName,
+    /// The subject's own ports drawn on the enclosure boundary (a box that
+    /// wraps the schematic). Empty when no `enclosure { }` block is authored.
+    pub enclosure: Vec<EnclosurePort>,
     pub includes: Vec<Include>,
+}
+
+/// One of the subject component's own ports, placed on the enclosure
+/// boundary. `side` names the edge it sits on; `coord` is its position along
+/// that edge in grid units (the free axis: y for west/east, x for
+/// north/south).
+#[derive(Debug)]
+pub struct EnclosurePort {
+    pub port: PortName,
+    pub side: Side,
+    pub coord: f64,
 }
 
 /// A view placement at grid coordinates.
@@ -232,6 +246,19 @@ pub enum Side {
     East,
     North,
     South,
+}
+
+impl Side {
+    /// The opposing edge. An inverted boundary port faces this way, so it
+    /// labels like a normal port placed on the opposite side.
+    pub fn opposite(self) -> Side {
+        match self {
+            Side::West => Side::East,
+            Side::East => Side::West,
+            Side::North => Side::South,
+            Side::South => Side::North,
+        }
+    }
 }
 
 impl std::str::FromStr for Side {

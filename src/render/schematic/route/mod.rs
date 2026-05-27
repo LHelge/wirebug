@@ -84,8 +84,8 @@ impl Router {
     /// empty node path (drawn as a straight segment) if the graph offers
     /// no route — never drops a connection.
     pub(super) fn route_one(&self, a: &PlacedPort, b: &PlacedPort) -> RawRoute {
-        let out_a = Dir::from(a.side);
-        let in_b = Dir::from(b.side).opposite();
+        let out_a = out_dir(a);
+        let in_b = out_dir(b).opposite();
 
         let nodes = match (
             self.ovg.node_at(stub(a, self.clearance)),
@@ -119,9 +119,17 @@ impl Router {
     }
 }
 
-/// The point one `clearance` outward from a port along its normal.
+/// The direction a wire leaves a port: outward from its box, or inward for an
+/// inverted enclosure port (which faces the schematic interior).
+fn out_dir(p: &PlacedPort) -> Dir {
+    let dir = Dir::from(p.side);
+    if p.inverted { dir.opposite() } else { dir }
+}
+
+/// The point one `clearance` along a port's leaving direction — its stub,
+/// which always lands on a grid node.
 fn stub(p: &PlacedPort, clearance: f64) -> Point {
-    let (dx, dy) = Dir::from(p.side).unit();
+    let (dx, dy) = out_dir(p).unit();
     Point::new(p.pos.x + dx * clearance, p.pos.y + dy * clearance)
 }
 
@@ -160,6 +168,24 @@ mod tests {
     use crate::render::geometry::Side;
     use crate::render::schematic::layout::Grid;
     use crate::render::schematic::tests::{design_from, view_of};
+
+    #[test]
+    fn inverted_port_stubs_inward() {
+        use crate::dsl::ir::PortName;
+        // A normal west port stubs west (x decreases); an inverted boundary
+        // port faces the interior, so its stub goes east.
+        let port = PlacedPort {
+            port: PortName::from("x"),
+            side: Side::West,
+            pos: Point::new(100.0, 50.0),
+            pin: None,
+            label: "X".to_string(),
+            inverted: true,
+        };
+        let s = stub(&port, 10.0);
+        assert_eq!(s.x, 110.0);
+        assert_eq!(s.y, 50.0);
+    }
 
     /// Regression for the whole point of this module: a connection whose
     /// endpoints share a y would, under the old `manhattan_route`, run

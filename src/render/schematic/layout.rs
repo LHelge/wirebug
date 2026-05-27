@@ -17,8 +17,16 @@ use crate::dsl::ir::{Design, Instance, InstanceName, Pin, Port, PortName};
 use crate::error::Result;
 use crate::render::geometry::{Point, Side};
 
-/// A port's identity within a view: which included instance, which port.
-type PortKey = (InstanceName, PortName);
+/// A port's identity within a view: a port on an included child instance, or
+/// one of the subject's own ports drawn on the enclosure boundary.
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum PortKey {
+    Child {
+        instance: InstanceName,
+        port: PortName,
+    },
+    Enclosure(PortName),
+}
 
 /// A resolved include: its world centre, the child instance it places, and
 /// the authored port placements (side + order) to lay out for it.
@@ -61,6 +69,13 @@ impl Grid {
     fn pitch(self) -> f64 {
         2.0 * self.0
     }
+
+    /// How far the enclosure box stands off the wrapped child boxes — four
+    /// steps (an even count, so the edges stay grid-aligned and routing has
+    /// room between the children and the boundary).
+    fn enclosure_inset(self) -> f64 {
+        4.0 * self.0
+    }
 }
 
 /// Geometry for a single component box and all its placed ports, in
@@ -82,12 +97,19 @@ pub(super) struct PlacedPort {
     pub(super) pos: Point,
     pub(super) pin: Option<String>,
     pub(super) label: String,
+    /// True for an enclosure port: it sits on the boundary facing *inward*,
+    /// so its wire leaves toward the schematic interior, not outward.
+    pub(super) inverted: bool,
 }
 
 /// Everything the renderer needs after walking the design's view once:
 /// the placed boxes plus the wire segments to route between their ports.
 pub(super) struct Placement {
     pub(super) components: IndexMap<InstanceName, PlacedComponent>,
+    /// The subject's boundary box with its inverted ports, when the view
+    /// authors an `enclosure { }` block. Drawn and routed to, but never an
+    /// obstacle (it's a container, not a component).
+    enclosure: Option<PlacedComponent>,
     /// Chain-decomposed wire segments, both ends resolving to a placed
     /// port (see [`Placement::compute`]).
     connections: Vec<(PortKey, PortKey)>,
@@ -164,23 +186,32 @@ impl Placement {
 
         // A port is shown iff the view lists it; that listing also fixes its
         // side. Build the lookup from the authored placements of every
-        // resolved box.
+        // resolved box, plus the subject's own ports placed on the enclosure.
         let mut side_of: HashMap<PortKey, Side> = HashMap::new();
         for (name, (_, _, ports)) in &boxes {
             for (port, side) in ports.iter() {
-                side_of.insert((name.clone(), port.clone()), *side);
+                side_of.insert(
+                    PortKey::Child {
+                        instance: name.clone(),
+                        port: port.clone(),
+                    },
+                    *side,
+                );
             }
         }
+        for ep in &view.enclosure {
+            side_of.insert(PortKey::Enclosure(ep.port.clone()), ep.side);
+        }
 
-        // Chain-decompose the subject's wires into segments whose ends are
-        // both listed ports on included boxes; drop the rest (subject-own
-        // ends, ends on excluded instances, and unlisted ports) silently.
+        // Chain-decompose the subject's wires into segments whose ends both
+        // resolve to a placed port — a listed port on an included box, or a
+        // subject-own port listed in the enclosure. Ends on excluded
+        // instances, unlisted ports, and own ports without an enclosure
+        // placement drop silently.
         let mut connections: Vec<(PortKey, PortKey)> = Vec::new();
         for wire in &subject.wires {
             for pair in wire.endpoints.windows(2) {
-                let (Some(a), Some(b)) = (child_key(&pair[0]), child_key(&pair[1])) else {
-                    continue;
-                };
+                let (a, b) = (endpoint_key(&pair[0]), endpoint_key(&pair[1]));
                 if side_of.contains_key(&a) && side_of.contains_key(&b) {
                     connections.push((a, b));
                 }
@@ -219,6 +250,7 @@ impl Placement {
                         pos,
                         pin: format_pins(&port.pins),
                         label: port.label.clone(),
+                        inverted: false,
                     });
                 }
             }
@@ -236,15 +268,105 @@ impl Placement {
             );
         }
 
+        let enclosure = Self::place_enclosure(subject, view, &components, grid);
+
         Ok(Self {
             components,
+            enclosure,
             connections,
         })
     }
 
+    /// Wrap the placed child boxes in the subject's boundary, placing each
+    /// authored subject port on the named edge at its free-axis coordinate.
+    /// `None` when the view has no `enclosure { }` block or no boxes to wrap.
+    fn place_enclosure(
+        subject: &Instance,
+        view: &crate::dsl::ir::View,
+        components: &IndexMap<InstanceName, PlacedComponent>,
+        grid: Grid,
+    ) -> Option<PlacedComponent> {
+        if view.enclosure.is_empty() || components.is_empty() {
+            return None;
+        }
+
+        // Bounding box of every child, then folded to span each port's
+        // free-axis coordinate so the edge always reaches its ports.
+        let mut min_x = f64::INFINITY;
+        let mut min_y = f64::INFINITY;
+        let mut max_x = f64::NEG_INFINITY;
+        let mut max_y = f64::NEG_INFINITY;
+        for pc in components.values() {
+            min_x = min_x.min(pc.origin.x);
+            min_y = min_y.min(pc.origin.y);
+            max_x = max_x.max(pc.origin.x + pc.width);
+            max_y = max_y.max(pc.origin.y + pc.height);
+        }
+        for ep in &view.enclosure {
+            let world = grid.to_world(ep.coord);
+            match ep.side {
+                Side::West | Side::East => {
+                    min_y = min_y.min(world);
+                    max_y = max_y.max(world);
+                }
+                Side::North | Side::South => {
+                    min_x = min_x.min(world);
+                    max_x = max_x.max(world);
+                }
+            }
+        }
+
+        let inset = grid.enclosure_inset();
+        let (left, top) = (min_x - inset, min_y - inset);
+        let (right, bottom) = (max_x + inset, max_y + inset);
+        let origin = Point::new(left, top);
+        let (width, height) = (right - left, bottom - top);
+
+        let mut ports = Vec::new();
+        let mut port_index = HashMap::new();
+        for ep in &view.enclosure {
+            let Some(port) = subject.ports.get(&ep.port) else {
+                continue;
+            };
+            let free = grid.to_world(ep.coord);
+            let pos = match ep.side {
+                Side::West => Point::new(left, free),
+                Side::East => Point::new(right, free),
+                Side::North => Point::new(free, top),
+                Side::South => Point::new(free, bottom),
+            };
+            port_index.insert(ep.port.clone(), ports.len());
+            ports.push(PlacedPort {
+                port: ep.port.clone(),
+                side: ep.side,
+                pos,
+                pin: format_pins(&port.pins),
+                label: port.label.clone(),
+                inverted: true,
+            });
+        }
+
+        let label = subject
+            .label
+            .clone()
+            .unwrap_or_else(|| subject.type_name.to_string());
+
+        Some(PlacedComponent {
+            origin,
+            width,
+            height,
+            label,
+            ports,
+            port_index,
+        })
+    }
+
     fn endpoint(&self, key: &PortKey) -> Option<&PlacedPort> {
-        let comp = self.components.get(&key.0)?;
-        let idx = comp.port_index.get(&key.1)?;
+        let (comp, port) = match key {
+            PortKey::Child { instance, port } => (self.components.get(instance)?, port),
+            PortKey::Enclosure(port) => (self.enclosure.as_ref()?, port),
+        };
+        let idx = comp.port_index.get(port)?;
         Some(&comp.ports[*idx])
     }
 
@@ -265,9 +387,19 @@ impl Placement {
         })
     }
 
-    /// Every placed port across all components, in include order.
+    /// The subject's boundary box, if the view authors an `enclosure { }`.
+    pub(super) fn enclosure(&self) -> Option<&PlacedComponent> {
+        self.enclosure.as_ref()
+    }
+
+    /// Every placed port the router must reach: child ports, then the
+    /// enclosure's inverted ports. The enclosure is a routing endpoint set
+    /// but not an obstacle, so it is absent from [`Self::component_bounds`].
     pub(super) fn ports(&self) -> impl Iterator<Item = &PlacedPort> + '_ {
-        self.components.values().flat_map(|pc| pc.ports.iter())
+        self.components
+            .values()
+            .chain(self.enclosure.as_ref())
+            .flat_map(|pc| pc.ports.iter())
     }
 
     /// The drawing's bounding box, padded for margins and an optional
@@ -288,7 +420,7 @@ impl Placement {
         let mut max_x = f64::NEG_INFINITY;
         let mut max_y = f64::NEG_INFINITY;
 
-        for pc in self.components.values() {
+        for pc in self.components.values().chain(self.enclosure.as_ref()) {
             min_x = min_x.min(pc.origin.x);
             min_y = min_y.min(pc.origin.y);
             max_x = max_x.max(pc.origin.x + pc.width);
@@ -302,6 +434,20 @@ impl Placement {
             max_y = max_y.max(p.y);
         }
 
+        // Enclosure port names sit *outside* the boundary, so they can reach
+        // past the box bounds — measure them so the viewBox doesn't clip.
+        if let Some(enc) = &self.enclosure {
+            for port in &enc.ports {
+                let reach = LABEL_INSET + port.label.chars().count() as f64 * CHAR_WIDTH;
+                match port.side {
+                    Side::West => min_x = min_x.min(port.pos.x - reach),
+                    Side::East => max_x = max_x.max(port.pos.x + reach),
+                    Side::North => min_y = min_y.min(port.pos.y - reach),
+                    Side::South => max_y = max_y.max(port.pos.y + reach),
+                }
+            }
+        }
+
         let pad = SVG_MARGIN;
         let title_pad = if has_title { 20.0 } else { 0.0 };
         ViewBox {
@@ -313,12 +459,16 @@ impl Placement {
     }
 }
 
-/// A wire endpoint's `(instance, port)` key, or `None` for an endpoint on
-/// the subject's own boundary (which has no drawn box).
-fn child_key(end: &crate::dsl::ir::WireEnd) -> Option<PortKey> {
+/// A wire endpoint's port key: a child instance's port, or a subject-own port
+/// on the enclosure boundary. Whether the key is actually drawn depends on it
+/// being listed (present in `side_of`); see [`Placement::compute`].
+fn endpoint_key(end: &crate::dsl::ir::WireEnd) -> PortKey {
     match end {
-        crate::dsl::ir::WireEnd::Child { instance, port } => Some((instance.clone(), port.clone())),
-        crate::dsl::ir::WireEnd::Own(_) => None,
+        crate::dsl::ir::WireEnd::Child { instance, port } => PortKey::Child {
+            instance: instance.clone(),
+            port: port.clone(),
+        },
+        crate::dsl::ir::WireEnd::Own(port) => PortKey::Enclosure(port.clone()),
     }
 }
 
@@ -562,6 +712,72 @@ component sys {
         assert!(b.ports.iter().any(|p| p.port == PortName::from("spare")));
         // The unconnected port draws no wire.
         assert_eq!(placement.connection_pairs().len(), 1);
+    }
+
+    #[test]
+    fn enclosure_draws_a_subject_wire_and_places_ports_on_its_edge() {
+        // The wire `[a.p, out]` ends on the subject's own port `out`; listing
+        // `out` in the enclosure un-drops it and places it on the east edge.
+        let design = design_from(
+            r#"
+component sys {
+    blk a;
+    pub port out "OUT";
+    wire red 1 [a.p, out];
+    component blk {
+        pub port p "P";
+    }
+}
+
+view schematic "T" {
+    grid 10;
+    enclosure {
+        out at (east, 0);
+    }
+    include a at (0, 0) ports { west: p; };
+}
+"#,
+        );
+        let subject = design.get(&design.root).unwrap();
+        let view = &design.views[0];
+        let placement = Placement::compute(&design, subject, view, Grid::new(10.0)).unwrap();
+
+        // The own end now resolves to a drawn connection.
+        assert_eq!(placement.connection_pairs().len(), 1);
+
+        // The enclosure wraps the child and sits `out` on its (inverted) east edge.
+        let enc = placement.enclosure().expect("enclosure placed");
+        let port = &enc.ports[0];
+        assert_eq!(port.port, PortName::from("out"));
+        assert!(port.inverted);
+        assert_eq!(port.side, Side::East);
+        assert_eq!(port.pos.x, enc.origin.x + enc.width);
+    }
+
+    #[test]
+    fn no_enclosure_block_leaves_no_boundary() {
+        let design = design_from(
+            r#"
+component sys {
+    blk a;
+    blk b;
+    wire red 1 [a.p, b.p];
+    component blk {
+        pub port p "P";
+    }
+}
+"#,
+        );
+        let subject = design.get(&design.root).unwrap();
+        let view = view_of(
+            "sys",
+            &[
+                ("a", 0.0, 0.0, &[("p", Side::East)]),
+                ("b", 10.0, 0.0, &[("p", Side::West)]),
+            ],
+        );
+        let placement = Placement::compute(&design, subject, &view, Grid::new(20.0)).unwrap();
+        assert!(placement.enclosure().is_none());
     }
 
     #[test]

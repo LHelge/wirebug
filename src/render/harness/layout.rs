@@ -1,13 +1,15 @@
-//! Harness layout: turn a view's harness includes into positioned
-//! connector nodes (pin tables) and the cables that bundle the subject's
-//! wires running between them.
+//! Harness layout: turn a view's harness includes into positioned connector
+//! nodes (pin tables) plus a central spine of cable boxes, ready for the
+//! bezier wire router in `draw`.
 //!
 //! A harness include names `instance.connector`; the node is that whole
-//! connector, drawn as a table of pin rows. Cables mirror the schematic's
-//! rule — each subject wire is chain-decomposed into consecutive pairs
-//! (`[a, b, c]` → `a–b, b–c`), and a pair is kept only when both ends land
-//! on *included* connectors. Connectorless ports, `Own` ends, and ends on
-//! connectors the view doesn't include drop silently.
+//! connector, drawn as a table of pin rows at its authored `(x, y)`. The
+//! renderer derives a vertical **spine** midway between the connectors; each
+//! node faces the spine, declared cables stack along it as boxes, and wires
+//! run pin → cable → pin (or pin → pin for loose wires). Each subject wire is
+//! chain-decomposed into consecutive pairs (`[a, b, c]` → `a–b, b–c`); a pair
+//! is kept only when both ends land on *included* connectors. Connectorless
+//! ports, `Own` ends, and ends on excluded connectors drop silently.
 
 use std::collections::HashMap;
 
@@ -15,7 +17,7 @@ use indexmap::IndexMap;
 
 use super::draw::wire_annotation;
 use super::{
-    BUNDLE_SPACING, CHAR_WIDTH, HEADER_HEIGHT, MIN_NODE_WIDTH, NODE_PAD, PIN_COL_WIDTH, ROW_HEIGHT,
+    CABLE_GAP, CHAR_WIDTH, HEADER_HEIGHT, MIN_NODE_WIDTH, NODE_PAD, PIN_COL_WIDTH, ROW_HEIGHT,
     SVG_MARGIN,
 };
 use crate::dsl::ir::{
@@ -60,8 +62,9 @@ impl ConnectorNode {
     }
 }
 
-/// One wire within a cable, resolved to its two attach points.
-pub(super) struct CableWire {
+/// A loose wire (one not in a declared cable), resolved to its two attach
+/// points. Drawn as a single bezier with no box.
+pub(super) struct LooseWire {
     pub(super) from: Point,
     pub(super) to: Point,
     pub(super) color: String,
@@ -69,13 +72,9 @@ pub(super) struct CableWire {
     pub(super) label: Option<String>,
 }
 
-/// A bundle of wires between two connector nodes.
-pub(super) struct Cable {
-    pub(super) wires: Vec<CableWire>,
-}
-
-/// One conductor of a declared cable, drawn as a coloured strand entering the
-/// cable box's left edge and leaving its right edge at the strand's row.
+/// One conductor of a declared cable: it leads in from the left connector to
+/// the box's left edge at `row_y`, crosses the box, and leads out from the
+/// right edge to the right connector.
 pub(super) struct CableStrand {
     /// Connector attach on the box's left side.
     pub(super) left_attach: Point,
@@ -88,12 +87,12 @@ pub(super) struct CableStrand {
     pub(super) label: Option<String>,
 }
 
-/// A declared `cable`, drawn WireViz-style as a labelled box between the two
-/// connectors its conductors span, one row per strand.
+/// A declared `cable`, drawn WireViz-style as a labelled box on the spine,
+/// one row per strand.
 pub(super) struct CableBox {
     /// Cable label (or designator) shown as the title.
     pub(super) title: String,
-    /// `<type> · <length> m`, omitting absent parts; empty when neither is set.
+    /// `<type> · <length> m · ×<count>`, omitting absent parts.
     pub(super) subtitle: String,
     pub(super) origin: Point,
     pub(super) width: f64,
@@ -101,12 +100,28 @@ pub(super) struct CableBox {
     pub(super) strands: Vec<CableStrand>,
 }
 
-/// The full harness layout: nodes in include order, loose cables in wire
-/// order, and a box per declared cable.
+impl CableBox {
+    /// Move the box so its top sits at `top`, re-flowing the strand rows.
+    fn move_top_to(&mut self, top: f64) {
+        self.origin.y = top;
+        self.place_rows();
+    }
+
+    /// Set each strand's `row_y` from the current `origin.y`.
+    fn place_rows(&mut self) {
+        for (k, strand) in self.strands.iter_mut().enumerate() {
+            strand.row_y = self.origin.y + HEADER_HEIGHT + (k as f64 + 0.5) * ROW_HEIGHT;
+        }
+    }
+}
+
+/// The full harness layout: connector nodes in include order, a box per
+/// declared cable (placed on the spine), and the loose wires between
+/// connectors. The spine x is consumed during layout and not retained.
 pub(super) struct HarnessLayout {
     pub(super) nodes: Vec<ConnectorNode>,
-    pub(super) cables: Vec<Cable>,
     pub(super) cable_boxes: Vec<CableBox>,
+    pub(super) loose: Vec<LooseWire>,
 }
 
 /// A pending connection between two pin rows, before facing (and thus the
@@ -187,52 +202,56 @@ impl HarnessLayout {
             }
         }
 
-        Self::orient_nodes(&mut nodes, &raws);
+        // The spine is the vertical line midway between the connectors; each
+        // node faces it, so attach points all point at the trunk.
+        let spine_x = Self::spine_x(&nodes);
+        Self::face_spine(&mut nodes, spine_x);
         Self::set_attach_points(&mut nodes);
 
-        // Declared cables draw as boxes; everything else keeps the simple
-        // node-pair bundle.
-        let (tagged, loose): (Vec<RawWire>, Vec<RawWire>) =
+        // Declared cables draw as boxes on the spine; loose wires draw as
+        // direct pin-to-pin beziers.
+        let (tagged, loose_raws): (Vec<RawWire>, Vec<RawWire>) =
             raws.into_iter().partition(|r| r.cable.is_some());
-        let cables = Self::bundle(&nodes, loose);
-        let cable_boxes = Self::build_cable_boxes(&nodes, subject, tagged);
+        let cable_boxes = Self::build_cable_boxes(&nodes, subject, spine_x, tagged);
+        let loose = loose_raws
+            .into_iter()
+            .map(|raw| LooseWire {
+                from: nodes[raw.a].pins[raw.ra].attach,
+                to: nodes[raw.b].pins[raw.rb].attach,
+                color: raw.color,
+                gauge: raw.gauge,
+                label: raw.label,
+            })
+            .collect();
         HarnessLayout {
             nodes,
-            cables,
             cable_boxes,
+            loose,
         }
     }
 
-    /// Group tagged conductors by their cable designator and lay out one box
-    /// per cable, centred between the connectors its strands span.
-    fn build_cable_boxes(
-        nodes: &[ConnectorNode],
-        subject: &Instance,
-        raws: Vec<RawWire>,
-    ) -> Vec<CableBox> {
-        let mut groups: IndexMap<CableName, Vec<RawWire>> = IndexMap::new();
-        for raw in raws {
-            let name = raw.cable.clone().expect("partitioned to tagged only");
-            groups.entry(name).or_default().push(raw);
+    /// The spine x: midway between the leftmost and rightmost node centres
+    /// (0 when there are no nodes).
+    fn spine_x(nodes: &[ConnectorNode]) -> f64 {
+        let xs = nodes.iter().map(|n| n.centre().x);
+        let min = xs.clone().fold(f64::INFINITY, f64::min);
+        let max = xs.fold(f64::NEG_INFINITY, f64::max);
+        if min.is_finite() {
+            (min + max) / 2.0
+        } else {
+            0.0
         }
-        groups
-            .into_iter()
-            .map(|(name, raws)| build_cable_box(nodes, subject, &name, raws))
-            .collect()
     }
 
-    /// Auto-orient each node: pins face the net horizontal direction of the
-    /// connectors it cables to (East when the bulk lies right, else West).
-    /// Table rows are horizontal, so facing is constrained to East/West.
-    fn orient_nodes(nodes: &mut [ConnectorNode], raws: &[RawWire]) {
-        let centres: Vec<Point> = nodes.iter().map(ConnectorNode::centre).collect();
-        let mut dx = vec![0.0f64; nodes.len()];
-        for raw in raws {
-            dx[raw.a] += centres[raw.b].x - centres[raw.a].x;
-            dx[raw.b] += centres[raw.a].x - centres[raw.b].x;
-        }
-        for (node, &sum) in nodes.iter_mut().zip(&dx) {
-            node.facing = if sum < 0.0 { Side::West } else { Side::East };
+    /// Face every node toward the spine: a node left of it faces East (attach
+    /// on its right edge), one on or right of it faces West.
+    fn face_spine(nodes: &mut [ConnectorNode], spine_x: f64) {
+        for node in nodes.iter_mut() {
+            node.facing = if node.centre().x < spine_x {
+                Side::East
+            } else {
+                Side::West
+            };
         }
     }
 
@@ -250,23 +269,35 @@ impl HarnessLayout {
         }
     }
 
-    /// Group connections by node pair into cables, resolving each to its
-    /// attach points.
-    fn bundle(nodes: &[ConnectorNode], raws: Vec<RawWire>) -> Vec<Cable> {
-        let mut groups: IndexMap<(usize, usize), Vec<CableWire>> = IndexMap::new();
+    /// Group tagged conductors by their cable designator, lay out one box per
+    /// cable on the spine, then push overlapping boxes apart vertically.
+    fn build_cable_boxes(
+        nodes: &[ConnectorNode],
+        subject: &Instance,
+        spine_x: f64,
+        raws: Vec<RawWire>,
+    ) -> Vec<CableBox> {
+        let mut groups: IndexMap<CableName, Vec<RawWire>> = IndexMap::new();
         for raw in raws {
-            let key = (raw.a.min(raw.b), raw.a.max(raw.b));
-            let from = nodes[raw.a].pins[raw.ra].attach;
-            let to = nodes[raw.b].pins[raw.rb].attach;
-            groups.entry(key).or_default().push(CableWire {
-                from,
-                to,
-                color: raw.color,
-                gauge: raw.gauge,
-                label: raw.label,
-            });
+            let name = raw.cable.clone().expect("partitioned to tagged only");
+            groups.entry(name).or_default().push(raw);
         }
-        groups.into_values().map(|wires| Cable { wires }).collect()
+        let mut boxes: Vec<CableBox> = groups
+            .into_iter()
+            .map(|(name, raws)| build_cable_box(nodes, subject, &name, spine_x, raws))
+            .collect();
+
+        // De-overlap along the spine: sort by centre y, then sweep top-down
+        // pushing each box clear of the previous one's bottom edge.
+        boxes.sort_by(|a, b| a.origin.y.total_cmp(&b.origin.y));
+        let mut floor = f64::NEG_INFINITY;
+        for b in &mut boxes {
+            if b.origin.y < floor {
+                b.move_top_to(floor);
+            }
+            floor = b.origin.y + b.height + CABLE_GAP;
+        }
+        boxes
     }
 
     /// The drawing's bounding box, padded for margins and the title.
@@ -289,11 +320,9 @@ impl HarnessLayout {
                 node.origin.y + node.height,
             ));
         }
-        for cable in &self.cables {
-            for w in &cable.wires {
-                grow(w.from);
-                grow(w.to);
-            }
+        for w in &self.loose {
+            grow(w.from);
+            grow(w.to);
         }
         for cb in &self.cable_boxes {
             grow(cb.origin);
@@ -400,21 +429,22 @@ fn build_node(child: &Instance, conn: &ConnectorName, cx: f64, cy: f64) -> Optio
     })
 }
 
-/// Lay out one cable box for the conductors tagged with `name`, centred at
-/// the centroid of its strands' attach points. Strands are stacked as rows in
-/// the box, the leftmost attach feeding the left edge and the rightmost the
-/// right edge.
+/// Lay out one cable box for the conductors tagged with `name`. The box is
+/// centred on the spine; its vertical centre is the centroid of its strands'
+/// midpoints (the de-overlap pass in `build_cable_boxes` resolves collisions).
+/// Strands are ordered top-to-bottom by their midpoint y, so the bundle fans
+/// out monotonically and lead beziers cross as little as possible.
 fn build_cable_box(
     nodes: &[ConnectorNode],
     subject: &Instance,
     name: &CableName,
+    spine_x: f64,
     raws: Vec<RawWire>,
 ) -> CableBox {
     let meta = subject.cables.get(name);
     let title = meta
         .and_then(|m| m.label.clone())
         .unwrap_or_else(|| name.to_string());
-    let subtitle = meta.map(cable_subtitle).unwrap_or_default();
 
     struct Strand {
         left: Point,
@@ -423,7 +453,7 @@ fn build_cable_box(
         gauge: f64,
         label: Option<String>,
     }
-    let strands: Vec<Strand> = raws
+    let mut strands: Vec<Strand> = raws
         .into_iter()
         .map(|raw| {
             let p1 = nodes[raw.a].pins[raw.ra].attach;
@@ -439,12 +469,15 @@ fn build_cable_box(
         })
         .collect();
 
+    // The 1D occupancy step: order rows by each conductor's midpoint y.
+    strands.sort_by(|a, b| {
+        let ma = (a.left.y + a.right.y) / 2.0;
+        let mb = (b.left.y + b.right.y) / 2.0;
+        ma.total_cmp(&mb)
+    });
+
+    let subtitle = cable_subtitle(meta, strands.len());
     let n = strands.len().max(1) as f64;
-    let cx = strands
-        .iter()
-        .map(|s| (s.left.x + s.right.x) / 2.0)
-        .sum::<f64>()
-        / n;
     let cy = strands
         .iter()
         .map(|s| (s.left.y + s.right.y) / 2.0)
@@ -460,40 +493,43 @@ fn build_cable_box(
         .max(subtitle.chars().count());
     let width = (widest as f64 * CHAR_WIDTH + 2.0 * NODE_PAD).max(MIN_NODE_WIDTH);
     let height = HEADER_HEIGHT + strands.len() as f64 * ROW_HEIGHT;
-    let origin = Point::new(cx - width / 2.0, cy - height / 2.0);
+    let origin = Point::new(spine_x - width / 2.0, cy - height / 2.0);
 
     let strands = strands
         .into_iter()
-        .enumerate()
-        .map(|(k, s)| CableStrand {
+        .map(|s| CableStrand {
             left_attach: s.left,
             right_attach: s.right,
-            row_y: origin.y + HEADER_HEIGHT + (k as f64 + 0.5) * ROW_HEIGHT,
+            row_y: 0.0, // set by place_rows below
             color: s.color,
             gauge: s.gauge,
             label: s.label,
         })
         .collect();
 
-    CableBox {
+    let mut cable_box = CableBox {
         title,
         subtitle,
         origin,
         width,
         height,
         strands,
-    }
+    };
+    cable_box.place_rows();
+    cable_box
 }
 
-/// `<type> · <length> m`, omitting whichever part is unset (empty when both).
-fn cable_subtitle(meta: &CableMeta) -> String {
+/// `<type> · <length> m · ×<count>`, omitting the type/length parts that are
+/// unset; the conductor count is always shown.
+fn cable_subtitle(meta: Option<&CableMeta>, count: usize) -> String {
     let mut parts = Vec::new();
-    if let Some(t) = &meta.r#type {
+    if let Some(t) = meta.and_then(|m| m.r#type.as_ref()) {
         parts.push(t.clone());
     }
-    if let Some(l) = meta.length {
+    if let Some(l) = meta.and_then(|m| m.length) {
         parts.push(format!("{l} m"));
     }
+    parts.push(format!("×{count}"));
     parts.join(" · ")
 }
 
@@ -510,25 +546,57 @@ fn format_pins(pins: &[Pin]) -> Option<String> {
     )
 }
 
-/// The per-wire orthogonal path within a cable: out from each node's attach
-/// edge to a shared channel x, then vertical, then in to the other attach.
-/// `k` of `n` spreads the vertical segments so the bundle reads as parallel
-/// strands rather than one overlapping line.
-pub(super) fn cable_path(from: Point, to: Point, k: usize, n: usize) -> [Point; 4] {
-    let spread = (k as f64 - (n as f64 - 1.0) / 2.0) * BUNDLE_SPACING;
-    let channel_x = (from.x + to.x) / 2.0 + spread;
-    [
-        from,
-        Point::new(channel_x, from.y),
-        Point::new(channel_x, to.y),
-        to,
-    ]
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-/// The midpoint of a cable wire's vertical channel, where its annotation
-/// (label + gauge) is placed. Shares the spread logic with [`cable_path`].
-pub(super) fn cable_label_anchor(from: Point, to: Point, k: usize, n: usize) -> Point {
-    let spread = (k as f64 - (n as f64 - 1.0) / 2.0) * BUNDLE_SPACING;
-    let channel_x = (from.x + to.x) / 2.0 + spread;
-    Point::new(channel_x, (from.y + to.y) / 2.0)
+    fn strand(row_y: f64) -> CableStrand {
+        CableStrand {
+            left_attach: Point::ORIGIN,
+            right_attach: Point::ORIGIN,
+            row_y,
+            color: "black".into(),
+            gauge: 1.0,
+            label: None,
+        }
+    }
+
+    #[test]
+    fn subtitle_shows_present_parts_and_always_the_count() {
+        let full = CableMeta {
+            label: None,
+            r#type: Some("2-core".into()),
+            length: Some(0.8),
+        };
+        assert_eq!(cable_subtitle(Some(&full), 3), "2-core · 0.8 m · ×3");
+
+        let bare = CableMeta {
+            label: None,
+            r#type: None,
+            length: None,
+        };
+        assert_eq!(cable_subtitle(Some(&bare), 2), "×2");
+        assert_eq!(cable_subtitle(None, 1), "×1");
+    }
+
+    #[test]
+    fn move_top_to_translates_and_reflows_rows() {
+        let mut cb = CableBox {
+            title: "c".into(),
+            subtitle: String::new(),
+            origin: Point::new(0.0, 0.0),
+            width: 100.0,
+            height: HEADER_HEIGHT + 2.0 * ROW_HEIGHT,
+            strands: vec![strand(0.0), strand(0.0)],
+        };
+        cb.place_rows();
+        let r0 = cb.strands[0].row_y;
+        let r1 = cb.strands[1].row_y;
+        assert!(r1 > r0, "rows stack downward");
+
+        cb.move_top_to(100.0);
+        assert_eq!(cb.origin.y, 100.0);
+        assert_eq!(cb.strands[0].row_y, r0 + 100.0);
+        assert_eq!(cb.strands[1].row_y, r1 + 100.0);
+    }
 }

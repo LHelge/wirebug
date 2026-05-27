@@ -36,13 +36,54 @@ pub(super) fn render_component(cid: &InstanceName, pc: &PlacedComponent) -> Grou
         .add(ports_group)
 }
 
+/// The subject's boundary box: a wrapper rectangle with the subject's own
+/// ports on its edges, facing inward. Port label/pin placement is the same as
+/// a component's — the label insets toward the interior (the schematic) and
+/// the pin sits outside (the exterior), which reads as an inverted port.
+pub(super) fn render_enclosure(pc: &PlacedComponent) -> Group {
+    let rect = Rectangle::new()
+        .set("x", pc.origin.x)
+        .set("y", pc.origin.y)
+        .set("width", pc.width)
+        .set("height", pc.height);
+
+    let label = Text::new(pc.label.clone())
+        .set("class", "enclosure-label")
+        .set("x", pc.origin.x + pc.width / 2.0)
+        .set("y", pc.origin.y - COMPONENT_TITLE_GAP);
+
+    let mut ports_group = Group::new().set("class", "ports");
+    for port in &pc.ports {
+        ports_group = ports_group.add(render_port(port));
+    }
+
+    Group::new()
+        .set("class", "enclosure")
+        .add(rect)
+        .add(label)
+        .add(ports_group)
+}
+
 fn render_port(p: &PlacedPort) -> Group {
     let circle = Circle::new()
         .set("cx", p.pos.x)
         .set("cy", p.pos.y)
         .set("r", PORT_RADIUS);
 
-    let label = text_with_placement(p.label.clone(), "port-label", inside_label_placement(p));
+    // An inverted boundary port faces the interior, so it labels like a
+    // normal port on the opposite side: the name sits outside the boundary,
+    // the pin number inside.
+    let side = if p.inverted {
+        p.side.opposite()
+    } else {
+        p.side
+    };
+
+    let label = text_with_placement(
+        p.label.clone(),
+        "port-label",
+        inside_label_placement(side, p.pos),
+    );
 
     let mut group = Group::new()
         .set("class", "port")
@@ -51,7 +92,8 @@ fn render_port(p: &PlacedPort) -> Group {
         .add(label);
 
     if let Some(pin) = &p.pin {
-        let pin_text = text_with_placement(pin.clone(), "port-pin", outside_pin_placement(p));
+        let pin_text =
+            text_with_placement(pin.clone(), "port-pin", outside_pin_placement(side, p.pos));
         group = group.add(pin_text);
     }
 
@@ -91,32 +133,32 @@ fn text_with_placement(content: String, class: &'static str, lp: LabelPlacement)
 /// adjacent ports don't overlap horizontally. All sides use
 /// `dominant-baseline="central"` so the text's cross-axis center
 /// aligns with the port — no manual half-glyph fudge.
-fn inside_label_placement(p: &PlacedPort) -> LabelPlacement {
-    match p.side {
+fn inside_label_placement(side: Side, pos: Point) -> LabelPlacement {
+    match side {
         Side::West => LabelPlacement {
-            x: p.pos.x + LABEL_INSET,
-            y: p.pos.y,
+            x: pos.x + LABEL_INSET,
+            y: pos.y,
             anchor: "start",
             rotate: 0.0,
             baseline: Some("central"),
         },
         Side::East => LabelPlacement {
-            x: p.pos.x - LABEL_INSET,
-            y: p.pos.y,
+            x: pos.x - LABEL_INSET,
+            y: pos.y,
             anchor: "end",
             rotate: 0.0,
             baseline: Some("central"),
         },
         Side::North => LabelPlacement {
-            x: p.pos.x,
-            y: p.pos.y + LABEL_INSET,
+            x: pos.x,
+            y: pos.y + LABEL_INSET,
             anchor: "start",
             rotate: 90.0,
             baseline: Some("central"),
         },
         Side::South => LabelPlacement {
-            x: p.pos.x,
-            y: p.pos.y - LABEL_INSET,
+            x: pos.x,
+            y: pos.y - LABEL_INSET,
             anchor: "start",
             rotate: -90.0,
             baseline: Some("central"),
@@ -127,32 +169,32 @@ fn inside_label_placement(p: &PlacedPort) -> LabelPlacement {
 /// Pin-number label placement (outside the box). Kept horizontal on
 /// all sides — pin numbers are short enough that they don't fight
 /// each other.
-fn outside_pin_placement(p: &PlacedPort) -> LabelPlacement {
-    match p.side {
+fn outside_pin_placement(side: Side, pos: Point) -> LabelPlacement {
+    match side {
         Side::West => LabelPlacement {
-            x: p.pos.x - PIN_INSET,
-            y: p.pos.y - 5.0,
+            x: pos.x - PIN_INSET,
+            y: pos.y - 5.0,
             anchor: "end",
             rotate: 0.0,
             baseline: None,
         },
         Side::East => LabelPlacement {
-            x: p.pos.x + PIN_INSET,
-            y: p.pos.y - 5.0,
+            x: pos.x + PIN_INSET,
+            y: pos.y - 5.0,
             anchor: "start",
             rotate: 0.0,
             baseline: None,
         },
         Side::North => LabelPlacement {
-            x: p.pos.x + PIN_INSET,
-            y: p.pos.y - 5.0,
+            x: pos.x + PIN_INSET,
+            y: pos.y - 5.0,
             anchor: "start",
             rotate: 0.0,
             baseline: None,
         },
         Side::South => LabelPlacement {
-            x: p.pos.x + PIN_INSET,
-            y: p.pos.y + 13.0,
+            x: pos.x + PIN_INSET,
+            y: pos.y + 13.0,
             anchor: "start",
             rotate: 0.0,
             baseline: None,

@@ -1,19 +1,19 @@
 //! WireViz-style harness renderer.
 //!
-//! Each included `instance.connector` becomes a pin table; the subject's
-//! wires running between two included connectors become cable bundles. This
-//! is the dual of the schematic renderer (`super::schematic`): same
-//! subject/first-instance lookup and the same chain-decomposition of wires,
-//! but keyed on connectors rather than authored port sides.
+//! Each included `instance.connector` becomes a pin table, placed at its
+//! authored `(x, y)`. The renderer derives a vertical **spine** midway
+//! between the connectors; every node faces it, declared cables stack along
+//! it as labelled boxes, and wires flex between them as cubic beziers
+//! (pin → cable → pin, or pin → pin for loose wires). This is the dual of the
+//! schematic renderer (`super::schematic`): same subject/first-instance lookup
+//! and the same chain-decomposition of wires, but keyed on connectors rather
+//! than authored port sides.
 //!
-//! - `layout` places connector nodes and groups wires into cables.
-//! - `draw` emits the SVG for the pin tables and cable bundles.
-//!
-//! Cable routing is intentionally simple for now: each wire is an
-//! orthogonal three-segment path through a per-wire channel offset, so a
-//! bundle reads as parallel strands. Reusing the schematic's
-//! object-avoiding router is a later refinement.
+//! - `layout` places connector nodes, the spine, and the cable boxes.
+//! - `bezier` is the pure cubic-bezier math for the wire flex.
+//! - `draw` emits the SVG for the pin tables, cable boxes, and wires.
 
+mod bezier;
 mod draw;
 pub(super) mod layout;
 
@@ -42,21 +42,21 @@ pub(super) const MIN_NODE_WIDTH: f64 = 120.0;
 pub(super) const CHAR_WIDTH: f64 = 7.0;
 /// Radius of the dot marking a pin's cable attach point.
 pub(super) const PIN_DOT_RADIUS: f64 = 3.0;
-/// Horizontal spacing between adjacent wires' vertical channels in a bundle.
-pub(super) const BUNDLE_SPACING: f64 = 7.0;
+/// Minimum vertical gap between two cable boxes stacked on the spine.
+pub(super) const CABLE_GAP: f64 = 24.0;
 pub(super) const SVG_MARGIN: f64 = 48.0;
 pub(super) const TITLE_GAP: f64 = 12.0;
 
 const STYLE: &str = "\
 .connector rect { fill: white; stroke: black; stroke-width: 1.5; }
 .connector .header { fill: #f0f0f0; }
-.connector-title { font: bold 12px sans-serif; text-anchor: middle; }
+.connector-title { font: bold 13px sans-serif; text-anchor: middle; }
 .connector-part { font: 10px sans-serif; text-anchor: middle; fill: #555; }
 .row-sep { stroke: #ddd; stroke-width: 1; }
 .pin-num { font: italic 10px sans-serif; fill: #555; text-anchor: middle; }
 .pin-label { font: 11px sans-serif; }
 .pin-dot { fill: black; }
-.cable-wire { fill: none; stroke-width: 2.5; }
+.cable-wire { fill: none; stroke-width: 2; }
 .cable-label { font: 9px sans-serif; text-anchor: middle; fill: #333; }
 .title { font: bold 14px sans-serif; }\
 ";
@@ -101,10 +101,11 @@ impl HarnessRenderer {
             );
         }
 
-        // Cables under the nodes so attach dots and labels stay legible.
+        // Wires and cable boxes under the nodes so attach dots and pin labels
+        // stay legible on top.
         let mut cables_group = Group::new().set("class", "cables");
-        for cable in &layout.cables {
-            cables_group = cables_group.add(draw::render_cable(cable));
+        for wire in &layout.loose {
+            cables_group = cables_group.add(draw::render_loose(wire));
         }
         for cable_box in &layout.cable_boxes {
             cables_group = cables_group.add(draw::render_cable_box(cable_box));
@@ -134,6 +135,7 @@ mod tests {
             title: "Harness".to_string(),
             grid: None,
             subject: TypeName::from(subject),
+            enclosure: Vec::new(),
             includes: includes
                 .iter()
                 .map(|(inst, conn, x, y)| Include {
@@ -262,14 +264,106 @@ component sys {
     fn left_node_faces_east_right_node_faces_west() {
         let design = two_connector_design();
         let view = harness_view("sys", &[("a", "hv", 0.0, 0.0), ("b", "hv", 12.0, 0.0)]);
-        let subject = design
-            .instances
-            .values()
-            .find(|i| i.type_name == TypeName::from("sys"))
-            .unwrap();
-        let layout = HarnessLayout::compute(&design, subject, &view, 20.0);
+        let layout = compute(&design, &view);
         use crate::render::geometry::Side;
         assert_eq!(layout.nodes[0].facing, Side::East, "left node faces right");
         assert_eq!(layout.nodes[1].facing, Side::West, "right node faces left");
+    }
+
+    /// A cable whose conductors are declared bottom-pin-first, to prove the
+    /// box rows reorder by endpoint y rather than declaration order.
+    fn reordered_cable_design() -> Design {
+        design_from(
+            r#"
+component sys {
+    src a "A";
+    snk b "B";
+    cable feed "Feed" {
+        wire red   1 "hi" [a.p2, b.p2];
+        wire green 1 "lo" [a.p1, b.p1];
+    }
+    component src {
+        connector c "C 2p" { pub port p1 "P1" pin 1; pub port p2 "P2" pin 2; }
+    }
+    component snk {
+        connector c "C 2p" { pub port p1 "P1" pin 1; pub port p2 "P2" pin 2; }
+    }
+}
+"#,
+        )
+    }
+
+    #[test]
+    fn cable_box_rows_sort_by_endpoint_y() {
+        let design = reordered_cable_design();
+        let view = harness_view("sys", &[("a", "c", 0.0, 0.0), ("b", "c", 16.0, 0.0)]);
+        let layout = compute(&design, &view);
+        let cb = &layout.cable_boxes[0];
+        // `green` lands on pin 1 (top, smaller y) so it takes the first row,
+        // even though `red` (pin 2) was declared first.
+        assert_eq!(cb.strands[0].color, "green");
+        assert_eq!(cb.strands[1].color, "red");
+        assert!(cb.strands[0].row_y < cb.strands[1].row_y);
+    }
+
+    #[test]
+    fn cabled_layout_structure_snapshot() {
+        let design = cabled_design();
+        let view = harness_view("sys", &[("a", "hv", 0.0, 0.0), ("b", "hv", 16.0, 0.0)]);
+        insta::assert_snapshot!(structural(&compute(&design, &view)));
+    }
+
+    /// Build the layout for `view` against `design`'s subject instance.
+    fn compute(design: &Design, view: &View) -> HarnessLayout {
+        let subject = design
+            .instances
+            .values()
+            .find(|i| i.type_name == view.subject)
+            .expect("subject instance");
+        HarnessLayout::compute(design, subject, view, 20.0)
+    }
+
+    /// A float-stable, layout-only dump for snapshotting (coordinates rounded
+    /// so renderer pixel tweaks don't churn the snapshot).
+    fn structural(layout: &HarnessLayout) -> String {
+        use std::fmt::Write;
+        let pt = |p: crate::render::geometry::Point| format!("({:.0},{:.0})", p.x, p.y);
+        let mut s = String::new();
+        for n in &layout.nodes {
+            writeln!(
+                s,
+                "node {:?} @{} {:?} pins={}",
+                n.title,
+                pt(n.origin),
+                n.facing,
+                n.pins.len()
+            )
+            .unwrap();
+        }
+        for cb in &layout.cable_boxes {
+            writeln!(
+                s,
+                "cable {:?} [{}] @{}",
+                cb.title,
+                cb.subtitle,
+                pt(cb.origin)
+            )
+            .unwrap();
+            for st in &cb.strands {
+                writeln!(
+                    s,
+                    "  strand {} row={:.0} {}->{}",
+                    st.color,
+                    st.row_y,
+                    pt(st.left_attach),
+                    pt(st.right_attach)
+                )
+                .unwrap();
+            }
+        }
+        for w in &layout.loose {
+            writeln!(s, "loose {} {}->{}", w.color, pt(w.from), pt(w.to)).unwrap();
+        }
+        s
     }
 }

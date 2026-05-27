@@ -24,6 +24,13 @@ fn render_writes_an_svg_per_view() {
     assert!(svg.contains("HV System Overview"));
     assert!(svg.contains("class=\"wire\""));
 
+    // The front-battery detail wraps its children in the subject's
+    // enclosure, drawing the pack's own external ports on the boundary.
+    let detail =
+        std::fs::read_to_string(out.join("front_battery.svg")).expect("battery view rendered");
+    assert!(detail.contains("class=\"enclosure\""));
+    assert!(detail.contains("class=\"enclosure-label\""));
+
     // The harness view renders connectors as pin tables with labelled,
     // gauged cable bundles between them.
     let harness =
