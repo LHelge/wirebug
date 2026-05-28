@@ -4,6 +4,8 @@
 //! view in the design, resolves each to its subject instance, and
 //! dispatches to the renderer named by the view's `kind`.
 
+use std::collections::HashMap;
+
 use askama::Template;
 
 use crate::dsl::ir::{Design, Instance, View};
@@ -33,24 +35,23 @@ pub struct RenderedView {
 /// view). A view naming a `kind` this build can't render, or a subject
 /// type with no instance, is an error.
 pub fn render_views(design: &Design) -> Result<Vec<RenderedView>> {
-    design
-        .views
-        .iter()
-        .map(|view| {
-            let subject = subject_instance(design, view)?;
-            let svg = match view.kind.as_str() {
-                "schematic" => schematic::SchematicRenderer.render(design, subject, view)?,
-                "harness" => harness::HarnessRenderer.render(design, subject, view)?,
-                other => return Err(Error::UnknownViewKind(other.to_string())),
-            };
-            Ok(RenderedView {
-                title: view.title.clone(),
-                filename: format!("{}.svg", slug(&view.title)),
-                kind: view.kind.clone(),
-                svg,
-            })
-        })
-        .collect()
+    let mut filenames = FilenameAllocator::default();
+    let mut rendered = Vec::with_capacity(design.views.len());
+    for view in &design.views {
+        let subject = subject_instance(design, view)?;
+        let svg = match view.kind.as_str() {
+            "schematic" => schematic::SchematicRenderer.render(design, subject, view)?,
+            "harness" => harness::HarnessRenderer.render(design, subject, view)?,
+            other => return Err(Error::UnknownViewKind(other.to_string())),
+        };
+        rendered.push(RenderedView {
+            title: view.title.clone(),
+            filename: filenames.svg_filename(&view.title),
+            kind: view.kind.clone(),
+            svg,
+        });
+    }
+    Ok(rendered)
 }
 
 /// File name for the HTML index page written alongside the per-view SVGs.
@@ -125,6 +126,25 @@ fn slug(title: &str) -> String {
     }
 }
 
+/// Allocates stable, non-overwriting SVG file names from view titles.
+#[derive(Default)]
+struct FilenameAllocator {
+    seen: HashMap<String, usize>,
+}
+
+impl FilenameAllocator {
+    fn svg_filename(&mut self, title: &str) -> String {
+        let base = slug(title);
+        let count = self.seen.entry(base.clone()).or_insert(0);
+        *count += 1;
+        if *count == 1 {
+            format!("{base}.svg")
+        } else {
+            format!("{base}_{count}.svg")
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,6 +154,16 @@ mod tests {
         assert_eq!(slug("HV System Overview"), "hv_system_overview");
         assert_eq!(slug("  Pack / Detail  "), "pack_detail");
         assert_eq!(slug("!!!"), "view");
+    }
+
+    #[test]
+    fn filename_allocator_disambiguates_duplicate_titles() {
+        let mut filenames = FilenameAllocator::default();
+        assert_eq!(filenames.svg_filename("Pack Detail"), "pack_detail.svg");
+        assert_eq!(filenames.svg_filename("Pack Detail"), "pack_detail_2.svg");
+        assert_eq!(filenames.svg_filename("Pack Detail!"), "pack_detail_3.svg");
+        assert_eq!(filenames.svg_filename("!!!"), "view.svg");
+        assert_eq!(filenames.svg_filename("???"), "view_2.svg");
     }
 
     fn view(title: &str, filename: &str, kind: &str) -> RenderedView {

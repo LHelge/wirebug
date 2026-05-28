@@ -66,6 +66,40 @@ fn render_rejects_a_project_that_does_not_check() {
 }
 
 #[test]
+fn render_disambiguates_duplicate_view_titles() {
+    let tmp = tempdir().expect("tempdir");
+    let main = tmp.path().join("main.wb");
+    let out = tmp.path().join("svg");
+    std::fs::write(
+        &main,
+        r#"
+component c { }
+view schematic "Overview" { }
+view schematic "Overview" { }
+"#,
+    )
+    .expect("write main.wb");
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args([
+            "render",
+            main.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    assert!(out.join("overview.svg").is_file());
+    assert!(out.join("overview_2.svg").is_file());
+
+    let index = std::fs::read_to_string(out.join("index.html")).expect("index rendered");
+    assert!(index.contains("src=\"overview.svg\""));
+    assert!(index.contains("src=\"overview_2.svg\""));
+}
+
+#[test]
 fn help_text_mentions_render() {
     Command::cargo_bin("wirebug")
         .expect("binary present")
