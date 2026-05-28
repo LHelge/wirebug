@@ -1,5 +1,5 @@
 // Battery cell module
-// Contains a cell pack (13 series cells with measurement taps + NTC sensors)
+// Contains an 8s2p cell pack with measurement taps + NTC sensors
 // and a BMS slave board that monitors the cells and communicates via ISO-SPI.
 
 component cell_module {
@@ -9,7 +9,7 @@ component cell_module {
         pub port hv_pos "HV+";
         pub port hv_neg "HV-";
 
-        connector "Measurement 17p" {
+        connector "Measurement 13p" {
             pub port c0  "C0" pin 1;
             pub port c1  "C1" pin 2;
             pub port c2  "C2" pin 3;
@@ -19,19 +19,15 @@ component cell_module {
             pub port c6  "C6" pin 7;
             pub port c7  "C7" pin 8;
             pub port c8  "C8" pin 9;
-            pub port c9  "C9" pin 10;
-            pub port c10 "C10" pin 11;
-            pub port c11 "C11" pin 12;
-            pub port c12 "C12" pin 13;
-            pub port ntc1_p "NTC1+" pin 14;
-            pub port ntc1_n "NTC1-" pin 15;
-            pub port ntc2_p "NTC2+" pin 16;
-            pub port ntc2_n "NTC2-" pin 17;
+            pub port ntc1_p "NTC1+" pin 10;
+            pub port ntc1_n "NTC1-" pin 11;
+            pub port ntc2_p "NTC2+" pin 12;
+            pub port ntc2_n "NTC2-" pin 13;
         }
     }
 
     component bms_slave {
-        connector "Cell taps 13p" {
+        connector "Cell taps 9p" {
             pub port c0  "C0" pin 1;
             pub port c1  "C1" pin 2;
             pub port c2  "C2" pin 3;
@@ -41,10 +37,6 @@ component cell_module {
             pub port c6  "C6" pin 7;
             pub port c7  "C7" pin 8;
             pub port c8  "C8" pin 9;
-            pub port c9  "C9" pin 10;
-            pub port c10 "C10" pin 11;
-            pub port c11 "C11" pin 12;
-            pub port c12 "C12" pin 13;
         }
 
         connector "Temperature 4p" {
@@ -96,10 +88,6 @@ component cell_module {
     wire black 0.25 [pack.c6,  slave.c6];
     wire black 0.25 [pack.c7,  slave.c7];
     wire black 0.25 [pack.c8,  slave.c8];
-    wire black 0.25 [pack.c9,  slave.c9];
-    wire black 0.25 [pack.c10, slave.c10];
-    wire black 0.25 [pack.c11, slave.c11];
-    wire black 0.25 [pack.c12, slave.c12];
 
     // Temperature sensors — pack to slave
     wire black 0.25 [pack.ntc1_p, slave.ntc1_p];
@@ -133,12 +121,14 @@ view schematic "Cell Module" {
 
     include pack at (6, 8) ports {
         west: hv_pos, hv_neg;
-        east: c0, c6, c12, ntc1_p, ntc2_p;
+        east: c0, c1, c2, c3, c4, c5, c6, c7, c8, ntc1_p, ntc1_n, ntc2_p, ntc2_n;
     };
 
     include slave at (20, 8) ports {
-        west:  c0, c6, c12, ntc1_p, ntc2_p;
+        west:  c0, c1, c2, c3, c4, c5, c6, c7, c8, ntc1_p, ntc1_n, ntc2_p, ntc2_n;
         north: iso_spi_up_h, iso_spi_up_l;
         south: iso_spi_down_h, iso_spi_down_l;
     };
+
+    text pack_note at (6, 24) "8s2p cell pack from a Renault Zoe";
 }
