@@ -83,10 +83,9 @@ fn render_png_writes_a_png_per_view_and_index_references_png() {
 }
 
 #[test]
-fn render_no_stamp_omits_the_corner_stamp() {
+fn render_embed_writes_manifest_and_no_index() {
     let tmp = tempdir().expect("tempdir");
-    let out_with = tmp.path().join("with");
-    let out_without = tmp.path().join("without");
+    let out = tmp.path().join("embed");
 
     Command::cargo_bin("wirebug")
         .expect("binary present")
@@ -94,31 +93,46 @@ fn render_no_stamp_omits_the_corner_stamp() {
             "render",
             "examples/main.wb",
             "--out",
-            out_with.to_str().unwrap(),
+            out.to_str().unwrap(),
+            "--embed",
         ])
         .assert()
         .success();
 
-    Command::cargo_bin("wirebug")
-        .expect("binary present")
-        .args([
-            "render",
-            "examples/main.wb",
-            "--out",
-            out_without.to_str().unwrap(),
-            "--no-stamp",
-        ])
-        .assert()
-        .success();
+    // SVGs still land on disk under their slugged file names.
+    let svg =
+        std::fs::read_to_string(out.join("hv_system_overview.svg")).expect("hv view rendered");
 
-    let with =
-        std::fs::read_to_string(out_with.join("hv_system_overview.svg")).expect("hv view rendered");
-    let without = std::fs::read_to_string(out_without.join("hv_system_overview.svg"))
-        .expect("hv view rendered");
-    assert!(with.contains("class=\"stamp\""));
-    assert!(with.contains("aphid-evpack v0.1.0"));
-    assert!(!without.contains("class=\"stamp\""));
-    assert!(!without.contains("aphid-evpack v0.1.0"));
+    // Embed-mode SVGs drop the built-in <style>, suppress the corner
+    // stamp, and class-tag the root so a host stylesheet can scope
+    // rules under `.wirebug`.
+    assert!(!svg.contains("<style>"));
+    assert!(!svg.contains("class=\"stamp\""));
+    assert!(!svg.contains("aphid-evpack v0.1.0"));
+    assert!(svg.contains("class=\"wirebug wirebug-schematic\""));
+
+    let harness =
+        std::fs::read_to_string(out.join("main_hv_harness.svg")).expect("harness view rendered");
+    assert!(harness.contains("class=\"wirebug wirebug-harness\""));
+
+    // The HTML index is replaced by a JSON sidecar listing the views.
+    assert!(!out.join("index.html").exists());
+    let manifest_src =
+        std::fs::read_to_string(out.join("manifest.json")).expect("embed manifest written");
+    let manifest: serde_json::Value =
+        serde_json::from_str(&manifest_src).expect("manifest is valid JSON");
+    assert_eq!(manifest["project"]["name"], "aphid-evpack");
+    let views = manifest["views"].as_array().expect("views array");
+    let first = &views[0];
+    assert_eq!(first["title"], "HV System Overview");
+    assert_eq!(first["filename"], "hv_system_overview.svg");
+    assert_eq!(first["kind"], "schematic");
+    assert!(
+        views
+            .iter()
+            .any(|v| v["kind"] == "harness" && v["filename"] == "main_hv_harness.svg"),
+        "harness view listed in manifest"
+    );
 }
 
 #[test]

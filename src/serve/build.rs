@@ -72,7 +72,9 @@ pub(crate) fn build_site(target: Option<&Path>) -> Build {
 
     // A render/index failure is a build error in its own right; show it on the
     // page and count it so the console summary reflects the failure.
-    let render = render_views(design, true)
+    // `serve` always emits self-contained SVGs (built-in style + identity
+    // stamp); embed-mode is for static export, not the live browser.
+    let render = render_views(design, false)
         .map_err(|e| format!("render failed: {e}"))
         .and_then(|views| {
             index_html(&views, design.manifest.as_ref(), true)

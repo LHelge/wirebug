@@ -66,13 +66,18 @@ pub struct SchematicRenderer;
 impl SchematicRenderer {
     /// Render `view` (documenting `subject`) against `design` to an SVG
     /// string. Wire segments are routed against the placed boxes.
-    /// `draw_stamp` gates the bottom-right project-identity stamp.
+    ///
+    /// `embed` switches to embed-mode output for inclusion in another
+    /// document: the built-in `<style>` is dropped (the host owns the
+    /// look), the bottom-right project-identity stamp is suppressed,
+    /// and the root `<svg>` carries `class="wirebug wirebug-schematic"`
+    /// so a host stylesheet can scope rules under `.wirebug`.
     pub(super) fn render(
         &self,
         design: &Design,
         subject: &Instance,
         view: &View,
-        draw_stamp: bool,
+        embed: bool,
     ) -> Result<String> {
         let step = view.grid.unwrap_or(DEFAULT_GRID);
         if step <= 0.0 {
@@ -96,13 +101,16 @@ impl SchematicRenderer {
         let pairs = placement.connection_pairs();
         let wires = router.route_all(&pairs, step)?;
 
-        let mut doc = Document::new()
-            .set("xmlns", "http://www.w3.org/2000/svg")
-            .add(Style::new(STYLE));
+        let mut doc = Document::new().set("xmlns", "http://www.w3.org/2000/svg");
+        if embed {
+            doc = doc.set("class", "wirebug wirebug-schematic");
+        } else {
+            doc = doc.add(Style::new(STYLE));
+        }
 
         let has_title = !view.title.is_empty();
         let mut viewbox = placement.viewbox(has_title, &wires);
-        let manifest = draw_stamp.then_some(design.manifest.as_ref()).flatten();
+        let manifest = (!embed).then_some(design.manifest.as_ref()).flatten();
         if manifest.is_some() {
             viewbox.height += STAMP_HEIGHT;
         }
@@ -213,7 +221,7 @@ pub(crate) mod tests {
             .values()
             .find(|i| i.type_name == view.subject)
             .expect("subject instance");
-        SchematicRenderer.render(design, subject, view, true)
+        SchematicRenderer.render(design, subject, view, false)
     }
 
     fn two_box_design() -> Design {
@@ -274,6 +282,41 @@ component sys {
         let view = view_of("sys", &[("a", 0.0, 0.0, &[("p", Side::East)])]);
         let svg = render(&design, &view).unwrap();
         assert!(!svg.contains("class=\"wire\""));
+    }
+
+    fn render_embed(design: &Design, view: &View) -> Result<String> {
+        let subject = design
+            .instances
+            .values()
+            .find(|i| i.type_name == view.subject)
+            .expect("subject instance");
+        SchematicRenderer.render(design, subject, view, true)
+    }
+
+    #[test]
+    fn embed_mode_omits_embedded_style_block() {
+        let design = two_box_design();
+        let view = view_of(
+            "sys",
+            &[
+                ("a", 0.0, 0.0, &[("p", Side::East)]),
+                ("b", 16.0, 0.0, &[("p", Side::West)]),
+            ],
+        );
+        let svg = render_embed(&design, &view).expect("renders");
+
+        // The built-in <style> tag and its STYLE-block selectors are absent
+        // in embed mode; the host stylesheet owns the look.
+        assert!(!svg.contains("<style>"));
+        assert!(!svg.contains(".component rect"));
+    }
+
+    #[test]
+    fn embed_mode_class_tags_the_root_svg() {
+        let design = two_box_design();
+        let view = view_of("sys", &[("a", 0.0, 0.0, &[("p", Side::East)])]);
+        let svg = render_embed(&design, &view).expect("renders");
+        assert!(svg.contains("class=\"wirebug wirebug-schematic\""));
     }
 
     #[test]

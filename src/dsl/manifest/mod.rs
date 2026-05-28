@@ -17,7 +17,7 @@ use std::path::Path;
 
 use chrono::NaiveDate;
 use miette::NamedSource;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::dsl::diagnostics::Problem;
 
@@ -25,7 +25,7 @@ use crate::dsl::diagnostics::Problem;
 pub const FILE_NAME: &str = "wirebug.toml";
 
 /// The parsed project manifest.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Manifest {
     pub name: String,
     pub version: String,
