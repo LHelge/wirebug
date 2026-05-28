@@ -455,6 +455,18 @@ pub enum Problem {
         at: SourceSpan,
     },
 
+    /// A pin number is not a positive integer. The parser accepts `u32` so
+    /// validation can point at the exact authored pin token.
+    #[error("pin numbers must be positive, got {value}")]
+    #[diagnostic(code(wirebug::invalid_pin))]
+    InvalidPin {
+        value: u32,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("not a positive pin number")]
+        at: SourceSpan,
+    },
+
     /// An imported component is never instantiated in the importing file.
     #[error("unused import `{name}`")]
     #[diagnostic(

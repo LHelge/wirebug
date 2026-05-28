@@ -5,6 +5,7 @@
 //! elaboration (containment cycles). This pass adds what's left:
 //!
 //! - wire arity (a wire needs at least two endpoints) — an error;
+//! - pin number range (pins are positive integers) — an error;
 //! - unused imports and pin assignments outside a connector — warnings,
 //!   which only fail the run under `--strict`.
 //!
@@ -14,7 +15,7 @@
 
 use std::collections::HashMap;
 
-use crate::dsl::ast::{CablePropertyValue, Member};
+use crate::dsl::ast::{CablePropertyValue, Member, Port};
 use crate::dsl::diagnostics::Problem;
 use crate::dsl::resolve::Resolved;
 use crate::dsl::span::{FileId, Span};
@@ -35,11 +36,17 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
                     });
                 }
                 Member::Port(port) if !port.pins.is_empty() => {
+                    validate_pin_numbers(port, def.file, resolved, &mut problems);
                     problems.push(Problem::BarePortPin {
                         port: port.name.node.as_str().to_string(),
                         src: src(),
                         at: port.name.span.into(),
                     });
+                }
+                Member::Connector(connector) => {
+                    for port in &connector.ports {
+                        validate_pin_numbers(port, def.file, resolved, &mut problems);
+                    }
                 }
                 Member::Cable(cable) => {
                     // A conductor is point-to-point: shared rails stay loose.
@@ -112,6 +119,23 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
     }
 
     problems
+}
+
+fn validate_pin_numbers(
+    port: &Port,
+    file: FileId,
+    resolved: &Resolved,
+    problems: &mut Vec<Problem>,
+) {
+    for pin in &port.pins {
+        if pin.node == 0 {
+            problems.push(Problem::InvalidPin {
+                value: pin.node,
+                src: resolved.project.source(file),
+                at: pin.span.into(),
+            });
+        }
+    }
 }
 
 #[cfg(test)]
@@ -233,6 +257,30 @@ mod tests {
         let codes = validate_files(&[("main.wb", "component m { pub port a \"A\" pin 1; }\n")]);
         assert!(
             codes.iter().any(|c| c == "wirebug::bare_port_pin"),
+            "{codes:?}"
+        );
+    }
+
+    #[test]
+    fn connector_pin_zero_errors() {
+        let codes = validate_files(&[(
+            "main.wb",
+            "component m { connector j1 \"J1\" { pub port a \"A\" pin 0; } }\n",
+        )]);
+        assert!(
+            codes.iter().any(|c| c == "wirebug::invalid_pin"),
+            "{codes:?}"
+        );
+    }
+
+    #[test]
+    fn ganged_pin_zero_errors() {
+        let codes = validate_files(&[(
+            "main.wb",
+            "component m { connector j1 \"J1\" { pub port a \"A\" pins (1, 0, 2); } }\n",
+        )]);
+        assert!(
+            codes.iter().any(|c| c == "wirebug::invalid_pin"),
             "{codes:?}"
         );
     }
