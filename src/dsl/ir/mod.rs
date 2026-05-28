@@ -52,6 +52,49 @@ name_newtype!(
     "A cable's designator, grouping its conductor wires."
 );
 
+/// A supported view renderer, or an as-yet unknown kind preserved from the
+/// DSL so render can report it precisely.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ViewKind {
+    Schematic,
+    Harness,
+    Other(String),
+}
+
+impl ViewKind {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Schematic => "schematic",
+            Self::Harness => "harness",
+            Self::Other(kind) => kind,
+        }
+    }
+
+    pub fn is_schematic(&self) -> bool {
+        matches!(self, Self::Schematic)
+    }
+
+    pub fn is_harness(&self) -> bool {
+        matches!(self, Self::Harness)
+    }
+}
+
+impl From<&str> for ViewKind {
+    fn from(kind: &str) -> Self {
+        match kind {
+            "schematic" => Self::Schematic,
+            "harness" => Self::Harness,
+            other => Self::Other(other.to_string()),
+        }
+    }
+}
+
+impl fmt::Display for ViewKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// A physical connector pin (a positive integer in the DSL).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Pin(pub u32);
@@ -216,7 +259,7 @@ impl fmt::Debug for InstancePath {
 /// A view, bound to the component type it documents.
 #[derive(Debug)]
 pub struct View {
-    pub kind: String,
+    pub kind: ViewKind,
     pub title: String,
     pub grid: Option<f64>,
     pub subject: TypeName,
@@ -320,5 +363,13 @@ mod tests {
             Pin::display_list(&[Pin(1), Pin(2), Pin(10)]),
             Some("1,2,10".to_string())
         );
+    }
+
+    #[test]
+    fn view_kind_classifies_known_kinds_and_preserves_unknown_ones() {
+        assert_eq!(ViewKind::from("schematic"), ViewKind::Schematic);
+        assert_eq!(ViewKind::from("harness"), ViewKind::Harness);
+        assert_eq!(ViewKind::from("bom"), ViewKind::Other("bom".to_string()));
+        assert_eq!(ViewKind::from("bom").as_str(), "bom");
     }
 }

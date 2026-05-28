@@ -146,7 +146,7 @@ impl SchematicRenderer {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::dsl::ir::{Include, InstanceName, PortName, Side, TextBox, TypeName};
+    use crate::dsl::ir::{Include, InstanceName, PortName, Side, TextBox, TypeName, ViewKind};
 
     /// Elaborate a single-file `.wb` source into a [`Design`]. The source
     /// must have a single top-level component (the views are built
@@ -168,7 +168,7 @@ pub(crate) mod tests {
     #[allow(clippy::type_complexity)]
     pub(crate) fn view_of(subject: &str, includes: &[(&str, f64, f64, &[(&str, Side)])]) -> View {
         View {
-            kind: "schematic".to_string(),
+            kind: ViewKind::Schematic,
             title: "T".to_string(),
             grid: None,
             subject: TypeName::from(subject),

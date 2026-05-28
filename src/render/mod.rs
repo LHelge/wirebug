@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use askama::Template;
 
-use crate::dsl::ir::{Design, Instance, View};
+use crate::dsl::ir::{Design, Instance, View, ViewKind};
 use crate::error::{Error, Result};
 
 pub mod geometry;
@@ -25,8 +25,18 @@ pub mod schematic;
 pub struct RenderedView {
     pub title: String,
     pub filename: String,
-    pub kind: String,
+    pub kind: ViewKind,
     pub svg: String,
+}
+
+impl RenderedView {
+    pub fn is_schematic(&self) -> bool {
+        self.kind.is_schematic()
+    }
+
+    pub fn is_harness(&self) -> bool {
+        self.kind.is_harness()
+    }
 }
 
 /// Render every view in `design` to SVG, in declaration order.
@@ -40,10 +50,10 @@ pub fn render_views(design: &Design) -> Result<Vec<RenderedView>> {
     let mut rendered = Vec::with_capacity(design.views.len());
     for view in &design.views {
         let subject = subject_instance(design, view)?;
-        let svg = match view.kind.as_str() {
-            "schematic" => schematic::SchematicRenderer.render(design, subject, view)?,
-            "harness" => harness::HarnessRenderer.render(design, subject, view)?,
-            other => return Err(Error::UnknownViewKind(other.to_string())),
+        let svg = match &view.kind {
+            ViewKind::Schematic => schematic::SchematicRenderer.render(design, subject, view)?,
+            ViewKind::Harness => harness::HarnessRenderer.render(design, subject, view)?,
+            ViewKind::Other(other) => return Err(Error::UnknownViewKind(other.clone())),
         };
         rendered.push(RenderedView {
             title: view.title.clone(),
@@ -84,8 +94,8 @@ pub fn index_html(views: &[RenderedView], live_reload: bool) -> Result<String> {
     IndexTemplate {
         views,
         live_reload,
-        has_schematic: views.iter().any(|v| v.kind == "schematic"),
-        has_harness: views.iter().any(|v| v.kind == "harness"),
+        has_schematic: views.iter().any(RenderedView::is_schematic),
+        has_harness: views.iter().any(RenderedView::is_harness),
     }
     .render()
     .map_err(Error::Template)
@@ -171,7 +181,7 @@ mod tests {
         RenderedView {
             title: title.to_string(),
             filename: filename.to_string(),
-            kind: kind.to_string(),
+            kind: ViewKind::from(kind),
             svg: String::new(),
         }
     }

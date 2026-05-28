@@ -176,7 +176,7 @@ impl Elaborator<'_> {
                 let subject = binding.subject?;
                 let v = binding.ast;
                 Some(View {
-                    kind: v.kind.node.as_str().to_string(),
+                    kind: crate::dsl::ir::ViewKind::from(v.kind.node.as_str()),
                     title: v.title.node.clone(),
                     grid: v.grid.as_ref().map(|g| g.node),
                     subject: TypeName::from(self.resolved.defs[subject].name),

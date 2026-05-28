@@ -125,13 +125,13 @@ impl HarnessRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dsl::ir::{ConnectorName, Include, InstanceName, TypeName};
+    use crate::dsl::ir::{ConnectorName, Include, InstanceName, TypeName, ViewKind};
     use crate::render::schematic::tests::design_from;
 
     /// A harness view over `subject`, including `(instance, connector, x, y)`.
     fn harness_view(subject: &str, includes: &[(&str, &str, f64, f64)]) -> View {
         View {
-            kind: "harness".to_string(),
+            kind: ViewKind::Harness,
             title: "Harness".to_string(),
             grid: None,
             subject: TypeName::from(subject),

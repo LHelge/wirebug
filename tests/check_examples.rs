@@ -49,7 +49,7 @@ fn seed_project_checks_clean_and_elaborates() {
     // harness).
     assert_eq!(design.views.len(), 6);
     assert_eq!(
-        design.views.iter().filter(|v| v.kind == "harness").count(),
+        design.views.iter().filter(|v| v.kind.is_harness()).count(),
         2,
         "the HV harness and motor-phase harness views are present"
     );

@@ -15,7 +15,7 @@ use indexmap::IndexMap;
 
 use crate::dsl::ast::{self, Item, Member};
 use crate::dsl::diagnostics::Problem;
-use crate::dsl::ir::{InstanceName, Pin, PortName, Side};
+use crate::dsl::ir::{InstanceName, Pin, PortName, Side, ViewKind};
 use crate::dsl::project::Project;
 use crate::dsl::span::{FileId, Span, Spanned};
 
@@ -694,7 +694,7 @@ impl<'a> Resolver<'a> {
         problems: &mut Vec<Problem>,
     ) {
         let mut seen: HashMap<String, Span> = HashMap::new();
-        let is_harness = view.kind.node.as_str() == "harness";
+        let is_harness = ViewKind::from(view.kind.node.as_str()).is_harness();
         for inc in &view.includes {
             let Some(target) = include_target(inc, is_harness) else {
                 continue;
@@ -719,6 +719,7 @@ impl<'a> Resolver<'a> {
             let roots = &roots_by_file[fi];
             for item in &file.ast.items {
                 let Item::View(view) = item else { continue };
+                let view_kind = ViewKind::from(view.kind.node.as_str());
                 for dup in &view.duplicate_items {
                     problems.push(Problem::DuplicateViewItem {
                         kind: dup.node.to_string(),
@@ -737,9 +738,9 @@ impl<'a> Resolver<'a> {
                             first: first.into(),
                         });
                     }
-                    if view.kind.node.as_str() != "schematic" {
+                    if !view_kind.is_schematic() {
                         problems.push(Problem::UnsupportedViewText {
-                            kind: view.kind.node.as_str().to_string(),
+                            kind: view_kind.to_string(),
                             src: self.project.source(FileId(fi)),
                             at: text.span.into(),
                         });
@@ -757,7 +758,7 @@ impl<'a> Resolver<'a> {
                 if let Some(s) = subject {
                     self.check_enclosure(view, s, FileId(fi), &mut problems);
                     self.check_duplicate_includes(view, FileId(fi), &mut problems);
-                    let is_harness = view.kind.node.as_str() == "harness";
+                    let is_harness = view_kind.is_harness();
                     for inc in &view.includes {
                         let name = inc.instance.node.as_str();
                         match self.defs[s].instances.get(&InstanceName::from(name)) {

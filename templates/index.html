@@ -51,7 +51,7 @@
 {% if has_schematic %}
     <div class="panel panel-schematic">
 {% for view in views %}
-{% if view.kind == "schematic" %}
+{% if view.is_schematic() %}
       <section>
         <h2>{{ view.title }}</h2>
         <a href="#lb-{{ view.filename }}"><img src="{{ view.filename }}" alt="{{ view.title }}"></a>
@@ -64,7 +64,7 @@
 {% if has_harness %}
     <div class="panel panel-harness">
 {% for view in views %}
-{% if view.kind == "harness" %}
+{% if view.is_harness() %}
       <section>
         <h2>{{ view.title }}</h2>
         <a href="#lb-{{ view.filename }}"><img src="{{ view.filename }}" alt="{{ view.title }}"></a>
