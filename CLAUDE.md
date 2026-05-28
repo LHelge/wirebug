@@ -16,8 +16,11 @@ Three CLI commands share it:
   an `index.html` (`render::index_html`) that embeds them all for browsing,
   grouped into **Schematics** / **Harnesses** tabs by view kind. Two view
   kinds render today: `schematic` (`render/schematic/`) and `harness`
-  (`render/harness/`). The legacy YAML model/view loader has been removed;
-  `ir::Design` is the only thing the renderer consumes.
+  (`render/harness/`). `--png` rasterises each view to PNG instead
+  (`render/png.rs`, via `resvg`); `--embed` emits host-styled "naked" SVGs
+  plus a `manifest.json` sidecar in place of the HTML index (see below).
+  The legacy YAML model/view loader has been removed; `ir::Design` is the
+  only thing the renderer consumes.
 - **`serve` (`src/serve/`)** — a live-reloading dev server. Renders the
   project into memory (the same `render_views` + `index_html` pipeline,
   `live_reload` on), serves it over axum, and watches the project tree for
@@ -256,7 +259,9 @@ src/
 ├── render/
 │   ├── mod.rs       # render_views: subject lookup + per-view dispatch + slug;
 │   │                #   RenderedView{title,filename,kind,svg} + index_html (tabs)
+│   │                #   + embed_manifest (manifest.json sidecar for --embed)
 │   ├── geometry.rs  # Point; re-exports ir::Side (sides are authored)
+│   ├── png.rs       # SVG → PNG rasterisation for --png (resvg/usvg/tiny_skia)
 │   ├── stamp.rs     # project-identity stamp text/element (corner of every SVG)
 │   ├── schematic/   # rectangle-based SVG renderer (kind: schematic)
 │   │   ├── mod.rs       # SchematicRenderer; render orchestration
@@ -423,6 +428,8 @@ Runtime:
 - [`thiserror`] — typed library error enums; underpins the `Diagnostic`s.
 - [`anyhow`] — error glue in `main` only.
 - [`svg`] — SVG document emission with escaping handled (render path).
+- [`resvg`] — SVG → PNG rasterisation for `render --png` (`render/png.rs`).
+- [`serde_json`] — serialises the `--embed` `manifest.json` sidecar.
 - [`pathfinding`] — A* over the orthogonal visibility graph for
   object-avoiding connector routing (render path).
 - [`askama`] — compile-time HTML templates (`templates/`); the `index.html`
@@ -438,6 +445,7 @@ Dev / test:
 - [`insta`] — snapshot tests.
 - [`assert_cmd`] — black-box CLI tests.
 - [`predicates`] — assertions for `assert_cmd`.
+- [`tempfile`] — scratch project dirs for pipeline/render tests.
 
 [`chumsky`]: https://docs.rs/chumsky
 [`toml`]: https://docs.rs/toml
@@ -447,6 +455,9 @@ Dev / test:
 [`indexmap`]: https://docs.rs/indexmap
 [`clap`]: https://docs.rs/clap
 [`svg`]: https://docs.rs/svg
+[`resvg`]: https://docs.rs/resvg
+[`serde_json`]: https://docs.rs/serde_json
+[`tempfile`]: https://docs.rs/tempfile
 [`pathfinding`]: https://docs.rs/pathfinding
 [`askama`]: https://docs.rs/askama
 [`axum`]: https://docs.rs/axum
@@ -475,6 +486,8 @@ cargo run -- check --strict --format json examples/main.wb
 
 # render every view in a .wb project to SVG (one file per view, into --out)
 cargo run --release -- render examples/main.wb --out out/
+cargo run --release -- render examples/main.wb --out out/ --png    # rasterise to PNG
+cargo run --release -- render examples/main.wb --out out/ --embed  # naked SVGs + manifest.json
 
 # serve a project with live reload (re-renders on every .wb save)
 cargo run -- serve examples/main.wb --port 3000   # then open http://localhost:3000
