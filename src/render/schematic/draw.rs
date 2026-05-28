@@ -3,7 +3,7 @@
 
 use svg::node::element::{Circle, Group, Polyline, Rectangle, Text};
 
-use super::layout::{PlacedComponent, PlacedPort};
+use super::layout::{PlacedComponent, PlacedPort, PlacedText};
 use super::{COMPONENT_TITLE_GAP, LABEL_INSET, PIN_INSET, PORT_RADIUS};
 use crate::dsl::ir::InstanceName;
 use crate::render::geometry::{Point, Side};
@@ -62,6 +62,26 @@ pub(super) fn render_enclosure(pc: &PlacedComponent) -> Group {
         .add(rect)
         .add(label)
         .add(ports_group)
+}
+
+pub(super) fn render_text_box(text: &PlacedText) -> Group {
+    let rect = Rectangle::new()
+        .set("x", text.origin.x)
+        .set("y", text.origin.y)
+        .set("width", text.width)
+        .set("height", text.height)
+        .set("rx", 4)
+        .set("ry", 4);
+
+    let label = Text::new(text.label.clone())
+        .set("x", text.origin.x + text.width / 2.0)
+        .set("y", text.origin.y + text.height / 2.0);
+
+    Group::new()
+        .set("class", "text-box")
+        .set("data-text", text.name.clone())
+        .add(rect)
+        .add(label)
 }
 
 fn render_port(p: &PlacedPort) -> Group {

@@ -209,6 +209,16 @@ impl Elaborator<'_> {
                                 .collect(),
                         })
                         .collect(),
+                    texts: v
+                        .texts
+                        .iter()
+                        .map(|text| crate::dsl::ir::TextBox {
+                            name: text.name.node.as_str().to_string(),
+                            x: text.x.node,
+                            y: text.y.node,
+                            label: text.label.node.clone(),
+                        })
+                        .collect(),
                 })
             })
             .collect()

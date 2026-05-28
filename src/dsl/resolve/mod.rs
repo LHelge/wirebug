@@ -696,6 +696,25 @@ impl<'a> Resolver<'a> {
                         at: dup.span.into(),
                     });
                 }
+                let mut text_names: HashMap<&str, Span> = HashMap::new();
+                for text in &view.texts {
+                    let name = text.name.node.as_str();
+                    if let Some(first) = text_names.insert(name, text.name.span) {
+                        problems.push(Problem::DuplicateViewText {
+                            name: name.to_string(),
+                            src: self.project.source(FileId(fi)),
+                            at: text.name.span.into(),
+                            first: first.into(),
+                        });
+                    }
+                    if view.kind.node.as_str() != "schematic" {
+                        problems.push(Problem::UnsupportedViewText {
+                            kind: view.kind.node.as_str().to_string(),
+                            src: self.project.source(FileId(fi)),
+                            at: text.span.into(),
+                        });
+                    }
+                }
                 let subject = if roots.len() == 1 {
                     Some(roots[0])
                 } else {
@@ -978,6 +997,24 @@ mod tests {
             "component m { pub port a \"A\"; } view schematic \"V\" { enclosure { a at (west, 0); } enclosure { } }\n",
         )]);
         assert!(has(&p, "wirebug::duplicate_view_item"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn duplicate_text_box_in_view_is_reported() {
+        let p = problems(&[(
+            "main.wb",
+            "component m { } view schematic \"V\" { text note at (0, 0) \"A\"; text note at (1, 1) \"B\"; }\n",
+        )]);
+        assert!(has(&p, "wirebug::duplicate_view_text"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn text_box_in_harness_view_is_reported() {
+        let p = problems(&[(
+            "main.wb",
+            "component m { } view harness \"H\" { text note at (0, 0) \"A\"; }\n",
+        )]);
+        assert!(has(&p, "wirebug::unsupported_view_text"), "{:?}", codes(&p));
     }
 
     #[test]

@@ -39,6 +39,9 @@ pub(super) const CHAR_WIDTH: f64 = 7.5;
 pub(super) const COMPONENT_TITLE_GAP: f64 = 8.0;
 pub(super) const SVG_MARGIN: f64 = 48.0;
 pub(super) const TITLE_GAP: f64 = 12.0;
+pub(super) const TEXT_BOX_MIN_WIDTH: f64 = 80.0;
+pub(super) const TEXT_BOX_HEIGHT: f64 = 34.0;
+pub(super) const TEXT_BOX_PAD_X: f64 = 12.0;
 
 const STYLE: &str = "\
 .component rect { fill: white; stroke: black; stroke-width: 1.5; }
@@ -49,6 +52,8 @@ const STYLE: &str = "\
 .wire { fill: none; stroke: black; stroke-width: 1.25; }
 .enclosure rect { fill: none; stroke: #888; stroke-width: 1.5; stroke-dasharray: 6 4; }
 .enclosure-label { font: bold 13px sans-serif; text-anchor: middle; fill: #555; }
+.text-box rect { fill: #fff9d6; stroke: #8a7a2f; stroke-width: 1.25; }
+.text-box text { font: 12px sans-serif; fill: #2f2a13; text-anchor: middle; dominant-baseline: central; }
 .title { font: bold 14px sans-serif; }\
 ";
 
@@ -128,6 +133,12 @@ impl SchematicRenderer {
         }
         doc = doc.add(wires_group);
 
+        let mut texts_group = Group::new().set("class", "text-boxes");
+        for text in &placement.texts {
+            texts_group = texts_group.add(draw::render_text_box(text));
+        }
+        doc = doc.add(texts_group);
+
         Ok(doc.to_string())
     }
 }
@@ -135,7 +146,7 @@ impl SchematicRenderer {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::dsl::ir::{Include, InstanceName, PortName, Side, TypeName};
+    use crate::dsl::ir::{Include, InstanceName, PortName, Side, TextBox, TypeName};
 
     /// Elaborate a single-file `.wb` source into a [`Design`]. The source
     /// must have a single top-level component (the views are built
@@ -175,6 +186,7 @@ pub(crate) mod tests {
                         .collect(),
                 })
                 .collect(),
+            texts: Vec::new(),
         }
     }
 
@@ -245,5 +257,23 @@ component sys {
         let view = view_of("sys", &[("a", 0.0, 0.0, &[("p", Side::East)])]);
         let svg = render(&design, &view).unwrap();
         assert!(!svg.contains("class=\"wire\""));
+    }
+
+    #[test]
+    fn renders_text_boxes() {
+        let design = design_from("component sys { }");
+        let mut view = view_of("sys", &[]);
+        view.texts.push(TextBox {
+            name: "note".to_string(),
+            x: 2.0,
+            y: 3.0,
+            label: "This is my textbox!".to_string(),
+        });
+
+        let svg = render(&design, &view).unwrap();
+
+        assert!(svg.contains("class=\"text-box\""));
+        assert!(svg.contains("data-text=\"note\""));
+        assert!(svg.contains("This is my textbox!"));
     }
 }

@@ -146,6 +146,7 @@ mod tests {
                     ports: Vec::new(),
                 })
                 .collect(),
+            texts: Vec::new(),
         }
     }
 

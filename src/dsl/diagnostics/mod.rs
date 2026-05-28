@@ -359,6 +359,33 @@ pub enum Problem {
         at: SourceSpan,
     },
 
+    /// A view places two text boxes with the same name.
+    #[error("duplicate text box `{name}` in view")]
+    #[diagnostic(code(wirebug::duplicate_view_text))]
+    DuplicateViewText {
+        name: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("reused here")]
+        at: SourceSpan,
+        #[label("first used here")]
+        first: SourceSpan,
+    },
+
+    /// Text boxes are currently schematic-only.
+    #[error("text boxes are not supported in `{kind}` views")]
+    #[diagnostic(
+        code(wirebug::unsupported_view_text),
+        help("move this `text` item to a schematic view")
+    )]
+    UnsupportedViewText {
+        kind: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("schematic views only")]
+        at: SourceSpan,
+    },
+
     /// An enclosure port's `at (x, y)` anchor isn't exactly one side keyword
     /// and one coordinate: two coordinates, two sides, or a side in the
     /// wrong slot (west/east must be the x slot, north/south the y slot).

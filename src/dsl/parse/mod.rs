@@ -66,6 +66,7 @@ enum ViewItem {
     Grid(Spanned<f64>),
     Enclosure(Spanned<Vec<EnclosurePort>>),
     Include(Include),
+    Text(TextBox),
 }
 
 /// One member of a cable body, parsed in any order and folded into a
@@ -352,6 +353,25 @@ where
             span: e.span(),
         });
 
+    let text_box = just(Token::Text)
+        .ignore_then(ident)
+        .then_ignore(just(Token::At))
+        .then(
+            number
+                .then_ignore(just(Token::Comma))
+                .then(number)
+                .delimited_by(just(Token::LParen), just(Token::RParen)),
+        )
+        .then(string)
+        .then_ignore(just(Token::Semicolon))
+        .map_with(|((name, (x, y)), label), e| TextBox {
+            name,
+            x,
+            y,
+            label,
+            span: e.span(),
+        });
+
     let grid = just(Token::Grid)
         .ignore_then(number)
         .then_ignore(just(Token::Semicolon));
@@ -362,6 +382,7 @@ where
         grid.map(ViewItem::Grid),
         enclosure_block.map(ViewItem::Enclosure),
         include.map(ViewItem::Include),
+        text_box.map(ViewItem::Text),
     ));
 
     let view = just(Token::View)
@@ -377,6 +398,7 @@ where
             let mut grid = None;
             let mut enclosure = None;
             let mut includes = Vec::new();
+            let mut texts = Vec::new();
             let mut duplicate_items = Vec::new();
             for item in items {
                 match item {
@@ -389,6 +411,7 @@ where
                     }
                     ViewItem::Enclosure(block) => enclosure = Some(block.node),
                     ViewItem::Include(inc) => includes.push(inc),
+                    ViewItem::Text(text) => texts.push(text),
                 }
             }
             View {
@@ -397,6 +420,7 @@ where
                 grid,
                 enclosure: enclosure.unwrap_or_default(),
                 includes,
+                texts,
                 duplicate_items,
                 span: e.span(),
             }
@@ -734,6 +758,19 @@ mod tests {
             vec![("west", "p"), ("west", "q"), ("east", "r")],
             "placements keep their declaration order, one per port"
         );
+    }
+
+    #[test]
+    fn view_text_box_parses() {
+        let file =
+            parse_ok(r#"view schematic "V" { text note_1 at (3, 4) "This is my textbox!"; }"#);
+        let Item::View(v) = &file.items[0] else {
+            panic!("expected view");
+        };
+        assert_eq!(v.texts.len(), 1);
+        assert_eq!(v.texts[0].name.node.as_str(), "note_1");
+        assert_eq!((v.texts[0].x.node, v.texts[0].y.node), (3.0, 4.0));
+        assert_eq!(v.texts[0].label.node, "This is my textbox!");
     }
 
     #[test]

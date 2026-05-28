@@ -12,7 +12,10 @@ use std::collections::HashMap;
 
 use indexmap::IndexMap;
 
-use super::{CHAR_WIDTH, LABEL_INSET, MIN_HEIGHT, MIN_WIDTH, SVG_MARGIN};
+use super::{
+    CHAR_WIDTH, LABEL_INSET, MIN_HEIGHT, MIN_WIDTH, SVG_MARGIN, TEXT_BOX_HEIGHT,
+    TEXT_BOX_MIN_WIDTH, TEXT_BOX_PAD_X,
+};
 use crate::dsl::ir::{Design, Instance, InstanceName, Pin, Port, PortName};
 use crate::error::Result;
 use crate::render::geometry::{Point, Side};
@@ -102,10 +105,19 @@ pub(super) struct PlacedPort {
     pub(super) inverted: bool,
 }
 
+pub(super) struct PlacedText {
+    pub(super) name: String,
+    pub(super) origin: Point,
+    pub(super) width: f64,
+    pub(super) height: f64,
+    pub(super) label: String,
+}
+
 /// Everything the renderer needs after walking the design's view once:
 /// the placed boxes plus the wire segments to route between their ports.
 pub(super) struct Placement {
     pub(super) components: IndexMap<InstanceName, PlacedComponent>,
+    pub(super) texts: Vec<PlacedText>,
     /// The subject's boundary box with its inverted ports, when the view
     /// authors an `enclosure { }` block. Drawn and routed to, but never an
     /// obstacle (it's a container, not a component).
@@ -268,10 +280,29 @@ impl Placement {
             );
         }
 
+        let texts = view
+            .texts
+            .iter()
+            .map(|text| {
+                let width = (text.label.chars().count() as f64 * CHAR_WIDTH + 2.0 * TEXT_BOX_PAD_X)
+                    .max(TEXT_BOX_MIN_WIDTH);
+                let height = TEXT_BOX_HEIGHT;
+                let centre = Point::new(grid.to_world(text.x), grid.to_world(text.y));
+                PlacedText {
+                    name: text.name.clone(),
+                    origin: Point::new(centre.x - width / 2.0, centre.y - height / 2.0),
+                    width,
+                    height,
+                    label: text.label.clone(),
+                }
+            })
+            .collect();
+
         let enclosure = Self::place_enclosure(subject, view, &components, grid);
 
         Ok(Self {
             components,
+            texts,
             enclosure,
             connections,
         })
@@ -406,7 +437,7 @@ impl Placement {
     /// title. Encloses both the component boxes and every routed wire —
     /// wires can detour outside the boxes, so they must be measured too.
     pub(super) fn viewbox(&self, has_title: bool, wires: &[Vec<Point>]) -> ViewBox {
-        if self.components.is_empty() {
+        if self.components.is_empty() && self.texts.is_empty() {
             return ViewBox {
                 x: 0.0,
                 y: 0.0,
@@ -425,6 +456,12 @@ impl Placement {
             min_y = min_y.min(pc.origin.y);
             max_x = max_x.max(pc.origin.x + pc.width);
             max_y = max_y.max(pc.origin.y + pc.height);
+        }
+        for text in &self.texts {
+            min_x = min_x.min(text.origin.x);
+            min_y = min_y.min(text.origin.y);
+            max_x = max_x.max(text.origin.x + text.width);
+            max_y = max_y.max(text.origin.y + text.height);
         }
 
         for p in wires.iter().flatten() {

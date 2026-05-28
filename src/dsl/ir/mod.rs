@@ -208,6 +208,16 @@ pub struct View {
     /// wraps the schematic). Empty when no `enclosure { }` block is authored.
     pub enclosure: Vec<EnclosurePort>,
     pub includes: Vec<Include>,
+    pub texts: Vec<TextBox>,
+}
+
+/// A named annotation box placed at grid coordinates in a schematic view.
+#[derive(Debug)]
+pub struct TextBox {
+    pub name: String,
+    pub x: f64,
+    pub y: f64,
+    pub label: String,
 }
 
 /// One of the subject component's own ports, placed on the enclosure

@@ -197,7 +197,7 @@ impl CablePropertyValue {
 }
 
 /// `view <kind> "<title>" { <item>* }` where each item is a `grid N;`, an
-/// `enclosure { ... }` block, or an `include`, in any order.
+/// `enclosure { ... }` block, an `include`, or a `text` box, in any order.
 #[derive(Debug, Clone)]
 pub struct View {
     pub kind: Spanned<Ident>,
@@ -208,9 +208,21 @@ pub struct View {
     /// are left unresolved; resolve validates them.
     pub enclosure: Vec<EnclosurePort>,
     pub includes: Vec<Include>,
+    pub texts: Vec<TextBox>,
     /// Spans of any `grid`/`enclosure` declared beyond the first (tagged with
     /// the item's kind). First-wins; resolve reports each as a duplicate.
     pub duplicate_items: Vec<Spanned<&'static str>>,
+    pub span: Span,
+}
+
+/// `text <name> at (<x>, <y>) "<label>";` — a named annotation box placed at
+/// grid coordinates in a schematic view.
+#[derive(Debug, Clone)]
+pub struct TextBox {
+    pub name: Spanned<Ident>,
+    pub x: Spanned<f64>,
+    pub y: Spanned<f64>,
+    pub label: Spanned<String>,
     pub span: Span,
 }
 
