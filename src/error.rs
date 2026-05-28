@@ -39,6 +39,12 @@ pub enum Error {
     #[error("grid step {grid} is too small; ports need at least {minimum} per step")]
     GridTooSmall { grid: f64, minimum: f64 },
 
+    /// The schematic router could not find an object-avoiding route for a
+    /// connection. Rendering fails instead of drawing a misleading straight
+    /// segment through obstacles.
+    #[error("failed to route schematic wire between {from:?} and {to:?}")]
+    RouteFailed { from: String, to: String },
+
     /// Failure writing the output SVG to disk.
     #[error("failed to write {path}: {source}")]
     Write {

@@ -33,11 +33,9 @@ pub(super) const EPS: f64 = 1e-6;
 pub(super) fn run(ovg: &Ovg, obstacles: &[Rect], raws: &[RawRoute], gap: f64) -> Vec<Vec<Point>> {
     let node_paths: Vec<Vec<usize>> = raws.iter().map(|r| r.nodes.clone()).collect();
 
-    // Routes with no node path failed to route — keep them as a straight
-    // segment and out of the nudging.
     let mut shapes: Vec<Option<Vec<Segment>>> = raws
         .iter()
-        .map(|r| (!r.nodes.is_empty()).then(|| segments::segmentize(ovg, r)))
+        .map(|r| Some(segments::segmentize(ovg, r)))
         .collect();
 
     let channels = order::channels(ovg, &node_paths);

@@ -90,7 +90,7 @@ impl SchematicRenderer {
         // component bounds, so the viewBox has to enclose them too.
         let router = Router::build(&placement, step);
         let pairs = placement.connection_pairs();
-        let wires = router.route_all(&pairs, step);
+        let wires = router.route_all(&pairs, step)?;
 
         let mut doc = Document::new()
             .set("xmlns", "http://www.w3.org/2000/svg")

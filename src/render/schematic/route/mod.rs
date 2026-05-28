@@ -27,6 +27,7 @@ use geometry::{Dir, Rect};
 use visibility::Ovg;
 
 use super::layout::{PlacedPort, Placement};
+use crate::error::{Error, Result};
 use crate::render::geometry::Point;
 
 const EPS: f64 = 1e-6;
@@ -39,8 +40,7 @@ const BEND_PENALTY: i64 = 100_000_000;
 
 /// One connector's route through the visibility graph, before nudging:
 /// the two port connection points plus the interior OVG node-id path
-/// (`start_stub` … `goal_stub`). An empty `nodes` means the fallback
-/// straight segment.
+/// (`start_stub` … `goal_stub`).
 pub(super) struct RawRoute {
     pub(super) a: Point,
     pub(super) b: Point,
@@ -80,29 +80,31 @@ impl Router {
         }
     }
 
-    /// Route a single connection through the graph. Falls back to an
-    /// empty node path (drawn as a straight segment) if the graph offers
-    /// no route — never drops a connection.
-    pub(super) fn route_one(&self, a: &PlacedPort, b: &PlacedPort) -> RawRoute {
+    /// Route a single connection through the graph.
+    pub(super) fn route_one(&self, a: &PlacedPort, b: &PlacedPort) -> Result<RawRoute> {
         let out_a = out_dir(a);
         let in_b = out_dir(b).opposite();
 
-        let nodes = match (
-            self.ovg.node_at(stub(a, self.clearance)),
-            self.ovg.node_at(stub(b, self.clearance)),
-        ) {
-            (Some(stub_a), Some(stub_b)) => {
-                astar::find_route(&self.ovg, a.pos, out_a, stub_a, b.pos, in_b, stub_b)
-                    .unwrap_or_default()
-            }
-            _ => Vec::new(),
+        let route_error = || Error::RouteFailed {
+            from: port_name(a),
+            to: port_name(b),
         };
+        let stub_a = self
+            .ovg
+            .node_at(stub(a, self.clearance))
+            .ok_or_else(route_error)?;
+        let stub_b = self
+            .ovg
+            .node_at(stub(b, self.clearance))
+            .ok_or_else(route_error)?;
+        let nodes = astar::find_route(&self.ovg, a.pos, out_a, stub_a, b.pos, in_b, stub_b)
+            .ok_or_else(route_error)?;
 
-        RawRoute {
+        Ok(RawRoute {
             a: a.pos,
             b: b.pos,
             nodes,
-        }
+        })
     }
 
     /// Route every connection, then nudge shared channels apart (paper
@@ -113,10 +115,17 @@ impl Router {
         &self,
         pairs: &[(&PlacedPort, &PlacedPort)],
         gap: f64,
-    ) -> Vec<Vec<Point>> {
-        let raws: Vec<RawRoute> = pairs.iter().map(|(a, b)| self.route_one(a, b)).collect();
-        nudge::run(&self.ovg, &self.obstacles, &raws, gap)
+    ) -> Result<Vec<Vec<Point>>> {
+        let raws: Vec<RawRoute> = pairs
+            .iter()
+            .map(|(a, b)| self.route_one(a, b))
+            .collect::<Result<_>>()?;
+        Ok(nudge::run(&self.ovg, &self.obstacles, &raws, gap))
     }
+}
+
+fn port_name(p: &PlacedPort) -> String {
+    format!("{} ({})", p.port, p.label)
 }
 
 /// The direction a wire leaves a port: outward from its box, or inward for an
@@ -233,7 +242,7 @@ component sys {
         // its world position depends on the centre-based layout.
         let b = Rect::from(placement.component_bounds().nth(1).expect("b placed"));
 
-        let path = router.route_all(&[(a, c)], step).remove(0);
+        let path = router.route_all(&[(a, c)], step).expect("routes").remove(0);
 
         assert!(path.len() > 2, "expected a detour, got {path:?}");
         assert!(
@@ -242,5 +251,38 @@ component sys {
         );
         assert_eq!(*path.first().unwrap(), a.pos);
         assert_eq!(*path.last().unwrap(), c.pos);
+    }
+
+    #[test]
+    fn route_errors_when_a_stub_is_inside_an_obstacle() {
+        use crate::dsl::ir::PortName;
+
+        let obstacle = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let router = Router {
+            ovg: Ovg::build(&[obstacle], &[]),
+            obstacles: vec![obstacle],
+            clearance: 10.0,
+        };
+        let a = PlacedPort {
+            port: PortName::from("a"),
+            side: Side::East,
+            pos: Point::new(50.0, 50.0),
+            pin: None,
+            label: "A".to_string(),
+            inverted: false,
+        };
+        let b = PlacedPort {
+            port: PortName::from("b"),
+            side: Side::West,
+            pos: Point::new(150.0, 50.0),
+            pin: None,
+            label: "B".to_string(),
+            inverted: false,
+        };
+
+        assert!(matches!(
+            router.route_one(&a, &b),
+            Err(crate::error::Error::RouteFailed { .. })
+        ));
     }
 }

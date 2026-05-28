@@ -41,8 +41,7 @@ pub(super) struct Segment {
 }
 
 /// Collapse one route's point path into maximal segments. The caller must
-/// only pass routes with a non-empty node path (orthogonal throughout);
-/// fallback straight routes are handled separately.
+/// only pass routes with a successful node path (orthogonal throughout).
 pub(super) fn segmentize(ovg: &Ovg, raw: &RawRoute) -> Vec<Segment> {
     let mut pts: Vec<Point> = Vec::with_capacity(raw.nodes.len() + 2);
     pts.push(raw.a);
