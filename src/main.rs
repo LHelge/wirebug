@@ -71,6 +71,11 @@ enum Command {
         /// Treat warnings as errors.
         #[arg(long)]
         strict: bool,
+        /// Rasterise each view to PNG instead of writing SVG. PNGs are at
+        /// 2× the SVG's intrinsic size; the HTML index references the
+        /// `.png` files.
+        #[arg(long)]
+        png: bool,
     },
     /// Serve a project with live reload, re-rendering on every change.
     Serve {
@@ -105,7 +110,8 @@ fn run(cli: Cli) -> Result<ExitCode> {
             target,
             out,
             strict,
-        } => render_command(target.as_deref(), &out, strict),
+            png,
+        } => render_command(target.as_deref(), &out, strict, png),
         Command::Serve { target, port } => serve_command(target.as_deref(), port),
     }
 }
@@ -170,7 +176,12 @@ fn check_command(target: Option<&Path>, strict: bool, format: Format) -> ExitCod
     exit_code(errors, warnings, strict)
 }
 
-fn render_command(target: Option<&Path>, out_dir: &Path, strict: bool) -> Result<ExitCode> {
+fn render_command(
+    target: Option<&Path>,
+    out_dir: &Path,
+    strict: bool,
+    png: bool,
+) -> Result<ExitCode> {
     let report = dsl::check_project(target);
     let (errors, warnings) = tally(&report);
 
@@ -193,25 +204,55 @@ fn render_command(target: Option<&Path>, out_dir: &Path, strict: bool) -> Result
         path: out_dir.to_path_buf(),
         source,
     })?;
-    for view in &views {
-        let path = out_dir.join(&view.filename);
-        fs::write(&path, &view.svg).map_err(|source| Error::Write {
-            path: path.clone(),
-            source,
-        })?;
-    }
 
-    // An index page that embeds every rendered SVG, for browsing the views.
+    let index_views = if png {
+        // PNG mode: rasterise each SVG at 2× and write it under the
+        // matching `.png` filename. The index then references the PNGs.
+        let png_views: Vec<wirebug::render::RenderedView> = views
+            .iter()
+            .map(|v| wirebug::render::RenderedView {
+                title: v.title.clone(),
+                filename: Path::new(&v.filename)
+                    .with_extension("png")
+                    .to_string_lossy()
+                    .into_owned(),
+                kind: v.kind.clone(),
+                svg: String::new(),
+            })
+            .collect();
+        for (src, dst) in views.iter().zip(png_views.iter()) {
+            let bytes = wirebug::render::png::svg_to_png(&src.svg, 2.0)
+                .context("rasterising view to PNG")?;
+            let path = out_dir.join(&dst.filename);
+            fs::write(&path, &bytes).map_err(|source| Error::Write {
+                path: path.clone(),
+                source,
+            })?;
+        }
+        png_views
+    } else {
+        for view in &views {
+            let path = out_dir.join(&view.filename);
+            fs::write(&path, &view.svg).map_err(|source| Error::Write {
+                path: path.clone(),
+                source,
+            })?;
+        }
+        views
+    };
+
+    // An index page that embeds every rendered view, for browsing.
     let index_path = out_dir.join(wirebug::render::INDEX_FILENAME);
-    let index = wirebug::index_html(&views, false).context("rendering HTML index")?;
+    let index = wirebug::index_html(&index_views, false).context("rendering HTML index")?;
     fs::write(&index_path, index).map_err(|source| Error::Write {
         path: index_path.clone(),
         source,
     })?;
 
     eprintln!(
-        "rendered {} view(s) to {} ({})",
-        views.len(),
+        "rendered {} view(s) as {} to {} ({})",
+        index_views.len(),
+        if png { "png" } else { "svg" },
         out_dir.display(),
         index_path.display(),
     );

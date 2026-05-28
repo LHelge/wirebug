@@ -46,6 +46,42 @@ fn render_writes_an_svg_per_view() {
 }
 
 #[test]
+fn render_png_writes_a_png_per_view_and_index_references_png() {
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("png");
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args([
+            "render",
+            "examples/main.wb",
+            "--out",
+            out.to_str().unwrap(),
+            "--png",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("rendered"));
+
+    // Each view lands as a real PNG (right magic bytes) under the slug
+    // it would have got as an SVG, with `.png` swapped in.
+    let png = std::fs::read(out.join("hv_system_overview.png")).expect("hv view rasterised");
+    assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+    assert!(out.join("front_battery.png").is_file());
+    assert!(out.join("main_hv_harness.png").is_file());
+
+    // The matching SVGs are not written in PNG mode.
+    assert!(!out.join("hv_system_overview.svg").exists());
+    assert!(!out.join("front_battery.svg").exists());
+
+    // The index references the PNGs, never the SVGs.
+    let index = std::fs::read_to_string(out.join("index.html")).expect("index rendered");
+    assert!(index.contains("src=\"hv_system_overview.png\""));
+    assert!(index.contains("src=\"main_hv_harness.png\""));
+    assert!(!index.contains(".svg"));
+}
+
+#[test]
 fn render_rejects_a_project_that_does_not_check() {
     let tmp = tempdir().expect("tempdir");
     let main = tmp.path().join("main.wb");

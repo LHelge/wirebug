@@ -56,6 +56,14 @@ pub enum Error {
     /// Rendering the HTML index template failed.
     #[error("failed to render HTML index: {0}")]
     Template(#[from] askama::Error),
+
+    /// Failed to parse our own rendered SVG before rasterising it to PNG.
+    #[error("failed to parse rendered SVG for PNG conversion: {0}")]
+    SvgParse(String),
+
+    /// Failed to allocate or encode a PNG pixmap.
+    #[error("failed to encode PNG: {0}")]
+    PngEncode(String),
 }
 
 /// Convenience alias used throughout the crate.

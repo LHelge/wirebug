@@ -13,6 +13,7 @@ use crate::error::{Error, Result};
 
 pub mod geometry;
 pub mod harness;
+pub mod png;
 pub mod schematic;
 
 /// One rendered view: the SVG document, the file name it should be
