@@ -1,8 +1,9 @@
 //! `wirebug` CLI binary.
 //!
-//! Two subcommands over the `.wb` DSL pipeline: `check` reports problems,
-//! `render` writes one SVG per view in the design. Both discover the
-//! project by walking up to `main.wb` when given no target.
+//! Three subcommands over the `.wb` DSL pipeline: `check` reports problems,
+//! `render` writes one SVG (or PNG) per view in the design, and `serve` runs
+//! a live-reloading dev server. Each discovers the project by walking up to
+//! `main.wb` when given no target.
 
 use std::fs;
 use std::path::{Path, PathBuf};

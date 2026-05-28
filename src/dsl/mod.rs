@@ -4,10 +4,6 @@
 //! load and lex/parse every reachable file, resolve names, elaborate the
 //! type/instance hierarchy into the [`ir`], then validate it. The
 //! terminal artifact is `ir::Design` — nothing here renders.
-//!
-//! Built up across several changes. Today the pipeline discovers, loads,
-//! and parses the whole project, reporting lex/parse/import problems;
-//! resolution, elaboration, and validation land in later changes.
 
 pub mod ast;
 pub mod diagnostics;
@@ -36,8 +32,8 @@ pub enum Format {
     Json,
 }
 
-/// Everything a check run produced: the problems found and (later) the
-/// elaborated IR. The CLI renders the problems and derives an exit code.
+/// Everything a check run produced: the problems found and the elaborated
+/// IR. The CLI renders the problems and derives an exit code.
 #[derive(Debug, Default)]
 #[must_use]
 pub struct CheckReport {
