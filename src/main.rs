@@ -10,7 +10,7 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
-use miette::{Diagnostic, GraphicalReportHandler, JSONReportHandler, Severity};
+use miette::{GraphicalReportHandler, JSONReportHandler};
 use tracing_subscriber::EnvFilter;
 
 use wirebug::dsl::{self, CheckReport, Format};
@@ -130,20 +130,9 @@ fn serve_command(target: Option<&Path>, port: u16) -> Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-/// Count a report's errors and warnings (warnings are the only
-/// non-error severity the pipeline emits).
-fn tally(report: &CheckReport) -> (usize, usize) {
-    let errors = report
-        .problems
-        .iter()
-        .filter(|p| !matches!(p.severity(), Some(Severity::Warning)))
-        .count();
-    (errors, report.problems.len() - errors)
-}
-
 fn check_command(target: Option<&Path>, strict: bool, format: Format) -> ExitCode {
     let report = dsl::check_project(target);
-    let (errors, warnings) = tally(&report);
+    let counts = report.counts();
 
     match format {
         Format::Human => {
@@ -155,7 +144,7 @@ fn check_command(target: Option<&Path>, strict: bool, format: Format) -> ExitCod
                     design.views.len()
                 ),
                 _ if report.problems.is_empty() => eprintln!("ok"),
-                _ => eprintln!("{errors} error(s), {warnings} warning(s)"),
+                _ => eprintln!("{} error(s), {} warning(s)", counts.errors, counts.warnings),
             }
         }
         Format::Json => {
@@ -173,7 +162,7 @@ fn check_command(target: Option<&Path>, strict: bool, format: Format) -> ExitCod
         }
     }
 
-    exit_code(errors, warnings, strict)
+    exit_code(&report, strict)
 }
 
 fn render_command(
@@ -183,13 +172,16 @@ fn render_command(
     png: bool,
 ) -> Result<ExitCode> {
     let report = dsl::check_project(target);
-    let (errors, warnings) = tally(&report);
+    let counts = report.counts();
 
     // Surface any check problems first; an erroring project (or, under
     // --strict, a warning) is not rendered.
     eprint!("{}", render_problems_human(&report));
-    if errors > 0 || (strict && warnings > 0) {
-        eprintln!("{errors} error(s), {warnings} warning(s) — not rendering");
+    if report.has_blocking_problems(strict) {
+        eprintln!(
+            "{} error(s), {} warning(s) — not rendering",
+            counts.errors, counts.warnings
+        );
         return Ok(ExitCode::FAILURE);
     }
 
@@ -269,8 +261,8 @@ fn render_problems_human(report: &CheckReport) -> String {
     out
 }
 
-fn exit_code(errors: usize, warnings: usize, strict: bool) -> ExitCode {
-    if errors > 0 || (strict && warnings > 0) {
+fn exit_code(report: &CheckReport, strict: bool) -> ExitCode {
+    if report.has_blocking_problems(strict) {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS

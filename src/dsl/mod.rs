@@ -45,6 +45,31 @@ pub struct CheckReport {
     pub design: Option<Design>,
 }
 
+/// Number of failing errors and non-failing warnings in a [`CheckReport`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ProblemCounts {
+    pub errors: usize,
+    pub warnings: usize,
+}
+
+impl CheckReport {
+    /// Count the report's errors and warnings.
+    pub fn counts(&self) -> ProblemCounts {
+        let errors = self.problems.iter().filter(|p| p.is_error()).count();
+        ProblemCounts {
+            errors,
+            warnings: self.problems.len() - errors,
+        }
+    }
+
+    /// Whether this report should block check/render success. Warnings block
+    /// only in strict mode.
+    pub fn has_blocking_problems(&self, strict: bool) -> bool {
+        let counts = self.counts();
+        counts.errors > 0 || (strict && counts.warnings > 0)
+    }
+}
+
 /// Run the parse-and-check pipeline against the project containing
 /// `target` (or the project discovered by walking up from the current
 /// directory when `target` is `None`).
@@ -70,4 +95,57 @@ pub fn check_project(target: Option<&Path>) -> CheckReport {
         design = elaborated;
     }
     CheckReport { problems, design }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use miette::NamedSource;
+
+    #[test]
+    fn check_report_counts_errors_and_warnings() {
+        let report = CheckReport {
+            problems: vec![
+                Problem::NoRoot,
+                Problem::UnusedImport {
+                    name: "leaf".to_string(),
+                    src: NamedSource::new("main.wb", String::new()),
+                    at: (0, 0).into(),
+                },
+            ],
+            design: None,
+        };
+
+        assert_eq!(
+            report.counts(),
+            ProblemCounts {
+                errors: 1,
+                warnings: 1,
+            }
+        );
+        assert!(report.has_blocking_problems(false));
+        assert!(report.has_blocking_problems(true));
+    }
+
+    #[test]
+    fn check_report_warnings_block_only_under_strict() {
+        let report = CheckReport {
+            problems: vec![Problem::UnusedImport {
+                name: "leaf".to_string(),
+                src: NamedSource::new("main.wb", String::new()),
+                at: (0, 0).into(),
+            }],
+            design: None,
+        };
+
+        assert_eq!(
+            report.counts(),
+            ProblemCounts {
+                errors: 0,
+                warnings: 1,
+            }
+        );
+        assert!(!report.has_blocking_problems(false));
+        assert!(report.has_blocking_problems(true));
+    }
 }

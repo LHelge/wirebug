@@ -5,7 +5,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use indexmap::IndexMap;
-use miette::{Diagnostic, GraphicalReportHandler, GraphicalTheme, Severity};
+use miette::{GraphicalReportHandler, GraphicalTheme};
 
 use super::livereload::ERROR_PAGE_SCRIPT;
 use super::state::Site;
@@ -51,13 +51,13 @@ impl Build {
 /// browser shows what's wrong and recovers automatically once it's fixed.
 pub(crate) fn build_site(target: Option<&Path>) -> Build {
     let report = dsl::check_project(target);
-    let (errors, warnings) = tally(&report);
+    let counts = report.counts();
 
-    if errors > 0 {
+    if counts.errors > 0 {
         return Build {
             site: error_site(&report),
-            errors,
-            warnings,
+            errors: counts.errors,
+            warnings: counts.warnings,
         };
     }
     let Some(design) = &report.design else {
@@ -65,8 +65,8 @@ pub(crate) fn build_site(target: Option<&Path>) -> Build {
         // diagnostics rather than panic.
         return Build {
             site: error_site(&report),
-            errors: errors.max(1),
-            warnings,
+            errors: counts.errors.max(1),
+            warnings: counts.warnings,
         };
     };
 
@@ -90,27 +90,16 @@ pub(crate) fn build_site(target: Option<&Path>) -> Build {
                     index_html: html,
                     svgs,
                 },
-                errors,
-                warnings,
+                errors: counts.errors,
+                warnings: counts.warnings,
             }
         }
         Err(message) => Build {
             site: message_site(&message),
             errors: 1,
-            warnings,
+            warnings: counts.warnings,
         },
     }
-}
-
-/// Count a report's errors and warnings (warnings are the only non-error
-/// severity the pipeline emits).
-fn tally(report: &CheckReport) -> (usize, usize) {
-    let errors = report
-        .problems
-        .iter()
-        .filter(|p| !matches!(p.severity(), Some(Severity::Warning)))
-        .count();
-    (errors, report.problems.len() - errors)
 }
 
 /// A site whose index lists the project's diagnostics as text.
