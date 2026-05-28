@@ -115,7 +115,7 @@ date        = "2026-05-28"    # optional; ISO date
 
 **Revision from git.** If `revision` is omitted, wirebug shells out to `git rev-parse --short HEAD` in the project directory and uses the result, suffixed `-dirty` when the working tree has uncommitted changes. An explicit `revision = "..."` in the manifest always wins. If `git` isn't on `PATH`, or the directory isn't a git repo, the field stays empty and the stamp simply omits it — no error.
 
-**Suppressing the stamp.** Pass `--no-stamp` to `wirebug render` to omit the corner stamp entirely (and the viewBox room it would take). Useful when the rendered SVGs are embedded somewhere that handles identity itself — a blog post, a build report — and you want the figure to size cleanly against your own styles.
+**Embedding into another document.** Pass `--embed` to `wirebug render` to emit SVGs intended for inclusion in another page, report, or static site. Embed-mode SVGs drop the built-in `<style>` block (the host stylesheet owns the look), suppress the bottom-right project-identity stamp, and class-tag the root `<svg>` with `wirebug wirebug-schematic` (or `wirebug-harness`) so host CSS can scope rules under `.wirebug`. The HTML index is replaced by a `manifest.json` sidecar listing every view (title, filename, kind) plus the project's identity, so a downstream build can enumerate and embed views without parsing each SVG. (The previous `--no-stamp` flag is removed: embedding was its only use case, and `--embed` now expresses it directly.)
 
 ## Rendering
 
@@ -125,7 +125,8 @@ The view authors each port's side and order directly in its `ports` block, and t
 
 ```sh
 wirebug render                       # discovers main.wb by walking up from the CWD
-wirebug render examples/main.wb --out out/   # one SVG per view, into out/
+wirebug render examples/main.wb --out out/           # one SVG per view, into out/
+wirebug render examples/main.wb --out out/ --embed   # naked SVGs + manifest.json for embedding
 ```
 
 ## Design principles

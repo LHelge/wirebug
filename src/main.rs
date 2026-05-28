@@ -133,11 +133,14 @@ enum Command {
         /// `.png` files.
         #[arg(long)]
         png: bool,
-        /// Omit the project-identity stamp from the bottom-right corner
-        /// of every SVG. Useful when the rendered SVGs are embedded
-        /// somewhere that handles identity itself (a blog, a report).
+        /// Emit SVGs suitable for embedding into another document or
+        /// site: the built-in `<style>` is dropped (the host owns the
+        /// look), the project-identity stamp is suppressed, and the root
+        /// `<svg>` is class-tagged `wirebug wirebug-{kind}` so a host
+        /// stylesheet can scope rules under `.wirebug`. Writes a
+        /// `manifest.json` sidecar in place of the HTML index.
         #[arg(long)]
-        no_stamp: bool,
+        embed: bool,
     },
     /// Serve a project with live reload, re-rendering on every change.
     Serve {
@@ -173,8 +176,8 @@ fn run(cli: Cli) -> Result<ExitCode> {
             out,
             strict,
             png,
-            no_stamp,
-        } => render_command(target.as_deref(), &out, strict, png, no_stamp),
+            embed,
+        } => render_command(target.as_deref(), &out, strict, png, embed),
         Command::Serve { target, port } => serve_command(target.as_deref(), port),
     }
 }
@@ -233,7 +236,7 @@ fn render_command(
     out_dir: &Path,
     strict: bool,
     png: bool,
-    no_stamp: bool,
+    embed: bool,
 ) -> Result<ExitCode> {
     let report = dsl::check_project(target);
     let counts = report.counts();
@@ -254,7 +257,7 @@ fn render_command(
         return Ok(ExitCode::FAILURE);
     };
 
-    let views = wirebug::render_views(design, !no_stamp).context("rendering views")?;
+    let views = wirebug::render_views(design, embed).context("rendering views")?;
 
     fs::create_dir_all(out_dir).map_err(|source| Error::Write {
         path: out_dir.to_path_buf(),
@@ -264,18 +267,33 @@ fn render_command(
     let render_format = RenderFormat::from_png_flag(png);
     let index_views = render_format.write_views(views, out_dir)?;
 
-    // An index page that embeds every rendered view, for browsing.
-    let index_path = out_dir.join(wirebug::render::INDEX_FILENAME);
-    let index = wirebug::index_html(&index_views, design.manifest.as_ref(), false)
-        .context("rendering HTML index")?;
-    write_file(out_dir, wirebug::render::INDEX_FILENAME, index.as_bytes())?;
+    // Embed-mode writes a structured manifest sidecar for a downstream
+    // host (e.g. a static site generator). The HTML index is for
+    // wirebug's own browsing UI and would only get in the host's way.
+    let sidecar_path = if embed {
+        let manifest = wirebug::render::embed_manifest(&index_views, design.manifest.as_ref());
+        let json = serde_json::to_string_pretty(&manifest).context("serializing embed manifest")?;
+        let path = out_dir.join(wirebug::render::EMBED_MANIFEST_FILENAME);
+        write_file(
+            out_dir,
+            wirebug::render::EMBED_MANIFEST_FILENAME,
+            json.as_bytes(),
+        )?;
+        path
+    } else {
+        let index = wirebug::index_html(&index_views, design.manifest.as_ref(), false)
+            .context("rendering HTML index")?;
+        let path = out_dir.join(wirebug::render::INDEX_FILENAME);
+        write_file(out_dir, wirebug::render::INDEX_FILENAME, index.as_bytes())?;
+        path
+    };
 
     eprintln!(
         "rendered {} view(s) as {} to {} ({})",
         index_views.len(),
         render_format.label(),
         out_dir.display(),
-        index_path.display(),
+        sidecar_path.display(),
     );
     Ok(ExitCode::SUCCESS)
 }

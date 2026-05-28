@@ -7,8 +7,10 @@
 use std::collections::HashMap;
 
 use askama::Template;
+use serde::Serialize;
 
 use crate::dsl::ir::{Design, Instance, View, ViewKind};
+use crate::dsl::manifest::Manifest;
 use crate::error::{Error, Result};
 
 pub mod geometry;
@@ -47,22 +49,21 @@ impl RenderedView {
 /// view). A view naming a `kind` this build can't render, or a subject
 /// type with no instance, is an error.
 ///
-/// `draw_stamp` controls the project-identity stamp drawn in the bottom-
-/// right corner of every view: pass `true` for normal rendering, `false`
-/// to suppress it (and the viewBox room it would take) so a downstream
-/// stylesheet can take full control of the SVG.
-pub fn render_views(design: &Design, draw_stamp: bool) -> Result<Vec<RenderedView>> {
+/// `embed` switches every view to embed-mode output: the built-in
+/// `<style>` is dropped, the bottom-right project-identity stamp is
+/// suppressed, and the root `<svg>` is tagged with a `wirebug` class so
+/// a downstream stylesheet can take full control of the look. Pass
+/// `false` for self-contained SVGs intended to render on their own.
+pub fn render_views(design: &Design, embed: bool) -> Result<Vec<RenderedView>> {
     let mut filenames = FilenameAllocator::default();
     let mut rendered = Vec::with_capacity(design.views.len());
     for view in &design.views {
         let subject = subject_instance(design, view)?;
         let svg = match &view.kind {
             ViewKind::Schematic => {
-                schematic::SchematicRenderer.render(design, subject, view, draw_stamp)?
+                schematic::SchematicRenderer.render(design, subject, view, embed)?
             }
-            ViewKind::Harness => {
-                harness::HarnessRenderer.render(design, subject, view, draw_stamp)?
-            }
+            ViewKind::Harness => harness::HarnessRenderer.render(design, subject, view, embed)?,
             ViewKind::Other(other) => return Err(Error::UnknownViewKind(other.clone())),
         };
         rendered.push(RenderedView {
@@ -77,6 +78,47 @@ pub fn render_views(design: &Design, draw_stamp: bool) -> Result<Vec<RenderedVie
 
 /// File name for the HTML index page written alongside the per-view SVGs.
 pub const INDEX_FILENAME: &str = "index.html";
+
+/// File name for the JSON sidecar written instead of the HTML index when
+/// rendering in embed mode.
+pub const EMBED_MANIFEST_FILENAME: &str = "manifest.json";
+
+/// Serialized shape of [`EMBED_MANIFEST_FILENAME`]: the project's identity
+/// (or `null` for a synthetic design) plus the list of rendered views in
+/// declaration order. Borrows from the data so a host needs only to call
+/// `serde_json::to_string_pretty(&embed_manifest(...))`.
+#[derive(Debug, Serialize)]
+pub struct EmbedManifest<'a> {
+    pub project: Option<&'a Manifest>,
+    pub views: Vec<EmbedManifestView<'a>>,
+}
+
+/// One row of [`EmbedManifest::views`].
+#[derive(Debug, Serialize)]
+pub struct EmbedManifestView<'a> {
+    pub title: &'a str,
+    pub filename: &'a str,
+    pub kind: &'a str,
+}
+
+/// Build the embed-mode manifest from the rendered views and the project's
+/// own manifest (when available — synthetic designs in tests pass `None`).
+pub fn embed_manifest<'a>(
+    views: &'a [RenderedView],
+    project: Option<&'a Manifest>,
+) -> EmbedManifest<'a> {
+    EmbedManifest {
+        project,
+        views: views
+            .iter()
+            .map(|v| EmbedManifestView {
+                title: &v.title,
+                filename: &v.filename,
+                kind: v.kind.as_str(),
+            })
+            .collect(),
+    }
+}
 
 /// The HTML index that embeds every rendered view, in render order, each
 /// under its title. The SVGs are referenced by their sibling file names, so
@@ -257,6 +299,28 @@ mod tests {
     #[test]
     fn index_notes_a_design_with_no_views() {
         assert!(index_html(&[], None, false).unwrap().contains("no views"));
+    }
+
+    #[test]
+    fn manifest_lists_each_view_with_title_filename_kind() {
+        let views = vec![
+            view("HV Overview", "hv_overview.svg", "schematic"),
+            view("Main Harness", "main_harness.svg", "harness"),
+        ];
+        let manifest = embed_manifest(&views, None);
+        let json = serde_json::to_string(&manifest).expect("serializes");
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("re-parses");
+
+        assert!(parsed["project"].is_null());
+        let entries = parsed["views"].as_array().expect("views array");
+        assert_eq!(entries.len(), 2);
+        // Order matches the input (view declaration order from the design).
+        assert_eq!(entries[0]["title"], "HV Overview");
+        assert_eq!(entries[0]["filename"], "hv_overview.svg");
+        assert_eq!(entries[0]["kind"], "schematic");
+        assert_eq!(entries[1]["title"], "Main Harness");
+        assert_eq!(entries[1]["filename"], "main_harness.svg");
+        assert_eq!(entries[1]["kind"], "harness");
     }
 
     #[test]

@@ -69,13 +69,19 @@ pub struct HarnessRenderer;
 
 impl HarnessRenderer {
     /// Render `view` (documenting `subject`) against `design` to an SVG
-    /// string. `draw_stamp` gates the bottom-right project-identity stamp.
+    /// string.
+    ///
+    /// `embed` switches to embed-mode output for inclusion in another
+    /// document: the built-in `<style>` is dropped (the host owns the
+    /// look), the bottom-right project-identity stamp is suppressed,
+    /// and the root `<svg>` carries `class="wirebug wirebug-harness"`
+    /// so a host stylesheet can scope rules under `.wirebug`.
     pub(super) fn render(
         &self,
         design: &Design,
         subject: &Instance,
         view: &View,
-        draw_stamp: bool,
+        embed: bool,
     ) -> Result<String> {
         let step = view.grid.unwrap_or(DEFAULT_GRID);
         if step <= 0.0 {
@@ -84,13 +90,16 @@ impl HarnessRenderer {
 
         let layout = HarnessLayout::compute(design, subject, view, step);
 
-        let mut doc = Document::new()
-            .set("xmlns", "http://www.w3.org/2000/svg")
-            .add(Style::new(STYLE));
+        let mut doc = Document::new().set("xmlns", "http://www.w3.org/2000/svg");
+        if embed {
+            doc = doc.set("class", "wirebug wirebug-harness");
+        } else {
+            doc = doc.add(Style::new(STYLE));
+        }
 
         let has_title = !view.title.is_empty();
         let mut vb = layout.viewbox(has_title);
-        let manifest = draw_stamp.then_some(design.manifest.as_ref()).flatten();
+        let manifest = (!embed).then_some(design.manifest.as_ref()).flatten();
         if manifest.is_some() {
             vb.height += STAMP_HEIGHT;
         }
@@ -173,7 +182,7 @@ mod tests {
             .find(|i| i.type_name == view.subject)
             .expect("subject instance");
         HarnessRenderer
-            .render(design, subject, view, true)
+            .render(design, subject, view, false)
             .expect("renders")
     }
 
@@ -218,6 +227,35 @@ component sys {
         assert!(svg.contains("V+ · 50mm²"));
         assert!(svg.contains("stroke=\"orange\""));
         assert!(svg.contains("Source"));
+    }
+
+    fn render_embed(design: &Design, view: &View) -> String {
+        let subject = design
+            .instances
+            .values()
+            .find(|i| i.type_name == view.subject)
+            .expect("subject instance");
+        HarnessRenderer
+            .render(design, subject, view, true)
+            .expect("renders")
+    }
+
+    #[test]
+    fn embed_mode_omits_embedded_style_block() {
+        let design = two_connector_design();
+        let view = harness_view("sys", &[("a", "hv", 0.0, 0.0), ("b", "hv", 12.0, 0.0)]);
+        let svg = render_embed(&design, &view);
+
+        assert!(!svg.contains("<style>"));
+        assert!(!svg.contains(".connector rect"));
+    }
+
+    #[test]
+    fn embed_mode_class_tags_the_root_svg() {
+        let design = two_connector_design();
+        let view = harness_view("sys", &[("a", "hv", 0.0, 0.0), ("b", "hv", 12.0, 0.0)]);
+        let svg = render_embed(&design, &view);
+        assert!(svg.contains("class=\"wirebug wirebug-harness\""));
     }
 
     /// Like `two_connector_design`, but the two conductors are grouped into a
