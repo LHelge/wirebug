@@ -806,9 +806,15 @@ mod tests {
     use crate::dsl::project::load;
 
     /// Write `files` into a temp dir and resolve, returning every problem
-    /// (loading + resolution).
+    /// (loading + resolution). Auto-writes a minimal `wirebug.toml` so a
+    /// missing-manifest problem doesn't leak into resolve-focused tests.
     fn problems(files: &[(&str, &str)]) -> Vec<Problem> {
         let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("wirebug.toml"),
+            "[project]\nname = \"t\"\nversion = \"0.0.0\"\n",
+        )
+        .expect("write wirebug.toml");
         for (name, body) in files {
             std::fs::write(dir.path().join(name), body).expect("write");
         }

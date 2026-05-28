@@ -63,6 +63,27 @@ pub enum Problem {
         source: std::io::Error,
     },
 
+    /// The project directory has no `wirebug.toml`.
+    #[error("no project manifest: `wirebug.toml` is missing from `{dir}`")]
+    #[diagnostic(
+        code(wirebug::manifest_missing),
+        help(
+            "create `wirebug.toml` beside `main.wb` with a `[project]` table (`name` and `version` required)"
+        )
+    )]
+    ManifestMissing { dir: String },
+
+    /// `wirebug.toml` failed to parse, or didn't match the schema.
+    #[error("{message}")]
+    #[diagnostic(code(wirebug::manifest_parse))]
+    ManifestParse {
+        message: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("here")]
+        at: SourceSpan,
+    },
+
     // --- Resolution ---
     /// An instance names a component type that isn't in scope.
     #[error("unknown component type `{name}`")]

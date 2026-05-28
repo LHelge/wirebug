@@ -133,6 +133,11 @@ enum Command {
         /// `.png` files.
         #[arg(long)]
         png: bool,
+        /// Omit the project-identity stamp from the bottom-right corner
+        /// of every SVG. Useful when the rendered SVGs are embedded
+        /// somewhere that handles identity itself (a blog, a report).
+        #[arg(long)]
+        no_stamp: bool,
     },
     /// Serve a project with live reload, re-rendering on every change.
     Serve {
@@ -168,7 +173,8 @@ fn run(cli: Cli) -> Result<ExitCode> {
             out,
             strict,
             png,
-        } => render_command(target.as_deref(), &out, strict, png),
+            no_stamp,
+        } => render_command(target.as_deref(), &out, strict, png, no_stamp),
         Command::Serve { target, port } => serve_command(target.as_deref(), port),
     }
 }
@@ -227,6 +233,7 @@ fn render_command(
     out_dir: &Path,
     strict: bool,
     png: bool,
+    no_stamp: bool,
 ) -> Result<ExitCode> {
     let report = dsl::check_project(target);
     let counts = report.counts();
@@ -247,7 +254,7 @@ fn render_command(
         return Ok(ExitCode::FAILURE);
     };
 
-    let views = wirebug::render_views(design).context("rendering views")?;
+    let views = wirebug::render_views(design, !no_stamp).context("rendering views")?;
 
     fs::create_dir_all(out_dir).map_err(|source| Error::Write {
         path: out_dir.to_path_buf(),
@@ -259,7 +266,8 @@ fn render_command(
 
     // An index page that embeds every rendered view, for browsing.
     let index_path = out_dir.join(wirebug::render::INDEX_FILENAME);
-    let index = wirebug::index_html(&index_views, false).context("rendering HTML index")?;
+    let index = wirebug::index_html(&index_views, design.manifest.as_ref(), false)
+        .context("rendering HTML index")?;
     write_file(out_dir, wirebug::render::INDEX_FILENAME, index.as_bytes())?;
 
     eprintln!(

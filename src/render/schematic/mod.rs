@@ -17,6 +17,7 @@ use svg::node::element::{Group, Style, Text};
 
 use crate::dsl::ir::{Design, Instance, View};
 use crate::error::{Error, Result};
+use crate::render::stamp::{STAMP_HEIGHT, STAMP_INSET, stamp_element};
 
 use layout::{Grid, Placement};
 use route::Router;
@@ -54,7 +55,8 @@ const STYLE: &str = "\
 .enclosure-label { font: bold 13px sans-serif; text-anchor: middle; fill: #555; }
 .text-box rect { fill: #fff9d6; stroke: #8a7a2f; stroke-width: 1.25; }
 .text-box text { font: 12px sans-serif; fill: #2f2a13; text-anchor: middle; dominant-baseline: central; }
-.title { font: bold 14px sans-serif; }\
+.title { font: bold 14px sans-serif; }
+.stamp { font: 10px sans-serif; fill: #666; text-anchor: end; }\
 ";
 
 /// SVG renderer for `kind: schematic` views.
@@ -64,11 +66,13 @@ pub struct SchematicRenderer;
 impl SchematicRenderer {
     /// Render `view` (documenting `subject`) against `design` to an SVG
     /// string. Wire segments are routed against the placed boxes.
+    /// `draw_stamp` gates the bottom-right project-identity stamp.
     pub(super) fn render(
         &self,
         design: &Design,
         subject: &Instance,
         view: &View,
+        draw_stamp: bool,
     ) -> Result<String> {
         let step = view.grid.unwrap_or(DEFAULT_GRID);
         if step <= 0.0 {
@@ -97,7 +101,11 @@ impl SchematicRenderer {
             .add(Style::new(STYLE));
 
         let has_title = !view.title.is_empty();
-        let viewbox = placement.viewbox(has_title, &wires);
+        let mut viewbox = placement.viewbox(has_title, &wires);
+        let manifest = draw_stamp.then_some(design.manifest.as_ref()).flatten();
+        if manifest.is_some() {
+            viewbox.height += STAMP_HEIGHT;
+        }
         doc = doc.set(
             "viewBox",
             format!(
@@ -113,6 +121,14 @@ impl SchematicRenderer {
                     .set("x", viewbox.x + SVG_MARGIN)
                     .set("y", viewbox.y + SVG_MARGIN - TITLE_GAP),
             );
+        }
+
+        if let Some(manifest) = manifest {
+            doc = doc.add(stamp_element(
+                manifest,
+                viewbox.x + viewbox.width - STAMP_INSET,
+                viewbox.y + viewbox.height - STAMP_INSET,
+            ));
         }
 
         // The enclosure is the subject's boundary; draw it behind the
@@ -197,7 +213,7 @@ pub(crate) mod tests {
             .values()
             .find(|i| i.type_name == view.subject)
             .expect("subject instance");
-        SchematicRenderer.render(design, subject, view)
+        SchematicRenderer.render(design, subject, view, true)
     }
 
     fn two_box_design() -> Design {

@@ -46,6 +46,7 @@ pub fn elaborate(resolved: &Resolved) -> (Option<Design>, Vec<Problem>) {
         root: root_path,
         instances,
         views,
+        manifest: resolved.project.manifest.clone(),
     };
     (Some(design), problems)
 }

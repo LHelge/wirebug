@@ -22,6 +22,7 @@ use svg::node::element::{Group, Style, Text};
 
 use crate::dsl::ir::{Design, Instance, View};
 use crate::error::{Error, Result};
+use crate::render::stamp::{STAMP_HEIGHT, STAMP_INSET, stamp_element};
 
 use layout::HarnessLayout;
 
@@ -58,7 +59,8 @@ const STYLE: &str = "\
 .pin-dot { fill: black; }
 .cable-wire { fill: none; stroke-width: 2; }
 .cable-label { font: 9px sans-serif; text-anchor: middle; fill: #333; }
-.title { font: bold 14px sans-serif; }\
+.title { font: bold 14px sans-serif; }
+.stamp { font: 10px sans-serif; fill: #666; text-anchor: end; }\
 ";
 
 /// SVG renderer for `kind: harness` views.
@@ -67,12 +69,13 @@ pub struct HarnessRenderer;
 
 impl HarnessRenderer {
     /// Render `view` (documenting `subject`) against `design` to an SVG
-    /// string.
+    /// string. `draw_stamp` gates the bottom-right project-identity stamp.
     pub(super) fn render(
         &self,
         design: &Design,
         subject: &Instance,
         view: &View,
+        draw_stamp: bool,
     ) -> Result<String> {
         let step = view.grid.unwrap_or(DEFAULT_GRID);
         if step <= 0.0 {
@@ -86,7 +89,11 @@ impl HarnessRenderer {
             .add(Style::new(STYLE));
 
         let has_title = !view.title.is_empty();
-        let vb = layout.viewbox(has_title);
+        let mut vb = layout.viewbox(has_title);
+        let manifest = draw_stamp.then_some(design.manifest.as_ref()).flatten();
+        if manifest.is_some() {
+            vb.height += STAMP_HEIGHT;
+        }
         doc = doc.set(
             "viewBox",
             format!("{} {} {} {}", vb.x, vb.y, vb.width, vb.height),
@@ -99,6 +106,14 @@ impl HarnessRenderer {
                     .set("x", vb.x + SVG_MARGIN)
                     .set("y", vb.y + SVG_MARGIN - TITLE_GAP),
             );
+        }
+
+        if let Some(manifest) = manifest {
+            doc = doc.add(stamp_element(
+                manifest,
+                vb.x + vb.width - STAMP_INSET,
+                vb.y + vb.height - STAMP_INSET,
+            ));
         }
 
         // Wires and cable boxes under the nodes so attach dots and pin labels
@@ -158,7 +173,7 @@ mod tests {
             .find(|i| i.type_name == view.subject)
             .expect("subject instance");
         HarnessRenderer
-            .render(design, subject, view)
+            .render(design, subject, view, true)
             .expect("renders")
     }
 
