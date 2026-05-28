@@ -1,8 +1,8 @@
 //! The elaborated intermediate representation.
 //!
 //! Identifier newtypes live here and are shared by resolution and
-//! elaboration. The elaborated `Design` (a flat-map, hierarchical model)
-//! lands in a later change; for now this module defines the names.
+//! elaboration, alongside the elaborated [`Design`] — a flat-map,
+//! hierarchical model the renderer consumes directly.
 
 use std::fmt;
 
