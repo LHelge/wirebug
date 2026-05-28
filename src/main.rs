@@ -33,6 +33,63 @@ impl From<OutputFormat> for Format {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum RenderFormat {
+    Svg,
+    Png { scale: f32 },
+}
+
+impl RenderFormat {
+    fn from_png_flag(png: bool) -> Self {
+        if png {
+            Self::Png { scale: 2.0 }
+        } else {
+            Self::Svg
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Svg => "svg",
+            Self::Png { .. } => "png",
+        }
+    }
+
+    fn write_views(
+        self,
+        views: Vec<wirebug::render::RenderedView>,
+        out_dir: &Path,
+    ) -> Result<Vec<wirebug::render::RenderedView>> {
+        match self {
+            Self::Svg => {
+                for view in &views {
+                    write_file(out_dir, &view.filename, view.svg.as_bytes())?;
+                }
+                Ok(views)
+            }
+            Self::Png { scale } => {
+                let mut index_views = Vec::with_capacity(views.len());
+                for view in views {
+                    let filename = Path::new(&view.filename)
+                        .with_extension("png")
+                        .to_string_lossy()
+                        .into_owned();
+                    let bytes = wirebug::render::png::svg_to_png(&view.svg, scale)
+                        .context("rasterising view to PNG")?;
+                    write_file(out_dir, &filename, &bytes)?;
+                    index_views.push(wirebug::render::RenderedView {
+                        title: view.title,
+                        filename,
+                        kind: view.kind,
+                        svg: String::new(),
+                    });
+                }
+                Ok(index_views)
+            }
+        }
+    }
+}
+
 #[derive(Debug, Parser)]
 #[command(
     name = "wirebug",
@@ -197,58 +254,28 @@ fn render_command(
         source,
     })?;
 
-    let index_views = if png {
-        // PNG mode: rasterise each SVG at 2× and write it under the
-        // matching `.png` filename. The index then references the PNGs.
-        let png_views: Vec<wirebug::render::RenderedView> = views
-            .iter()
-            .map(|v| wirebug::render::RenderedView {
-                title: v.title.clone(),
-                filename: Path::new(&v.filename)
-                    .with_extension("png")
-                    .to_string_lossy()
-                    .into_owned(),
-                kind: v.kind.clone(),
-                svg: String::new(),
-            })
-            .collect();
-        for (src, dst) in views.iter().zip(png_views.iter()) {
-            let bytes = wirebug::render::png::svg_to_png(&src.svg, 2.0)
-                .context("rasterising view to PNG")?;
-            let path = out_dir.join(&dst.filename);
-            fs::write(&path, &bytes).map_err(|source| Error::Write {
-                path: path.clone(),
-                source,
-            })?;
-        }
-        png_views
-    } else {
-        for view in &views {
-            let path = out_dir.join(&view.filename);
-            fs::write(&path, &view.svg).map_err(|source| Error::Write {
-                path: path.clone(),
-                source,
-            })?;
-        }
-        views
-    };
+    let render_format = RenderFormat::from_png_flag(png);
+    let index_views = render_format.write_views(views, out_dir)?;
 
     // An index page that embeds every rendered view, for browsing.
     let index_path = out_dir.join(wirebug::render::INDEX_FILENAME);
     let index = wirebug::index_html(&index_views, false).context("rendering HTML index")?;
-    fs::write(&index_path, index).map_err(|source| Error::Write {
-        path: index_path.clone(),
-        source,
-    })?;
+    write_file(out_dir, wirebug::render::INDEX_FILENAME, index.as_bytes())?;
 
     eprintln!(
         "rendered {} view(s) as {} to {} ({})",
         index_views.len(),
-        if png { "png" } else { "svg" },
+        render_format.label(),
         out_dir.display(),
         index_path.display(),
     );
     Ok(ExitCode::SUCCESS)
+}
+
+fn write_file(out_dir: &Path, filename: &str, contents: &[u8]) -> Result<()> {
+    let path = out_dir.join(filename);
+    fs::write(&path, contents).map_err(|source| Error::Write { path, source })?;
+    Ok(())
 }
 
 /// Render a report's problems with miette's graphical handler.
