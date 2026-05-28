@@ -188,22 +188,13 @@ pub(super) fn render_loose(wire: &LooseWire) -> Group {
 }
 
 /// The text shown along a wire: `<label> · <gauge>mm²`, or just the gauge
-/// when the wire is unlabelled.
+/// when the wire is unlabelled. `f64`'s shortest-round-trip formatting already
+/// drops a trailing `.0` (`50.0` → `50`, `0.25` stays `0.25`).
 pub(super) fn wire_annotation(label: Option<&str>, gauge: f64) -> String {
-    let gauge = format!("{}mm²", trim_float(gauge));
+    let gauge = format!("{gauge}mm²");
     match label {
         Some(l) => format!("{l} · {gauge}"),
         None => gauge,
-    }
-}
-
-/// Format a gauge without a trailing `.0` (so `50.0` reads `50`, `0.25`
-/// stays `0.25`).
-fn trim_float(v: f64) -> String {
-    if v.fract() == 0.0 {
-        format!("{}", v as i64)
-    } else {
-        format!("{v}")
     }
 }
 

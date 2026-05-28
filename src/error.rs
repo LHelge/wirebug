@@ -12,14 +12,6 @@ use thiserror::Error;
 /// All errors produced by the render path.
 #[derive(Debug, Error)]
 pub enum Error {
-    /// Failed to read a file from disk.
-    #[error("failed to read {path}: {source}")]
-    Io {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-
     /// A view named a renderer this build doesn't know how to dispatch.
     #[error("unknown view kind {0:?}")]
     UnknownViewKind(String),
