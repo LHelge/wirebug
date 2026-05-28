@@ -260,7 +260,7 @@ impl Placement {
                         port: (*port_name).clone(),
                         side,
                         pos,
-                        pin: format_pins(&port.pins),
+                        pin: Pin::display_list(&port.pins),
                         label: port.label.clone(),
                         inverted: false,
                     });
@@ -372,7 +372,7 @@ impl Placement {
                 port: ep.port.clone(),
                 side: ep.side,
                 pos,
-                pin: format_pins(&port.pins),
+                pin: Pin::display_list(&port.pins),
                 label: port.label.clone(),
                 inverted: true,
             });
@@ -522,20 +522,6 @@ fn endpoint_key(end: &crate::dsl::ir::WireEnd) -> PortKey {
         },
         crate::dsl::ir::WireEnd::Own(port) => PortKey::Enclosure(port.clone()),
     }
-}
-
-/// Render a port's pins as a comma-joined string, or `None` when it has
-/// no pin assignment.
-fn format_pins(pins: &[Pin]) -> Option<String> {
-    if pins.is_empty() {
-        return None;
-    }
-    Some(
-        pins.iter()
-            .map(Pin::to_string)
-            .collect::<Vec<_>>()
-            .join(","),
-    )
 }
 
 /// The minimum box size (width, height) in world units that fits this

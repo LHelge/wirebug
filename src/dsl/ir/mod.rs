@@ -56,6 +56,22 @@ name_newtype!(
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Pin(pub u32);
 
+impl Pin {
+    /// Render a connector pin assignment, or `None` when no pins are
+    /// assigned.
+    pub fn display_list(pins: &[Self]) -> Option<String> {
+        if pins.is_empty() {
+            return None;
+        }
+        Some(
+            pins.iter()
+                .map(Self::to_string)
+                .collect::<Vec<_>>()
+                .join(","),
+        )
+    }
+}
+
 impl fmt::Display for Pin {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.0)
@@ -286,5 +302,23 @@ impl std::str::FromStr for Side {
             "south" => Side::South,
             _ => return Err(()),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pin_display_list_is_absent_when_unassigned() {
+        assert_eq!(Pin::display_list(&[]), None);
+    }
+
+    #[test]
+    fn pin_display_list_joins_assigned_pins() {
+        assert_eq!(
+            Pin::display_list(&[Pin(1), Pin(2), Pin(10)]),
+            Some("1,2,10".to_string())
+        );
     }
 }

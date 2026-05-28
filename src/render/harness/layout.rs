@@ -379,7 +379,7 @@ fn build_node(child: &Instance, conn: &ConnectorName, cx: f64, cy: f64) -> Optio
         part.get_or_insert_with(|| cref.part.clone());
         rows.push((
             name.clone(),
-            format_pins(&port.pins),
+            Pin::display_list(&port.pins),
             port.label.clone(),
             port.pins.first().map(|p| p.0),
         ));
@@ -534,19 +534,6 @@ fn cable_subtitle(meta: Option<&CableMeta>, count: usize) -> String {
     }
     parts.push(format!("×{count}"));
     parts.join(" · ")
-}
-
-/// Render a port's pins as a comma-joined string, or `None` when unassigned.
-fn format_pins(pins: &[Pin]) -> Option<String> {
-    if pins.is_empty() {
-        return None;
-    }
-    Some(
-        pins.iter()
-            .map(Pin::to_string)
-            .collect::<Vec<_>>()
-            .join(","),
-    )
 }
 
 #[cfg(test)]
