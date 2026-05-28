@@ -165,3 +165,25 @@ fn check_rejects_a_dangling_use() {
         .failure()
         .stderr(predicate::str::contains("cannot find imported file"));
 }
+
+#[test]
+fn check_accepts_use_after_a_component() {
+    let tmp = tempdir().expect("tempdir");
+    let main = tmp.path().join("main.wb");
+    std::fs::write(
+        &main,
+        r#"
+component m { leaf l; }
+use leaf from "leaf.wb"
+view schematic "M" { include l at (0, 0); }
+"#,
+    )
+    .expect("write main.wb");
+    std::fs::write(tmp.path().join("leaf.wb"), "component leaf { }\n").expect("write leaf.wb");
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", main.to_str().unwrap()])
+        .assert()
+        .success();
+}

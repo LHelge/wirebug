@@ -76,6 +76,13 @@ enum CableItem {
     Wire(Wire),
 }
 
+/// One top-level file entry, parsed in source order and folded into
+/// [`File::uses`] plus [`File::items`].
+enum FileEntry {
+    Use(Use),
+    Item(Item),
+}
+
 /// Parse the significant token stream of one file into an [`ast::File`].
 pub fn parse_file(tokens: Vec<(Token, Span)>, file: FileId, src_len: usize) -> Parsed {
     let eoi = Span {
@@ -466,12 +473,21 @@ where
             span: e.span(),
         });
 
-    use_decl
+    let file_entry = choice((use_decl.map(FileEntry::Use), item.map(FileEntry::Item)));
+
+    file_entry
         .repeated()
-        .collect::<Vec<_>>()
-        .then(item.repeated().collect::<Vec<_>>())
+        .collect::<Vec<FileEntry>>()
         .then_ignore(end())
-        .map_with(|(uses, items), e| {
+        .map_with(|entries, e| {
+            let mut uses = Vec::new();
+            let mut items = Vec::new();
+            for entry in entries {
+                match entry {
+                    FileEntry::Use(use_decl) => uses.push(use_decl),
+                    FileEntry::Item(item) => items.push(item),
+                }
+            }
             let span: Span = e.span();
             File {
                 id: span.file,
@@ -781,6 +797,26 @@ mod tests {
         assert_eq!(file.uses.len(), 1);
         assert_eq!(file.uses[0].name.node.as_str(), "cell_module");
         assert_eq!(file.uses[0].path.node, "components/cell_module.wb");
+    }
+
+    #[test]
+    fn use_declarations_may_interleave_with_items() {
+        let file = parse_ok(
+            r#"
+component a { }
+use leaf from "leaf.wb"
+view schematic "A" { }
+use relay from "relay.wb"
+component b { }
+"#,
+        );
+
+        let uses: Vec<&str> = file.uses.iter().map(|u| u.name.node.as_str()).collect();
+        assert_eq!(uses, vec!["leaf", "relay"]);
+        assert_eq!(file.items.len(), 3);
+        assert!(matches!(file.items[0], Item::Definition(_)));
+        assert!(matches!(file.items[1], Item::View(_)));
+        assert!(matches!(file.items[2], Item::Definition(_)));
     }
 
     #[test]
