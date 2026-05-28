@@ -369,7 +369,9 @@ impl<'a> Resolver<'a> {
             for (name, type_name, span) in pending {
                 match env.get(&type_name) {
                     Some(&tid) => {
-                        self.defs[d].instances.get_mut(&name).unwrap().type_id = Some(tid);
+                        if let Some(facts) = self.defs[d].instances.get_mut(&name) {
+                            facts.type_id = Some(tid);
+                        }
                     }
                     None => self.problems.push(Problem::UndefinedType {
                         name: type_name,

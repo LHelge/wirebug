@@ -278,8 +278,10 @@ impl HarnessLayout {
         raws: Vec<RawWire>,
     ) -> Vec<CableBox> {
         let mut groups: IndexMap<CableName, Vec<RawWire>> = IndexMap::new();
-        for raw in raws {
-            let name = raw.cable.clone().expect("partitioned to tagged only");
+        for mut raw in raws {
+            let Some(name) = raw.cable.take() else {
+                continue;
+            };
             groups.entry(name).or_default().push(raw);
         }
         let mut boxes: Vec<CableBox> = groups

@@ -112,7 +112,7 @@ impl Ovg {
 }
 
 fn sorted_unique(mut v: Vec<f64>) -> Vec<f64> {
-    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    v.sort_by(f64::total_cmp);
     v.dedup_by(|a, b| (*a - *b).abs() < EPS);
     v
 }

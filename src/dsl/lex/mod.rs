@@ -145,7 +145,9 @@ pub fn lex(src: &str, file: FileId) -> Result<Vec<SpannedLexeme>, LexError> {
                         push(&mut out, Lexeme::Token(token), start, i);
                     }
                     None => {
-                        let ch = src[start..].chars().next().expect("byte implies a char");
+                        let Some(ch) = src[start..].chars().next() else {
+                            return Ok(out);
+                        };
                         return Err(LexError::UnexpectedChar {
                             ch,
                             span: Span::new(file, start, start + ch.len_utf8()),

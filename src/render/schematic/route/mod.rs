@@ -156,18 +156,19 @@ pub(super) fn collapse_collinear(pts: Vec<Point>) -> Vec<Point> {
         return out;
     }
 
-    let mut merged = vec![out[0]];
-    for i in 1..out.len() - 1 {
-        let a = *merged.last().unwrap();
-        let b = out[i];
-        let c = out[i + 1];
+    let mut merged = Vec::with_capacity(out.len());
+    merged.push(out[0]);
+    for window in out.windows(3) {
+        let a = merged[merged.len() - 1];
+        let b = window[1];
+        let c = window[2];
         let collinear = ((a.y - b.y).abs() < EPS && (b.y - c.y).abs() < EPS)
             || ((a.x - b.x).abs() < EPS && (b.x - c.x).abs() < EPS);
         if !collinear {
             merged.push(b);
         }
     }
-    merged.push(*out.last().unwrap());
+    merged.push(out[out.len() - 1]);
     merged
 }
 
