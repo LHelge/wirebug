@@ -5,7 +5,7 @@ future work on the codebase. Keep it short; don't restate the README.
 
 ## One pipeline
 
-The only input is the **`.wb` DSL** (spec: `.github/skills/wirebug-dsl/`).
+The only input is the **`.wb` DSL** (spec: `.claude/skills/wirebug-dsl/`).
 Three CLI commands share it:
 
 - **`check` (`src/dsl/`)** — lex → parse → load project → resolve →
