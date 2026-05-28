@@ -9,6 +9,23 @@ use contactor   from "contactor.wb"
 use resistor    from "resistor.wb"
 
 component rear_battery {
+    component precharge_system {
+        contactor c_pre "Precharge";
+        resistor  r_pre "Precharge R";
+
+        pub port in       "IN";
+        pub port out      "OUT";
+        pub port safe_pwr "SAFE PWR";
+        pub port coil_n   "COIL-";
+
+        wire orange 50 [in, c_pre.in];
+        wire orange 50 [c_pre.out, r_pre.a];
+        wire orange 50 [r_pre.b, out];
+
+        wire red 1.0 [safe_pwr, c_pre.coil_p];
+        wire black 1.0 [coil_n, c_pre.coil_n];
+    }
+
     // --- Instances ---
 
     cell_module module_1 "Module 1";
@@ -22,8 +39,7 @@ component rear_battery {
 
     contactor c_pos "Contactor +";
     contactor c_neg "Contactor -";
-    contactor c_pre "Precharge";
-    resistor  r_pre "Precharge R";
+    precharge_system precharge "Precharge";
 
     // --- External interface ---
 
@@ -44,13 +60,12 @@ component rear_battery {
     pub port interlock_out "INTLK OUT";
 
     // --- HV series chain with precharge ---
-    // Positive side: hv_pos splits to c_pos (main) and c_pre→r_pre (precharge)
+    // Positive side: hv_pos splits to c_pos (main) and the precharge branch
     // Both paths merge at module_1.hv_pos
     // Negative side: module_6 → c_neg → hv_neg
 
-    wire orange 50 [hv_pos, c_pos.in, c_pre.in];
-    wire orange 50 [c_pos.out, r_pre.b, module_1.hv_pos];
-    wire orange 50 [c_pre.out, r_pre.a];
+    wire orange 50 [hv_pos, c_pos.in, precharge.in];
+    wire orange 50 [precharge.out, c_pos.out, module_1.hv_pos];
 
     wire orange 50 [module_1.hv_neg, module_2.hv_pos];
     wire orange 50 [module_2.hv_neg, module_3.hv_pos];
@@ -79,10 +94,10 @@ component rear_battery {
     // Safe power feeds coil high side of all 3 contactors
     // BMS low-side drivers control coil ground
 
-    wire red 1.0 [safe_pwr, c_pos.coil_p, c_neg.coil_p, c_pre.coil_p];
+    wire red 1.0 [safe_pwr, c_pos.coil_p, c_neg.coil_p, precharge.safe_pwr];
     wire black 1.0 [bms.cont_1_n, c_pos.coil_n];
     wire black 1.0 [bms.cont_2_n, c_neg.coil_n];
-    wire black 1.0 [bms.cont_3_n, c_pre.coil_n];
+    wire black 1.0 [bms.cont_3_n, precharge.coil_n];
 
     // --- CAN bus ---
 
@@ -104,52 +119,68 @@ component rear_battery {
 view schematic "Rear Battery" {
     grid 20;
 
-    include c_pos at (4, 30) ports {
-        east:  out;
-        north: coil_n;
-        south: in;
-    };
+    // The pack's external interface, drawn on the wrapping enclosure: HV
+    // terminals leave east/west, the signal connector's CAN + 12V leave south,
+    // and the interlock loop passes through on the east edge.
+    enclosure {
+        hv_pos at (west, 2);
+        hv_neg at (east, 2);
 
-    include module_1 at (15, 30) ports {
-        west: hv_pos, iso_spi_up_h, iso_spi_up_l;
-        east: hv_neg, iso_spi_down_h, iso_spi_down_l;
-    };
-    include module_2 at (26, 30) ports {
-        west: hv_pos, iso_spi_up_h, iso_spi_up_l;
-        east: hv_neg, iso_spi_down_h, iso_spi_down_l;
-    };
-    include module_3 at (37, 30) ports {
-        west: hv_pos, iso_spi_up_h, iso_spi_up_l;
-        east: hv_neg, iso_spi_down_h, iso_spi_down_l;
-    };
-    include module_4 at (48, 30) ports {
-        west: hv_pos, iso_spi_up_h, iso_spi_up_l;
-        east: hv_neg, iso_spi_down_h, iso_spi_down_l;
-    };
-    include module_5 at (59, 30) ports {
-        west: hv_pos, iso_spi_up_h, iso_spi_up_l;
-        east: hv_neg, iso_spi_down_h, iso_spi_down_l;
-    };
-    include module_6 at (70, 30) ports {
-        west: hv_pos, iso_spi_up_h, iso_spi_up_l;
-        east: hv_neg, iso_spi_down_h, iso_spi_down_l;
-    };
+        b_pos  at (42, south);
+        gnd    at (44, south);
+        can_h  at (46, south);
+        can_l  at (48, south);
 
-    include c_neg at (81, 30) ports {
+        interlock_in  at (east, 8);
+        interlock_out at (east, 12);
+    }
+
+    include c_pos at (2, 2) ports {
         west:  in;
-        north: coil_n;
-    };
-
-    include bms at (42, 8) ports {
-        south: cont_1_n, iso_spi_h, iso_spi_l, cont_2_n, cont_3_n;
-    };
-
-    include c_pre at (15, 52) ports {
-        north: in, coil_n;
         east:  out;
+        south: coil_n;
     };
-    include r_pre at (26, 52) ports {
-        west:  a;
-        north: b;
+
+    include precharge at (2, 10) ports {
+        west:  in;
+        east:  out;
+        south: coil_n;
+    };
+
+    include module_1 at (18, 4) ports {
+        west: hv_pos, iso_spi_up_h, iso_spi_up_l;
+        east: hv_neg, iso_spi_down_h, iso_spi_down_l;
+    };
+    include module_2 at (29, 4) ports {
+        west: hv_pos, iso_spi_up_h, iso_spi_up_l;
+        east: hv_neg, iso_spi_down_h, iso_spi_down_l;
+    };
+    include module_3 at (40, 4) ports {
+        west: hv_pos, iso_spi_up_h, iso_spi_up_l;
+        east: hv_neg, iso_spi_down_h, iso_spi_down_l;
+    };
+    include module_4 at (51, 4) ports {
+        west: hv_pos, iso_spi_up_h, iso_spi_up_l;
+        east: hv_neg, iso_spi_down_h, iso_spi_down_l;
+    };
+    include module_5 at (62, 4) ports {
+        west: hv_pos, iso_spi_up_h, iso_spi_up_l;
+        east: hv_neg, iso_spi_down_h, iso_spi_down_l;
+    };
+    include module_6 at (73, 4) ports {
+        west: hv_pos, iso_spi_up_h, iso_spi_up_l;
+        east: hv_neg, iso_spi_down_h, iso_spi_down_l;
+    };
+
+    include c_neg at (84, 2) ports {
+        west:  in;
+        east:  out;
+        south: coil_n;
+    };
+
+    include bms at (45, 25) ports {
+        west:  iso_spi_l, iso_spi_h, cont_1_n, cont_3_n;
+        east:  cont_2_n;
+        south: b_pos, gnd, can_h, can_l;
     };
 }
