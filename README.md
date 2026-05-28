@@ -2,9 +2,9 @@
 
 Text-defined electrical schematics and wiring harnesses.
 
-**wirebug** describes an electrical system in a small text DSL (`.wb` files) and turns it into SVG schematics and (eventually) wiring harness drawings. One model, many views — inspired by [Structurizr](https://structurizr.com/) / [LikeC4](https://likec4.dev/) for system architecture and [WireViz](https://github.com/wireviz/WireViz) for wiring harnesses.
+**wirebug** describes an electrical system in a small text DSL (`.wb` files) and turns it into SVG schematics and wiring harness drawings. One model, many views — inspired by [Structurizr](https://structurizr.com/) / [LikeC4](https://likec4.dev/) for system architecture and [WireViz](https://github.com/wireviz/WireViz) for wiring harnesses.
 
-A project is a directory rooted at a `main.wb`. Components are *types* with `pub` ports; you instantiate them, wire the instances together, and split a system across files with `use`. The full language is documented in `.github/skills/wirebug-dsl/`.
+A project is a directory rooted at a `main.wb`. Components are *types* with `pub` ports; you instantiate them, wire the instances together, and split a system across files with `use`. The full language is documented in `.claude/skills/wirebug-dsl/`.
 
 ## Why
 
@@ -23,14 +23,18 @@ What works today:
   - elaboration of the type/instance hierarchy into a flat, addressable IR;
   - validation (undefined names, duplicates, private-port access, containment cycles, …);
   - rich diagnostics via [`miette`](https://github.com/zkat/miette) — source snippets, carets, `--format json`.
-- A schematic renderer (rectangle blocks, labeled ports, auto-routed wires, single SVG out) driven straight off the elaborated IR — `.wb` projects render directly.
+- Two SVG renderers driven straight off the elaborated IR, one file per view plus an HTML index that groups them into Schematics/Harnesses tabs:
+  - a **schematic** renderer (rectangle blocks, labeled ports, object-avoiding orthogonal wire routing);
+  - a **harness** renderer (WireViz-style pin tables, a central spine, and bezier cable bundles).
+- `wirebug render` to disk (SVG, or `--png` rasterised, or `--embed` for naked SVGs + a `manifest.json` sidecar).
+- `wirebug serve` — a live-reloading dev server that re-renders on every `.wb` save.
 
 In transition / not yet:
 
-- Harness drawings (WireViz-style via Graphviz)
+- Object-avoiding harness routing (the harness renderer flexes beziers, no obstacle avoidance yet)
 - BOM views
 - View composition / `extends`
-- Unconnected-port linting, theming, manifest emission
+- Unconnected-port linting, theming, auto-layout
 
 ## Example
 
@@ -92,7 +96,7 @@ Problems are reported with source snippets and carets (via miette); a clean run 
 
 **Wire** — a colour, a gauge (mm²), and two or more endpoints (`instance.port`, or a bare `port` for the enclosing component's own port). Multi-endpoint wires model shared rails and T-junctions.
 
-**View** — a rendering target that documents a component: a kind (`schematic` for now), a grid, and which instances to place where, each with the ports to show on each side. Wires are derived from the model, never listed in views — a wire draws only between ports both views list.
+**View** — a rendering target that documents a component: a kind (`schematic` or `harness`), a grid, and which instances to place where. A `schematic` include lists the ports to show on each side; a `harness` include names a connector and draws its whole pin table. Wires are derived from the model, never listed in views — a wire draws only between ports/connectors both views include.
 
 **Project** — a directory rooted at `main.wb`, with a `wirebug.toml` manifest beside it (see below). Logical hierarchy comes only from `use` imports and DSL nesting, never from directory layout.
 
