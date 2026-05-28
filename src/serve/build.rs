@@ -72,10 +72,10 @@ pub(crate) fn build_site(target: Option<&Path>) -> Build {
 
     // A render/index failure is a build error in its own right; show it on the
     // page and count it so the console summary reflects the failure.
-    let render = render_views(design)
+    let render = render_views(design, true)
         .map_err(|e| format!("render failed: {e}"))
         .and_then(|views| {
-            index_html(&views, true)
+            index_html(&views, design.manifest.as_ref(), true)
                 .map_err(|e| format!("HTML index failed: {e}"))
                 .map(|html| (views, html))
         });

@@ -14,6 +14,7 @@ pub mod diagnostics;
 pub mod elaborate;
 pub mod ir;
 pub mod lex;
+pub mod manifest;
 pub mod parse;
 pub mod project;
 pub mod resolve;

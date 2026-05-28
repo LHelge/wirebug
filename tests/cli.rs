@@ -83,6 +83,45 @@ fn render_png_writes_a_png_per_view_and_index_references_png() {
 }
 
 #[test]
+fn render_no_stamp_omits_the_corner_stamp() {
+    let tmp = tempdir().expect("tempdir");
+    let out_with = tmp.path().join("with");
+    let out_without = tmp.path().join("without");
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args([
+            "render",
+            "examples/main.wb",
+            "--out",
+            out_with.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args([
+            "render",
+            "examples/main.wb",
+            "--out",
+            out_without.to_str().unwrap(),
+            "--no-stamp",
+        ])
+        .assert()
+        .success();
+
+    let with =
+        std::fs::read_to_string(out_with.join("hv_system_overview.svg")).expect("hv view rendered");
+    let without = std::fs::read_to_string(out_without.join("hv_system_overview.svg"))
+        .expect("hv view rendered");
+    assert!(with.contains("class=\"stamp\""));
+    assert!(with.contains("aphid-evpack v0.1.0"));
+    assert!(!without.contains("class=\"stamp\""));
+    assert!(!without.contains("aphid-evpack v0.1.0"));
+}
+
+#[test]
 fn render_rejects_a_project_that_does_not_check() {
     let tmp = tempdir().expect("tempdir");
     let main = tmp.path().join("main.wb");
@@ -107,6 +146,11 @@ fn render_disambiguates_duplicate_view_titles() {
     let tmp = tempdir().expect("tempdir");
     let main = tmp.path().join("main.wb");
     let out = tmp.path().join("svg");
+    std::fs::write(
+        tmp.path().join("wirebug.toml"),
+        "[project]\nname = \"t\"\nversion = \"0.0.0\"\n",
+    )
+    .expect("write wirebug.toml");
     std::fs::write(
         &main,
         r#"
@@ -207,6 +251,11 @@ fn check_rejects_a_dangling_use() {
 fn check_accepts_use_after_a_component() {
     let tmp = tempdir().expect("tempdir");
     let main = tmp.path().join("main.wb");
+    std::fs::write(
+        tmp.path().join("wirebug.toml"),
+        "[project]\nname = \"t\"\nversion = \"0.0.0\"\n",
+    )
+    .expect("write wirebug.toml");
     std::fs::write(
         &main,
         r#"

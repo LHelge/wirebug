@@ -1,0 +1,5 @@
+[project]
+name = "aphid-evpack"
+version = "0.1.0"
+description = "Aphid EV conversion — top-level vehicle wiring"
+authors = ["Aphid EV team"]

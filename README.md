@@ -94,7 +94,28 @@ Problems are reported with source snippets and carets (via miette); a clean run 
 
 **View** — a rendering target that documents a component: a kind (`schematic` for now), a grid, and which instances to place where, each with the ports to show on each side. Wires are derived from the model, never listed in views — a wire draws only between ports both views list.
 
-**Project** — a directory rooted at `main.wb`. Logical hierarchy comes only from `use` imports and DSL nesting, never from directory layout.
+**Project** — a directory rooted at `main.wb`, with a `wirebug.toml` manifest beside it (see below). Logical hierarchy comes only from `use` imports and DSL nesting, never from directory layout.
+
+## Project manifest
+
+Every project carries a `wirebug.toml` beside `main.wb`. It's a small TOML file with a single `[project]` table — `name` and `version` are required, the rest are optional:
+
+```toml
+[project]
+name        = "aphid-evpack"
+version     = "0.1.0"
+description = "Aphid EV conversion — top-level vehicle wiring"
+authors     = ["Aphid EV team"]
+license     = "MIT"
+revision    = "B"             # optional; auto-filled from git when absent
+date        = "2026-05-28"    # optional; ISO date
+```
+
+`name` and `version` appear in the rendered output: as a small stamp in the bottom-right corner of every SVG, and as the page header on the HTML index. `revision` and `date`, when set, are appended to the stamp.
+
+**Revision from git.** If `revision` is omitted, wirebug shells out to `git rev-parse --short HEAD` in the project directory and uses the result, suffixed `-dirty` when the working tree has uncommitted changes. An explicit `revision = "..."` in the manifest always wins. If `git` isn't on `PATH`, or the directory isn't a git repo, the field stays empty and the stamp simply omits it — no error.
+
+**Suppressing the stamp.** Pass `--no-stamp` to `wirebug render` to omit the corner stamp entirely (and the viewBox room it would take). Useful when the rendered SVGs are embedded somewhere that handles identity itself — a blog post, a build report — and you want the figure to size cleanly against your own styles.
 
 ## Rendering
 

@@ -15,6 +15,7 @@ pub mod geometry;
 pub mod harness;
 pub mod png;
 pub mod schematic;
+pub(crate) mod stamp;
 
 /// One rendered view: the SVG document, the file name it should be
 /// written to (a slug of the view title, without a directory), the human
@@ -45,14 +46,23 @@ impl RenderedView {
 /// first instance of that type in the design (the root for a top-level
 /// view). A view naming a `kind` this build can't render, or a subject
 /// type with no instance, is an error.
-pub fn render_views(design: &Design) -> Result<Vec<RenderedView>> {
+///
+/// `draw_stamp` controls the project-identity stamp drawn in the bottom-
+/// right corner of every view: pass `true` for normal rendering, `false`
+/// to suppress it (and the viewBox room it would take) so a downstream
+/// stylesheet can take full control of the SVG.
+pub fn render_views(design: &Design, draw_stamp: bool) -> Result<Vec<RenderedView>> {
     let mut filenames = FilenameAllocator::default();
     let mut rendered = Vec::with_capacity(design.views.len());
     for view in &design.views {
         let subject = subject_instance(design, view)?;
         let svg = match &view.kind {
-            ViewKind::Schematic => schematic::SchematicRenderer.render(design, subject, view)?,
-            ViewKind::Harness => harness::HarnessRenderer.render(design, subject, view)?,
+            ViewKind::Schematic => {
+                schematic::SchematicRenderer.render(design, subject, view, draw_stamp)?
+            }
+            ViewKind::Harness => {
+                harness::HarnessRenderer.render(design, subject, view, draw_stamp)?
+            }
             ViewKind::Other(other) => return Err(Error::UnknownViewKind(other.clone())),
         };
         rendered.push(RenderedView {
@@ -79,6 +89,9 @@ pub const INDEX_FILENAME: &str = "index.html";
 #[derive(Template)]
 #[template(path = "index.html")]
 struct IndexTemplate<'a> {
+    project_name: Option<&'a str>,
+    project_version: Option<&'a str>,
+    project_description: Option<&'a str>,
     views: &'a [RenderedView],
     live_reload: bool,
     /// Whether either tab has any views, so the template can hide an empty
@@ -90,8 +103,19 @@ struct IndexTemplate<'a> {
 /// Render the HTML index for `views`. Shared by `render` (static, no
 /// live-reload) and `serve` (in-memory, live-reload on). Views are grouped
 /// into Schematics/Harnesses tabs by their `kind`.
-pub fn index_html(views: &[RenderedView], live_reload: bool) -> Result<String> {
+///
+/// `manifest` supplies the project header (name, version, description); pass
+/// `None` for callers that don't have one (e.g. unit tests that build a
+/// `Design` by hand).
+pub fn index_html(
+    views: &[RenderedView],
+    manifest: Option<&crate::dsl::manifest::Manifest>,
+    live_reload: bool,
+) -> Result<String> {
     IndexTemplate {
+        project_name: manifest.map(|m| m.name.as_str()),
+        project_version: manifest.map(|m| m.version.as_str()),
+        project_description: manifest.and_then(|m| m.description.as_deref()),
         views,
         live_reload,
         has_schematic: views.iter().any(RenderedView::is_schematic),
@@ -192,7 +216,7 @@ mod tests {
             view("HV Overview", "hv_overview.svg", "schematic"),
             view("Pack Detail", "pack_detail.svg", "schematic"),
         ];
-        let html = index_html(&views, false).unwrap();
+        let html = index_html(&views, None, false).unwrap();
         assert!(html.contains("<h2>HV Overview</h2>"));
         assert!(html.contains("<img src=\"hv_overview.svg\" alt=\"HV Overview\">"));
         assert!(html.contains("<img src=\"pack_detail.svg\" alt=\"Pack Detail\">"));
@@ -204,7 +228,7 @@ mod tests {
             view("Overview", "overview.svg", "schematic"),
             view("Main Harness", "main_harness.svg", "harness"),
         ];
-        let html = index_html(&views, false).unwrap();
+        let html = index_html(&views, None, false).unwrap();
         // Both tab controls present when both kinds exist.
         assert!(html.contains("Schematics"));
         assert!(html.contains("Harnesses"));
@@ -215,7 +239,7 @@ mod tests {
     #[test]
     fn index_omits_a_tab_with_no_views() {
         let views = vec![view("Overview", "overview.svg", "schematic")];
-        let html = index_html(&views, false).unwrap();
+        let html = index_html(&views, None, false).unwrap();
         assert!(html.contains("id=\"tab-schematic\""));
         assert!(!html.contains("id=\"tab-harness\""));
     }
@@ -223,7 +247,7 @@ mod tests {
     #[test]
     fn index_escapes_author_supplied_titles() {
         let views = vec![view("A & B <hv>", "a_b_hv.svg", "schematic")];
-        let html = index_html(&views, false).unwrap();
+        let html = index_html(&views, None, false).unwrap();
         // Askama auto-escapes (with numeric entities); the author-supplied
         // angle brackets must not survive as a literal tag.
         assert!(!html.contains("<hv>"));
@@ -232,12 +256,20 @@ mod tests {
 
     #[test]
     fn index_notes_a_design_with_no_views() {
-        assert!(index_html(&[], false).unwrap().contains("no views"));
+        assert!(index_html(&[], None, false).unwrap().contains("no views"));
     }
 
     #[test]
     fn live_reload_flag_toggles_the_websocket_script() {
-        assert!(index_html(&[], true).unwrap().contains("new WebSocket"));
-        assert!(!index_html(&[], false).unwrap().contains("new WebSocket"));
+        assert!(
+            index_html(&[], None, true)
+                .unwrap()
+                .contains("new WebSocket")
+        );
+        assert!(
+            !index_html(&[], None, false)
+                .unwrap()
+                .contains("new WebSocket")
+        );
     }
 }

@@ -8,6 +8,8 @@ use std::fmt;
 
 use indexmap::IndexMap;
 
+use crate::dsl::manifest::Manifest;
+
 macro_rules! name_newtype {
     ($name:ident, $doc:literal) => {
         #[doc = $doc]
@@ -123,12 +125,16 @@ impl fmt::Display for Pin {
 
 /// The elaborated design: a flat map of every instance keyed by its path,
 /// plus the views. The tree lives in each instance's `children` links;
-/// no recursive ownership.
+/// no recursive ownership. The project manifest rides along so the
+/// renderer can stamp project identity (name, version, revision, …) on
+/// every view; it's an `Option` so synthetic test designs don't need to
+/// invent one.
 #[derive(Debug)]
 pub struct Design {
     pub root: InstancePath,
     pub instances: IndexMap<InstancePath, Instance>,
     pub views: Vec<View>,
+    pub manifest: Option<Manifest>,
 }
 
 impl Design {

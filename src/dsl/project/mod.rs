@@ -15,6 +15,7 @@ use miette::NamedSource;
 use crate::dsl::ast;
 use crate::dsl::diagnostics::Problem;
 use crate::dsl::lex::{lex, significant};
+use crate::dsl::manifest::{self, Manifest};
 use crate::dsl::parse::parse_file;
 use crate::dsl::span::FileId;
 
@@ -32,10 +33,12 @@ impl LoadedFile {
     }
 }
 
-/// A loaded project: every reachable file, with the entry file's id.
+/// A loaded project: every reachable file, with the entry file's id and
+/// the project manifest (`wirebug.toml`) if one was loaded.
 pub struct Project {
     pub root: FileId,
     pub files: Vec<LoadedFile>,
+    pub manifest: Option<Manifest>,
 }
 
 impl Project {
@@ -106,8 +109,21 @@ pub fn load(entry: &Path) -> (Option<Project>, Vec<Problem>) {
     let Loader {
         files, problems, ..
     } = loader;
+
+    let project_dir = entry.parent().unwrap_or(Path::new("."));
+    let (manifest, manifest_problems) = manifest::load(project_dir);
+    let mut problems = problems;
+    problems.extend(manifest_problems);
+
     match root {
-        Some(root) => (Some(Project { root, files }), problems),
+        Some(root) => (
+            Some(Project {
+                root,
+                files,
+                manifest,
+            }),
+            problems,
+        ),
         None => (None, problems),
     }
 }

@@ -30,6 +30,25 @@ The `index.html` is an [`askama`] compile-time template (`templates/`),
 rendered by `render::index_html(views, live_reload)` — shared by `render`
 (static, `false`) and `serve` (`true`, injects the reload script).
 
+## Project manifest
+
+Every project carries a `wirebug.toml` beside `main.wb` — a small TOML
+manifest with a single `[project]` table. `name` and `version` are
+required; `description`, `authors`, `license`, `revision`, and `date`
+(parsed as `chrono::NaiveDate`) are optional. Unknown keys are a parse
+error (`#[serde(deny_unknown_fields)]`).
+
+If `revision` is omitted, the loader fills it from git: the short HEAD
+SHA, suffixed `-dirty` when the working tree has changes. An authored
+`revision` always wins; outside a git repo (or without `git` on PATH)
+the field stays `None`.
+
+The parsed `Manifest` rides on `Project` → `ir::Design` (as an
+`Option<Manifest>` so synthetic test designs need not invent one).
+Renderers stamp `<name> v<version> · rev … (date)` in the SVG's
+bottom-right corner; the HTML index puts the project name in `<h1>`
+with the version and description below it.
+
 ## DSL mental model
 
 - **AST** — a faithful parse of one `.wb` file. `Definition` (a component
@@ -225,6 +244,7 @@ src/
 │   │   └── token.rs     # Token, Trivia, Lexeme
 │   ├── ast/mod.rs       # spanned AST; refs are unresolved Spanned<Ident>
 │   ├── parse/mod.rs     # chumsky parser over &[(Token, Span)] → ast::File
+│   ├── manifest/        # wirebug.toml loader + git-revision auto-fill
 │   ├── project/mod.rs   # walk-up discovery + transitive `use` loading → Project
 │   ├── resolve/mod.rs   # DefId registry, scopes, flattened ports, reference checks
 │   ├── elaborate/mod.rs # AST/registry → ir::Design; containment-cycle guard
@@ -237,6 +257,7 @@ src/
 │   ├── mod.rs       # render_views: subject lookup + per-view dispatch + slug;
 │   │                #   RenderedView{title,filename,kind,svg} + index_html (tabs)
 │   ├── geometry.rs  # Point; re-exports ir::Side (sides are authored)
+│   ├── stamp.rs     # project-identity stamp text/element (corner of every SVG)
 │   ├── schematic/   # rectangle-based SVG renderer (kind: schematic)
 │   │   ├── mod.rs       # SchematicRenderer; render orchestration
 │   │   ├── layout.rs    # Placement: derive sides + boxes/ports in world coords
@@ -391,6 +412,10 @@ Runtime:
 
 - [`chumsky`] — parser combinators (span-carrying `Rich` errors) for the
   `.wb` DSL. The lexer is hand-written; chumsky is confined to `dsl/parse/`.
+- [`toml`] / [`serde`] (with `derive`) — parse `wirebug.toml` into the
+  project manifest. Confined to `dsl/manifest/`.
+- [`chrono`] (with `serde`) — `NaiveDate` for the manifest's optional
+  `date` field; ISO `YYYY-MM-DD` parsing rides serde.
 - [`miette`] (feature `fancy`) — `Diagnostic` derives plus the pretty
   terminal renderer for `check` (`--format json` uses `JSONReportHandler`).
 - [`indexmap`] — order-preserving maps (DSL registry/IR).
@@ -415,6 +440,9 @@ Dev / test:
 - [`predicates`] — assertions for `assert_cmd`.
 
 [`chumsky`]: https://docs.rs/chumsky
+[`toml`]: https://docs.rs/toml
+[`serde`]: https://docs.rs/serde
+[`chrono`]: https://docs.rs/chrono
 [`miette`]: https://docs.rs/miette
 [`indexmap`]: https://docs.rs/indexmap
 [`clap`]: https://docs.rs/clap

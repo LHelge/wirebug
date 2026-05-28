@@ -7,6 +7,7 @@ edition = "2024"
 anyhow = "1.0.102"
 askama = "0.16.0"
 axum = { version = "0.8.9", features = ["ws"] }
+chrono = { version = "0.4.44", features = ["serde"] }
 chumsky = "0.13.0"
 clap = { version = "4.6.1", features = ["derive"] }
 indexmap = "2.14.0"
@@ -14,9 +15,11 @@ miette = { version = "7.6.0", features = ["fancy"] }
 notify = "8.2.0"
 pathfinding = "4.15.0"
 resvg = "0.47.0"
+serde = { version = "1.0.228", features = ["derive"] }
 svg = "0.18.0"
 thiserror = "2.0.18"
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "net", "sync", "signal", "time"] }
+toml = "1.1.2"
 tower-http = { version = "0.6.11", features = ["set-header"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
