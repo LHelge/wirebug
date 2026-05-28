@@ -421,10 +421,12 @@ where
                     ViewItem::Text(text) => texts.push(text),
                 }
             }
+            let has_enclosure = enclosure.is_some();
             View {
                 kind,
                 title,
                 grid,
+                has_enclosure,
                 enclosure: enclosure.unwrap_or_default(),
                 includes,
                 texts,

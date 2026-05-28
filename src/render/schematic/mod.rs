@@ -172,6 +172,7 @@ pub(crate) mod tests {
             title: "T".to_string(),
             grid: None,
             subject: TypeName::from(subject),
+            has_enclosure: false,
             enclosure: Vec::new(),
             includes: includes
                 .iter()

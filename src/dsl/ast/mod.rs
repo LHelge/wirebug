@@ -203,9 +203,13 @@ pub struct View {
     pub kind: Spanned<Ident>,
     pub title: Spanned<String>,
     pub grid: Option<Spanned<f64>>,
+    /// Whether an `enclosure { }` block was authored. Kept separate from the
+    /// port list so an empty block still draws a boundary.
+    pub has_enclosure: bool,
     /// The subject component's own ports drawn on the enclosure boundary.
     /// Empty when the `enclosure { }` block is absent. Refs and anchor shape
-    /// are left unresolved; resolve validates them.
+    /// are left unresolved; resolve validates them. Also empty for an authored
+    /// empty enclosure.
     pub enclosure: Vec<EnclosurePort>,
     pub includes: Vec<Include>,
     pub texts: Vec<TextBox>,

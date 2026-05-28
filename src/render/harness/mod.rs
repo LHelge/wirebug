@@ -135,6 +135,7 @@ mod tests {
             title: "Harness".to_string(),
             grid: None,
             subject: TypeName::from(subject),
+            has_enclosure: false,
             enclosure: Vec::new(),
             includes: includes
                 .iter()

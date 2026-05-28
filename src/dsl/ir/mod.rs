@@ -204,8 +204,12 @@ pub struct View {
     pub title: String,
     pub grid: Option<f64>,
     pub subject: TypeName,
+    /// Whether the view authored an `enclosure { }` block. Kept separate from
+    /// the port list so an empty enclosure still draws the subject boundary.
+    pub has_enclosure: bool,
     /// The subject's own ports drawn on the enclosure boundary (a box that
-    /// wraps the schematic). Empty when no `enclosure { }` block is authored.
+    /// wraps the schematic). Empty when no `enclosure { }` block is authored
+    /// or when the authored block lists no ports.
     pub enclosure: Vec<EnclosurePort>,
     pub includes: Vec<Include>,
     pub texts: Vec<TextBox>,

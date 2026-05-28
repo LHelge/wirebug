@@ -180,6 +180,7 @@ impl Elaborator<'_> {
                     title: v.title.node.clone(),
                     grid: v.grid.as_ref().map(|g| g.node),
                     subject: TypeName::from(self.resolved.defs[subject].name),
+                    has_enclosure: v.has_enclosure,
                     // Anchors whose shape resolve already rejected drop here.
                     enclosure: v
                         .enclosure

@@ -80,6 +80,9 @@ component vehicle {
 view schematic "HV System Overview" {
     grid 20;
 
+    enclosure {
+    }
+
     include front at (10, 10) ports {
         east:  hv_pos, hv_neg, can_h, can_l, b_pos, safe_pwr, gnd;
         south: interlock_in, interlock_out;

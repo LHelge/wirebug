@@ -310,29 +310,30 @@ impl Placement {
 
     /// Wrap the placed child boxes in the subject's boundary, placing each
     /// authored subject port on the named edge at its free-axis coordinate.
-    /// `None` when the view has no `enclosure { }` block or no boxes to wrap.
+    /// `None` when the view has no `enclosure { }` block. When there are no
+    /// child boxes, the authored enclosure ports seed a small boundary by
+    /// themselves so a boundary-only view still renders.
     fn place_enclosure(
         subject: &Instance,
         view: &crate::dsl::ir::View,
         components: &IndexMap<InstanceName, PlacedComponent>,
         grid: Grid,
     ) -> Option<PlacedComponent> {
-        if view.enclosure.is_empty() || components.is_empty() {
+        if !view.has_enclosure {
             return None;
         }
 
         // Bounding box of every child, then folded to span each port's
         // free-axis coordinate so the edge always reaches its ports.
-        let mut min_x = f64::INFINITY;
-        let mut min_y = f64::INFINITY;
-        let mut max_x = f64::NEG_INFINITY;
-        let mut max_y = f64::NEG_INFINITY;
+        let mut bounds: Option<(f64, f64, f64, f64)> = None;
         for pc in components.values() {
-            min_x = min_x.min(pc.origin.x);
-            min_y = min_y.min(pc.origin.y);
-            max_x = max_x.max(pc.origin.x + pc.width);
-            max_y = max_y.max(pc.origin.y + pc.height);
+            grow_bounds(
+                &mut bounds,
+                pc.origin,
+                Point::new(pc.origin.x + pc.width, pc.origin.y + pc.height),
+            );
         }
+        let (mut min_x, mut min_y, mut max_x, mut max_y) = bounds.unwrap_or((0.0, 0.0, 0.0, 0.0));
         for ep in &view.enclosure {
             let world = grid.to_world(ep.coord);
             match ep.side {
@@ -437,7 +438,7 @@ impl Placement {
     /// title. Encloses both the component boxes and every routed wire —
     /// wires can detour outside the boxes, so they must be measured too.
     pub(super) fn viewbox(&self, has_title: bool, wires: &[Vec<Point>]) -> ViewBox {
-        if self.components.is_empty() && self.texts.is_empty() {
+        if self.components.is_empty() && self.texts.is_empty() && self.enclosure.is_none() {
             return ViewBox {
                 x: 0.0,
                 y: 0.0,
@@ -492,6 +493,20 @@ impl Placement {
             y: min_y - pad - title_pad,
             width: (max_x - min_x) + 2.0 * pad,
             height: (max_y - min_y) + 2.0 * pad + title_pad,
+        }
+    }
+}
+
+fn grow_bounds(bounds: &mut Option<(f64, f64, f64, f64)>, a: Point, b: Point) {
+    match bounds {
+        Some((min_x, min_y, max_x, max_y)) => {
+            *min_x = (*min_x).min(a.x).min(b.x);
+            *min_y = (*min_y).min(a.y).min(b.y);
+            *max_x = (*max_x).max(a.x).max(b.x);
+            *max_y = (*max_y).max(a.y).max(b.y);
+        }
+        None => {
+            *bounds = Some((a.x.min(b.x), a.y.min(b.y), a.x.max(b.x), a.y.max(b.y)));
         }
     }
 }
@@ -815,6 +830,72 @@ component sys {
         );
         let placement = Placement::compute(&design, subject, &view, Grid::new(20.0)).unwrap();
         assert!(placement.enclosure().is_none());
+    }
+
+    #[test]
+    fn empty_enclosure_block_wraps_child_boxes() {
+        let design = design_from(
+            r#"
+component sys {
+    blk a;
+    component blk {
+        pub port p "P";
+    }
+}
+
+view schematic "T" {
+    grid 10;
+    enclosure {
+    }
+    include a at (0, 0);
+}
+"#,
+        );
+        let subject = design.get(&design.root).unwrap();
+        let view = &design.views[0];
+        let placement = Placement::compute(&design, subject, view, Grid::new(10.0)).unwrap();
+
+        let child = placement.components.get(&InstanceName::from("a")).unwrap();
+        let enc = placement.enclosure().expect("enclosure placed");
+        assert!(enc.ports.is_empty());
+        assert!(enc.origin.x < child.origin.x);
+        assert!(enc.origin.y < child.origin.y);
+        assert!(enc.origin.x + enc.width > child.origin.x + child.width);
+        assert!(enc.origin.y + enc.height > child.origin.y + child.height);
+    }
+
+    #[test]
+    fn enclosure_without_child_boxes_still_draws_boundary_ports() {
+        let design = design_from(
+            r#"
+component sys {
+    pub port a "A";
+    pub port b "B";
+    wire red 1 [a, b];
+}
+
+view schematic "T" {
+    grid 10;
+    enclosure {
+        a at (west, 0);
+        b at (east, 2);
+    }
+}
+"#,
+        );
+        let subject = design.get(&design.root).unwrap();
+        let view = &design.views[0];
+        let placement = Placement::compute(&design, subject, view, Grid::new(10.0)).unwrap();
+
+        let enc = placement.enclosure().expect("enclosure placed");
+        assert_eq!(enc.ports.len(), 2);
+        assert!(enc.width > 0.0);
+        assert!(enc.height > 0.0);
+        assert_eq!(placement.connection_pairs().len(), 1);
+
+        let vb = placement.viewbox(false, &[]);
+        assert!(vb.width > MIN_WIDTH);
+        assert!(vb.height > 0.0);
     }
 
     #[test]
