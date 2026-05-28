@@ -401,8 +401,9 @@ fn build_node(child: &Instance, conn: &ConnectorName, cx: f64, cy: f64) -> Optio
 
     let widest_label = rows.iter().map(|r| r.2.chars().count()).max().unwrap_or(0);
     let body_width = PIN_COL_WIDTH + widest_label as f64 * CHAR_WIDTH + 2.0 * NODE_PAD;
-    let title_width = subtitle.chars().count() as f64 * CHAR_WIDTH + 2.0 * NODE_PAD;
-    let width = body_width.max(title_width).max(MIN_NODE_WIDTH);
+    let header_width =
+        title.chars().count().max(subtitle.chars().count()) as f64 * CHAR_WIDTH + 2.0 * NODE_PAD;
+    let width = body_width.max(header_width).max(MIN_NODE_WIDTH);
     let height = HEADER_HEIGHT + rows.len() as f64 * ROW_HEIGHT;
 
     let origin = Point::new(cx - width / 2.0, cy - height / 2.0);
@@ -549,6 +550,7 @@ fn format_pins(pins: &[Pin]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dsl::ir::{ConnectorRef, InstancePath, Port, TypeName, Visibility};
 
     fn strand(row_y: f64) -> CableStrand {
         CableStrand {
@@ -598,5 +600,39 @@ mod tests {
         assert_eq!(cb.origin.y, 100.0);
         assert_eq!(cb.strands[0].row_y, r0 + 100.0);
         assert_eq!(cb.strands[1].row_y, r1 + 100.0);
+    }
+
+    #[test]
+    fn connector_node_width_includes_title() {
+        let title = "Very Long Descriptive Instance Label";
+        let connector = ConnectorName::from("j1");
+        let instance = Instance {
+            path: InstancePath::root(InstanceName::from("leaf")),
+            type_name: TypeName::from("leaf"),
+            label: Some(title.into()),
+            ports: [(
+                PortName::from("p"),
+                Port {
+                    name: PortName::from("p"),
+                    label: "P".into(),
+                    visibility: Visibility::Public,
+                    connector: Some(ConnectorRef {
+                        name: Some(connector.clone()),
+                        part: "J1".into(),
+                        index: 0,
+                    }),
+                    pins: vec![Pin(1)],
+                },
+            )]
+            .into_iter()
+            .collect(),
+            children: IndexMap::new(),
+            wires: Vec::new(),
+            cables: IndexMap::new(),
+        };
+
+        let node = build_node(&instance, &connector, 0.0, 0.0).expect("node");
+        let expected = title.chars().count() as f64 * CHAR_WIDTH + 2.0 * NODE_PAD;
+        assert!(node.width >= expected);
     }
 }
