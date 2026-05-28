@@ -4,7 +4,7 @@
 //! view in the design, resolves each to its subject instance, and
 //! dispatches to the renderer named by the view's `kind`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use askama::Template;
 use serde::Serialize;
@@ -206,18 +206,28 @@ fn slug(title: &str) -> String {
 /// Allocates stable, non-overwriting SVG file names from view titles.
 #[derive(Default)]
 struct FilenameAllocator {
-    seen: HashMap<String, usize>,
+    /// Next suffix index to try per base slug.
+    counts: HashMap<String, usize>,
+    /// Every file name already handed out, so a disambiguated name (e.g.
+    /// `overview_2.svg`) can't collide with a later title that slugs to it
+    /// directly (e.g. `"Overview 2"`).
+    taken: HashSet<String>,
 }
 
 impl FilenameAllocator {
     fn svg_filename(&mut self, title: &str) -> String {
         let base = slug(title);
-        let count = self.seen.entry(base.clone()).or_insert(0);
-        *count += 1;
-        if *count == 1 {
-            format!("{base}.svg")
-        } else {
-            format!("{base}_{count}.svg")
+        let count = self.counts.entry(base.clone()).or_insert(0);
+        loop {
+            *count += 1;
+            let name = if *count == 1 {
+                format!("{base}.svg")
+            } else {
+                format!("{base}_{count}.svg")
+            };
+            if self.taken.insert(name.clone()) {
+                return name;
+            }
         }
     }
 }
@@ -241,6 +251,21 @@ mod tests {
         assert_eq!(filenames.svg_filename("Pack Detail!"), "pack_detail_3.svg");
         assert_eq!(filenames.svg_filename("!!!"), "view.svg");
         assert_eq!(filenames.svg_filename("???"), "view_2.svg");
+    }
+
+    #[test]
+    fn filename_allocator_avoids_colliding_with_a_disambiguated_name() {
+        // "X 2" slugs to `x_2`, the same name a second "X" gets via
+        // disambiguation — so it must be pushed to `x_2_2`, not overwrite it.
+        let mut filenames = FilenameAllocator::default();
+        let names = [
+            filenames.svg_filename("X"),
+            filenames.svg_filename("X"),
+            filenames.svg_filename("X 2"),
+        ];
+        assert_eq!(names, ["x.svg", "x_2.svg", "x_2_2.svg"]);
+        let unique: HashSet<&String> = names.iter().collect();
+        assert_eq!(unique.len(), names.len(), "file names must be distinct");
     }
 
     fn view(title: &str, filename: &str, kind: &str) -> RenderedView {
