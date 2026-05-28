@@ -682,6 +682,34 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    /// Validate that a view doesn't include the same rendered target twice.
+    /// Schematic views render whole instances, while harness views render
+    /// instance connectors, so their duplicate keys differ.
+    fn check_duplicate_includes(
+        &self,
+        view: &ast::View,
+        file: FileId,
+        problems: &mut Vec<Problem>,
+    ) {
+        let mut seen: HashMap<String, Span> = HashMap::new();
+        let is_harness = view.kind.node.as_str() == "harness";
+        for inc in &view.includes {
+            let Some(target) = include_target(inc, is_harness) else {
+                continue;
+            };
+            if let Some(&first) = seen.get(&target) {
+                problems.push(Problem::DuplicateViewInclude {
+                    target,
+                    src: self.project.source(file),
+                    at: inc.instance.span.into(),
+                    first: first.into(),
+                });
+            } else {
+                seen.insert(target, inc.instance.span);
+            }
+        }
+    }
+
     fn resolve_views(&mut self, roots_by_file: &[Vec<DefId>]) -> Vec<ViewBinding<'a>> {
         let mut bindings = Vec::new();
         let mut problems = Vec::new();
@@ -726,6 +754,7 @@ impl<'a> Resolver<'a> {
                 };
                 if let Some(s) = subject {
                     self.check_enclosure(view, s, FileId(fi), &mut problems);
+                    self.check_duplicate_includes(view, FileId(fi), &mut problems);
                     let is_harness = view.kind.node.as_str() == "harness";
                     for inc in &view.includes {
                         let name = inc.instance.node.as_str();
@@ -755,6 +784,16 @@ impl<'a> Resolver<'a> {
         }
         self.problems.extend(problems);
         bindings
+    }
+}
+
+fn include_target(inc: &ast::Include, is_harness: bool) -> Option<String> {
+    let instance = inc.instance.node.as_str();
+    if is_harness {
+        let connector = inc.connector.as_ref()?.node.as_str();
+        Some(format!("{instance}.{connector}"))
+    } else {
+        Some(instance.to_string())
     }
 }
 
@@ -1006,6 +1045,56 @@ mod tests {
             "component m { } view schematic \"V\" { text note at (0, 0) \"A\"; text note at (1, 1) \"B\"; }\n",
         )]);
         assert!(has(&p, "wirebug::duplicate_view_text"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn duplicate_schematic_include_is_reported() {
+        let p = problems(&[
+            (
+                "main.wb",
+                "use leaf from \"leaf.wb\"\ncomponent m { leaf l; }\nview schematic \"V\" { include l at (0, 0); include l at (2, 0); }\n",
+            ),
+            ("leaf.wb", "component leaf { pub port p \"P\"; }\n"),
+        ]);
+        assert!(
+            has(&p, "wirebug::duplicate_view_include"),
+            "{:?}",
+            codes(&p)
+        );
+    }
+
+    #[test]
+    fn duplicate_harness_connector_include_is_reported() {
+        let p = problems(&[
+            (
+                "main.wb",
+                "use leaf from \"leaf.wb\"\ncomponent m { leaf l; }\nview harness \"H\" { include l.j1 at (0, 0); include l.j1 at (2, 0); }\n",
+            ),
+            (
+                "leaf.wb",
+                "component leaf { connector j1 \"J1\" { pub port p \"P\" pin 1; } }\n",
+            ),
+        ]);
+        assert!(
+            has(&p, "wirebug::duplicate_view_include"),
+            "{:?}",
+            codes(&p)
+        );
+    }
+
+    #[test]
+    fn harness_can_include_two_connectors_from_one_instance() {
+        let p = problems(&[
+            (
+                "main.wb",
+                "use leaf from \"leaf.wb\"\ncomponent m { leaf l; }\nview harness \"H\" { include l.j1 at (0, 0); include l.j2 at (2, 0); }\n",
+            ),
+            (
+                "leaf.wb",
+                "component leaf { connector j1 \"J1\" { pub port p \"P\" pin 1; } connector j2 \"J2\" { pub port q \"Q\" pin 1; } }\n",
+            ),
+        ]);
+        assert!(p.is_empty(), "unexpected problems: {:?}", codes(&p));
     }
 
     #[test]

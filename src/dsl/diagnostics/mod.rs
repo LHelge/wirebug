@@ -226,6 +226,23 @@ pub enum Problem {
         first: SourceSpan,
     },
 
+    /// A view includes the same render target twice. Schematic views key this
+    /// by instance; harness views key it by `instance.connector`.
+    #[error("duplicate include `{target}` in view")]
+    #[diagnostic(
+        code(wirebug::duplicate_view_include),
+        help("place each view include target only once")
+    )]
+    DuplicateViewInclude {
+        target: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("included again here")]
+        at: SourceSpan,
+        #[label("first included here")]
+        first: SourceSpan,
+    },
+
     /// Two connectors in one component share a designator.
     #[error("duplicate connector designator `{name}`")]
     #[diagnostic(
