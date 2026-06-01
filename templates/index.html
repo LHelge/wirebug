@@ -85,7 +85,30 @@
   </div>
 {% endif %}
 {% if live_reload %}
-  <script>(function(){var ws=new WebSocket("ws://"+location.host+"/ws");ws.onmessage=function(){location.reload()};ws.onclose=function(){setTimeout(function(){location.reload()},1000)}})()</script>
+  <script>(function(){
+    // A live-reload is a full page reload, which would otherwise reset the
+    // active tab (a CSS radio, not in the URL) and the scroll to the top of
+    // the first tab. Snapshot both just before reloading and restore them on
+    // the fresh load. (The open lightbox survives on its own — it's in the
+    // URL hash.)
+    var TAB="wirebug:tab",SCROLL="wirebug:scroll";
+    try{history.scrollRestoration="manual";}catch(e){}
+    try{var el=document.getElementById(sessionStorage.getItem(TAB));if(el)el.checked=true;}catch(e){}
+    addEventListener("load",function(){
+      try{var y=sessionStorage.getItem(SCROLL);if(y!==null)scrollTo(0,parseFloat(y));}catch(e){}
+    });
+    function reload(){
+      try{
+        var c=document.querySelector('input[name="tab"]:checked');
+        if(c)sessionStorage.setItem(TAB,c.id);
+        sessionStorage.setItem(SCROLL,String(scrollY));
+      }catch(e){}
+      location.reload();
+    }
+    var ws=new WebSocket("ws://"+location.host+"/ws");
+    ws.onmessage=reload;
+    ws.onclose=function(){setTimeout(reload,1000)};
+  })()</script>
 {% endif %}
 </body>
 </html>
