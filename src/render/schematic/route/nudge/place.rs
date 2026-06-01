@@ -57,7 +57,9 @@ pub(super) fn place(
 /// Write solved perpendicular coordinates back onto their segments.
 fn apply(shapes: &mut [Option<Vec<Segment>>], assignment: &[(usize, usize, f64)]) {
     for &(ri, si, perp) in assignment {
-        if let Some(segs) = shapes[ri].as_mut() {
+        if let Some(segs) = shapes[ri].as_mut()
+            && !segs[si].is_end
+        {
             segs[si].perp = perp;
         }
     }
@@ -417,6 +419,16 @@ mod tests {
 
         assert!((y0 - 10.0).abs() < 1e-3, "pinned segment moved to {y0}");
         assert!((y1 - 16.0).abs() < 1e-3, "free segment didn't yield: {y1}");
+    }
+
+    #[test]
+    fn applying_solution_never_moves_port_touching_segments() {
+        let mut shapes = vec![Some(channel_route(10.0, (1, 2), true))];
+
+        apply(&mut shapes, &[(0, 1, 20.0)]);
+
+        let segs = shapes[0].as_ref().unwrap();
+        assert_eq!(segs[1].perp, 10.0);
     }
 
     #[test]

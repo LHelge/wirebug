@@ -52,6 +52,7 @@ pub(super) struct RawRoute {
 pub(super) struct Router {
     ovg: Ovg,
     obstacles: Vec<Rect>,
+    soft_avoid: Vec<Vec<Point>>,
     /// How far routes stay clear of component boxes, and the length of
     /// the stub a wire leaves its port by — one grid step.
     clearance: f64,
@@ -73,15 +74,27 @@ impl Router {
             extra.push(stub(port, clearance));
         }
 
+        let soft_avoid = placement
+            .enclosure_bounds()
+            .map(|b| outline(Rect::from(b)))
+            .into_iter()
+            .collect();
+
         Self {
             ovg: Ovg::build(&obstacles, &extra),
             obstacles,
+            soft_avoid,
             clearance,
         }
     }
 
     /// Route a single connection through the graph.
-    pub(super) fn route_one(&self, a: &PlacedPort, b: &PlacedPort) -> Result<RawRoute> {
+    fn route_one_avoiding(
+        &self,
+        a: &PlacedPort,
+        b: &PlacedPort,
+        avoid: &[Vec<Point>],
+    ) -> Result<RawRoute> {
         let out_a = out_dir(a);
         let in_b = out_dir(b).opposite();
 
@@ -97,8 +110,18 @@ impl Router {
             .ovg
             .node_at(stub(b, self.clearance))
             .ok_or_else(route_error)?;
-        let nodes = astar::find_route(&self.ovg, a.pos, out_a, stub_a, b.pos, in_b, stub_b)
-            .ok_or_else(route_error)?;
+        let nodes = astar::find_route_avoiding(
+            &self.ovg,
+            a.pos,
+            out_a,
+            stub_a,
+            b.pos,
+            in_b,
+            stub_b,
+            avoid,
+            &self.soft_avoid,
+        )
+        .ok_or_else(route_error)?;
 
         Ok(RawRoute {
             a: a.pos,
@@ -116,12 +139,33 @@ impl Router {
         pairs: &[(&PlacedPort, &PlacedPort)],
         gap: f64,
     ) -> Result<Vec<Vec<Point>>> {
-        let raws: Vec<RawRoute> = pairs
-            .iter()
-            .map(|(a, b)| self.route_one(a, b))
-            .collect::<Result<_>>()?;
+        let mut raws = Vec::with_capacity(pairs.len());
+        let mut routed = Vec::with_capacity(pairs.len());
+        for &(a, b) in pairs {
+            let raw = self.route_one_avoiding(a, b, &routed)?;
+            routed.push(self.raw_points(&raw));
+            raws.push(raw);
+        }
         Ok(nudge::run(&self.ovg, &self.obstacles, &raws, gap))
     }
+
+    fn raw_points(&self, raw: &RawRoute) -> Vec<Point> {
+        let mut pts = Vec::with_capacity(raw.nodes.len() + 2);
+        pts.push(raw.a);
+        pts.extend(raw.nodes.iter().map(|&n| self.ovg.position(n)));
+        pts.push(raw.b);
+        pts
+    }
+}
+
+fn outline(r: Rect) -> Vec<Point> {
+    vec![
+        Point::new(r.x, r.y),
+        Point::new(r.x + r.w, r.y),
+        Point::new(r.x + r.w, r.y + r.h),
+        Point::new(r.x, r.y + r.h),
+        Point::new(r.x, r.y),
+    ]
 }
 
 fn port_name(p: &PlacedPort) -> String {
@@ -262,6 +306,7 @@ component sys {
         let router = Router {
             ovg: Ovg::build(&[obstacle], &[]),
             obstacles: vec![obstacle],
+            soft_avoid: Vec::new(),
             clearance: 10.0,
         };
         let a = PlacedPort {
@@ -282,8 +327,55 @@ component sys {
         };
 
         assert!(matches!(
-            router.route_one(&a, &b),
+            router.route_one_avoiding(&a, &b, &[]),
             Err(crate::error::Error::RouteFailed { .. })
         ));
+    }
+
+    #[test]
+    fn route_all_penalizes_crossings_with_previous_routes() {
+        use crate::dsl::ir::PortName;
+
+        let mk_port = |name: &str, side, x, y| PlacedPort {
+            port: PortName::from(name),
+            side,
+            pos: Point::new(x, y),
+            pin: None,
+            label: name.to_string(),
+            inverted: false,
+        };
+        let ports = [
+            mk_port("a", Side::East, 0.0, 50.0),
+            mk_port("b", Side::West, 30.0, 50.0),
+            mk_port("c", Side::East, 0.0, 0.0),
+            mk_port("d", Side::West, 100.0, 100.0),
+        ];
+        let extra = [
+            Point::new(0.0, 50.0),
+            Point::new(10.0, 50.0),
+            Point::new(20.0, 50.0),
+            Point::new(30.0, 50.0),
+            Point::new(0.0, 0.0),
+            Point::new(10.0, 0.0),
+            Point::new(90.0, 100.0),
+            Point::new(100.0, 100.0),
+        ];
+        let router = Router {
+            ovg: Ovg::build(&[], &extra),
+            obstacles: Vec::new(),
+            soft_avoid: Vec::new(),
+            clearance: 10.0,
+        };
+
+        let wires = router
+            .route_all(&[(&ports[0], &ports[1]), (&ports[2], &ports[3])], 10.0)
+            .expect("routes");
+
+        assert_eq!(wires[0], vec![Point::new(0.0, 50.0), Point::new(30.0, 50.0)]);
+        assert!(
+            wires[1].iter().any(|p| (p.x - 90.0).abs() < EPS),
+            "second route should take the non-crossing dogleg: {:?}",
+            wires[1]
+        );
     }
 }

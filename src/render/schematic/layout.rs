@@ -424,6 +424,17 @@ impl Placement {
         self.enclosure.as_ref()
     }
 
+    /// The subject boundary as routing geometry. The router treats this as a
+    /// soft guide to avoid overlapping the dashed enclosure, not as an
+    /// obstacle: wires may still attach to enclosure ports.
+    pub(super) fn enclosure_bounds(&self) -> Option<Bounds> {
+        self.enclosure.as_ref().map(|pc| Bounds {
+            origin: pc.origin,
+            width: pc.width,
+            height: pc.height,
+        })
+    }
+
     /// Every placed port the router must reach: child ports, then the
     /// enclosure's inverted ports. The enclosure is a routing endpoint set
     /// but not an obstacle, so it is absent from [`Self::component_bounds`].

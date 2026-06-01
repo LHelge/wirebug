@@ -19,15 +19,22 @@ use super::{BEND_PENALTY, SCALE};
 use crate::render::geometry::Point;
 
 const EPS: f64 = 1e-6;
+/// Cost of one proper wire crossing. Kept below a bend so bend count still
+/// dominates, but far above ordinary length so crossings break equal-bend
+/// ties before path length does.
+const CROSSING_PENALTY: i64 = BEND_PENALTY / 10;
+const SOFT_OVERLAP_PENALTY: i64 = BEND_PENALTY / 10;
 
 /// Find a minimal-cost orthogonal route from a source connection point
 /// (leaving along `start_dir`) to a target connection point (entered
 /// along `goal_in_dir`), via the stub nodes `start_stub` / `goal_stub`.
 /// Returns the base OVG node-id path (`start_stub` … `goal_stub`,
 /// excluding the synthetic port nodes), or `None` if the graph offers no
-/// route. Geometry — the port connection points and the collinear
-/// collapse — is reconstructed by the caller.
-pub(super) fn find_route(
+/// route. Adds a crossing penalty for each segment that properly crosses
+/// any already routed polyline in `avoid`, and an overlap penalty for
+/// running along any soft guide line in `soft_avoid`.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn find_route_avoiding(
     ovg: &Ovg,
     start_pos: Point,
     start_dir: Dir,
@@ -35,6 +42,8 @@ pub(super) fn find_route(
     goal_pos: Point,
     goal_in_dir: Dir,
     goal_stub: usize,
+    avoid: &[Vec<Point>],
+    soft_avoid: &[Vec<Point>],
 ) -> Option<Vec<usize>> {
     let search = Search {
         ovg,
@@ -44,6 +53,8 @@ pub(super) fn find_route(
         goal_pos,
         goal_in_dir,
         goal_stub,
+        avoid,
+        soft_avoid,
         port_a: ovg.node_count(),
         port_b: ovg.node_count() + 1,
     };
@@ -71,6 +82,8 @@ struct Search<'a> {
     goal_pos: Point,
     goal_in_dir: Dir,
     goal_stub: usize,
+    avoid: &'a [Vec<Point>],
+    soft_avoid: &'a [Vec<Point>],
     port_a: usize,
     port_b: usize,
 }
@@ -91,7 +104,7 @@ impl Search<'_> {
             let to = self.ovg.position(self.start_stub);
             return vec![(
                 (self.start_stub, self.start_dir),
-                seg_cost(self.start_pos, to, dir, self.start_dir),
+                self.seg_cost(self.start_pos, to, dir, self.start_dir),
             )];
         }
         if id == self.port_b {
@@ -103,13 +116,18 @@ impl Search<'_> {
             .ovg
             .neighbours(id)
             .iter()
-            .map(|&(nb, edir)| ((nb, edir), seg_cost(from, self.ovg.position(nb), dir, edir)))
+            .map(|&(nb, edir)| {
+                (
+                    (nb, edir),
+                    self.seg_cost(from, self.ovg.position(nb), dir, edir),
+                )
+            })
             .collect();
 
         if id == self.goal_stub {
             out.push((
                 (self.port_b, self.goal_in_dir),
-                seg_cost(from, self.goal_pos, dir, self.goal_in_dir),
+                self.seg_cost(from, self.goal_pos, dir, self.goal_in_dir),
             ));
         }
         out
@@ -121,15 +139,82 @@ impl Search<'_> {
         let dy = self.goal_pos.y - p.y;
         len_scaled(p, self.goal_pos) + BEND_PENALTY * min_bends(dx, dy, dir)
     }
-}
 
-fn seg_cost(from: Point, to: Point, entry: Dir, step: Dir) -> i64 {
-    let bend = if step == entry { 0 } else { BEND_PENALTY };
-    len_scaled(from, to) + bend
+    fn seg_cost(&self, from: Point, to: Point, entry: Dir, step: Dir) -> i64 {
+        let bend = if step == entry { 0 } else { BEND_PENALTY };
+        len_scaled(from, to)
+            + bend
+            + CROSSING_PENALTY * crossing_count(from, to, self.avoid)
+            + SOFT_OVERLAP_PENALTY * overlap_count(from, to, self.soft_avoid)
+    }
 }
 
 fn len_scaled(a: Point, b: Point) -> i64 {
     (((a.x - b.x).abs() + (a.y - b.y).abs()) * SCALE).round() as i64
+}
+
+fn crossing_count(a: Point, b: Point, avoid: &[Vec<Point>]) -> i64 {
+    avoid
+        .iter()
+        .flat_map(|route| route.windows(2))
+        .filter(|w| orthogonally_intersects(a, b, w[0], w[1]))
+        .count() as i64
+}
+
+fn overlap_count(a: Point, b: Point, avoid: &[Vec<Point>]) -> i64 {
+    avoid
+        .iter()
+        .flat_map(|route| route.windows(2))
+        .filter(|w| collinear_overlap(a, b, w[0], w[1]))
+        .count() as i64
+}
+
+fn orthogonally_intersects(a: Point, b: Point, c: Point, d: Point) -> bool {
+    let ab_horizontal = (a.y - b.y).abs() < EPS;
+    let cd_horizontal = (c.y - d.y).abs() < EPS;
+    if ab_horizontal == cd_horizontal {
+        return false;
+    }
+
+    let (h0, h1, v0, v1) = if ab_horizontal {
+        (a, b, c, d)
+    } else {
+        (c, d, a, b)
+    };
+    let h_y = h0.y;
+    let v_x = v0.x;
+    let h_lo = h0.x.min(h1.x);
+    let h_hi = h0.x.max(h1.x);
+    let v_lo = v0.y.min(v1.y);
+    let v_hi = v0.y.max(v1.y);
+
+    v_x >= h_lo - EPS && v_x <= h_hi + EPS && h_y >= v_lo - EPS && h_y <= v_hi + EPS
+}
+
+fn collinear_overlap(a: Point, b: Point, c: Point, d: Point) -> bool {
+    let ab_horizontal = (a.y - b.y).abs() < EPS;
+    let cd_horizontal = (c.y - d.y).abs() < EPS;
+    if ab_horizontal != cd_horizontal {
+        return false;
+    }
+
+    if ab_horizontal {
+        if (a.y - c.y).abs() >= EPS {
+            return false;
+        }
+        intervals_overlap(a.x, b.x, c.x, d.x)
+    } else {
+        if (a.x - c.x).abs() >= EPS {
+            return false;
+        }
+        intervals_overlap(a.y, b.y, c.y, d.y)
+    }
+}
+
+fn intervals_overlap(a0: f64, a1: f64, b0: f64, b1: f64) -> bool {
+    let (a_lo, a_hi) = (a0.min(a1), a0.max(a1));
+    let (b_lo, b_hi) = (b0.min(b1), b0.max(b1));
+    a_hi.min(b_hi) - a_lo.max(b_lo) > EPS
 }
 
 /// A lower bound on the bends still needed to reach the goal from a node
@@ -190,7 +275,7 @@ mod tests {
         db: Dir,
         sb: usize,
     ) -> Vec<Point> {
-        let nodes = find_route(ovg, a, da, sa, b, db, sb).expect("route");
+        let nodes = find_route_avoiding(ovg, a, da, sa, b, db, sb, &[], &[]).expect("route");
         let mut pts = vec![a];
         pts.extend(nodes.iter().map(|&n| ovg.position(n)));
         pts.push(b);
@@ -255,5 +340,83 @@ mod tests {
         // Last step arrives at `b` from the West (heading East, inward).
         let penult = path[path.len() - 2];
         assert!(penult.x < b.x && (penult.y - b.y).abs() < EPS);
+    }
+
+    #[test]
+    fn crossing_penalty_breaks_equal_bend_ties() {
+        let a = Point::new(0.0, 0.0);
+        let a_stub = Point::new(10.0, 0.0);
+        let b = Point::new(100.0, 100.0);
+        let b_stub = Point::new(90.0, 100.0);
+        let avoid = vec![vec![Point::new(0.0, 50.0), Point::new(20.0, 50.0)]];
+        let extra = [
+            a,
+            a_stub,
+            b,
+            b_stub,
+            Point::new(10.0, 50.0),
+            Point::new(90.0, 50.0),
+        ];
+        let ovg = Ovg::build(&[] as &[Rect], &extra);
+        let sa = ovg.node_at(a_stub).unwrap();
+        let sb = ovg.node_at(b_stub).unwrap();
+
+        let nodes =
+            find_route_avoiding(&ovg, a, Dir::East, sa, b, Dir::East, sb, &avoid, &[])
+                .expect("route");
+        let mut path = vec![a];
+        path.extend(nodes.iter().map(|&n| ovg.position(n)));
+        path.push(b);
+        let path = collapse_collinear(path);
+
+        assert!(
+            !path
+                .windows(2)
+                .any(|w| orthogonally_intersects(w[0], w[1], avoid[0][0], avoid[0][1])),
+            "route still crosses avoided segment: {path:?}"
+        );
+        assert!(
+            path.iter().any(|p| (p.x - 90.0).abs() < EPS),
+            "expected route to use the non-crossing dogleg: {path:?}"
+        );
+    }
+
+    #[test]
+    fn soft_overlap_penalty_breaks_equal_bend_ties() {
+        let a = Point::new(0.0, 0.0);
+        let a_stub = Point::new(10.0, 0.0);
+        let b = Point::new(100.0, 100.0);
+        let b_stub = Point::new(90.0, 100.0);
+        let soft_avoid = vec![vec![Point::new(10.0, 0.0), Point::new(10.0, 100.0)]];
+        let extra = [
+            a,
+            a_stub,
+            b,
+            b_stub,
+            Point::new(10.0, 100.0),
+            Point::new(90.0, 0.0),
+        ];
+        let ovg = Ovg::build(&[] as &[Rect], &extra);
+        let sa = ovg.node_at(a_stub).unwrap();
+        let sb = ovg.node_at(b_stub).unwrap();
+
+        let nodes =
+            find_route_avoiding(&ovg, a, Dir::East, sa, b, Dir::East, sb, &[], &soft_avoid)
+                .expect("route");
+        let mut path = vec![a];
+        path.extend(nodes.iter().map(|&n| ovg.position(n)));
+        path.push(b);
+        let path = collapse_collinear(path);
+
+        assert!(
+            !path
+                .windows(2)
+                .any(|w| collinear_overlap(w[0], w[1], soft_avoid[0][0], soft_avoid[0][1])),
+            "route still overlaps soft avoid line: {path:?}"
+        );
+        assert!(
+            path.iter().any(|p| (p.x - 90.0).abs() < EPS),
+            "expected route to use the non-overlapping dogleg: {path:?}"
+        );
     }
 }
