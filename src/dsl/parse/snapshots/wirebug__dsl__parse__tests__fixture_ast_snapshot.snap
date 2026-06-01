@@ -1,0 +1,313 @@
+---
+source: src/dsl/parse/mod.rs
+assertion_line: 869
+expression: file
+---
+File {
+    id: FileId(
+        0,
+    ),
+    uses: [],
+    items: [
+        Definition(
+            Definition {
+                name: battery @ 10..17,
+                members: [
+                    Definition(
+                        Definition {
+                            name: cell_pack @ 34..43,
+                            members: [
+                                Port(
+                                    Port {
+                                        visibility: Public,
+                                        name: hv_pos @ 63..69,
+                                        label: "HV+" @ 70..75,
+                                        pins: [],
+                                        span: Span {
+                                            file: FileId(
+                                                0,
+                                            ),
+                                            start: 54,
+                                            end: 76,
+                                        },
+                                    },
+                                ),
+                                Port(
+                                    Port {
+                                        visibility: Public,
+                                        name: hv_neg @ 94..100,
+                                        label: "HV-" @ 101..106,
+                                        pins: [],
+                                        span: Span {
+                                            file: FileId(
+                                                0,
+                                            ),
+                                            start: 85,
+                                            end: 107,
+                                        },
+                                    },
+                                ),
+                            ],
+                            span: Span {
+                                file: FileId(
+                                    0,
+                                ),
+                                start: 24,
+                                end: 113,
+                            },
+                        },
+                    ),
+                    Instance(
+                        Instance {
+                            type_name: cell_pack @ 119..128,
+                            name: pack @ 129..133,
+                            label: Some(
+                                "Cells" @ 134..141,
+                            ),
+                            span: Span {
+                                file: FileId(
+                                    0,
+                                ),
+                                start: 119,
+                                end: 142,
+                            },
+                        },
+                    ),
+                    Connector(
+                        Connector {
+                            name: Some(
+                                hv @ 158..160,
+                            ),
+                            part: "HV 2p" @ 161..168,
+                            ports: [
+                                Port {
+                                    visibility: Public,
+                                    name: hv_pos @ 188..194,
+                                    label: "HV+" @ 195..200,
+                                    pins: [
+                                        1 @ 205..206,
+                                    ],
+                                    span: Span {
+                                        file: FileId(
+                                            0,
+                                        ),
+                                        start: 179,
+                                        end: 207,
+                                    },
+                                },
+                                Port {
+                                    visibility: Public,
+                                    name: hv_neg @ 225..231,
+                                    label: "HV-" @ 232..237,
+                                    pins: [
+                                        2 @ 242..243,
+                                    ],
+                                    span: Span {
+                                        file: FileId(
+                                            0,
+                                        ),
+                                        start: 216,
+                                        end: 244,
+                                    },
+                                },
+                            ],
+                            span: Span {
+                                file: FileId(
+                                    0,
+                                ),
+                                start: 148,
+                                end: 250,
+                            },
+                        },
+                    ),
+                    Wire(
+                        Wire {
+                            color: orange @ 261..267,
+                            gauge: 50.0 @ 268..270,
+                            label: None,
+                            endpoints: [
+                                Endpoint {
+                                    instance: None,
+                                    port: hv_pos @ 272..278,
+                                    span: Span {
+                                        file: FileId(
+                                            0,
+                                        ),
+                                        start: 272,
+                                        end: 278,
+                                    },
+                                },
+                                Endpoint {
+                                    instance: Some(
+                                        pack @ 280..284,
+                                    ),
+                                    port: hv_pos @ 285..291,
+                                    span: Span {
+                                        file: FileId(
+                                            0,
+                                        ),
+                                        start: 280,
+                                        end: 291,
+                                    },
+                                },
+                            ],
+                            span: Span {
+                                file: FileId(
+                                    0,
+                                ),
+                                start: 256,
+                                end: 293,
+                            },
+                        },
+                    ),
+                    Wire(
+                        Wire {
+                            color: orange @ 303..309,
+                            gauge: 50.0 @ 310..312,
+                            label: None,
+                            endpoints: [
+                                Endpoint {
+                                    instance: None,
+                                    port: hv_neg @ 314..320,
+                                    span: Span {
+                                        file: FileId(
+                                            0,
+                                        ),
+                                        start: 314,
+                                        end: 320,
+                                    },
+                                },
+                                Endpoint {
+                                    instance: Some(
+                                        pack @ 322..326,
+                                    ),
+                                    port: hv_neg @ 327..333,
+                                    span: Span {
+                                        file: FileId(
+                                            0,
+                                        ),
+                                        start: 322,
+                                        end: 333,
+                                    },
+                                },
+                            ],
+                            span: Span {
+                                file: FileId(
+                                    0,
+                                ),
+                                start: 298,
+                                end: 335,
+                            },
+                        },
+                    ),
+                ],
+                span: Span {
+                    file: FileId(
+                        0,
+                    ),
+                    start: 0,
+                    end: 337,
+                },
+            },
+        ),
+        View(
+            View {
+                kind: schematic @ 344..353,
+                title: "Battery Detail" @ 354..370,
+                grid: Some(
+                    20.0 @ 382..384,
+                ),
+                has_enclosure: true,
+                enclosure: [
+                    EnclosurePort {
+                        port: hv_pos @ 411..417,
+                        x: Edge(
+                            west @ 422..426,
+                        ),
+                        y: Coord(
+                            4.0 @ 428..429,
+                        ),
+                        span: Span {
+                            file: FileId(
+                                0,
+                            ),
+                            start: 411,
+                            end: 431,
+                        },
+                    },
+                    EnclosurePort {
+                        port: hv_neg @ 440..446,
+                        x: Edge(
+                            east @ 451..455,
+                        ),
+                        y: Coord(
+                            4.0 @ 457..458,
+                        ),
+                        span: Span {
+                            file: FileId(
+                                0,
+                            ),
+                            start: 440,
+                            end: 460,
+                        },
+                    },
+                ],
+                includes: [
+                    Include {
+                        instance: pack @ 480..484,
+                        connector: None,
+                        x: 10.0 @ 489..491,
+                        y: 4.0 @ 493..494,
+                        ports: [
+                            PortPlacement {
+                                side: west @ 512..516,
+                                port: hv_pos @ 519..525,
+                                span: Span {
+                                    file: FileId(
+                                        0,
+                                    ),
+                                    start: 512,
+                                    end: 526,
+                                },
+                            },
+                            PortPlacement {
+                                side: east @ 535..539,
+                                port: hv_neg @ 542..548,
+                                span: Span {
+                                    file: FileId(
+                                        0,
+                                    ),
+                                    start: 535,
+                                    end: 549,
+                                },
+                            },
+                        ],
+                        span: Span {
+                            file: FileId(
+                                0,
+                            ),
+                            start: 472,
+                            end: 556,
+                        },
+                    },
+                ],
+                texts: [],
+                duplicate_items: [],
+                span: Span {
+                    file: FileId(
+                        0,
+                    ),
+                    start: 339,
+                    end: 558,
+                },
+            },
+        ),
+    ],
+    span: Span {
+        file: FileId(
+            0,
+        ),
+        start: 0,
+        end: 558,
+    },
+}

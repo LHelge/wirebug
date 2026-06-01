@@ -314,9 +314,11 @@ mod tests {
     }
 
     #[test]
-    fn elaborates_the_seed_design_tree() {
-        let main =
-            std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/main.wb"));
+    fn elaborates_a_multi_file_design_tree() {
+        let main = std::path::PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/basic_project/main.wb"
+        ));
         let (project, _) = load(&main);
         let project = project.expect("loads");
         let resolved = resolve(&project);
@@ -328,33 +330,26 @@ mod tests {
 
         // Deep path materialized down through the hierarchy.
         let pack = InstancePath::root(InstanceName::from("vehicle"))
-            .child(InstanceName::from("front"))
-            .child(InstanceName::from("module_1"))
+            .child(InstanceName::from("pack"))
             .child(InstanceName::from("pack"));
-        let pack_inst = design
-            .get(&pack)
-            .expect("vehicle.front.module_1.pack exists");
+        let pack_inst = design.get(&pack).expect("vehicle.pack.pack exists");
         assert_eq!(pack_inst.type_name.as_str(), "cell_pack");
         assert!(pack_inst.ports.contains_key(&PortName::from("hv_pos")));
 
-        // `front` is a front_battery.
-        let front =
-            InstancePath::root(InstanceName::from("vehicle")).child(InstanceName::from("front"));
-        assert_eq!(
-            design.get(&front).unwrap().type_name.as_str(),
-            "front_battery"
-        );
+        // Imported child instances are stamped at the root level.
+        let battery =
+            InstancePath::root(InstanceName::from("vehicle")).child(InstanceName::from("pack"));
+        assert_eq!(design.get(&battery).unwrap().type_name.as_str(), "battery");
 
-        // The vehicle-level HV bus is a 4-endpoint shared rail; the
-        // chassis-ground bus is a 5-endpoint one. Both are multi-endpoint.
+        // The root owns two point-to-point HV wires between the included
+        // battery and inverter.
         let vehicle = design.get(&design.root).unwrap();
         assert!(
-            vehicle.wires.iter().any(|w| w.endpoints.len() == 4),
-            "the shared HV bus is a four-endpoint wire"
-        );
-        assert!(
-            vehicle.wires.iter().any(|w| w.endpoints.len() == 5),
-            "the chassis-ground bus is a five-endpoint wire"
+            vehicle
+                .wires
+                .iter()
+                .all(|w| w.gauge == 50.0 && w.endpoints.len() == 2),
+            "the fixture root uses only two-endpoint HV wires"
         );
 
         // Views came through, bound to their type.

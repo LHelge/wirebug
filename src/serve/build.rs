@@ -149,13 +149,13 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn example_main() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/main.wb")
+    fn fixture_main() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/basic_project/main.wb")
     }
 
     #[test]
     fn clean_project_yields_views_and_an_index() {
-        let build = build_site(Some(&example_main()));
+        let build = build_site(Some(&fixture_main()));
         assert_eq!(build.errors, 0);
         assert!(!build.site.svgs.is_empty(), "expected rendered SVGs");
         assert!(build.site.index_html.contains("wirebug views"));

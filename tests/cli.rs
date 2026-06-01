@@ -4,6 +4,8 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use tempfile::tempdir;
 
+const FIXTURE_MAIN: &str = "tests/fixtures/basic_project/main.wb";
+
 #[test]
 fn render_writes_an_svg_per_view() {
     let tmp = tempdir().expect("tempdir");
@@ -11,30 +13,29 @@ fn render_writes_an_svg_per_view() {
 
     Command::cargo_bin("wirebug")
         .expect("binary present")
-        .args(["render", "examples/main.wb", "--out", out.to_str().unwrap()])
+        .args(["render", FIXTURE_MAIN, "--out", out.to_str().unwrap()])
         .assert()
         .success()
         .stderr(predicate::str::contains("rendered"));
 
     // The top-level view lands as a slug of its title and is a real SVG
     // with its title and routed wires.
-    let svg =
-        std::fs::read_to_string(out.join("hv_system_overview.svg")).expect("hv view rendered");
+    let svg = std::fs::read_to_string(out.join("system_overview.svg")).expect("view rendered");
     assert!(svg.contains("<svg"));
-    assert!(svg.contains("HV System Overview"));
+    assert!(svg.contains("System Overview"));
     assert!(svg.contains("class=\"wire\""));
 
-    // The front-battery detail wraps its children in the subject's
-    // enclosure, drawing the pack's own external ports on the boundary.
+    // The battery detail wraps its children in the subject's enclosure,
+    // drawing the pack's own external ports on the boundary.
     let detail =
-        std::fs::read_to_string(out.join("front_battery.svg")).expect("battery view rendered");
+        std::fs::read_to_string(out.join("battery_detail.svg")).expect("battery view rendered");
     assert!(detail.contains("class=\"enclosure\""));
     assert!(detail.contains("class=\"enclosure-label\""));
 
     // The harness view renders connectors as pin tables with labelled,
     // gauged cable bundles between them.
     let harness =
-        std::fs::read_to_string(out.join("main_hv_harness.svg")).expect("harness view rendered");
+        std::fs::read_to_string(out.join("main_harness.svg")).expect("harness view rendered");
     assert!(harness.contains("class=\"connector\""));
     assert!(harness.contains("class=\"cable-wire\""));
     assert!(harness.contains("HV+ · 50mm²"));
@@ -54,7 +55,7 @@ fn render_png_writes_a_png_per_view_and_index_references_png() {
         .expect("binary present")
         .args([
             "render",
-            "examples/main.wb",
+            FIXTURE_MAIN,
             "--out",
             out.to_str().unwrap(),
             "--png",
@@ -65,19 +66,19 @@ fn render_png_writes_a_png_per_view_and_index_references_png() {
 
     // Each view lands as a real PNG (right magic bytes) under the slug
     // it would have got as an SVG, with `.png` swapped in.
-    let png = std::fs::read(out.join("hv_system_overview.png")).expect("hv view rasterised");
+    let png = std::fs::read(out.join("system_overview.png")).expect("view rasterised");
     assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
-    assert!(out.join("front_battery.png").is_file());
-    assert!(out.join("main_hv_harness.png").is_file());
+    assert!(out.join("battery_detail.png").is_file());
+    assert!(out.join("main_harness.png").is_file());
 
     // The matching SVGs are not written in PNG mode.
-    assert!(!out.join("hv_system_overview.svg").exists());
-    assert!(!out.join("front_battery.svg").exists());
+    assert!(!out.join("system_overview.svg").exists());
+    assert!(!out.join("battery_detail.svg").exists());
 
     // The index references the PNGs, never the SVGs.
     let index = std::fs::read_to_string(out.join("index.html")).expect("index rendered");
-    assert!(index.contains("src=\"hv_system_overview.png\""));
-    assert!(index.contains("src=\"main_hv_harness.png\""));
+    assert!(index.contains("src=\"system_overview.png\""));
+    assert!(index.contains("src=\"main_harness.png\""));
     assert!(!index.contains(".svg"));
 }
 
@@ -176,10 +177,10 @@ fn serve_help_documents_the_port_flag() {
 }
 
 #[test]
-fn check_accepts_the_example_project() {
+fn check_accepts_the_fixture_project() {
     Command::cargo_bin("wirebug")
         .expect("binary present")
-        .args(["check", "examples/main.wb"])
+        .args(["check", FIXTURE_MAIN])
         .assert()
         .success();
 }

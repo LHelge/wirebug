@@ -301,15 +301,15 @@ mod tests {
     }
 
     #[test]
-    fn lexes_every_example_file_without_error() {
-        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/examples");
+    fn lexes_every_fixture_file_without_error() {
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/basic_project");
         let mut count = 0;
         for entry in walk_wb(std::path::Path::new(root)) {
-            let src = std::fs::read_to_string(&entry).expect("read example");
+            let src = std::fs::read_to_string(&entry).expect("read fixture");
             lex(&src, F).unwrap_or_else(|e| panic!("lex {}: {e:?}", entry.display()));
             count += 1;
         }
-        assert!(count >= 13, "expected the full seed corpus, found {count}");
+        assert_eq!(count, 3, "expected the full fixture corpus");
     }
 
     fn walk_wb(dir: &std::path::Path) -> Vec<std::path::PathBuf> {

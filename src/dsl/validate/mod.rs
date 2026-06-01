@@ -160,9 +160,11 @@ mod tests {
     }
 
     #[test]
-    fn seed_project_has_no_validation_problems() {
-        let main =
-            std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/main.wb"));
+    fn fixture_project_has_no_validation_problems() {
+        let main = std::path::PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/basic_project/main.wb"
+        ));
         let (project, _) = load(&main);
         let project = project.expect("loads");
         let resolved = resolve(&project);

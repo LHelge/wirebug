@@ -828,11 +828,11 @@ component b { }
     }
 
     #[test]
-    fn parses_every_example_file() {
-        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/examples");
+    fn parses_every_fixture_file() {
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/basic_project");
         let mut count = 0;
         for path in super::tests::walk_wb(std::path::Path::new(root)) {
-            let src = std::fs::read_to_string(&path).expect("read example");
+            let src = std::fs::read_to_string(&path).expect("read fixture");
             let parsed = parse_str(&src);
             assert!(
                 parsed.errors.is_empty() && parsed.file.is_some(),
@@ -842,7 +842,7 @@ component b { }
             );
             count += 1;
         }
-        assert!(count >= 13, "expected the full seed corpus, found {count}");
+        assert_eq!(count, 3, "expected the full fixture corpus");
     }
 
     fn walk_wb(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
@@ -859,12 +859,12 @@ component b { }
     }
 
     #[test]
-    fn contactor_ast_snapshot() {
+    fn fixture_ast_snapshot() {
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/examples/components/contactor.wb"
+            "/tests/fixtures/basic_project/components/battery.wb"
         );
-        let src = std::fs::read_to_string(path).expect("read contactor.wb");
+        let src = std::fs::read_to_string(path).expect("read fixture");
         let file = parse_ok(&src);
         insta::assert_debug_snapshot!(file);
     }

@@ -228,22 +228,28 @@ fn lex_message(err: &crate::dsl::lex::LexError) -> String {
 mod tests {
     use super::*;
 
-    fn examples_main() -> PathBuf {
-        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/main.wb"))
+    fn fixture_main() -> PathBuf {
+        PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/basic_project/main.wb"
+        ))
     }
 
     #[test]
-    fn loads_the_whole_seed_project() {
-        let (project, problems) = load(&examples_main());
+    fn loads_a_multi_file_project() {
+        let (project, problems) = load(&fixture_main());
         assert!(problems.is_empty(), "unexpected problems: {problems:?}");
         let project = project.expect("project loaded");
-        // main.wb plus 12 component files, all reachable via `use`.
-        assert_eq!(project.files.len(), 13, "reachable file count");
+        // main.wb plus two imported component files, all reachable via `use`.
+        assert_eq!(project.files.len(), 3, "reachable file count");
     }
 
     #[test]
     fn discover_finds_main_by_walking_up() {
-        let from = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/components"));
+        let from = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/basic_project/components"
+        ));
         let found = discover(Some(&from)).expect("walk up to main.wb");
         assert!(found.ends_with("main.wb"));
     }

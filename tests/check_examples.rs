@@ -1,7 +1,7 @@
-//! End-to-end check of the seed project through the public pipeline.
+//! End-to-end check of a stable fixture project through the public pipeline.
 //!
-//! The `examples/` project is the gold-standard input: `check_project`
-//! must run it cleanly and elaborate the expected design tree.
+//! The user-facing examples change often, so structural assertions live on
+//! this deliberately small test project instead.
 
 use std::path::Path;
 
@@ -9,13 +9,13 @@ use wirebug::dsl::check_project;
 use wirebug::dsl::ir::{InstanceName, InstancePath, PortName};
 
 #[test]
-fn seed_project_checks_clean_and_elaborates() {
-    let main = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/main.wb");
+fn fixture_project_checks_clean_and_elaborates() {
+    let main = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/basic_project/main.wb");
     let report = check_project(Some(&main));
 
     assert!(
         report.problems.is_empty(),
-        "seed project should check clean, got {} problems",
+        "fixture project should check clean, got {} problems",
         report.problems.len()
     );
 
@@ -24,33 +24,27 @@ fn seed_project_checks_clean_and_elaborates() {
 
     // The hierarchy is stamped out to the leaves.
     let pack = InstancePath::root(InstanceName::from("vehicle"))
-        .child(InstanceName::from("front"))
-        .child(InstanceName::from("module_1"))
+        .child(InstanceName::from("pack"))
         .child(InstanceName::from("pack"));
-    let pack = design.get(&pack).expect("vehicle.front.module_1.pack");
+    let pack = design.get(&pack).expect("vehicle.pack.pack");
     assert_eq!(pack.type_name.as_str(), "cell_pack");
     assert!(pack.ports.contains_key(&PortName::from("hv_pos")));
 
-    // Both battery packs are present and distinct types.
-    let front =
-        InstancePath::root(InstanceName::from("vehicle")).child(InstanceName::from("front"));
-    let rear = InstancePath::root(InstanceName::from("vehicle")).child(InstanceName::from("rear"));
+    // Imported child instances are present and distinct types.
+    let battery =
+        InstancePath::root(InstanceName::from("vehicle")).child(InstanceName::from("pack"));
+    let inverter =
+        InstancePath::root(InstanceName::from("vehicle")).child(InstanceName::from("inv"));
+    assert_eq!(design.get(&battery).unwrap().type_name.as_str(), "battery");
     assert_eq!(
-        design.get(&front).unwrap().type_name.as_str(),
-        "front_battery"
-    );
-    assert_eq!(
-        design.get(&rear).unwrap().type_name.as_str(),
-        "rear_battery"
+        design.get(&inverter).unwrap().type_name.as_str(),
+        "inverter"
     );
 
-    // Six views came through (schematic overview + two battery details +
-    // the cell-module detail, plus the HV harness and the motor-phase cable
-    // harness).
-    assert_eq!(design.views.len(), 6);
+    assert_eq!(design.views.len(), 3);
     assert_eq!(
         design.views.iter().filter(|v| v.kind.is_harness()).count(),
-        2,
-        "the HV harness and motor-phase harness views are present"
+        1,
+        "the harness view is present"
     );
 }

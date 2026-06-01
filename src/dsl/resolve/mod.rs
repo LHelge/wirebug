@@ -831,9 +831,11 @@ mod tests {
     }
 
     #[test]
-    fn seed_project_resolves_cleanly() {
-        let main =
-            std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/examples/main.wb"));
+    fn fixture_project_resolves_cleanly() {
+        let main = std::path::PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/basic_project/main.wb"
+        ));
         let (project, load_problems) = load(&main);
         assert!(load_problems.is_empty(), "load: {load_problems:?}");
         let project = project.expect("loads");
