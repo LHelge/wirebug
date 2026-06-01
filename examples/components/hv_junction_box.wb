@@ -1,0 +1,30 @@
+// HV junction box
+// Receives the completed pack string and distributes it to the inverter and
+// OBC/DC-DC.
+
+component hv_junction_box {
+    connector pack "Pack string HV 2p" {
+        pub port pack_pos_in "PACK HV+" pin 1;
+        pub port pack_neg_in "PACK HV-" pin 2;
+    }
+
+    connector inverter "Inverter HV 2p" {
+        pub port inv_pos "INV DC+" pin 1;
+        pub port inv_neg "INV DC-" pin 2;
+    }
+
+    connector obc "OBC/DC-DC HV 2p" {
+        pub port obc_pos "OBC DC+" pin 1;
+        pub port obc_neg "OBC DC-" pin 2;
+    }
+
+    connector intlk "Interlock 2p" {
+        pub port interlock_in  "INTLK IN" pin 1;
+        pub port interlock_out "INTLK OUT" pin 2;
+    }
+
+    wire orange 50 "HV+" [pack_pos_in, inv_pos, obc_pos];
+    wire orange 50 "HV-" [pack_neg_in, inv_neg, obc_neg];
+
+    wire green 0.5 [interlock_in, interlock_out];
+}

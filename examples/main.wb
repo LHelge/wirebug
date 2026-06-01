@@ -2,6 +2,8 @@
 
 use front_battery from "components/front_battery.wb"
 use rear_battery  from "components/rear_battery.wb"
+use hv_junction_box from "components/hv_junction_box.wb"
+use msd           from "components/msd.wb"
 use inverter      from "components/inverter.wb"
 use motor         from "components/motor.wb"
 use obc_dcdc      from "components/obc_dcdc.wb"
@@ -14,6 +16,8 @@ component vehicle {
 
     front_battery front   "Front Battery";
     rear_battery  rear    "Rear Battery";
+    hv_junction_box hvjb  "HV Junction Box";
+    msd           msd     "MSD";
     inverter      inv     "Inverter";
     motor         mot     "Motor";
     obc_dcdc      charger "OBC/DC-DC";
@@ -21,11 +25,19 @@ component vehicle {
     fuse_box      fuses   "Fuse Box";
     e_stop        e_stop  "E-Stop";
 
-    // --- HV bus ---
-    // Shared positive and negative rails connecting all HV components
+    // --- HV system ---
+    // The battery packs are wired in series before the completed string enters
+    // the HV junction box. The front battery negative leg passes through the
+    // MSD before becoming the pack negative input.
 
-    wire orange 50 "HV+" [front.hv_pos, rear.hv_pos, inv.dc_pos, charger.dc_pos];
-    wire orange 50 "HV-" [front.hv_neg, rear.hv_neg, inv.dc_neg, charger.dc_neg];
+    wire orange 50 "Series link" [front.hv_pos, rear.hv_neg];
+    wire orange 50 "Pack HV+" [rear.hv_pos, hvjb.pack_pos_in];
+    wire orange 50 "Front HV-" [front.hv_neg, msd.hv_in];
+    wire orange 50 "Pack HV-" [msd.hv_out, hvjb.pack_neg_in];
+    wire orange 50 "Inverter HV+" [hvjb.inv_pos, inv.dc_pos];
+    wire orange 50 "Inverter HV-" [hvjb.inv_neg, inv.dc_neg];
+    wire orange 50 "OBC HV+" [hvjb.obc_pos, charger.dc_pos];
+    wire orange 50 "OBC HV-" [hvjb.obc_neg, charger.dc_neg];
 
     // --- Motor phases ---
     // A real point-to-point cable: three conductors, inverter to motor.
@@ -45,20 +57,22 @@ component vehicle {
     wire blue 0.5 [vcm.can_l, front.can_l, rear.can_l, inv.can_l, charger.can_l];
 
     // --- HV interlock chain ---
-    // Fuse box sources 12V → front → rear → inverter → OBC → e-stop → VCM (terminates)
+    // Fuse box sources 12V → e-stop → MSD → front → rear → hvjb -> inverter → OBC → VCM
 
-    wire green 0.5 [fuses.interlock, front.interlock_in];
+    wire green 0.5 [fuses.interlock, e_stop.interlock_in];
+    wire green 0.5 [e_stop.interlock_out, msd.interlock_in];
+    wire green 0.5 [msd.interlock_out, front.interlock_in];
     wire green 0.5 [front.interlock_out, rear.interlock_in];
-    wire green 0.5 [rear.interlock_out, inv.interlock_in];
+    wire green 0.5 [rear.interlock_out, hvjb.interlock_in];
+    wire green 0.5 [hvjb.interlock_out, inv.interlock_in];
     wire green 0.5 [inv.interlock_out, charger.interlock_in];
-    wire green 0.5 [charger.interlock_out, e_stop.interlock_in];
-    wire green 0.5 [e_stop.interlock_out, vcm.interlock];
+    wire green 0.5 [charger.interlock_out, vcm.interlock];
 
     // --- Safe power ---
     // VCM enables safe power when interlock OK + safety checks pass
     // Feeds contactor high-side in both battery packs
 
-    wire red 2.5 [vcm.safe_pwr, front.safe_pwr, rear.safe_pwr];
+    wire red 2.5 [vcm.safe_pwr, rear.safe_pwr, front.safe_pwr];
 
     // --- 12V system ---
     // OBC/DC-DC output feeds fuse box; fuse box distributes to subsystems
@@ -82,43 +96,53 @@ view schematic "HV System Overview" {
 
     enclosure {
     }
-
-    include front at (10, 10) ports {
-        east:  hv_pos, hv_neg, can_h, can_l, b_pos, safe_pwr, gnd;
+    
+    include msd at (10, 10) ports {
+        east:  hv_in;
+        west:  hv_out;
         south: interlock_in, interlock_out;
     };
 
-    include rear at (10, 30) ports {
-        east:  hv_pos, hv_neg, can_h, can_l, b_pos, safe_pwr, gnd;
-        north: interlock_in, interlock_out;
+    include front at (25, 10) ports {
+        west: hv_neg;
+        east: hv_pos;
+        south: interlock_in, safe_pwr, interlock_out;
     };
 
-    include inv at (38, 10) ports {
-        west:  dc_pos, dc_neg, can_h, can_l, b_pos, gnd;
+    include rear at (40, 10) ports {
+        west: hv_neg;
+        east: hv_pos;
+        south: interlock_in, safe_pwr, interlock_out;
+    };
+
+    include hvjb at (55, 11) ports {
+        west:  pack_pos_in, pack_neg_in;
+        east:  inv_pos, inv_neg, obc_pos, obc_neg;
+        south: interlock_in, interlock_out;
+    };
+
+    include inv at (80, 9) ports {
+        west:  dc_pos, dc_neg;
         east:  phase_u, phase_v, phase_w;
         south: interlock_in, interlock_out;
     };
 
-    include charger at (38, 30) ports {
-        west:  dc_pos, dc_neg, can_h, can_l, out_pos, out_neg;
-        south: interlock_in, interlock_out;
+    include charger at (75, 25) ports {
+        west:  dc_pos, dc_neg;
+        south: interlock_out, interlock_in;
     };
 
-    include vcm at (38, 50) ports {
-        west:  can_h, can_l, b_pos, gnd, safe_pwr;
-        north: interlock;
-    };
-
-    include mot at (66, 10) ports {
+    include mot at (95, 9) ports {
         west: phase_u, phase_v, phase_w;
     };
 
-    include e_stop at (66, 30) ports {
-        west: interlock_in, interlock_out;
+    include e_stop at (20, 25) ports {
+        west: interlock_out, interlock_in;
     };
 
-    include fuses at (66, 50) ports {
-        west: batt_in, vcm, inv, bms_front, bms_rear, interlock;
+    include vcm at (55, 30) ports {
+        west:  safe_pwr;
+        east: interlock;
     };
 }
 
@@ -129,10 +153,14 @@ view schematic "HV System Overview" {
 view harness "Main HV harness" {
     grid 20;
 
-    include front.hv   at (4, 8);
-    include rear.hv     at (4, 22);
-    include inv.hv      at (34, 8);
-    include charger.hv  at (40, 22);
+    include front.hv      at (4, 8);
+    include rear.hv       at (4, 22);
+    include msd.hv        at (22, 8);
+    include hvjb.pack     at (34, 14);
+    include hvjb.inverter at (46, 8);
+    include hvjb.obc      at (46, 22);
+    include inv.hv        at (64, 8);
+    include charger.hv    at (64, 22);
 }
 
 // --- View: Motor phase harness ---
