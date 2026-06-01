@@ -133,7 +133,8 @@ impl Router {
     /// Route every connection, then nudge shared channels apart (paper
     /// §6). Returns one polyline per input pair, in order. `gap` is the
     /// minimum spacing between parallel wires in a shared channel — the
-    /// view's grid step, so a nudged bundle stays grid-aligned.
+    /// port pitch (two grid steps), so a nudged bundle stays grid-aligned
+    /// and matches the spacing of the ports it fans out from.
     pub(super) fn route_all(
         &self,
         pairs: &[(&PlacedPort, &PlacedPort)],
