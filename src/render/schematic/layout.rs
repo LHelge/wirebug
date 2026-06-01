@@ -68,8 +68,9 @@ impl Grid {
 
     /// Spacing between consecutive ports on a side: two grid steps. The
     /// grid is validated so this pitch is at least `MIN_PORT_PITCH`, so
-    /// adjacent port labels never collide.
-    fn pitch(self) -> f64 {
+    /// adjacent port labels never collide. Parallel wires in a nudged
+    /// channel are spread by this same pitch (see [`SchematicRenderer`]).
+    pub(super) fn pitch(self) -> f64 {
         2.0 * self.0
     }
 

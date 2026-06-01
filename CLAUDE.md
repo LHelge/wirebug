@@ -122,8 +122,12 @@ box is always an even number of steps, so its centre and every port land on
 a grid line. The side margin (corner to first port) is a full pitch (two
 steps). Boxes always size from the busiest side's port count — width also
 respects a text minimum (`MIN_WIDTH`); there is no explicit `width`/`height`
-in the DSL. The routing clearance and nudge gap are one grid step, so wire
-bundles stay grid-integral; routing otherwise sees only world geometry.
+in the DSL. The routing clearance (box keepout) is one grid step; the nudge
+gap is the port pitch (two steps), so parallel wires in a channel space out
+like the ports they fan from. Both keep bundles grid-integral, and routing
+otherwise sees only world geometry. (Matching the keepout to the pitch was
+tried and reverted: at two steps the inflated box rects overlap on tightly
+packed views and close off the only corridor, so routing fails.)
 Because the pitch is two steps, the grid must be at least
 `MIN_PORT_PITCH / 2`; a finer grid errors.
 

@@ -99,7 +99,10 @@ impl SchematicRenderer {
         // component bounds, so the viewBox has to enclose them too.
         let router = Router::build(&placement, step);
         let pairs = placement.connection_pairs();
-        let wires = router.route_all(&pairs, step)?;
+        // Spread parallel wires in a shared channel by the port pitch (two
+        // steps), so a nudged bundle matches the spacing of the ports it
+        // fans out from rather than packing twice as tight.
+        let wires = router.route_all(&pairs, grid.pitch())?;
 
         let mut doc = Document::new().set("xmlns", "http://www.w3.org/2000/svg");
         if embed {
