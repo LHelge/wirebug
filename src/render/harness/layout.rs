@@ -11,6 +11,7 @@
 //! is kept only when both ends land on *included* connectors. Connectorless
 //! ports, `Own` ends, and ends on excluded connectors drop silently.
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 
 use indexmap::IndexMap;
@@ -35,8 +36,12 @@ pub(super) struct PinRow {
     pub(super) label: String,
     /// Row centre line (world y).
     pub(super) y: f64,
-    /// Where cables attach: on the node's facing edge, at the row centre.
-    /// Filled once facing is known.
+    /// Which edge this pin's cable leaves by — toward the connector its
+    /// conductor reaches. Pins of one node can differ (a node that bridges
+    /// both directions). Filled by [`HarnessLayout::face_pins`].
+    pub(super) side: Side,
+    /// Where cables attach: on this pin's `side` edge, at the row centre.
+    /// Filled alongside `side`.
     pub(super) attach: Point,
 }
 
@@ -49,6 +54,8 @@ pub(super) struct ConnectorNode {
     pub(super) origin: Point,
     pub(super) width: f64,
     pub(super) height: f64,
+    /// The node's dominant pin side — a per-node summary of the per-pin
+    /// [`PinRow::side`]s, used where a single facing is wanted.
     pub(super) facing: Side,
     pub(super) pins: Vec<PinRow>,
 }
@@ -202,11 +209,12 @@ impl HarnessLayout {
             }
         }
 
-        // The spine is the vertical line midway between the connectors; each
-        // node faces it, so attach points all point at the trunk.
+        // The spine is the vertical line midway between the connectors. Each
+        // pin attaches on the edge toward the connector its conductor reaches,
+        // so a node bridging both directions sends each pin the short way
+        // rather than forcing the whole table to one side.
         let spine_x = Self::spine_x(&nodes);
-        Self::face_spine(&mut nodes, spine_x);
-        Self::set_attach_points(&mut nodes);
+        Self::face_pins(&mut nodes, &raws, spine_x);
 
         // Declared cables draw as boxes on the spine; loose wires draw as
         // direct pin-to-pin beziers.
@@ -243,29 +251,41 @@ impl HarnessLayout {
         }
     }
 
-    /// Face every node toward the spine: a node left of it faces East (attach
-    /// on its right edge), one on or right of it faces West.
-    fn face_spine(nodes: &mut [ConnectorNode], spine_x: f64) {
-        for node in nodes.iter_mut() {
-            node.facing = if node.centre().x < spine_x {
-                Side::East
-            } else {
-                Side::West
-            };
+    /// Give every pin the edge it should leave by: the side toward the
+    /// connector its conductor reaches (East when that connector is to the
+    /// right, West when to the left), voting across the pin's conductors. A
+    /// pin with no conductor, or a left/right tie, falls back to the spine
+    /// side. Each node's `facing` is set to the dominant side of its pins.
+    fn face_pins(nodes: &mut [ConnectorNode], wires: &[RawWire], spine_x: f64) {
+        // +1 east / -1 west, summed per (node, pin row) over its conductors.
+        let mut votes: HashMap<(usize, usize), i32> = HashMap::new();
+        for w in wires {
+            let (ax, bx) = (nodes[w.a].centre().x, nodes[w.b].centre().x);
+            *votes.entry((w.a, w.ra)).or_default() += if bx >= ax { 1 } else { -1 };
+            *votes.entry((w.b, w.rb)).or_default() += if ax >= bx { 1 } else { -1 };
         }
-    }
 
-    /// With facing known, pin attach points sit on the facing edge at each
-    /// row's centre line.
-    fn set_attach_points(nodes: &mut [ConnectorNode]) {
-        for node in nodes.iter_mut() {
-            let edge_x = match node.facing {
-                Side::West => node.origin.x,
-                _ => node.origin.x + node.width,
-            };
-            for row in &mut node.pins {
+        for (ni, node) in nodes.iter_mut().enumerate() {
+            let cx = node.origin.x + node.width / 2.0;
+            let spine_side = if cx < spine_x { Side::East } else { Side::West };
+            let (left_x, right_x) = (node.origin.x, node.origin.x + node.width);
+            let mut tally = 0i32;
+            for (ri, row) in node.pins.iter_mut().enumerate() {
+                let side = match votes.get(&(ni, ri)).copied().unwrap_or(0) {
+                    v if v > 0 => Side::East,
+                    v if v < 0 => Side::West,
+                    _ => spine_side,
+                };
+                row.side = side;
+                let edge_x = if side == Side::West { left_x } else { right_x };
                 row.attach = Point::new(edge_x, row.y);
+                tally += if side == Side::East { 1 } else { -1 };
             }
+            node.facing = match tally.cmp(&0) {
+                Ordering::Greater => Side::East,
+                Ordering::Less => Side::West,
+                Ordering::Equal => spine_side,
+            };
         }
     }
 
@@ -417,7 +437,8 @@ fn build_node(child: &Instance, conn: &ConnectorName, cx: f64, cy: f64) -> Optio
             pin,
             label,
             y: origin.y + HEADER_HEIGHT + (i as f64 + 0.5) * ROW_HEIGHT,
-            attach: Point::ORIGIN, // set in set_attach_points
+            side: Side::East,      // set in face_pins
+            attach: Point::ORIGIN, // set in face_pins
         })
         .collect();
 

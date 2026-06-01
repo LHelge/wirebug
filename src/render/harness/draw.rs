@@ -50,22 +50,24 @@ pub(super) fn render_node(node: &ConnectorNode) -> Group {
         .add(title)
         .add(subtitle);
 
-    // The pin column runs along the facing edge; the label column fills the
-    // rest. The numbers sit nearest the cables.
-    let facing_west = node.facing == Side::West;
-    let pin_col_x = if facing_west {
-        ox + PIN_COL_WIDTH / 2.0
-    } else {
-        ox + node.width - PIN_COL_WIDTH / 2.0
-    };
-    let (label_x, label_anchor) = if facing_west {
-        (ox + PIN_COL_WIDTH + NODE_PAD, "start")
-    } else {
-        (ox + node.width - PIN_COL_WIDTH - NODE_PAD, "end")
-    };
-
     for (i, row) in node.pins.iter().enumerate() {
         let row_top = oy + HEADER_HEIGHT + i as f64 * ROW_HEIGHT;
+
+        // Each pin's number column hugs the edge it leaves by (nearest its
+        // cable); the label column fills the rest. Pins of one node can leave
+        // by different edges, so this is decided per row, not per node.
+        let facing_west = row.side == Side::West;
+        let pin_col_x = if facing_west {
+            ox + PIN_COL_WIDTH / 2.0
+        } else {
+            ox + node.width - PIN_COL_WIDTH / 2.0
+        };
+        let (label_x, label_anchor) = if facing_west {
+            (ox + PIN_COL_WIDTH + NODE_PAD, "start")
+        } else {
+            (ox + node.width - PIN_COL_WIDTH - NODE_PAD, "end")
+        };
+
         if i > 0 {
             group = group.add(
                 Line::new()

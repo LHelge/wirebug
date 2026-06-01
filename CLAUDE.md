@@ -138,9 +138,12 @@ include names a **connector** (`include <inst>.<connector> at (x,y)`), placed
 at its authored centre; that whole connector becomes a **pin table** (header =
 instance label + `<designator> · <part>`, one row per pin = number + label,
 ordered by pin). The renderer derives a vertical **spine** at the x-midpoint of
-the connectors (`layout.rs::spine_x`); each node faces the spine
-(`face_spine` — left of it faces East, right faces West, replacing the old
-per-node vote). Connections are the *same* chain-decomposed subject wires, kept
+the connectors (`layout.rs::spine_x`); each **pin** faces the connector its
+conductor reaches (`face_pins` — East when that connector is to the right, West
+when to the left, voting across the pin's conductors; an unwired pin or a tie
+falls back to the spine side). So a node bridging both directions sends each
+pin the short way rather than forcing the whole table to one side; `ConnectorNode.facing`
+is kept as the node's dominant pin side. Connections are the *same* chain-decomposed subject wires, kept
 only when both ends land on *included* connectors — a port's connector is found
 via `ir::ConnectorRef.name`, so a connectorless / excluded / `Own` end drops
 silently (like an unlisted port in a schematic).
@@ -161,8 +164,9 @@ within the endpoints' x-span, so the curve never overshoots its bounding box
 `stroke`) and annotated `<label> · <gauge>mm²`.
 
 Two deliberate departures from the schematic's no-inference rule: pin
-**facing** is derived from the spine (above), and wire routing is the bezier
-flex above — no object avoidance, unlike the schematic's orthogonal router.
+**facing** is derived per pin from where its conductor goes (above), and wire
+routing is the bezier flex above — no object avoidance, unlike the schematic's
+orthogonal router.
 **Shields/drain wires are not drawn** (the IR carries no shield flag); reusing
 the orthogonal router and adding shields are noted future refinements.
 

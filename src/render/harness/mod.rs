@@ -2,8 +2,9 @@
 //!
 //! Each included `instance.connector` becomes a pin table, placed at its
 //! authored `(x, y)`. The renderer derives a vertical **spine** midway
-//! between the connectors; every node faces it, declared cables stack along
-//! it as labelled boxes, and wires flex between them as cubic beziers
+//! between the connectors; each pin faces the connector its conductor
+//! reaches, declared cables stack along it as labelled boxes, and wires flex
+//! between them as cubic beziers
 //! (pin → cable → pin, or pin → pin for loose wires). This is the dual of the
 //! schematic renderer (`super::schematic`): same subject/first-instance lookup
 //! and the same chain-decomposition of wires, but keyed on connectors rather
@@ -323,6 +324,68 @@ component sys {
         use crate::render::geometry::Side;
         assert_eq!(layout.nodes[0].facing, Side::East, "left node faces right");
         assert_eq!(layout.nodes[1].facing, Side::West, "right node faces left");
+    }
+
+    /// A node whose two pins wire in opposite directions: one toward a
+    /// connector on its left, the other toward one on its right.
+    fn bridging_design() -> Design {
+        design_from(
+            r#"
+component sys {
+    end l "Left";
+    mid m "Mid";
+    end r "Right";
+    wire orange 1 [l.p, m.w];
+    wire orange 1 [m.e, r.p];
+    component end {
+        connector c "C 1p" { pub port p "P" pin 1; }
+    }
+    component mid {
+        connector c "C 2p" {
+            pub port w "W" pin 1;
+            pub port e "E" pin 2;
+        }
+    }
+}
+"#,
+        )
+    }
+
+    #[test]
+    fn each_pin_faces_the_connector_its_conductor_reaches() {
+        let design = bridging_design();
+        let view = harness_view(
+            "sys",
+            &[
+                ("l", "c", 0.0, 0.0),
+                ("m", "c", 12.0, 0.0),
+                ("r", "c", 24.0, 0.0),
+            ],
+        );
+        let layout = compute(&design, &view);
+        use crate::render::geometry::Side;
+
+        let mid = layout.nodes.iter().find(|n| n.title == "Mid").expect("mid");
+        let side = |port: &str| {
+            mid.pins
+                .iter()
+                .find(|r| r.port.to_string() == port)
+                .expect("pin")
+                .side
+        };
+        // The pin wired left attaches on the west edge, the one wired right on
+        // the east edge — each goes the short way, not the whole table forced
+        // to a single facing.
+        assert_eq!(
+            side("w"),
+            Side::West,
+            "pin toward the left connector faces west"
+        );
+        assert_eq!(
+            side("e"),
+            Side::East,
+            "pin toward the right connector faces east"
+        );
     }
 
     /// A cable whose conductors are declared bottom-pin-first, to prove the
