@@ -188,7 +188,7 @@ fn orthogonally_intersects(a: Point, b: Point, c: Point, d: Point) -> bool {
     let v_lo = v0.y.min(v1.y);
     let v_hi = v0.y.max(v1.y);
 
-    v_x >= h_lo - EPS && v_x <= h_hi + EPS && h_y >= v_lo - EPS && h_y <= v_hi + EPS
+    v_x > h_lo + EPS && v_x < h_hi - EPS && h_y > v_lo + EPS && h_y < v_hi - EPS
 }
 
 fn collinear_overlap(a: Point, b: Point, c: Point, d: Point) -> bool {
@@ -361,9 +361,8 @@ mod tests {
         let sa = ovg.node_at(a_stub).unwrap();
         let sb = ovg.node_at(b_stub).unwrap();
 
-        let nodes =
-            find_route_avoiding(&ovg, a, Dir::East, sa, b, Dir::East, sb, &avoid, &[])
-                .expect("route");
+        let nodes = find_route_avoiding(&ovg, a, Dir::East, sa, b, Dir::East, sb, &avoid, &[])
+            .expect("route");
         let mut path = vec![a];
         path.extend(nodes.iter().map(|&n| ovg.position(n)));
         path.push(b);
@@ -400,18 +399,20 @@ mod tests {
         let sa = ovg.node_at(a_stub).unwrap();
         let sb = ovg.node_at(b_stub).unwrap();
 
-        let nodes =
-            find_route_avoiding(&ovg, a, Dir::East, sa, b, Dir::East, sb, &[], &soft_avoid)
-                .expect("route");
+        let nodes = find_route_avoiding(&ovg, a, Dir::East, sa, b, Dir::East, sb, &[], &soft_avoid)
+            .expect("route");
         let mut path = vec![a];
         path.extend(nodes.iter().map(|&n| ovg.position(n)));
         path.push(b);
         let path = collapse_collinear(path);
 
         assert!(
-            !path
-                .windows(2)
-                .any(|w| collinear_overlap(w[0], w[1], soft_avoid[0][0], soft_avoid[0][1])),
+            !path.windows(2).any(|w| collinear_overlap(
+                w[0],
+                w[1],
+                soft_avoid[0][0],
+                soft_avoid[0][1]
+            )),
             "route still overlaps soft avoid line: {path:?}"
         );
         assert!(

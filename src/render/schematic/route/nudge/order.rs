@@ -7,12 +7,15 @@
 //! Scope note: the paper orders an arbitrary tree of shared edges via
 //! pseudo-direction + split points. The orthogonal routes this renderer
 //! produces share *collinear* channels (straight bundles), for which the
-//! crossing-minimal order is simply by where each route enters the
-//! channel. We implement that case; a connector entering a channel from
-//! a smaller coordinate is stacked before one entering from a larger.
+//! crossing-minimal order is derived from where each route enters the
+//! channel, then oriented by the shared travel direction. A connector
+//! entering earlier along an eastbound/northbound channel is stacked at
+//! the smaller perpendicular coordinate; westbound/southbound channels
+//! reverse that stack so the bundle stays on the same side of travel.
 
 use std::collections::HashSet;
 
+use super::super::geometry::Dir;
 use super::super::visibility::Ovg;
 use super::EPS;
 use super::segments::{Edge, Orientation, canon, shared_edges};
@@ -61,6 +64,11 @@ pub(super) fn channels(ovg: &Ovg, routes: &[Vec<usize>]) -> Vec<Channel> {
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then(x.cmp(&y))
         });
+        if channel_direction(ovg, routes, &ch.order, edges, orientation)
+            .is_some_and(reverses_stack_order)
+        {
+            ch.order.reverse();
+        }
     }
 
     buckets
@@ -96,6 +104,52 @@ fn entry_key(ovg: &Ovg, nodes: &[usize], edges: &HashSet<Edge>, orientation: Ori
     best
 }
 
+fn channel_direction(
+    ovg: &Ovg,
+    routes: &[Vec<usize>],
+    route_ids: &[usize],
+    edges: &HashSet<Edge>,
+    orientation: Orientation,
+) -> Option<Dir> {
+    let mut dir = None;
+    for &route_id in route_ids {
+        let nodes = &routes[route_id];
+        let Some(next) = route_direction_in_channel(ovg, nodes, edges, orientation) else {
+            continue;
+        };
+        if dir.is_some_and(|dir| dir != next) {
+            return None;
+        }
+        dir = Some(next);
+    }
+    dir
+}
+
+fn route_direction_in_channel(
+    ovg: &Ovg,
+    nodes: &[usize],
+    edges: &HashSet<Edge>,
+    orientation: Orientation,
+) -> Option<Dir> {
+    for w in nodes.windows(2) {
+        if !edges.contains(&canon(w[0], w[1])) {
+            continue;
+        }
+        let (a, b) = (ovg.position(w[0]), ovg.position(w[1]));
+        return Some(match orientation {
+            Orientation::Horizontal if b.x > a.x => Dir::East,
+            Orientation::Horizontal => Dir::West,
+            Orientation::Vertical if b.y > a.y => Dir::South,
+            Orientation::Vertical => Dir::North,
+        });
+    }
+    None
+}
+
+fn reverses_stack_order(dir: Dir) -> bool {
+    matches!(dir, Dir::South | Dir::West)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::super::geometry::Rect;
@@ -123,5 +177,28 @@ mod tests {
         assert_eq!(chans.len(), 1);
         assert_eq!(chans[0].orientation, Orientation::Horizontal);
         assert_eq!(chans[0].order, vec![0, 1]);
+    }
+
+    #[test]
+    fn southbound_vertical_channel_reverses_entry_order() {
+        // The top route enters the shared vertical run first, but for a
+        // southbound channel it must be nudged to the right of the lower
+        // route so the two doglegs do not cross.
+        let pts = [
+            Point::new(0.0, 0.0),
+            Point::new(0.0, 10.0),
+            Point::new(0.0, 20.0),
+            Point::new(0.0, 30.0),
+        ];
+        let ovg = Ovg::build(&[] as &[Rect], &pts);
+        let id = |p: Point| ovg.node_at(p).unwrap();
+        let (n0, n1, n2, n3) = (id(pts[0]), id(pts[1]), id(pts[2]), id(pts[3]));
+
+        let routes = vec![vec![n0, n1, n2], vec![n1, n2, n3]];
+        let chans = channels(&ovg, &routes);
+
+        assert_eq!(chans.len(), 1);
+        assert_eq!(chans[0].orientation, Orientation::Vertical);
+        assert_eq!(chans[0].order, vec![1, 0]);
     }
 }

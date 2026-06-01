@@ -443,11 +443,7 @@ mod tests {
         let mut overlapping_late = channel_route(10.0, edge, false);
         overlapping_late[0].perp = 50.0;
         overlapping_late[2].perp = 80.0;
-        let shapes = vec![
-            Some(long),
-            Some(disjoint_middle),
-            Some(overlapping_late),
-        ];
+        let shapes = vec![Some(long), Some(disjoint_middle), Some(overlapping_late)];
         let channels = vec![Channel {
             orientation: Orientation::Horizontal,
             order: vec![0, 1, 2],

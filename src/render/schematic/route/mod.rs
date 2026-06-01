@@ -371,7 +371,10 @@ component sys {
             .route_all(&[(&ports[0], &ports[1]), (&ports[2], &ports[3])], 10.0)
             .expect("routes");
 
-        assert_eq!(wires[0], vec![Point::new(0.0, 50.0), Point::new(30.0, 50.0)]);
+        assert_eq!(
+            wires[0],
+            vec![Point::new(0.0, 50.0), Point::new(30.0, 50.0)]
+        );
         assert!(
             wires[1].iter().any(|p| (p.x - 90.0).abs() < EPS),
             "second route should take the non-crossing dogleg: {:?}",
