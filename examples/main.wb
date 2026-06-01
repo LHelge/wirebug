@@ -52,9 +52,15 @@ component vehicle {
     }
 
     // --- CAN bus ---
+    // VCM is the gateway. CAN1 is the powertrain link, straight to the
+    // inverter. CAN2 is the vehicle bus, daisy-chained front-to-back
+    // through the BMS pair and the charger; it is terminated at its two
+    // ends — the front BMS and the VCM.
 
-    wire blue 0.5 [vcm.can_h, front.can_h, rear.can_h, inv.can_h, charger.can_h];
-    wire blue 0.5 [vcm.can_l, front.can_l, rear.can_l, inv.can_l, charger.can_l];
+    wire blue 0.5 [front.can_h, rear.can_h, charger.can_h, vcm.can2_h];
+    wire blue 0.5 [front.can_l, rear.can_l, charger.can_l, vcm.can2_l];
+    wire blue 0.5 [vcm.can1_h, inv.can_h];
+    wire blue 0.5 [vcm.can1_l, inv.can_l];
 
     // --- HV interlock chain ---
     // Fuse box sources 12V → e-stop → MSD → front → rear → hvjb -> inverter → OBC → VCM
@@ -94,9 +100,12 @@ component vehicle {
 view schematic "HV System Overview" {
     grid 20;
 
-    enclosure {
-    }
-    
+    // The fuse box appears only as its interlock feed: a single port wired
+    // into the e-stop, which is the head of the HV interlock loop.
+    include fuses at (6, 26) ports {
+        east: interlock;
+    };
+
     include msd at (10, 10) ports {
         east:  hv_in;
         west:  hv_out;
@@ -146,6 +155,40 @@ view schematic "HV System Overview" {
     };
 }
 
+// --- View: CAN bus ---
+// The vehicle CAN topology laid out front-to-back. Every ECU taps the bus
+// on its south edge so the two conductors run as a pair beneath the row.
+// VCM is the gateway: CAN2 runs left to the charger and BMS pair, CAN1
+// right to the inverter. CAN2 is terminated at its two ends — the front
+// BMS and the VCM (the two 120 Ω notes).
+
+view schematic "CAN bus" {
+    grid 20;
+
+    text front_term at (8, 4)  "120 Ω termination";
+    text vcm_term   at (56, 4) "120 Ω termination";
+
+    include front at (8, 12) ports {
+        south: can_h, can_l;
+    };
+
+    include rear at (24, 12) ports {
+        south: can_h, can_l;
+    };
+
+    include charger at (40, 12) ports {
+        south: can_h, can_l;
+    };
+
+    include vcm at (56, 12) ports {
+        south: can2_h, can2_l, can1_h, can1_l;
+    };
+
+    include inv at (72, 12) ports {
+        south: can_h, can_l;
+    };
+}
+
 // --- View: Main HV harness ---
 // The HV bus as a wiring harness: each box's HV connector as a pin table,
 // the shared positive/negative rails as cable bundles between them.
@@ -153,14 +196,20 @@ view schematic "HV System Overview" {
 view harness "Main HV harness" {
     grid 20;
 
-    include front.hv      at (4, 8);
-    include rear.hv       at (4, 22);
-    include msd.hv        at (22, 8);
-    include hvjb.pack     at (34, 14);
-    include hvjb.inverter at (46, 8);
-    include hvjb.obc      at (46, 22);
-    include inv.hv        at (64, 8);
-    include charger.hv    at (64, 22);
+    // Pack-string bundle: the series-linked batteries and the MSD on the
+    // left fan into the junction box's pack connector on the right —
+    // mirroring the schematic's source → junction flow.
+    include front.hv  at (12, 5);
+    include rear.hv   at (24, 5);
+    include msd.hv    at (0, 7);
+    include hvjb.pack at (40, 8);
+
+    // Distribution bundle: the junction box on the left feeds the inverter
+    // and the OBC/DC-DC on the right (junction → load, same direction).
+    include hvjb.inverter at (10, 17);
+    include hvjb.obc      at (10, 30);
+    include inv.hv        at (30, 17);
+    include charger.hv    at (30, 30);
 }
 
 // --- View: Motor phase harness ---
