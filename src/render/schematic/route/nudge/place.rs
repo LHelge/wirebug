@@ -108,8 +108,10 @@ fn solve_axis(
 
     let mut cons = Vec::new();
 
-    // Separation constraints: consecutive routes in each channel's order
-    // whose segments actually overlap along the channel.
+    // Separation constraints: routes in each channel's order whose segments
+    // actually overlap along the channel. A single `prev` route is not enough:
+    // a long segment can overlap a later segment even when a route between
+    // them in channel order is disjoint from both.
     for ch in channels.iter().filter(|c| c.orientation == orientation) {
         let seg_in_channel = |r: usize| -> Option<usize> {
             shapes[r].as_ref()?.iter().position(|s| {
@@ -117,21 +119,24 @@ fn solve_axis(
             })
         };
 
-        let mut prev: Option<(usize, usize)> = None; // (route, segment index)
-        for &r in &ch.order {
-            let Some(si) = seg_in_channel(r) else {
-                continue;
-            };
-            if let Some((pr, psi)) = prev
-                && spans_overlap(span_at(&spans, pr, psi), span_at(&spans, r, si))
-            {
-                cons.push(Constraint {
-                    left: var_of[&(pr, psi)],
-                    right: var_of[&(r, si)],
-                    gap,
-                });
+        let segments: Vec<(usize, usize)> = ch
+            .order
+            .iter()
+            .filter_map(|&r| Some((r, seg_in_channel(r)?)))
+            .collect();
+        for (i, &(left_route, left_seg)) in segments.iter().enumerate() {
+            for &(right_route, right_seg) in segments.iter().skip(i + 1) {
+                if spans_overlap(
+                    span_at(&spans, left_route, left_seg),
+                    span_at(&spans, right_route, right_seg),
+                ) {
+                    cons.push(Constraint {
+                        left: var_of[&(left_route, left_seg)],
+                        right: var_of[&(right_route, right_seg)],
+                        gap,
+                    });
+                }
             }
-            prev = Some((r, si));
         }
     }
 
@@ -412,5 +417,42 @@ mod tests {
 
         assert!((y0 - 10.0).abs() < 1e-3, "pinned segment moved to {y0}");
         assert!((y1 - 16.0).abs() < 1e-3, "free segment didn't yield: {y1}");
+    }
+
+    #[test]
+    fn nonconsecutive_overlapping_channel_segments_are_separated() {
+        let edge: Edge = (1, 2);
+        let mut long = channel_route(10.0, edge, false);
+        long[0].perp = 0.0;
+        long[2].perp = 100.0;
+        let mut disjoint_middle = channel_route(10.0, edge, false);
+        disjoint_middle[0].perp = 120.0;
+        disjoint_middle[2].perp = 160.0;
+        let mut overlapping_late = channel_route(10.0, edge, false);
+        overlapping_late[0].perp = 50.0;
+        overlapping_late[2].perp = 80.0;
+        let shapes = vec![
+            Some(long),
+            Some(disjoint_middle),
+            Some(overlapping_late),
+        ];
+        let channels = vec![Channel {
+            orientation: Orientation::Horizontal,
+            order: vec![0, 1, 2],
+            edges: HashSet::from([edge]),
+        }];
+
+        let gap = 6.0;
+        let out = solve_axis(
+            &shapes,
+            &channels,
+            &[raw(), raw(), raw()],
+            &[],
+            Orientation::Horizontal,
+            gap,
+        );
+        let (y0, y2) = (solved_perp(&out, 0, 1), solved_perp(&out, 2, 1));
+
+        assert!((y2 - y0 - gap).abs() < EPS, "gap was {}", y2 - y0);
     }
 }
