@@ -1,0 +1,4 @@
+[project]
+name = "basic-project"
+version = "0.1.0"
+description = "Minimal two-component fixture for pipeline tests"
