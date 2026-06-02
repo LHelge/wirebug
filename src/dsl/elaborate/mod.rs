@@ -7,11 +7,12 @@
 //! its children. Definitions vanish here; only instances flow to the IR.
 //! A type stack guards against containment cycles.
 
-use crate::dsl::ast::{self, CablePropertyValue, Member};
+use crate::dsl::ast::{self, CablePropertyValue, ConnectorPropertyValue, Member};
 use crate::dsl::diagnostics::Problem;
 use crate::dsl::ir::{
-    CableMeta, CableName, ConnectorName, ConnectorRef, Design, EnclosurePort, Include, Instance,
-    InstanceName, InstancePath, Port, PortName, Side, TypeName, View, Visibility, Wire, WireEnd,
+    CableMeta, CableName, Connector, ConnectorName, ConnectorPin, ConnectorRef, ConnectorTypeName,
+    Design, EnclosurePort, Include, Instance, InstanceName, InstancePath, Port, PortName, Side,
+    TypeName, View, Visibility, Wire, WireEnd,
 };
 use crate::dsl::resolve::{DefId, Resolved};
 
@@ -118,6 +119,7 @@ impl Elaborator<'_> {
         // is best-effort: it takes well-typed values and ignores the rest.
         let mut wires = Vec::new();
         let mut cables: IndexMap<CableName, CableMeta> = IndexMap::new();
+        let mut connectors: IndexMap<ConnectorName, Connector> = IndexMap::new();
         for m in &info.ast.members {
             match m {
                 Member::Wire(w) => wires.push(rewrite_wire(w, None)),
@@ -127,6 +129,23 @@ impl Elaborator<'_> {
                     for w in &c.wires {
                         wires.push(rewrite_wire(w, Some(name.clone())));
                     }
+                }
+                Member::Connector(conn) => {
+                    if let Some(name) = &conn.name {
+                        let name = ConnectorName::from(name.node.as_str());
+                        connectors.insert(name.clone(), inline_connector(name, conn));
+                    }
+                }
+                Member::ConnectorInstance(conn) => {
+                    let name = ConnectorName::from(conn.name.node.as_str());
+                    let Some(facts) = info.connectors.get(&name) else {
+                        continue;
+                    };
+                    let Some(type_id) = facts.type_id else {
+                        continue;
+                    };
+                    let connector_type = self.resolved.connector_types[type_id].ast;
+                    connectors.insert(name.clone(), typed_connector(name, conn, connector_type));
                 }
                 _ => {}
             }
@@ -158,6 +177,7 @@ impl Elaborator<'_> {
                 children,
                 wires,
                 cables,
+                connectors,
             },
         );
 
@@ -296,6 +316,62 @@ fn cable_meta(c: &ast::Cable) -> CableMeta {
     meta
 }
 
+fn inline_connector(name: ConnectorName, conn: &ast::Connector) -> Connector {
+    Connector {
+        name,
+        type_name: None,
+        description: conn.part.node.clone(),
+        properties: IndexMap::new(),
+        pins: conn
+            .ports
+            .iter()
+            .flat_map(|port| {
+                port.pins.iter().map(|pin| ConnectorPin {
+                    pin: crate::dsl::ir::Pin(pin.node),
+                    port: PortName::from(port.name.node.as_str()),
+                })
+            })
+            .collect(),
+    }
+}
+
+fn typed_connector(
+    name: ConnectorName,
+    conn: &ast::ConnectorInstance,
+    connector_type: &ast::ConnectorType,
+) -> Connector {
+    Connector {
+        name,
+        type_name: Some(ConnectorTypeName::from(connector_type.name.node.as_str())),
+        description: connector_type.description.node.clone(),
+        properties: connector_type
+            .properties
+            .iter()
+            .map(|p| {
+                (
+                    p.key.node.as_str().to_string(),
+                    match &p.value {
+                        ConnectorPropertyValue::Str(s) => {
+                            crate::dsl::ir::ConnectorPropertyValue::Str(s.node.clone())
+                        }
+                        ConnectorPropertyValue::Number(n) => {
+                            crate::dsl::ir::ConnectorPropertyValue::Number(n.node)
+                        }
+                    },
+                )
+            })
+            .collect(),
+        pins: conn
+            .pins
+            .iter()
+            .map(|binding| ConnectorPin {
+                pin: crate::dsl::ir::Pin(binding.pin.node),
+                port: PortName::from(binding.port.node.as_str()),
+            })
+            .collect(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -389,6 +465,78 @@ mod tests {
         assert_eq!(meta.label.as_deref(), Some("Power feed"));
         assert_eq!(meta.r#type.as_deref(), Some("2-core"));
         assert_eq!(meta.length, Some(0.8));
+    }
+
+    #[test]
+    fn connector_instances_materialize_type_metadata_and_pin_bindings() {
+        let (design, problems) = elaborate_files(&[(
+            "main.wb",
+            "connector_type ampseal \"AMPSEAL\" { part: \"TE 776164-1\"; cavities: 35; }
+            component m {
+                pub port can_h \"CAN H\";
+                pub port can_l \"CAN L\";
+                connector x1: ampseal {
+                    pin 1 = can_h;
+                    pin 2 = can_l;
+                }
+            }\n",
+        )]);
+        assert!(problems.is_empty(), "{problems:?}");
+        let design = design.unwrap();
+        let root = design.get(&design.root).unwrap();
+        let connector = root
+            .connectors
+            .get(&ConnectorName::from("x1"))
+            .expect("connector");
+
+        assert_eq!(
+            connector.type_name.as_ref().map(|n| n.as_str()),
+            Some("ampseal")
+        );
+        assert_eq!(connector.description, "AMPSEAL");
+        assert_eq!(
+            connector.properties.get("part"),
+            Some(&crate::dsl::ir::ConnectorPropertyValue::Str(
+                "TE 776164-1".to_string()
+            ))
+        );
+        assert_eq!(
+            connector.pins,
+            vec![
+                ConnectorPin {
+                    pin: crate::dsl::ir::Pin(1),
+                    port: PortName::from("can_h")
+                },
+                ConnectorPin {
+                    pin: crate::dsl::ir::Pin(2),
+                    port: PortName::from("can_l")
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn inline_connectors_materialize_for_compatibility() {
+        let (design, problems) = elaborate_files(&[(
+            "main.wb",
+            "component m {
+                connector x1 \"Legacy 2p\" {
+                    pub port a \"A\" pin 1;
+                    pub port b \"B\" pin 2;
+                }
+            }\n",
+        )]);
+        assert!(problems.is_empty(), "{problems:?}");
+        let design = design.unwrap();
+        let root = design.get(&design.root).unwrap();
+        let connector = root
+            .connectors
+            .get(&ConnectorName::from("x1"))
+            .expect("connector");
+
+        assert!(connector.type_name.is_none());
+        assert_eq!(connector.description, "Legacy 2p");
+        assert_eq!(connector.pins.len(), 2);
     }
 
     #[test]
