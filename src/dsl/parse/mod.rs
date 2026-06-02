@@ -83,6 +83,12 @@ enum FileEntry {
     Item(Item),
 }
 
+/// One member of a `connector_type` body.
+enum ConnectorTypeItem {
+    Property(ConnectorProperty),
+    Layout(ConnectorLayout),
+}
+
 /// Parse the significant token stream of one file into an [`ast::File`].
 pub fn parse_file(tokens: Vec<(Token, Span)>, file: FileId, src_len: usize) -> Parsed {
     let eoi = Span {
@@ -141,20 +147,103 @@ where
             span: e.span(),
         });
 
+    let connector_grid_layout = just(Token::Layout)
+        .ignore_then(just(Token::Grid))
+        .ignore_then(
+            just(Token::Rows)
+                .ignore_then(just(Token::Colon))
+                .ignore_then(pin)
+                .then_ignore(just(Token::Semicolon))
+                .then(
+                    just(Token::Cols)
+                        .ignore_then(just(Token::Colon))
+                        .ignore_then(pin)
+                        .then_ignore(just(Token::Semicolon)),
+                )
+                .then(
+                    just(Token::Numbering)
+                        .ignore_then(just(Token::Colon))
+                        .ignore_then(ident)
+                        .then_ignore(just(Token::Semicolon))
+                        .or_not(),
+                )
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+        )
+        .map_with(|((rows, cols), numbering), e| {
+            ConnectorLayout::Grid(ConnectorGridLayout {
+                rows,
+                cols,
+                numbering,
+                span: e.span(),
+            })
+        });
+
+    let connector_cavity = just(Token::Cavity)
+        .ignore_then(pin)
+        .then_ignore(just(Token::At))
+        .then(
+            number
+                .then_ignore(just(Token::Comma))
+                .then(number)
+                .delimited_by(just(Token::LParen), just(Token::RParen)),
+        )
+        .then(just(Token::Size).ignore_then(ident).or_not())
+        .then_ignore(just(Token::Semicolon))
+        .map_with(|((pin, (x, y)), size), e| ConnectorCavity {
+            pin,
+            x,
+            y,
+            size,
+            span: e.span(),
+        });
+
+    let connector_face_layout = just(Token::Layout)
+        .ignore_then(just(Token::Face))
+        .ignore_then(
+            connector_cavity
+                .repeated()
+                .at_least(1)
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+        )
+        .map_with(|cavities, e| {
+            ConnectorLayout::Face(ConnectorFaceLayout {
+                cavities,
+                span: e.span(),
+            })
+        });
+
+    let connector_type_item = choice((
+        connector_face_layout.map(ConnectorTypeItem::Layout),
+        connector_grid_layout.map(ConnectorTypeItem::Layout),
+        connector_property.map(ConnectorTypeItem::Property),
+    ));
+
     let connector_type = just(Token::ConnectorType)
         .ignore_then(ident)
         .then(string)
         .then(
-            connector_property
+            connector_type_item
                 .repeated()
                 .collect::<Vec<_>>()
                 .delimited_by(just(Token::LBrace), just(Token::RBrace)),
         )
-        .map_with(|((name, description), properties), e| ConnectorType {
-            name,
-            description,
-            properties,
-            span: e.span(),
+        .map_with(|((name, description), items), e| {
+            let mut properties = Vec::new();
+            let mut layout = None;
+            for item in items {
+                match item {
+                    ConnectorTypeItem::Property(property) => properties.push(property),
+                    ConnectorTypeItem::Layout(next_layout) => layout = Some(next_layout),
+                }
+            }
+            ConnectorType {
+                name,
+                description,
+                properties,
+                layout,
+                span: e.span(),
+            }
         });
 
     // --- Ports & connectors ---
@@ -664,6 +753,59 @@ mod tests {
             conn.properties[1].value,
             ConnectorPropertyValue::Number(_)
         ));
+        assert!(conn.layout.is_none());
+    }
+
+    #[test]
+    fn connector_type_carries_grid_layout() {
+        let file = parse_ok(
+            r#"connector_type mx150_8 "Molex MX-150 8p" {
+                part: "Molex";
+                layout grid {
+                    rows: 2;
+                    cols: 4;
+                    numbering: row_major;
+                }
+            }"#,
+        );
+        let Item::ConnectorType(conn) = &file.items[0] else {
+            panic!("expected a connector type");
+        };
+        let Some(ConnectorLayout::Grid(layout)) = &conn.layout else {
+            panic!("expected a grid layout");
+        };
+        assert_eq!(layout.rows.node, 2);
+        assert_eq!(layout.cols.node, 4);
+        assert_eq!(
+            layout.numbering.as_ref().map(|n| n.node.as_str()),
+            Some("row_major")
+        );
+    }
+
+    #[test]
+    fn connector_type_carries_explicit_face_layout() {
+        let file = parse_ok(
+            r#"connector_type inv_control "Inverter control" {
+                layout face {
+                    cavity 47 at (0, 0) size large;
+                    cavity 21 at (2, 0);
+                }
+            }"#,
+        );
+        let Item::ConnectorType(conn) = &file.items[0] else {
+            panic!("expected a connector type");
+        };
+        let Some(ConnectorLayout::Face(layout)) = &conn.layout else {
+            panic!("expected a face layout");
+        };
+        assert_eq!(layout.cavities.len(), 2);
+        assert_eq!(layout.cavities[0].pin.node, 47);
+        assert_eq!(
+            layout.cavities[0].size.as_ref().map(|s| s.node.as_str()),
+            Some("large")
+        );
+        assert_eq!(layout.cavities[1].pin.node, 21);
+        assert!(layout.cavities[1].size.is_none());
     }
 
     #[test]

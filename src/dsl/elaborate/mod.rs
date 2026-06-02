@@ -10,9 +10,10 @@
 use crate::dsl::ast::{self, CablePropertyValue, ConnectorPropertyValue, Member};
 use crate::dsl::diagnostics::Problem;
 use crate::dsl::ir::{
-    CableMeta, CableName, Connector, ConnectorName, ConnectorPin, ConnectorRef, ConnectorTypeName,
-    Design, EnclosurePort, Include, Instance, InstanceName, InstancePath, Port, PortName, Side,
-    TypeName, View, Visibility, Wire, WireEnd,
+    CableMeta, CableName, Connector, ConnectorCavity, ConnectorFaceLayout, ConnectorGridLayout,
+    ConnectorLayout, ConnectorName, ConnectorPin, ConnectorRef, ConnectorTypeName, Design,
+    EnclosurePort, Include, Instance, InstanceName, InstancePath, Port, PortName, Side, TypeName,
+    View, Visibility, Wire, WireEnd,
 };
 use crate::dsl::resolve::{DefId, Resolved};
 
@@ -322,6 +323,7 @@ fn inline_connector(name: ConnectorName, conn: &ast::Connector) -> Connector {
         type_name: None,
         description: conn.part.node.clone(),
         properties: IndexMap::new(),
+        layout: None,
         pins: conn
             .ports
             .iter()
@@ -361,6 +363,7 @@ fn typed_connector(
                 )
             })
             .collect(),
+        layout: connector_type_layout(connector_type),
         pins: conn
             .pins
             .iter()
@@ -369,6 +372,31 @@ fn typed_connector(
                 port: PortName::from(binding.port.node.as_str()),
             })
             .collect(),
+    }
+}
+
+fn connector_type_layout(connector_type: &ast::ConnectorType) -> Option<ConnectorLayout> {
+    match connector_type.layout.as_ref()? {
+        ast::ConnectorLayout::Grid(layout) => Some(ConnectorLayout::Grid(ConnectorGridLayout {
+            rows: layout.rows.node,
+            cols: layout.cols.node,
+            numbering: layout
+                .numbering
+                .as_ref()
+                .map(|n| n.node.as_str().to_string()),
+        })),
+        ast::ConnectorLayout::Face(layout) => Some(ConnectorLayout::Face(ConnectorFaceLayout {
+            cavities: layout
+                .cavities
+                .iter()
+                .map(|cavity| ConnectorCavity {
+                    pin: crate::dsl::ir::Pin(cavity.pin.node),
+                    x: cavity.x.node,
+                    y: cavity.y.node,
+                    size: cavity.size.as_ref().map(|s| s.node.as_str().to_string()),
+                })
+                .collect(),
+        })),
     }
 }
 
@@ -471,7 +499,15 @@ mod tests {
     fn connector_instances_materialize_type_metadata_and_pin_bindings() {
         let (design, problems) = elaborate_files(&[(
             "main.wb",
-            "connector_type ampseal \"AMPSEAL\" { part: \"TE 776164-1\"; cavities: 35; }
+            "connector_type ampseal \"AMPSEAL\" {
+                part: \"TE 776164-1\";
+                cavities: 35;
+                layout grid {
+                    rows: 1;
+                    cols: 2;
+                    numbering: row_major;
+                }
+            }
             component m {
                 pub port can_h \"CAN H\";
                 pub port can_l \"CAN L\";
@@ -499,6 +535,14 @@ mod tests {
             Some(&crate::dsl::ir::ConnectorPropertyValue::Str(
                 "TE 776164-1".to_string()
             ))
+        );
+        assert_eq!(
+            connector.layout,
+            Some(ConnectorLayout::Grid(ConnectorGridLayout {
+                rows: 1,
+                cols: 2,
+                numbering: Some("row_major".to_string()),
+            }))
         );
         assert_eq!(
             connector.pins,
