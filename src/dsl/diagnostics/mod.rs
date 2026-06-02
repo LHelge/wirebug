@@ -99,8 +99,24 @@ pub enum Problem {
         at: SourceSpan,
     },
 
-    /// A `use` resolved to a file that has no matching top-level component.
-    #[error("`{name}` is not a top-level component in `{file}`")]
+    /// A component connector instance names a connector type that isn't in
+    /// scope.
+    #[error("unknown connector type `{name}`")]
+    #[diagnostic(
+        code(wirebug::undefined_connector_type),
+        help("define `{name}` as a top-level `connector_type`, or `use` it from another file")
+    )]
+    UndefinedConnectorType {
+        name: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("not a connector type in scope")]
+        at: SourceSpan,
+    },
+
+    /// A `use` resolved to a file that has no matching top-level component
+    /// or connector type.
+    #[error("`{name}` is not a top-level component or connector type in `{file}`")]
     #[diagnostic(code(wirebug::unresolved_import))]
     UnresolvedImport {
         name: String,
@@ -109,6 +125,19 @@ pub enum Problem {
         src: NamedSource<String>,
         #[label("no such component to import")]
         at: SourceSpan,
+    },
+
+    /// Two connector types share a name in one file's connector-type scope.
+    #[error("duplicate connector type `{name}`")]
+    #[diagnostic(code(wirebug::duplicate_connector_type))]
+    DuplicateConnectorType {
+        name: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("redefined here")]
+        at: SourceSpan,
+        #[label("first defined here")]
+        first: SourceSpan,
     },
 
     /// Two component types share a name in one file's scope.
@@ -278,6 +307,34 @@ pub enum Problem {
         at: SourceSpan,
         #[label("first used here")]
         first: SourceSpan,
+    },
+
+    /// A component connector binds the same physical pin more than once.
+    #[error("duplicate pin `{pin}` in connector `{connector}`")]
+    #[diagnostic(code(wirebug::duplicate_connector_pin))]
+    DuplicateConnectorPin {
+        pin: u32,
+        connector: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("bound again here")]
+        at: SourceSpan,
+        #[label("first bound here")]
+        first: SourceSpan,
+    },
+
+    /// A port was assigned to two different component connectors.
+    #[error("port `{port}` is already assigned to another connector")]
+    #[diagnostic(
+        code(wirebug::port_connector_conflict),
+        help("a component port can belong to only one physical connector")
+    )]
+    PortConnectorConflict {
+        port: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("assigned again here")]
+        at: SourceSpan,
     },
 
     /// Two cables in one component share a designator.

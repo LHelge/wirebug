@@ -14,6 +14,7 @@ pub enum Token {
     Use,
     From,
     Component,
+    ConnectorType,
     Connector,
     Port,
     Pub,
@@ -40,6 +41,7 @@ pub enum Token {
     Semicolon,
     Dot,
     Colon,
+    Equals,
 
     // Leaves. Raw text is preserved so a future `fmt` can round-trip and
     // so the parser can interpret a [`Number`](Token::Number) as either a
@@ -58,6 +60,7 @@ impl Token {
             "use" => Token::Use,
             "from" => Token::From,
             "component" => Token::Component,
+            "connector_type" => Token::ConnectorType,
             "connector" => Token::Connector,
             "port" => Token::Port,
             "pub" => Token::Pub,
@@ -84,6 +87,7 @@ impl fmt::Display for Token {
             Token::Use => "use",
             Token::From => "from",
             Token::Component => "component",
+            Token::ConnectorType => "connector_type",
             Token::Connector => "connector",
             Token::Port => "port",
             Token::Pub => "pub",
@@ -108,6 +112,7 @@ impl fmt::Display for Token {
             Token::Semicolon => ";",
             Token::Dot => ".",
             Token::Colon => ":",
+            Token::Equals => "=",
             Token::Ident(name) => name,
             Token::Str(s) => return write!(f, "{s:?}"),
             Token::Number(n) => n,

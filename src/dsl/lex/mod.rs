@@ -137,6 +137,7 @@ pub fn lex(src: &str, file: FileId) -> Result<Vec<SpannedLexeme>, LexError> {
                     b';' => Some(Token::Semicolon),
                     b'.' => Some(Token::Dot),
                     b':' => Some(Token::Colon),
+                    b'=' => Some(Token::Equals),
                     _ => None,
                 };
                 match token {
@@ -237,6 +238,37 @@ mod tests {
                 Token::Comma,
                 Token::Number("4".into()),
                 Token::RParen,
+            ]
+        );
+    }
+
+    #[test]
+    fn connector_type_and_pin_binding_punctuation_lex() {
+        assert_eq!(
+            tokens(
+                "connector_type ampseal \"A\" { part: \"TE\"; } connector x1: ampseal { pin 1 = a; }"
+            ),
+            vec![
+                Token::ConnectorType,
+                Token::Ident("ampseal".into()),
+                Token::Str("A".into()),
+                Token::LBrace,
+                Token::Ident("part".into()),
+                Token::Colon,
+                Token::Str("TE".into()),
+                Token::Semicolon,
+                Token::RBrace,
+                Token::Connector,
+                Token::Ident("x1".into()),
+                Token::Colon,
+                Token::Ident("ampseal".into()),
+                Token::LBrace,
+                Token::Pin,
+                Token::Number("1".into()),
+                Token::Equals,
+                Token::Ident("a".into()),
+                Token::Semicolon,
+                Token::RBrace,
             ]
         );
     }
