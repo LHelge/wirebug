@@ -4,7 +4,8 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use tempfile::tempdir;
 
-const FIXTURE_MAIN: &str = "tests/fixtures/basic_project/main.wb";
+const FIXTURE_ROOT: &str = "tests/fixtures/basic_project";
+const FIXTURE_MANIFEST: &str = "tests/fixtures/basic_project/wirebug.toml";
 
 #[test]
 fn render_writes_an_svg_per_view() {
@@ -13,7 +14,7 @@ fn render_writes_an_svg_per_view() {
 
     Command::cargo_bin("wirebug")
         .expect("binary present")
-        .args(["render", FIXTURE_MAIN, "--out", out.to_str().unwrap()])
+        .args(["render", FIXTURE_ROOT, "--out", out.to_str().unwrap()])
         .assert()
         .success()
         .stderr(predicate::str::contains("rendered"));
@@ -55,7 +56,7 @@ fn render_png_writes_a_png_per_view_and_index_references_png() {
         .expect("binary present")
         .args([
             "render",
-            FIXTURE_MAIN,
+            FIXTURE_MANIFEST,
             "--out",
             out.to_str().unwrap(),
             "--png",
@@ -91,7 +92,7 @@ fn render_embed_writes_manifest_and_no_index() {
         .expect("binary present")
         .args([
             "render",
-            "examples/main.wb",
+            "examples",
             "--out",
             out.to_str().unwrap(),
             "--embed",
@@ -238,7 +239,16 @@ fn serve_help_documents_the_port_flag() {
 fn check_accepts_the_fixture_project() {
     Command::cargo_bin("wirebug")
         .expect("binary present")
-        .args(["check", FIXTURE_MAIN])
+        .args(["check", FIXTURE_ROOT])
+        .assert()
+        .success();
+}
+
+#[test]
+fn check_accepts_a_manifest_target() {
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", FIXTURE_MANIFEST])
         .assert()
         .success();
 }

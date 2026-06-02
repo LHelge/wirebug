@@ -1,6 +1,6 @@
 //! The `.wb` DSL parse-and-check pipeline.
 //!
-//! Stages: discover the project (the directory rooted at `main.wb`),
+//! Stages: discover the project (the directory rooted at `wirebug.toml`),
 //! load and lex/parse every reachable file, resolve names, elaborate the
 //! type/instance hierarchy into the [`ir`], then validate it. The
 //! terminal artifact is `ir::Design` — nothing here renders.

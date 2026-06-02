@@ -21,14 +21,23 @@ Three CLI commands share it:
 - **`serve` (`src/serve/`)** — a live-reloading dev server. Renders the
   project into memory (the same `render_views` + `index_html` pipeline,
   `live_reload` on), serves it over axum, and watches the project tree for
-  `.wb` changes; each save re-renders and pushes a websocket reload. Nothing
-  hits disk. A failing `check` serves a diagnostics page that still
-  live-reloads, so it recovers once fixed. `serve` is the only async command:
-  `main` stays synchronous and spins a Tokio runtime just for this arm.
+  `.wb` and `wirebug.toml` changes; each save re-renders and pushes a
+  websocket reload. Nothing hits disk. A failing `check` serves a
+  diagnostics page that still live-reloads, so it recovers once fixed.
+  `serve` is the only async command: `main` stays synchronous and spins a
+  Tokio runtime just for this arm.
 
 The `index.html` is an [`askama`] compile-time template (`templates/`),
 rendered by `render::index_html(views, live_reload)` — shared by `render`
 (static, `false`) and `serve` (`true`, injects the reload script).
+
+## Project manifest
+
+Every project carries a `wirebug.toml` beside `main.wb`. The manifest is
+the project marker: like Cargo, `check`, `render`, and `serve` walk up from
+the current directory until they find it. Commands can also point directly
+at the project root or at `wirebug.toml`; `main.wb` remains the entry `.wb`
+file beside the manifest.
 
 ## DSL mental model
 
@@ -146,7 +155,7 @@ Problems are miette `Diagnostic`s (`dsl::diagnostics::Problem`), collected
 so one run reports many. Errors fail the run; warnings fail only under
 `--strict`. The checks, by phase:
 
-- **Load** — file not found for a `use`; no `main.wb`; IO.
+- **Load** — file not found for a `use`; no `wirebug.toml`; IO.
 - **Parse/lex** — syntax and lexical errors (with expected-token sets).
 - **Resolve** — undefined type, unresolved import, duplicate
   type/instance/port, unknown instance/port in a wire endpoint,
@@ -442,14 +451,15 @@ cargo fmt
 cargo clippy -- -D warnings
 
 # check a .wb project
-cargo run -- check examples/main.wb        # or just `check` from inside the project
-cargo run -- check --strict --format json examples/main.wb
+cargo run -- check examples               # or just `check` from inside the project
+cargo run -- check examples/wirebug.toml
+cargo run -- check --strict --format json examples
 
 # render every view in a .wb project to SVG (one file per view, into --out)
-cargo run --release -- render examples/main.wb --out out/
+cargo run --release -- render examples --out out/
 
 # serve a project with live reload (re-renders on every .wb save)
-cargo run -- serve examples/main.wb --port 3000   # then open http://localhost:3000
+cargo run -- serve examples --port 3000   # then open http://localhost:3000
 ```
 
 ## Done definition for the MVP

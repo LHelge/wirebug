@@ -47,11 +47,11 @@ pub enum Problem {
         at: SourceSpan,
     },
 
-    /// No `main.wb` was found while discovering the project.
-    #[error("no wirebug project found: no `main.wb` in `{start}` or any parent directory")]
+    /// No `wirebug.toml` was found while discovering the project.
+    #[error("no wirebug project found: no `wirebug.toml` in `{start}` or any parent directory")]
     #[diagnostic(
         code(wirebug::no_project),
-        help("a wirebug project is a directory containing a `main.wb`")
+        help("a wirebug project is a directory containing a `wirebug.toml` manifest")
     )]
     NoProject { start: String },
 

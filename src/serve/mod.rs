@@ -26,11 +26,11 @@ use watcher::ProjectWatcher;
 /// Serve the project at `target` (or the project containing the current
 /// directory) on `port`, rebuilding and live-reloading on every change.
 pub async fn serve(target: Option<&Path>, port: u16) -> anyhow::Result<()> {
-    // The project root is the directory holding `main.wb`; watch it whole.
-    let main_wb = project::discover(target)
+    // The project root is the directory holding `wirebug.toml`; watch it whole.
+    let entry = project::discover(target)
         .map_err(|problem| anyhow::anyhow!("{problem}"))
         .context("locating the project")?;
-    let root = main_wb
+    let root = entry
         .parent()
         .context("project root has no parent directory")?
         .to_path_buf();

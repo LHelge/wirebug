@@ -1,7 +1,8 @@
 //! Project discovery and multi-file loading.
 //!
-//! A wirebug project is the directory rooted at a `main.wb`. We discover
-//! it by walking up from a target (or the CWD), then load every file
+//! A wirebug project is rooted at a `wirebug.toml` manifest. We discover
+//! it by walking up from a target (or the CWD), then load `main.wb` from
+//! that root plus every file
 //! reachable through `use` declarations, resolving paths relative to the
 //! importing file and de-duplicating by canonical path (so a `use` cycle
 //! is harmless — we load each file once). Logical hierarchy depends only
@@ -54,16 +55,18 @@ impl Project {
 }
 
 /// Find the entry `.wb` file for `target`:
-/// - a file path is used directly as the entry;
-/// - a directory is searched for `main.wb` (then its parents);
+/// - a `wirebug.toml` file resolves to the `main.wb` beside it;
+/// - a `.wb` file path is used directly as the entry;
+/// - a directory is searched for `wirebug.toml` (then its parents);
 /// - `None` walks up from the current directory.
 // A `Problem` is large (it carries source text), but discovery is a
 // once-per-run path, so the size of the error variant doesn't matter.
 #[allow(clippy::result_large_err)]
 pub fn discover(target: Option<&Path>) -> Result<PathBuf, Problem> {
     match target {
+        Some(p) if p.is_file() && is_manifest(p) => Ok(p.with_file_name("main.wb")),
         Some(p) if p.is_file() => Ok(p.to_path_buf()),
-        Some(p) if p.is_dir() => walk_up(p),
+        Some(p) if p.is_dir() => walk_up_manifest(p),
         Some(p) => Err(Problem::Io {
             path: p.display().to_string(),
             source: std::io::Error::new(std::io::ErrorKind::NotFound, "no such file or directory"),
@@ -73,25 +76,31 @@ pub fn discover(target: Option<&Path>) -> Result<PathBuf, Problem> {
                 path: ".".to_string(),
                 source,
             })?;
-            walk_up(&cwd)
+            walk_up_manifest(&cwd)
         }
     }
 }
 
-/// Walk up from `start`, returning the first `main.wb` found.
+/// Walk up from `start`, returning the `main.wb` beside the first
+/// `wirebug.toml` found.
 #[allow(clippy::result_large_err)]
-fn walk_up(start: &Path) -> Result<PathBuf, Problem> {
+fn walk_up_manifest(start: &Path) -> Result<PathBuf, Problem> {
     let mut dir = Some(start);
     while let Some(d) = dir {
-        let candidate = d.join("main.wb");
+        let candidate = d.join(manifest::FILE_NAME);
         if candidate.is_file() {
-            return Ok(candidate);
+            return Ok(d.join("main.wb"));
         }
         dir = d.parent();
     }
     Err(Problem::NoProject {
         start: start.display().to_string(),
     })
+}
+
+fn is_manifest(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|name| name == manifest::FILE_NAME)
 }
 
 /// Load `entry` and every file reachable through `use`, collecting all
@@ -261,12 +270,22 @@ mod tests {
     }
 
     #[test]
-    fn discover_finds_main_by_walking_up() {
+    fn discover_finds_manifest_by_walking_up() {
         let from = PathBuf::from(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/tests/fixtures/basic_project/components"
         ));
-        let found = discover(Some(&from)).expect("walk up to main.wb");
+        let found = discover(Some(&from)).expect("walk up to wirebug.toml");
+        assert!(found.ends_with("main.wb"));
+    }
+
+    #[test]
+    fn discover_accepts_a_manifest_file() {
+        let manifest = PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/basic_project/wirebug.toml"
+        ));
+        let found = discover(Some(&manifest)).expect("manifest resolves to main.wb");
         assert!(found.ends_with("main.wb"));
     }
 
@@ -324,9 +343,9 @@ mod tests {
     }
 
     #[test]
-    fn no_project_when_main_missing() {
+    fn no_project_when_manifest_missing() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let err = discover(Some(dir.path())).expect_err("no main.wb");
+        let err = discover(Some(dir.path())).expect_err("no wirebug.toml");
         assert!(matches!(err, Problem::NoProject { .. }));
     }
 }

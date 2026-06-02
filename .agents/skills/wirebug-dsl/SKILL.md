@@ -11,12 +11,13 @@ wirebug is a text-defined DSL for describing electrical systems — components, 
 
 ## Project structure
 
-A wirebug project is a directory rooted at a file named `main.wb`. The presence of `main.wb` identifies a directory as a wirebug project (Cargo-style — its existence is the project marker; no separate manifest is required).
+A wirebug project is a directory rooted at a `wirebug.toml` manifest, with `main.wb` as the conventional entry file beside it. The presence of `wirebug.toml` identifies a directory as a wirebug project; CLI commands follow Cargo's shape by walking up from the current directory until they find the manifest. Commands may also point directly at the project root or at `wirebug.toml`.
 
 A conventional layout, which is **convention, not requirement**:
 
 ```
 my-ev/
+├── wirebug.toml         # project metadata and root marker
 ├── main.wb              # top-level vehicle component + system view
 └── components/          # imported components, one type per file
     ├── battery_pack.wb
