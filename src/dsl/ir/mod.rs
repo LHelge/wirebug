@@ -196,9 +196,41 @@ pub struct Connector {
     pub description: String,
     /// Free-form connector metadata inherited from the connector type.
     pub properties: IndexMap<String, ConnectorPropertyValue>,
+    /// Optional harness-side pinout layout inherited from the connector type.
+    pub layout: Option<ConnectorLayout>,
     /// Authored pin bindings, preserving source order and allowing several
     /// pins to bind to one port for ganged high-current cavities.
     pub pins: Vec<ConnectorPin>,
+}
+
+/// A materialized connector pinout layout.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConnectorLayout {
+    Grid(ConnectorGridLayout),
+    Face(ConnectorFaceLayout),
+}
+
+/// Rectangular connector cavity layout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectorGridLayout {
+    pub rows: u32,
+    pub cols: u32,
+    pub numbering: Option<String>,
+}
+
+/// Explicit physical connector face layout.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConnectorFaceLayout {
+    pub cavities: Vec<ConnectorCavity>,
+}
+
+/// One authored physical cavity.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConnectorCavity {
+    pub pin: Pin,
+    pub x: f64,
+    pub y: f64,
+    pub size: Option<String>,
 }
 
 /// A connector metadata property value.

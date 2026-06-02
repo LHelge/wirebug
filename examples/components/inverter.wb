@@ -1,6 +1,73 @@
 // Motor inverter / motor controller
 // Converts DC from HV bus to 3-phase AC for the drive motor
 
+connector_type can_4p "CAN 4p" {
+    layout grid {
+        rows: 2;
+        cols: 2;
+        numbering: row_major;
+    }
+}
+
+connector_type inverter_control "Inverter control 47+13p" {
+    layout face {
+        cavity 47 at (1, 0) size large;
+        cavity 46 at (3, 0) size large;
+        cavity 49 at (1, 2) size large;
+        cavity 48 at (3, 2) size large;
+
+        cavity 21 at (5, 0);
+        cavity 20 at (6, 0);
+        cavity 19 at (7, 0);
+        cavity 18 at (8, 0);
+        cavity 17 at (9, 0);
+        cavity 16 at (10, 0);
+        cavity 15 at (11, 0);
+        cavity 14 at (12, 0);
+
+        cavity 29 at (5, 1);
+        cavity 28 at (6, 1);
+        cavity 27 at (7, 1);
+        cavity 26 at (8, 1);
+        cavity 25 at (9, 1);
+        cavity 24 at (10, 1);
+        cavity 23 at (11, 1);
+        cavity 22 at (12, 1);
+
+        cavity 37 at (5, 2);
+        cavity 36 at (6, 2);
+        cavity 35 at (7, 2);
+        cavity 34 at (8, 2);
+        cavity 33 at (9, 2);
+        cavity 32 at (10, 2);
+        cavity 31 at (11, 2);
+        cavity 30 at (12, 2);
+
+        cavity 45 at (5, 3);
+        cavity 44 at (6, 3);
+        cavity 43 at (7, 3);
+        cavity 42 at (8, 3);
+        cavity 41 at (9, 3);
+        cavity 40 at (10, 3);
+        cavity 39 at (11, 3);
+        cavity 38 at (12, 3);
+
+        cavity 1 at (18, 0);
+        cavity 2 at (17, 0);
+        cavity 3 at (18, 1);
+        cavity 4 at (17, 1);
+        cavity 5 at (16, 1);
+        cavity 6 at (15, 1);
+        cavity 7 at (18, 2);
+        cavity 8 at (17, 2);
+        cavity 9 at (16, 2);
+        cavity 10 at (15, 2);
+        cavity 11 at (18, 3);
+        cavity 12 at (17, 3);
+        cavity 13 at (16, 3);
+    }
+}
+
 component inverter {
     connector hv "HV DC 2p" {
         pub port dc_pos "DC+" pin 1;
@@ -13,9 +80,12 @@ component inverter {
         pub port phase_w "W" pin 3;
     }
 
-    connector can "CAN 4p" {
-        pub port can_h "CAN H" pin 1;
-        pub port can_l "CAN L" pin 2;
+    pub port can_h "CAN H";
+    pub port can_l "CAN L";
+
+    connector can: can_4p {
+        pin 1 = can_h;
+        pin 2 = can_l;
     }
 
     connector lv "12V 4p" {
@@ -27,6 +97,18 @@ component inverter {
         pub port interlock_in  "INTLK IN" pin 1;
         pub port interlock_out "INTLK OUT" pin 2;
     }
+
+    pub port control_47 "HV AUX+";
+    pub port control_48 "HV AUX-";
+    pub port control_1  "WAKE";
+    pub port control_2  "READY";
+
+    connector control: inverter_control {
+        pin 47 = control_47;
+        pin 48 = control_48;
+        pin 1 = control_1;
+        pin 2 = control_2;
+    }
 }
 
 view pinout "Inverter pinouts" {
@@ -37,4 +119,5 @@ view pinout "Inverter pinouts" {
     include can    at (0, 8);
     include lv     at (12, 8);
     include intlk  at (24, 8);
+    include control at (14, 22);
 }

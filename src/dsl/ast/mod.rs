@@ -70,14 +70,49 @@ impl Item {
     }
 }
 
-/// `connector_type <name> "<description>" { <property>* }` — a reusable
-/// physical connector definition. Layout lands here in a later feature
-/// slice; for now it carries the shared part description and metadata.
+/// `connector_type <name> "<description>" { <property>* [layout] }` — a
+/// reusable physical connector definition with shared metadata and optional
+/// harness-side pinout layout.
 #[derive(Debug, Clone)]
 pub struct ConnectorType {
     pub name: Spanned<Ident>,
     pub description: Spanned<String>,
     pub properties: Vec<ConnectorProperty>,
+    pub layout: Option<ConnectorLayout>,
+    pub span: Span,
+}
+
+/// Authored connector pinout layout. Coordinates are interpreted from the
+/// harness side.
+#[derive(Debug, Clone)]
+pub enum ConnectorLayout {
+    Grid(ConnectorGridLayout),
+    Face(ConnectorFaceLayout),
+}
+
+/// `layout grid { rows: N; cols: N; [numbering: <mode>;] }`.
+#[derive(Debug, Clone)]
+pub struct ConnectorGridLayout {
+    pub rows: Spanned<u32>,
+    pub cols: Spanned<u32>,
+    pub numbering: Option<Spanned<Ident>>,
+    pub span: Span,
+}
+
+/// `layout face { cavity <pin> at (<x>, <y>) [size <name>]; ... }`.
+#[derive(Debug, Clone)]
+pub struct ConnectorFaceLayout {
+    pub cavities: Vec<ConnectorCavity>,
+    pub span: Span,
+}
+
+/// One authored physical cavity in a connector face layout.
+#[derive(Debug, Clone)]
+pub struct ConnectorCavity {
+    pub pin: Spanned<u32>,
+    pub x: Spanned<f64>,
+    pub y: Spanned<f64>,
+    pub size: Option<Spanned<Ident>>,
     pub span: Span,
 }
 

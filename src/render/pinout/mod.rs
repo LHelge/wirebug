@@ -8,7 +8,9 @@
 use svg::Document;
 use svg::node::element::{Group, Line, Rectangle, Style, Text};
 
-use crate::dsl::ir::{Connector, ConnectorName, Design, Instance, PortName, View};
+use crate::dsl::ir::{
+    Connector, ConnectorLayout, ConnectorName, Design, Instance, Pin, PortName, View,
+};
 use crate::error::{Error, Result};
 use crate::render::stamp::{STAMP_HEIGHT, STAMP_INSET, stamp_element};
 
@@ -18,6 +20,9 @@ const ROW_HEIGHT: f64 = 22.0;
 const PIN_COL_WIDTH: f64 = 34.0;
 const PAD_X: f64 = 10.0;
 const MIN_WIDTH: f64 = 180.0;
+const CAVITY_SIZE: f64 = 38.0;
+const CAVITY_GAP: f64 = 6.0;
+const FACE_PAD: f64 = 12.0;
 const CHAR_WIDTH: f64 = 7.0;
 const SVG_MARGIN: f64 = 48.0;
 const TITLE_GAP: f64 = 12.0;
@@ -30,6 +35,9 @@ const STYLE: &str = "\
 .row-sep { stroke: #ddd; stroke-width: 1; }
 .pin-num { font: italic 10px sans-serif; fill: #555; text-anchor: middle; dominant-baseline: central; }
 .pin-label { font: 11px sans-serif; dominant-baseline: central; }
+.cavity { fill: white; stroke: black; stroke-width: 1.25; }
+.cavity-pin { font: bold 11px sans-serif; text-anchor: middle; dominant-baseline: central; }
+.cavity-label { font: 8px sans-serif; text-anchor: middle; dominant-baseline: central; fill: #555; }
 .title { font: bold 14px sans-serif; }
 .stamp { font: 10px sans-serif; fill: #666; text-anchor: end; }\
 ";
@@ -113,6 +121,7 @@ impl PinoutRenderer {
 struct Table {
     title: String,
     subtitle: String,
+    face: Option<Face>,
     rows: Vec<Row>,
     x: f64,
     y: f64,
@@ -135,6 +144,7 @@ impl Table {
                 }
             })
             .collect::<Vec<_>>();
+        let face = Face::from_connector(connector, subject);
 
         let max_chars = std::iter::once(title.chars().count())
             .chain(std::iter::once(subtitle.chars().count()))
@@ -144,19 +154,115 @@ impl Table {
             )
             .max()
             .unwrap_or(0);
-        let width = MIN_WIDTH.max(max_chars as f64 * CHAR_WIDTH + PIN_COL_WIDTH + 3.0 * PAD_X);
+        let table_width =
+            MIN_WIDTH.max(max_chars as f64 * CHAR_WIDTH + PIN_COL_WIDTH + 3.0 * PAD_X);
+        let width = table_width.max(face.as_ref().map_or(0.0, Face::width));
         let row_count = rows.len().max(1);
-        let height = HEADER_HEIGHT + row_count as f64 * ROW_HEIGHT;
+        let face_height = face.as_ref().map_or(0.0, |f| f.height() + FACE_PAD);
+        let height = HEADER_HEIGHT + face_height + row_count as f64 * ROW_HEIGHT;
 
         Self {
             title,
             subtitle,
+            face,
             rows,
             x: cx - width / 2.0,
             y: cy - height / 2.0,
             width,
             height,
         }
+    }
+}
+
+struct Face {
+    rows: u32,
+    cols: u32,
+    cells: Vec<Cell>,
+}
+
+impl Face {
+    fn from_connector(connector: &Connector, subject: &Instance) -> Option<Self> {
+        match connector.layout.as_ref()? {
+            ConnectorLayout::Grid(layout) => {
+                let cells = (1..=layout.rows * layout.cols)
+                    .map(|pin| {
+                        let port = connector
+                            .pins
+                            .iter()
+                            .find(|binding| binding.pin == Pin(pin))
+                            .and_then(|binding| subject.ports.get(&binding.port));
+                        Cell {
+                            pin: pin.to_string(),
+                            label: port.map(|p| p.label.clone()),
+                            x: (pin - 1) % layout.cols,
+                            y: (pin - 1) / layout.cols,
+                            size: None,
+                        }
+                    })
+                    .collect();
+                Some(Self {
+                    rows: layout.rows,
+                    cols: layout.cols,
+                    cells,
+                })
+            }
+            ConnectorLayout::Face(layout) => {
+                let cells = layout
+                    .cavities
+                    .iter()
+                    .map(|cavity| {
+                        let port = connector
+                            .pins
+                            .iter()
+                            .find(|binding| binding.pin == cavity.pin)
+                            .and_then(|binding| subject.ports.get(&binding.port));
+                        Cell {
+                            pin: cavity.pin.to_string(),
+                            label: port.map(|p| p.label.clone()),
+                            x: cavity.x as u32,
+                            y: cavity.y as u32,
+                            size: cavity.size.clone(),
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let cols = cells.iter().map(Cell::span_right).max().unwrap_or(0);
+                let rows = cells.iter().map(Cell::span_bottom).max().unwrap_or(0);
+                Some(Self { rows, cols, cells })
+            }
+        }
+    }
+
+    fn width(&self) -> f64 {
+        self.cols as f64 * CAVITY_SIZE + (self.cols.saturating_sub(1)) as f64 * CAVITY_GAP
+    }
+
+    fn height(&self) -> f64 {
+        self.rows as f64 * CAVITY_SIZE + (self.rows.saturating_sub(1)) as f64 * CAVITY_GAP
+    }
+}
+
+struct Cell {
+    pin: String,
+    label: Option<String>,
+    x: u32,
+    y: u32,
+    size: Option<String>,
+}
+
+impl Cell {
+    fn span(&self) -> u32 {
+        match self.size.as_deref() {
+            Some("large") => 2,
+            _ => 1,
+        }
+    }
+
+    fn span_right(&self) -> u32 {
+        self.x + self.span()
+    }
+
+    fn span_bottom(&self) -> u32 {
+        self.y + self.span()
     }
 }
 
@@ -222,6 +328,21 @@ fn render_table(table: &Table) -> Group {
                 .set("y", table.y + HEADER_HEIGHT * 0.78),
         );
 
+    let rows_top = table.y
+        + HEADER_HEIGHT
+        + table
+            .face
+            .as_ref()
+            .map_or(0.0, |face| face.height() + FACE_PAD);
+
+    if let Some(face) = &table.face {
+        group = group.add(render_face(
+            face,
+            table.x + (table.width - face.width()) / 2.0,
+            table.y + HEADER_HEIGHT + FACE_PAD / 2.0,
+        ));
+    }
+
     let rows = if table.rows.is_empty() {
         vec![Row {
             pin: String::new(),
@@ -239,7 +360,7 @@ fn render_table(table: &Table) -> Group {
     };
 
     for (i, row) in rows.iter().enumerate() {
-        let row_top = table.y + HEADER_HEIGHT + i as f64 * ROW_HEIGHT;
+        let row_top = rows_top + i as f64 * ROW_HEIGHT;
         let row_y = row_top + ROW_HEIGHT / 2.0;
         if i > 0 {
             group = group.add(
@@ -266,6 +387,40 @@ fn render_table(table: &Table) -> Group {
             );
     }
 
+    group
+}
+
+fn render_face(face: &Face, x: f64, y: f64) -> Group {
+    let mut group = Group::new().set("class", "pinout-face");
+    for cell in &face.cells {
+        let span = cell.span();
+        let size = span as f64 * CAVITY_SIZE + (span.saturating_sub(1)) as f64 * CAVITY_GAP;
+        let cx = x + cell.x as f64 * (CAVITY_SIZE + CAVITY_GAP);
+        let cy = y + cell.y as f64 * (CAVITY_SIZE + CAVITY_GAP);
+        group = group
+            .add(
+                Rectangle::new()
+                    .set("class", "cavity")
+                    .set("x", cx)
+                    .set("y", cy)
+                    .set("width", size)
+                    .set("height", size),
+            )
+            .add(
+                Text::new(cell.pin.clone())
+                    .set("class", "cavity-pin")
+                    .set("x", cx + size / 2.0)
+                    .set("y", cy + size * 0.42),
+            );
+        if let Some(label) = &cell.label {
+            group = group.add(
+                Text::new(label.clone())
+                    .set("class", "cavity-label")
+                    .set("x", cx + size / 2.0)
+                    .set("y", cy + size * 0.72),
+            );
+        }
+    }
     group
 }
 
@@ -345,7 +500,14 @@ mod tests {
     fn renders_connector_pin_table() {
         let design = design_from(
             r#"
-connector_type ampseal "AMPSEAL" { part: "TE 776164-1"; }
+connector_type ampseal "AMPSEAL" {
+    part: "TE 776164-1";
+    layout grid {
+        rows: 1;
+        cols: 2;
+        numbering: row_major;
+    }
+}
 component m {
     pub port can_h "CAN H";
     pub port can_l "CAN L";
@@ -362,6 +524,8 @@ component m {
         assert!(svg.contains("x1"));
         assert!(svg.contains("AMPSEAL"));
         assert!(svg.contains("TE 776164-1"));
+        assert!(svg.contains("class=\"pinout-face\""));
+        assert_eq!(svg.matches("class=\"cavity\"").count(), 2);
         assert!(svg.contains("can_h · CAN H"));
         assert!(svg.contains("can_l · CAN L"));
     }
@@ -379,6 +543,35 @@ component m {
 
         assert!(svg.contains("class=\"wirebug wirebug-pinout\""));
         assert!(!svg.contains("<style>"));
+    }
+
+    #[test]
+    fn renders_explicit_face_layout_with_large_cavity() {
+        let design = design_from(
+            r#"
+connector_type control "Control" {
+    layout face {
+        cavity 47 at (0, 0) size large;
+        cavity 1 at (3, 0);
+    }
+}
+component m {
+    pub port hv_aux "HV AUX";
+    pub port wake "WAKE";
+    connector x1: control {
+        pin 47 = hv_aux;
+        pin 1 = wake;
+    }
+}
+"#,
+        );
+        let svg = render(&design, &pinout_view("m", &[("x1", 0.0, 0.0)]), false);
+
+        assert!(svg.contains("class=\"pinout-face\""));
+        assert_eq!(svg.matches("class=\"cavity\"").count(), 2);
+        assert!(svg.contains("47"));
+        assert!(svg.contains("HV AUX"));
+        assert!(svg.contains("WAKE"));
     }
 
     #[test]
