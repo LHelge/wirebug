@@ -639,6 +639,7 @@ mod tests {
             children: IndexMap::new(),
             wires: Vec::new(),
             cables: IndexMap::new(),
+            connectors: IndexMap::new(),
         };
 
         let node = build_node(&instance, &connector, 0.0, 0.0).expect("node");

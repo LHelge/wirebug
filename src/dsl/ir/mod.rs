@@ -50,6 +50,10 @@ name_newtype!(
     "A connector's reference designator (its addressable name in a view)."
 );
 name_newtype!(
+    ConnectorTypeName,
+    "The name of a reusable connector type definition."
+);
+name_newtype!(
     CableName,
     "A cable's designator, grouping its conductor wires."
 );
@@ -159,6 +163,8 @@ pub struct Instance {
     /// Cable metadata declared at this level, keyed by designator. The cable's
     /// conductors live in `wires`, each tagged with this name.
     pub cables: IndexMap<CableName, CableMeta>,
+    /// Physical connectors declared at this level, keyed by designator.
+    pub connectors: IndexMap<ConnectorName, Connector>,
 }
 
 /// Physical metadata for a declared cable. Its conductor wires live in
@@ -170,6 +176,36 @@ pub struct CableMeta {
     pub r#type: Option<String>,
     /// Length in metres.
     pub length: Option<f64>,
+}
+
+/// A materialized physical connector on an instance.
+#[derive(Debug, Clone)]
+pub struct Connector {
+    pub name: ConnectorName,
+    /// `None` for legacy inline connector blocks; reusable connector
+    /// instances carry the top-level connector type name.
+    pub type_name: Option<ConnectorTypeName>,
+    /// Human-facing connector description or part label.
+    pub description: String,
+    /// Free-form connector metadata inherited from the connector type.
+    pub properties: IndexMap<String, ConnectorPropertyValue>,
+    /// Authored pin bindings, preserving source order and allowing several
+    /// pins to bind to one port for ganged high-current cavities.
+    pub pins: Vec<ConnectorPin>,
+}
+
+/// A connector metadata property value.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConnectorPropertyValue {
+    Str(String),
+    Number(f64),
+}
+
+/// One physical connector pin bound to a component port.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConnectorPin {
+    pub pin: Pin,
+    pub port: PortName,
 }
 
 /// A materialized port on an instance.
