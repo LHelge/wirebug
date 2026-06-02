@@ -1169,4 +1169,67 @@ mod tests {
         ]);
         assert!(has(&p, "wirebug::wrong_include_form"), "{:?}", codes(&p));
     }
+
+    #[test]
+    fn pinout_include_resolves_subject_connector_instance() {
+        let p = problems(&[(
+            "main.wb",
+            "connector_type ampseal \"AMPSEAL\" { }
+            component m {
+                pub port can_h \"CAN H\";
+                connector x1: ampseal { pin 1 = can_h; }
+            }
+            view pinout \"X1\" { include x1 at (0, 0); }\n",
+        )]);
+        assert!(p.is_empty(), "unexpected problems: {:?}", codes(&p));
+    }
+
+    #[test]
+    fn pinout_include_resolves_inline_subject_connector() {
+        let p = problems(&[(
+            "main.wb",
+            "component m {
+                connector x1 \"Legacy 1p\" { pub port can_h \"CAN H\" pin 1; }
+            }
+            view pinout \"X1\" { include x1 at (0, 0); }\n",
+        )]);
+        assert!(p.is_empty(), "unexpected problems: {:?}", codes(&p));
+    }
+
+    #[test]
+    fn pinout_unknown_connector_errors() {
+        let p = problems(&[(
+            "main.wb",
+            "component m { } view pinout \"X1\" { include x1 at (0, 0); }\n",
+        )]);
+        assert!(has(&p, "wirebug::unknown_connector"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn pinout_include_with_instance_connector_form_errors() {
+        let p = problems(&[(
+            "main.wb",
+            "connector_type ampseal \"AMPSEAL\" { }
+            component m {
+                pub port can_h \"CAN H\";
+                connector x1: ampseal { pin 1 = can_h; }
+            }
+            view pinout \"X1\" { include child.x1 at (0, 0); }\n",
+        )]);
+        assert!(has(&p, "wirebug::wrong_include_form"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn ports_block_on_pinout_include_errors() {
+        let p = problems(&[(
+            "main.wb",
+            "connector_type ampseal \"AMPSEAL\" { }
+            component m {
+                pub port can_h \"CAN H\";
+                connector x1: ampseal { pin 1 = can_h; }
+            }
+            view pinout \"X1\" { include x1 at (0, 0) ports { west: can_h; }; }\n",
+        )]);
+        assert!(has(&p, "wirebug::wrong_include_form"), "{:?}", codes(&p));
+    }
 }

@@ -64,6 +64,7 @@ name_newtype!(
 pub enum ViewKind {
     Schematic,
     Harness,
+    Pinout,
     Other(String),
 }
 
@@ -72,6 +73,7 @@ impl ViewKind {
         match self {
             Self::Schematic => "schematic",
             Self::Harness => "harness",
+            Self::Pinout => "pinout",
             Self::Other(kind) => kind,
         }
     }
@@ -83,6 +85,10 @@ impl ViewKind {
     pub fn is_harness(&self) -> bool {
         matches!(self, Self::Harness)
     }
+
+    pub fn is_pinout(&self) -> bool {
+        matches!(self, Self::Pinout)
+    }
 }
 
 impl From<&str> for ViewKind {
@@ -90,6 +96,7 @@ impl From<&str> for ViewKind {
         match kind {
             "schematic" => Self::Schematic,
             "harness" => Self::Harness,
+            "pinout" => Self::Pinout,
             other => Self::Other(other.to_string()),
         }
     }
@@ -411,6 +418,7 @@ mod tests {
     fn view_kind_classifies_known_kinds_and_preserves_unknown_ones() {
         assert_eq!(ViewKind::from("schematic"), ViewKind::Schematic);
         assert_eq!(ViewKind::from("harness"), ViewKind::Harness);
+        assert_eq!(ViewKind::from("pinout"), ViewKind::Pinout);
         assert_eq!(ViewKind::from("bom"), ViewKind::Other("bom".to_string()));
         assert_eq!(ViewKind::from("bom").as_str(), "bom");
     }
