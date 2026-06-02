@@ -28,3 +28,13 @@ component inverter {
         pub port interlock_out "INTLK OUT" pin 2;
     }
 }
+
+view pinout "Inverter pinouts" {
+    grid 20;
+
+    include hv     at (0, 0);
+    include phases at (12, 0);
+    include can    at (0, 8);
+    include lv     at (12, 8);
+    include intlk  at (24, 8);
+}

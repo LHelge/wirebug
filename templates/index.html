@@ -25,9 +25,11 @@
     .tabbar label { cursor: pointer; padding: .5rem .9rem; font-weight: 500; color: #666; border-bottom: 2px solid transparent; margin-bottom: -1px; }
     .panel { display: none; }
     #tab-schematic:checked ~ .tabbar label[for="tab-schematic"],
-    #tab-harness:checked ~ .tabbar label[for="tab-harness"] { color: #1a1a1a; border-bottom-color: #1a1a1a; }
+    #tab-harness:checked ~ .tabbar label[for="tab-harness"],
+    #tab-pinout:checked ~ .tabbar label[for="tab-pinout"] { color: #1a1a1a; border-bottom-color: #1a1a1a; }
     #tab-schematic:checked ~ .panel-schematic,
-    #tab-harness:checked ~ .panel-harness { display: block; }
+    #tab-harness:checked ~ .panel-harness,
+    #tab-pinout:checked ~ .panel-pinout { display: block; }
   </style>
 </head>
 <body>
@@ -48,12 +50,18 @@
 {% if has_harness %}
     <input type="radio" name="tab" id="tab-harness"{% if !has_schematic %} checked{% endif %}>
 {% endif %}
+{% if has_pinout %}
+    <input type="radio" name="tab" id="tab-pinout"{% if !has_schematic && !has_harness %} checked{% endif %}>
+{% endif %}
     <div class="tabbar">
 {% if has_schematic %}
       <label for="tab-schematic">Schematics</label>
 {% endif %}
 {% if has_harness %}
       <label for="tab-harness">Harnesses</label>
+{% endif %}
+{% if has_pinout %}
+      <label for="tab-pinout">Pinouts</label>
 {% endif %}
     </div>
 {% if has_schematic %}
@@ -73,6 +81,19 @@
     <div class="panel panel-harness">
 {% for view in views %}
 {% if view.is_harness() %}
+      <section>
+        <h2>{{ view.title }}</h2>
+        <a href="#lb-{{ view.filename }}"><img src="{{ view.filename }}" alt="{{ view.title }}"></a>
+      </section>
+      <a href="#" class="lightbox" id="lb-{{ view.filename }}"><img src="{{ view.filename }}" alt="{{ view.title }}"></a>
+{% endif %}
+{% endfor %}
+    </div>
+{% endif %}
+{% if has_pinout %}
+    <div class="panel panel-pinout">
+{% for view in views %}
+{% if view.is_pinout() %}
       <section>
         <h2>{{ view.title }}</h2>
         <a href="#lb-{{ view.filename }}"><img src="{{ view.filename }}" alt="{{ view.title }}"></a>
