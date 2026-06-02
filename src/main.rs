@@ -3,7 +3,7 @@
 //! Three subcommands over the `.wb` DSL pipeline: `check` reports problems,
 //! `render` writes one SVG (or PNG) per view in the design, and `serve` runs
 //! a live-reloading dev server. Each discovers the project by walking up to
-//! `main.wb` when given no target.
+//! `wirebug.toml` when given no target.
 
 mod cli;
 

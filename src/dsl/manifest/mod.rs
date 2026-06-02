@@ -1,4 +1,4 @@
-//! Project manifest: a `wirebug.toml` beside `main.wb`.
+//! Project manifest: the `wirebug.toml` at a project root.
 //!
 //! Carries the project's identity (name, version) plus a few optional
 //! engineering-drawing fields (description, authors, license, revision,

@@ -1,5 +1,6 @@
-//! File watcher: re-build the site when a `.wb` file under the project root
-//! changes, debouncing bursts so one save triggers one rebuild.
+//! File watcher: re-build the site when a `.wb` file or project manifest
+//! under the project root changes, debouncing bursts so one save triggers
+//! one rebuild.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -29,7 +30,7 @@ impl ProjectWatcher {
 
         let mut watcher = RecommendedWatcher::new(
             move |result: notify::Result<notify::Event>| match result {
-                Ok(event) if is_wb_change(&event) => {
+                Ok(event) if is_project_source_change(&event) => {
                     let _ = tx.try_send(());
                 }
                 Ok(_) => {}
@@ -93,9 +94,9 @@ impl ProjectWatcher {
     }
 }
 
-/// A content change touching at least one `.wb` file. Filters out editor
-/// metadata churn and unrelated files in the project tree.
-fn is_wb_change(event: &notify::Event) -> bool {
+/// A content change touching at least one project source file. Filters out
+/// editor metadata churn and unrelated files in the project tree.
+fn is_project_source_change(event: &notify::Event) -> bool {
     let is_content = matches!(
         event.kind,
         EventKind::Create(_)
@@ -106,5 +107,10 @@ fn is_wb_change(event: &notify::Event) -> bool {
         && event
             .paths
             .iter()
-            .any(|p| p.extension().is_some_and(|ext| ext == "wb"))
+            .any(|p| p.extension().is_some_and(|ext| ext == "wb") || is_manifest(p))
+}
+
+fn is_manifest(path: &Path) -> bool {
+    path.file_name()
+        .is_some_and(|name| name == crate::dsl::manifest::FILE_NAME)
 }

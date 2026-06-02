@@ -42,9 +42,9 @@ pub struct Cli {
 pub enum Command {
     /// Parse and validate a wirebug project, reporting any problems.
     Check {
-        /// A `.wb` file or project directory. Defaults to the project
-        /// containing the current directory (found by walking up to
-        /// `main.wb`).
+        /// A project manifest, project directory, or `.wb` file. Defaults
+        /// to the project containing the current directory (found by
+        /// walking up to `wirebug.toml`).
         target: Option<PathBuf>,
         /// Treat warnings as errors.
         #[arg(long)]
@@ -55,9 +55,9 @@ pub enum Command {
     },
     /// Render every view in a project to SVG.
     Render {
-        /// A `.wb` file or project directory. Defaults to the project
-        /// containing the current directory (found by walking up to
-        /// `main.wb`).
+        /// A project manifest, project directory, or `.wb` file. Defaults
+        /// to the project containing the current directory (found by
+        /// walking up to `wirebug.toml`).
         target: Option<PathBuf>,
         /// Directory to write the per-view SVGs into (created if absent).
         #[arg(long)]
@@ -81,9 +81,9 @@ pub enum Command {
     },
     /// Serve a project with live reload, re-rendering on every change.
     Serve {
-        /// A `.wb` file or project directory. Defaults to the project
-        /// containing the current directory (found by walking up to
-        /// `main.wb`).
+        /// A project manifest, project directory, or `.wb` file. Defaults
+        /// to the project containing the current directory (found by
+        /// walking up to `wirebug.toml`).
         target: Option<PathBuf>,
         /// Port to listen on.
         #[arg(short, long, default_value_t = 3000)]
