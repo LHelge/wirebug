@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use crate::dsl::ast::{self, Item};
 use crate::dsl::diagnostics::Problem;
-use crate::dsl::ir::{InstanceName, PortName, Side, ViewKind};
+use crate::dsl::ir::{ConnectorName, InstanceName, PortName, Side, ViewKind};
 use crate::dsl::span::{FileId, Span, Spanned};
 
 use super::{DefId, Resolver, ViewBinding};
@@ -246,6 +246,55 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    /// A pinout include names a connector on the view subject itself:
+    /// `include <connector> at (x, y);`. It carries neither an instance
+    /// connector segment nor a schematic `ports { }` block.
+    fn check_pinout_include(
+        &self,
+        inc: &ast::Include,
+        subject: DefId,
+        file: FileId,
+        problems: &mut Vec<Problem>,
+    ) {
+        if let Some(connector) = &inc.connector {
+            problems.push(Problem::WrongIncludeForm {
+                message: "a pinout include names a subject connector, not an instance connector"
+                    .to_string(),
+                help: "write `include <connector> at (x, y);`".to_string(),
+                src: self.project.source(file),
+                at: connector.span.into(),
+            });
+        }
+        if let Some(first) = inc.ports.first() {
+            problems.push(Problem::WrongIncludeForm {
+                message: "a pinout include draws a whole connector, not selected ports".to_string(),
+                help: "remove the `ports { }` block from this pinout include".to_string(),
+                src: self.project.source(file),
+                at: first.span.into(),
+            });
+        }
+
+        let wanted = inc.instance.node.as_str();
+        if !self.connector_exists(subject, wanted) {
+            problems.push(Problem::UnknownConnector {
+                name: wanted.to_string(),
+                on: format!(" on `{}`", self.defs[subject].name),
+                src: self.project.source(file),
+                at: inc.instance.span.into(),
+            });
+        }
+    }
+
+    fn connector_exists(&self, tid: DefId, wanted: &str) -> bool {
+        self.defs[tid]
+            .connectors
+            .contains_key(&ConnectorName::from(wanted))
+            || self.defs[tid]
+                .ports
+                .values()
+                .any(|p| p.connector.and_then(|c| c.name) == Some(wanted))
+    }
+
     /// Validate that a view doesn't include the same rendered target twice.
     /// Schematic views render whole instances, while harness views render
     /// instance connectors, so their duplicate keys differ.
@@ -256,7 +305,8 @@ impl<'a> Resolver<'a> {
         problems: &mut Vec<Problem>,
     ) {
         let mut seen: HashMap<String, Span> = HashMap::new();
-        let is_harness = ViewKind::from(view.kind.node.as_str()).is_harness();
+        let view_kind = ViewKind::from(view.kind.node.as_str());
+        let is_harness = view_kind.is_harness();
         for inc in &view.includes {
             let Some(target) = include_target(inc, is_harness) else {
                 continue;
@@ -322,6 +372,10 @@ impl<'a> Resolver<'a> {
                     self.check_duplicate_includes(view, FileId(fi), &mut problems);
                     let is_harness = view_kind.is_harness();
                     for inc in &view.includes {
+                        if view_kind.is_pinout() {
+                            self.check_pinout_include(inc, s, FileId(fi), &mut problems);
+                            continue;
+                        }
                         let name = inc.instance.node.as_str();
                         match self.defs[s].instances.get(&InstanceName::from(name)) {
                             None => problems.push(Problem::UnknownInclude {

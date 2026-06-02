@@ -64,6 +64,7 @@ pub fn render_views(design: &Design, embed: bool) -> Result<Vec<RenderedView>> {
                 schematic::SchematicRenderer.render(design, subject, view, embed)?
             }
             ViewKind::Harness => harness::HarnessRenderer.render(design, subject, view, embed)?,
+            ViewKind::Pinout => return Err(Error::UnknownViewKind("pinout".to_string())),
             ViewKind::Other(other) => return Err(Error::UnknownViewKind(other.clone())),
         };
         rendered.push(RenderedView {
