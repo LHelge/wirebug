@@ -156,7 +156,8 @@ impl Table {
             .unwrap_or(0);
         let table_width =
             MIN_WIDTH.max(max_chars as f64 * CHAR_WIDTH + PIN_COL_WIDTH + 3.0 * PAD_X);
-        let width = table_width.max(face.as_ref().map_or(0.0, Face::width));
+        let face_width = face.as_ref().map_or(0.0, |f| f.width() + 2.0 * FACE_PAD);
+        let width = table_width.max(face_width);
         let row_count = rows.len().max(1);
         let face_height = face.as_ref().map_or(0.0, |f| f.height() + FACE_PAD);
         let height = HEADER_HEIGHT + face_height + row_count as f64 * ROW_HEIGHT;
@@ -184,8 +185,13 @@ impl Face {
     fn from_connector(connector: &Connector, subject: &Instance) -> Option<Self> {
         match connector.layout.as_ref()? {
             ConnectorLayout::Grid(layout) => {
-                let cells = (1..=layout.rows * layout.cols)
-                    .map(|pin| {
+                let numbering = GridNumbering::from(layout.numbering.as_deref());
+                let cells = numbering
+                    .positions(layout.rows, layout.cols)
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, (x, y))| {
+                        let pin = (index + 1) as u32;
                         let port = connector
                             .pins
                             .iter()
@@ -194,8 +200,8 @@ impl Face {
                         Cell {
                             pin: pin.to_string(),
                             label: port.map(|p| p.label.clone()),
-                            x: (pin - 1) % layout.cols,
-                            y: (pin - 1) / layout.cols,
+                            x,
+                            y,
                             size: None,
                         }
                     })
@@ -207,6 +213,18 @@ impl Face {
                 })
             }
             ConnectorLayout::Face(layout) => {
+                let min_x = layout
+                    .cavities
+                    .iter()
+                    .map(|cavity| cavity.x as u32)
+                    .min()
+                    .unwrap_or(0);
+                let min_y = layout
+                    .cavities
+                    .iter()
+                    .map(|cavity| cavity.y as u32)
+                    .min()
+                    .unwrap_or(0);
                 let cells = layout
                     .cavities
                     .iter()
@@ -219,8 +237,8 @@ impl Face {
                         Cell {
                             pin: cavity.pin.to_string(),
                             label: port.map(|p| p.label.clone()),
-                            x: cavity.x as u32,
-                            y: cavity.y as u32,
+                            x: (cavity.x as u32).saturating_sub(min_x),
+                            y: (cavity.y as u32).saturating_sub(min_y),
                             size: cavity.size.clone(),
                         }
                     })
@@ -239,6 +257,142 @@ impl Face {
     fn height(&self) -> f64 {
         self.rows as f64 * CAVITY_SIZE + (self.rows.saturating_sub(1)) as f64 * CAVITY_GAP
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GridNumbering {
+    RowMajor,
+    OddEven,
+    Clockwise,
+    CounterClockwise,
+}
+
+impl GridNumbering {
+    fn from(value: Option<&str>) -> Self {
+        match value {
+            Some("odd_even") => Self::OddEven,
+            Some("clockwise") => Self::Clockwise,
+            Some("counter_clockwise") => Self::CounterClockwise,
+            _ => Self::RowMajor,
+        }
+    }
+
+    fn positions(self, rows: u32, cols: u32) -> Vec<(u32, u32)> {
+        match self {
+            Self::RowMajor => row_major_positions(rows, cols),
+            Self::OddEven => odd_even_positions(rows, cols),
+            Self::Clockwise => spiral_positions(rows, cols, SpiralDirection::Clockwise),
+            Self::CounterClockwise => counter_clockwise_positions(rows, cols),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SpiralDirection {
+    Clockwise,
+    CounterClockwise,
+}
+
+fn row_major_positions(rows: u32, cols: u32) -> Vec<(u32, u32)> {
+    (0..rows)
+        .flat_map(|y| (0..cols).map(move |x| (x, y)))
+        .collect()
+}
+
+fn odd_even_positions(rows: u32, cols: u32) -> Vec<(u32, u32)> {
+    (0..cols)
+        .flat_map(|x| (0..rows).map(move |y| (x, y)))
+        .collect()
+}
+
+fn counter_clockwise_positions(rows: u32, cols: u32) -> Vec<(u32, u32)> {
+    if rows <= 2 {
+        return (0..rows)
+            .flat_map(|y| {
+                if y == 0 {
+                    EitherRange::Descending((0..cols).rev())
+                } else {
+                    EitherRange::Ascending(0..cols)
+                }
+                .map(move |x| (x, y))
+            })
+            .collect();
+    }
+
+    if cols <= 2 {
+        return odd_even_positions(rows, cols);
+    }
+
+    spiral_positions(rows, cols, SpiralDirection::CounterClockwise)
+}
+
+enum EitherRange<A, D> {
+    Ascending(A),
+    Descending(D),
+}
+
+impl<A, D> Iterator for EitherRange<A, D>
+where
+    A: Iterator<Item = u32>,
+    D: Iterator<Item = u32>,
+{
+    type Item = u32;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::Ascending(iter) => iter.next(),
+            Self::Descending(iter) => iter.next(),
+        }
+    }
+}
+
+fn spiral_positions(rows: u32, cols: u32, direction: SpiralDirection) -> Vec<(u32, u32)> {
+    if rows == 0 || cols == 0 {
+        return Vec::new();
+    }
+
+    let mut positions = Vec::with_capacity(rows as usize * cols as usize);
+    let (mut left, mut top) = (0, 0);
+    let (mut right, mut bottom) = (cols - 1, rows - 1);
+
+    while left <= right && top <= bottom {
+        match direction {
+            SpiralDirection::Clockwise => {
+                positions.extend((left..=right).map(|x| (x, top)));
+                positions.extend(((top + 1)..=bottom).map(|y| (right, y)));
+                if top < bottom {
+                    positions.extend((left..right).rev().map(|x| (x, bottom)));
+                }
+                if left < right {
+                    positions.extend(((top + 1)..bottom).rev().map(|y| (left, y)));
+                }
+            }
+            SpiralDirection::CounterClockwise => {
+                positions.extend((top..=bottom).map(|y| (left, y)));
+                positions.extend(((left + 1)..=right).map(|x| (x, bottom)));
+                if left < right {
+                    positions.extend((top..bottom).rev().map(|y| (right, y)));
+                }
+                if top < bottom {
+                    positions.extend(((left + 1)..right).rev().map(|x| (x, top)));
+                }
+            }
+        }
+
+        left += 1;
+        top += 1;
+        right = match right.checked_sub(1) {
+            Some(next) => next,
+            None => break,
+        };
+        bottom = match bottom.checked_sub(1) {
+            Some(next) => next,
+            None => break,
+        };
+    }
+
+    positions.truncate(rows as usize * cols as usize);
+    positions
 }
 
 struct Cell {
@@ -572,6 +726,128 @@ component m {
         assert!(svg.contains("47"));
         assert!(svg.contains("HV AUX"));
         assert!(svg.contains("WAKE"));
+    }
+
+    #[test]
+    fn wide_face_layout_has_symmetric_side_padding() {
+        let design = design_from(
+            r#"
+connector_type wide "Wide" {
+    layout face {
+        cavity 1 at (0, 0);
+        cavity 2 at (5, 0);
+    }
+}
+component m {
+    connector x1: wide {
+    }
+}
+"#,
+        );
+        let subject = design
+            .instances
+            .values()
+            .find(|i| i.type_name == TypeName::from("m"))
+            .expect("subject");
+        let connector = subject
+            .connectors
+            .get(&ConnectorName::from("x1"))
+            .expect("connector");
+
+        let table = Table::new(connector, subject, 0.0, 0.0);
+        let face = table.face.as_ref().expect("face");
+
+        assert_eq!(table.width, face.width() + 2.0 * FACE_PAD);
+    }
+
+    #[test]
+    fn explicit_face_layout_sizes_to_occupied_cavities() {
+        let design = design_from(
+            r#"
+connector_type offset "Offset" {
+    layout face {
+        cavity 1 at (4, 2);
+        cavity 2 at (6, 2);
+    }
+}
+component m {
+    connector x1: offset {
+    }
+}
+"#,
+        );
+        let subject = design
+            .instances
+            .values()
+            .find(|i| i.type_name == TypeName::from("m"))
+            .expect("subject");
+        let connector = subject
+            .connectors
+            .get(&ConnectorName::from("x1"))
+            .expect("connector");
+        let face = Face::from_connector(connector, subject).expect("face");
+
+        assert_eq!(face.cols, 3);
+        assert_eq!(face.rows, 1);
+        assert_eq!(face.cells[0].x, 0);
+        assert_eq!(face.cells[1].x, 2);
+    }
+
+    #[test]
+    fn odd_even_grid_numbering_places_pin_pairs_in_columns() {
+        let positions = GridNumbering::OddEven.positions(2, 4);
+
+        assert_eq!(
+            positions,
+            vec![
+                (0, 0),
+                (0, 1),
+                (1, 0),
+                (1, 1),
+                (2, 0),
+                (2, 1),
+                (3, 0),
+                (3, 1)
+            ]
+        );
+    }
+
+    #[test]
+    fn clockwise_grid_numbering_wraps_around_the_face() {
+        let positions = GridNumbering::Clockwise.positions(2, 4);
+
+        assert_eq!(
+            positions,
+            vec![
+                (0, 0),
+                (1, 0),
+                (2, 0),
+                (3, 0),
+                (3, 1),
+                (2, 1),
+                (1, 1),
+                (0, 1)
+            ]
+        );
+    }
+
+    #[test]
+    fn counter_clockwise_grid_numbering_keeps_wide_sides_grouped() {
+        let positions = GridNumbering::CounterClockwise.positions(2, 4);
+
+        assert_eq!(
+            positions,
+            vec![
+                (3, 0),
+                (2, 0),
+                (1, 0),
+                (0, 0),
+                (0, 1),
+                (1, 1),
+                (2, 1),
+                (3, 1)
+            ]
+        );
     }
 
     #[test]

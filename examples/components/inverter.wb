@@ -9,21 +9,53 @@ connector_type can_4p "CAN 4p" {
     }
 }
 
+connector_type grid_row_major_8p "Grid row-major 2x4" {
+    layout grid {
+        rows: 2;
+        cols: 4;
+        numbering: row_major;
+    }
+}
+
+connector_type grid_odd_even_8p "Grid odd-even 2x4" {
+    layout grid {
+        rows: 2;
+        cols: 4;
+        numbering: odd_even;
+    }
+}
+
+connector_type grid_clockwise_8p "Grid clockwise 2x4" {
+    layout grid {
+        rows: 2;
+        cols: 4;
+        numbering: clockwise;
+    }
+}
+
+connector_type grid_counter_clockwise_8p "Grid counter-clockwise 2x4" {
+    layout grid {
+        rows: 2;
+        cols: 4;
+        numbering: counter_clockwise;
+    }
+}
+
 connector_type inverter_control "Inverter control 47+13p" {
     layout face {
-        cavity 47 at (1, 0) size large;
-        cavity 46 at (3, 0) size large;
-        cavity 49 at (1, 2) size large;
-        cavity 48 at (3, 2) size large;
+        cavity 47 at (0, 0) size large;
+        cavity 46 at (2, 0) size large;
+        cavity 49 at (0, 2) size large;
+        cavity 48 at (2, 2) size large;
 
-        cavity 21 at (5, 0);
-        cavity 20 at (6, 0);
-        cavity 19 at (7, 0);
-        cavity 18 at (8, 0);
-        cavity 17 at (9, 0);
-        cavity 16 at (10, 0);
-        cavity 15 at (11, 0);
-        cavity 14 at (12, 0);
+        cavity 21 at (4, 0);
+        cavity 20 at (5, 0);
+        cavity 19 at (6, 0);
+        cavity 18 at (7, 0);
+        cavity 17 at (8, 0);
+        cavity 16 at (9, 0);
+        cavity 15 at (10, 0);
+        cavity 14 at (11, 0);
 
         cavity 29 at (5, 1);
         cavity 28 at (6, 1);
@@ -109,6 +141,18 @@ component inverter {
         pin 1 = control_1;
         pin 2 = control_2;
     }
+
+    connector demo_row_major: grid_row_major_8p {
+    }
+
+    connector demo_odd_even: grid_odd_even_8p {
+    }
+
+    connector demo_clockwise: grid_clockwise_8p {
+    }
+
+    connector demo_counter_clockwise: grid_counter_clockwise_8p {
+    }
 }
 
 view pinout "Inverter pinouts" {
@@ -120,4 +164,8 @@ view pinout "Inverter pinouts" {
     include lv     at (12, 8);
     include intlk  at (24, 8);
     include control at (14, 22);
+    include demo_row_major at (0, 40);
+    include demo_odd_even at (12, 40);
+    include demo_clockwise at (24, 40);
+    include demo_counter_clockwise at (36, 40);
 }
