@@ -1,0 +1,60 @@
+#:schema https://dystroy.org/bacon/.bacon.schema.json
+
+# This is a configuration file for the bacon tool
+#
+# Complete help on configuration: https://dystroy.org/bacon/config/
+#
+# You may check the current default at
+#   https://github.com/Canop/bacon/blob/main/defaults/default-bacon.toml
+
+default_job = "serve"
+env.CARGO_TERM_COLOR = "always"
+
+[jobs.check]
+command = ["cargo", "check"]
+need_stdout = false
+
+[jobs.check-all]
+command = ["cargo", "check", "--all-targets"]
+need_stdout = false
+
+# Run clippy on the default target
+[jobs.clippy]
+command = ["cargo", "clippy"]
+need_stdout = false
+
+# This job lets you run
+# - all tests: bacon test
+# - a specific test: bacon test -- config::test_default_files
+# - the tests of a package: bacon test -- -- -p config
+[jobs.test]
+command = ["cargo", "test"]
+need_stdout = true
+
+# You can run your application and have the result displayed in bacon,
+# if it makes sense for this crate.
+[jobs.render]
+command = [
+    "cargo",
+    "run",
+    "--",
+    "render",
+    "examples/",
+    "--out",
+    "examples/out/",
+]
+need_stdout = true
+allow_warnings = true
+background = true
+show_command_error_code = true
+scroll_anchor = "auto"
+
+[jobs.serve]
+command = ["cargo", "run", "--", "serve", "examples/"]
+need_stdout = true
+allow_warnings = true
+background = false
+on_change_strategy = "kill_then_restart"
+scroll_anchor = "auto"
+default_watch = false
+watch = ["src", "build.rs", "Cargo.toml"]
