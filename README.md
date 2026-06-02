@@ -2,9 +2,9 @@
 
 Text-defined electrical schematics and wiring harnesses.
 
-**wirebug** describes an electrical system in a small text DSL (`.wb` files) and turns it into SVG schematics and wiring harness drawings. One model, many views — inspired by [Structurizr](https://structurizr.com/) / [LikeC4](https://likec4.dev/) for system architecture and [WireViz](https://github.com/wireviz/WireViz) for wiring harnesses.
+**wirebug** describes an electrical system in a small text DSL (`.wb` files) and turns it into SVG schematics, wiring harness drawings, and connector pinout drawings. One model, many views — inspired by [Structurizr](https://structurizr.com/) / [LikeC4](https://likec4.dev/) for system architecture and [WireViz](https://github.com/WireViz/WireViz) for wiring harnesses.
 
-A project is a directory rooted at a `wirebug.toml` manifest, with `main.wb` as the conventional entry file beside it. Components are *types* with `pub` ports; you instantiate them, wire the instances together, and split a system across files with `use`. The full language is documented in `.claude/skills/wirebug-dsl/`.
+A project is a directory rooted at a `wirebug.toml` manifest, with `main.wb` as the conventional entry file beside it. Components are *types* with `pub` ports; you instantiate them, wire the instances together, and split a system across files with `use`. The full language is documented in `.agents/skills/wirebug-dsl/` and mirrored in `.claude/skills/wirebug-dsl/`.
 
 ## Why
 
@@ -23,9 +23,10 @@ What works today:
   - elaboration of the type/instance hierarchy into a flat, addressable IR;
   - validation (undefined names, duplicates, private-port access, containment cycles, …);
   - rich diagnostics via [`miette`](https://github.com/zkat/miette) — source snippets, carets, `--format json`.
-- Two SVG renderers driven straight off the elaborated IR, one file per view plus an HTML index that groups them into Schematics/Harnesses tabs:
+- Three SVG renderers driven straight off the elaborated IR, one file per view plus an HTML index that groups them into Schematics/Harnesses/Pinouts tabs:
   - a **schematic** renderer (rectangle blocks, labeled ports, object-avoiding orthogonal wire routing);
-  - a **harness** renderer (WireViz-style pin tables, a central spine, and bezier cable bundles).
+  - a **harness** renderer (WireViz-style pin tables, a central spine, and bezier cable bundles);
+  - a **pinout** renderer (connector cavity faces plus pin tables, authored from the harness side).
 - `wirebug render` to disk (SVG, or `--png` rasterised, or `--embed` for naked SVGs + a `manifest.json` sidecar).
 - `wirebug serve` — a live-reloading dev server that re-renders on `.wb` or `wirebug.toml` saves.
 
@@ -91,13 +92,13 @@ Problems are reported with source snippets and carets (via miette); a clean run 
 
 **Port** — a named connection point with a human-readable label. `pub` exposes it to instantiators; visibility does not propagate automatically — a parent re-exports by declaring its own `pub` port and wiring it through.
 
-**Connector** — physical grouping metadata (a part description and pin assignments). It is *not* a namespace: a port `c0` inside a connector is still referenced as `instance.c0`, and port names are unique across the whole component.
+**Connector** — physical grouping metadata (a part description and pin assignments). It is *not* a namespace: a port `c0` inside a connector is still referenced as `instance.c0`, and port names are unique across the whole component. Reusable `connector_type` definitions can carry shared metadata and pinout layout, then components instantiate them with `connector x1: type_name { pin 1 = port; }`.
 
 **Instance** — a placement of a component type, with a name (used in wires) and an optional label (shown in diagrams).
 
 **Wire** — a colour, a gauge (mm²), and two or more endpoints (`instance.port`, or a bare `port` for the enclosing component's own port). Multi-endpoint wires model shared rails and T-junctions.
 
-**View** — a rendering target that documents a component: a kind (`schematic` or `harness`), a grid, and which instances to place where. A `schematic` include lists the ports to show on each side; a `harness` include names a connector and draws its whole pin table. Wires are derived from the model, never listed in views — a wire draws only between ports/connectors both views include.
+**View** — a rendering target that documents a component: a kind (`schematic`, `harness`, or `pinout`), a grid, and what to place where. A `schematic` include lists the ports to show on each side; a `harness` include names a child instance's connector and draws its whole pin table; a `pinout` include names one of the subject component's own connectors and draws its cavity face. Wires are derived from the model, never listed in views — a wire draws only between ports/connectors both views include.
 
 **Project** — a directory rooted at `wirebug.toml`, with `main.wb` beside it as the entry file. The CLI intentionally feels Cargo-like: from inside a project, commands walk up parent directories until they find the manifest; you can also point commands at the project root or at `wirebug.toml` explicitly. Logical hierarchy comes only from `use` imports and DSL nesting, never from directory layout.
 
@@ -127,6 +128,75 @@ date        = "2026-05-28"    # optional; ISO date
 `render` runs the same DSL pipeline as `check`, then draws every view in the design to its own SVG. Each `include` position is in **grid units**: the renderer multiplies by the grid step, and `x`/`y` are the box **centre**. Ports sit two grid steps apart and are centred on each side, so lining two components up makes the wire between them run straight. A box sizes itself from its busiest side (there is no explicit size in the DSL); omit `grid:` for the default. The grid must be coarse enough that the two-step port pitch clears a label — too fine a grid errors rather than overlapping labels.
 
 The view authors each port's side and order directly in its `ports` block, and that listing is also the scope: a box shows exactly the ports it lists, and a wire draws only where both ends are listed. Place a port on the side facing the box it connects to.
+
+### Connector pinouts
+
+Pinout views document the physical connector face from the **harness side**. This is intentional: the drawing is meant to be used while building the harness. If the device datasheet gives a device-side view, mirror it before entering the layout.
+
+Reusable connector types keep verbose physical metadata out of component definitions:
+
+```
+connector_type jst_xh_8p "JST XH 8p" {
+    part: "B8B-XH-A";
+
+    layout grid {
+        rows: 1;
+        cols: 8;
+        numbering: row_major;
+    }
+}
+
+component controller {
+    pub port can_h "CAN H";
+    pub port can_l "CAN L";
+
+    connector x1: jst_xh_8p {
+        pin 1 = can_h;
+        pin 2 = can_l;
+    }
+}
+
+view pinout "Controller pinouts" {
+    grid 20;
+    include x1 at (0, 0);
+}
+```
+
+A two-row connector can choose a numbering convention. `odd_even` fills columns first (`1,2` in the first column, `3,4` in the second), while `clockwise` and `counter_clockwise` walk the perimeter:
+
+```
+connector_type mx150_16p "MX150 16p" {
+    layout grid {
+        rows: 2;
+        cols: 8;
+        numbering: odd_even;
+    }
+}
+```
+
+For sectioned connectors with mixed cavity sizes, use an explicit face layout. Coordinates are small grid slots, still harness-side; `size large` spans a 2x2 cavity.
+
+```
+connector_type inverter_control "Inverter control 47+13p" {
+    layout face {
+        cavity 47 at (1, 0) size large;
+        cavity 46 at (3, 0) size large;
+        cavity 49 at (1, 2) size large;
+        cavity 48 at (3, 2) size large;
+
+        cavity 21 at (5, 0);
+        cavity 20 at (6, 0);
+        cavity 19 at (7, 0);
+
+        cavity 2 at (17, 0);
+        cavity 1 at (18, 0);
+        cavity 6 at (15, 1);
+        cavity 5 at (16, 1);
+        cavity 4 at (17, 1);
+        cavity 3 at (18, 1);
+    }
+}
+```
 
 ```sh
 wirebug render                       # discovers wirebug.toml by walking up from the CWD

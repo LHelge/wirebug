@@ -809,6 +809,74 @@ mod tests {
     }
 
     #[test]
+    fn connector_type_layouts_snapshot() {
+        let file = parse_ok(
+            r#"connector_type linear_8p "Linear 8p" {
+                layout grid {
+                    rows: 1;
+                    cols: 8;
+                    numbering: row_major;
+                }
+            }
+
+            connector_type dual_8p "Dual 8p" {
+                layout grid {
+                    rows: 2;
+                    cols: 8;
+                    numbering: odd_even;
+                }
+            }
+
+            connector_type inverter_control "Inverter control" {
+                part: "OEM";
+                layout face {
+                    cavity 47 at (1, 0) size large;
+                    cavity 21 at (5, 0);
+                    cavity 13 at (16, 3);
+                }
+            }"#,
+        );
+
+        let mut summary = String::new();
+        for item in &file.items {
+            let Item::ConnectorType(connector) = item else {
+                continue;
+            };
+            summary.push_str(connector.name.node.as_str());
+            summary.push_str(" = ");
+            match connector.layout.as_ref().expect("layout") {
+                ConnectorLayout::Grid(layout) => {
+                    summary.push_str(&format!(
+                        "grid {}x{} {:?}\n",
+                        layout.rows.node,
+                        layout.cols.node,
+                        layout.numbering.as_ref().map(|n| n.node.as_str())
+                    ));
+                }
+                ConnectorLayout::Face(layout) => {
+                    summary.push_str("face");
+                    for cavity in &layout.cavities {
+                        summary.push_str(&format!(
+                            " {}@({}, {})",
+                            cavity.pin.node, cavity.x.node, cavity.y.node
+                        ));
+                        if let Some(size) = &cavity.size {
+                            summary.push_str(&format!(" {}", size.node));
+                        }
+                    }
+                    summary.push('\n');
+                }
+            }
+        }
+
+        insta::assert_snapshot!(summary, @r###"
+linear_8p = grid 1x8 Some("row_major")
+dual_8p = grid 2x8 Some("odd_even")
+inverter_control = face 47@(1, 0) large 21@(5, 0) 13@(16, 3)
+"###);
+    }
+
+    #[test]
     fn connector_instance_binds_pins_to_existing_ports() {
         let file = parse_ok(
             r#"component c {

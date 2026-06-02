@@ -2,8 +2,8 @@
 //!
 //! A `pinout` view documents connectors on the view subject itself. Each
 //! `include <connector> at (x, y);` becomes a titled pin table rendered from
-//! the harness side. Physical cavity-face layouts land in a later slice; this
-//! renderer gives the model a useful visual endpoint now.
+//! the harness side, optionally with a physical cavity face above the pin
+//! table when the connector type carries a layout.
 
 use svg::Document;
 use svg::node::element::{Group, Line, Rectangle, Style, Text};

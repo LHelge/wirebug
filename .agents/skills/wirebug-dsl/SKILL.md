@@ -158,6 +158,102 @@ The designator is **optional** but required to address the connector in a harnes
 
 Connectors are **structural metadata, not a namespace**. A port `c0` inside a connector is still referenced as `cell_monitor_instance.c0`, not `cell_monitor_instance.cells.c0` — the designator names the *connector*, not a port scope. The `connector` block carries physical-grouping info (including pin assignments) for the harness renderer and BOM. `pub` is independent — a connector can mix `pub` and non-`pub` ports freely.
 
+## Connector types and pinout layouts
+
+Reusable connector types keep verbose connector metadata and physical pinout
+layouts out of component definitions. A component instantiates a connector type
+and binds the physical pins to its flat ports.
+
+```
+connector_type jst_xh_8p "JST XH 8p" {
+    part: "B8B-XH-A";
+
+    layout grid {
+        rows: 1;
+        cols: 8;
+        numbering: row_major;
+    }
+}
+
+component controller {
+    pub port can_h "CAN H";
+    pub port can_l "CAN L";
+
+    connector x1: jst_xh_8p {
+        pin 1 = can_h;
+        pin 2 = can_l;
+    }
+}
+```
+
+`connector_type` definitions are top-level items, like components and views.
+They can be imported with `use` and referenced by `connector <name>: <type>`.
+Connector instance names are the designators used in harness and pinout views.
+Pins in a connector instance must be positive integers; a pin can bind to only
+one port, but one port may bind to several pins when cavities are ganged for
+current.
+
+Pinout layouts are authored from the **harness side**. Be explicit about this
+in project docs and connector libraries: if a datasheet drawing is device-side,
+mirror it before entering the layout.
+
+Simple rectangular connectors use a grid:
+
+```
+connector_type linear_8p "Linear 8p" {
+    layout grid {
+        rows: 1;
+        cols: 8;
+        numbering: row_major;
+    }
+}
+
+connector_type dual_16p "Dual row 16p" {
+    layout grid {
+        rows: 2;
+        cols: 8;
+        numbering: odd_even;
+    }
+}
+```
+
+Supported grid numbering modes:
+
+- `row_major` — left-to-right across each row, then the next row.
+- `odd_even` — column-first, useful for paired 2xN connectors.
+- `clockwise` — walks around the face clockwise.
+- `counter_clockwise` — walks around the face counter-clockwise; for a 2xN
+  connector the upper row is mirrored and the lower row reads left-to-right.
+
+Complex connectors use an explicit face layout:
+
+```
+connector_type inverter_control "Inverter control 47+13p" {
+    layout face {
+        cavity 47 at (1, 0) size large;
+        cavity 46 at (3, 0) size large;
+        cavity 49 at (1, 2) size large;
+        cavity 48 at (3, 2) size large;
+
+        cavity 21 at (5, 0);
+        cavity 20 at (6, 0);
+        cavity 19 at (7, 0);
+
+        cavity 2 at (17, 0);
+        cavity 1 at (18, 0);
+        cavity 6 at (15, 1);
+        cavity 5 at (16, 1);
+        cavity 4 at (17, 1);
+        cavity 3 at (18, 1);
+    }
+}
+```
+
+`layout face` coordinates are slot coordinates on the connector face. A normal
+cavity occupies one slot; `size large` occupies a 2x2 slot cavity. The renderer
+normalizes the authored coordinates to the occupied cavities, so leading empty
+slots are not shown as extra padding.
+
 ## Instantiation
 
 A *type* is a definition; an *instance* is a placement of that definition. To instantiate:
@@ -236,7 +332,7 @@ A cable's wires are still ordinary connections: they show in schematic views lik
 
 ## Views
 
-A view declares a rendering target — what to render, at what positions, with what grid scale. There are two kinds: **`schematic`** (component boxes with ports on authored sides) and **`harness`** (WireViz-style connector pin tables with cable bundles). Both document the file's single top-level component and render its direct children; they differ in what an `include` selects.
+A view declares a rendering target — what to render, at what positions, with what grid scale. There are three kinds: **`schematic`** (component boxes with ports on authored sides), **`harness`** (WireViz-style connector pin tables with cable bundles), and **`pinout`** (physical connector faces plus pin tables). They differ in what an `include` selects.
 
 ### Schematic views
 
@@ -262,7 +358,7 @@ view schematic "System Overview" {
 
 Format:
 
-- `view <kind> "<title>" { ... }` — `kind` is `schematic` or `harness`.
+- `view <kind> "<title>" { ... }` — `kind` is `schematic`, `harness`, or `pinout`.
 - `grid <n>;` — pixels per grid cell. Optional; a sensible default applies.
 - `include <name> at (x, y) [ports { ... }];` — place a component by its instance name in the surrounding scope, at grid-cell coordinates. The trailing `;` is always required.
 - `ports { <side>: <port>, <port>; ... }` — optional. Each line lists the ports on one `side` (`north`, `east`, `south`, `west`), in the order they should appear on that edge. A `west: a, b;` line puts `a` above `b` on the west edge. List the same side more than once and the lines concatenate.
@@ -294,6 +390,27 @@ view harness "Main HV harness" {
 **Cables are derived, like schematic wires.** A wire renders as a cable strand only when *both* of its endpoints land on *included* connectors; ends on connectorless ports, excluded connectors, or the parent's own ports drop silently. So connectorize the external `pub port`s you want to see in a harness (wrap them in a named `connector` block).
 
 A wire that belongs to a declared `cable` (see Cables) draws WireViz-style: a labelled cable box sits between the two connectors it spans, titled with the cable's label and its `type · length`, one coloured strand per conductor. Loose wires between the same connector pair instead bundle into a plain strand group, each strand drawn in its `color` and annotated with its `label` and gauge.
+
+### Pinout views
+
+A `pinout` include selects a connector owned by the view subject itself. This
+is useful for connector reference drawings when building a harness.
+
+```
+view pinout "Inverter pinouts" {
+    grid 20;
+
+    include hv at (0, 0);
+    include control at (14, 22);
+}
+```
+
+- `include <connector> at (x, y);` — the target is a connector designator on
+  the subject component, not a child instance. Use `include control`, not
+  `include inv.control`.
+- No `ports { }` block. The whole connector is drawn from the connector type's
+  layout and pin bindings.
+- The drawing uses the harness-side convention described above.
 
 Views live in the same file as the component they primarily document — like unit tests in Rust source. A view of the system overview belongs in `main.wb` where `vehicle` is defined. A view of the battery pack detail belongs in the file where `battery_pack` is defined. This keeps views close to the data they describe.
 
