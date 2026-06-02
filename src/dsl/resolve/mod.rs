@@ -15,7 +15,7 @@ use indexmap::IndexMap;
 
 use crate::dsl::ast::{self, Item, Member};
 use crate::dsl::diagnostics::Problem;
-use crate::dsl::ir::{InstanceName, Pin, PortName};
+use crate::dsl::ir::{ConnectorName, InstanceName, Pin, PortName};
 use crate::dsl::project::Project;
 use crate::dsl::span::{FileId, Span};
 
@@ -23,6 +23,12 @@ mod views;
 
 /// Index of a definition in [`Resolved::defs`].
 pub type DefId = usize;
+
+/// Index of a connector type in [`Resolved::connector_types`].
+pub type ConnectorTypeId = usize;
+
+type ComponentScope = HashMap<String, DefId>;
+type ConnectorTypeScope = HashMap<String, ConnectorTypeId>;
 
 /// A flattened port of a component, with its connector grouping (if any).
 pub struct PortFacts<'a> {
@@ -43,10 +49,25 @@ pub struct ConnectorRef<'a> {
     pub index: usize,
 }
 
+/// A resolved top-level reusable connector type.
+pub struct ConnectorTypeInfo<'a> {
+    pub name: &'a str,
+    pub file: FileId,
+    pub ast: &'a ast::ConnectorType,
+}
+
 /// A direct child instance, with its resolved type (if it resolved).
 pub struct InstFacts<'a> {
     pub ast: &'a ast::Instance,
     pub type_id: Option<DefId>,
+}
+
+/// A component-owned connector instance, with its connector type resolved
+/// once the per-file connector-type scopes are known.
+pub struct ConnectorInstFacts<'a> {
+    pub ast: &'a ast::ConnectorInstance,
+    pub type_id: Option<ConnectorTypeId>,
+    pub index: usize,
 }
 
 /// A resolved component definition.
@@ -56,6 +77,7 @@ pub struct DefInfo<'a> {
     pub ast: &'a ast::Definition,
     pub parent: Option<DefId>,
     pub ports: IndexMap<PortName, PortFacts<'a>>,
+    pub connectors: IndexMap<ConnectorName, ConnectorInstFacts<'a>>,
     pub instances: IndexMap<InstanceName, InstFacts<'a>>,
     pub nested: Vec<DefId>,
 }
@@ -70,6 +92,7 @@ pub struct ViewBinding<'a> {
 /// (main.wb's sole top-level component), the views, and any problems.
 pub struct Resolved<'a> {
     pub defs: Vec<DefInfo<'a>>,
+    pub connector_types: Vec<ConnectorTypeInfo<'a>>,
     pub root: Option<DefId>,
     pub views: Vec<ViewBinding<'a>>,
     pub problems: Vec<Problem>,
@@ -81,26 +104,39 @@ pub fn resolve(project: &Project) -> Resolved<'_> {
     let mut r = Resolver {
         project,
         defs: Vec::new(),
+        connector_types: Vec::new(),
         problems: Vec::new(),
     };
 
     // Pass 1: register every definition, recording top-level ids per file.
     let mut roots_by_file: Vec<Vec<DefId>> = vec![Vec::new(); project.files.len()];
+    let mut connector_types_by_file: Vec<Vec<ConnectorTypeId>> =
+        vec![Vec::new(); project.files.len()];
     for (fi, file) in project.files.iter().enumerate() {
         for item in &file.ast.items {
-            if let Item::Definition(def) = item {
-                let id = r.register(def, FileId(fi), None);
-                roots_by_file[fi].push(id);
+            match item {
+                Item::Definition(def) => {
+                    let id = r.register(def, FileId(fi), None);
+                    roots_by_file[fi].push(id);
+                }
+                Item::ConnectorType(connector_type) => {
+                    let id = r.register_connector_type(connector_type, FileId(fi));
+                    connector_types_by_file[fi].push(id);
+                }
+                Item::View(_) => {}
             }
         }
     }
 
     // Pass 2: scopes, then references.
-    let file_scope = r.build_scopes(&roots_by_file);
+    let (file_scope, connector_type_scope) =
+        r.build_scopes(&roots_by_file, &connector_types_by_file);
     let envs: Vec<HashMap<String, DefId>> = (0..r.defs.len())
         .map(|d| r.visible_types(d, &file_scope))
         .collect();
     r.resolve_instances(&envs);
+    r.resolve_connector_instances(&connector_type_scope);
+    r.apply_connector_bindings();
     r.resolve_endpoints();
     let views = r.resolve_views(&roots_by_file);
 
@@ -111,6 +147,7 @@ pub fn resolve(project: &Project) -> Resolved<'_> {
 
     Resolved {
         defs: r.defs,
+        connector_types: r.connector_types,
         root,
         views,
         problems: r.problems,
@@ -121,6 +158,7 @@ pub fn resolve(project: &Project) -> Resolved<'_> {
 struct Resolver<'a> {
     project: &'a Project,
     defs: Vec<DefInfo<'a>>,
+    connector_types: Vec<ConnectorTypeInfo<'a>>,
     problems: Vec<Problem>,
 }
 
@@ -135,11 +173,13 @@ impl<'a> Resolver<'a> {
             ast: def,
             parent,
             ports: IndexMap::new(),
+            connectors: IndexMap::new(),
             instances: IndexMap::new(),
             nested: Vec::new(),
         });
 
         let mut ports: IndexMap<PortName, PortFacts<'a>> = IndexMap::new();
+        let mut connectors: IndexMap<ConnectorName, ConnectorInstFacts<'a>> = IndexMap::new();
         let mut instances: IndexMap<InstanceName, InstFacts<'a>> = IndexMap::new();
         let mut nested = Vec::new();
         let mut connector_index = 0;
@@ -171,6 +211,28 @@ impl<'a> Resolver<'a> {
                     connector_index += 1;
                     for port in &conn.ports {
                         self.add_port(&mut ports, port, Some(cref), file);
+                    }
+                }
+                Member::ConnectorInstance(conn) => {
+                    let name = ConnectorName::from(conn.name.node.as_str());
+                    if let Some(first) = connector_names.get(conn.name.node.as_str()) {
+                        self.problems.push(Problem::DuplicateConnectorName {
+                            name: name.to_string(),
+                            src: self.project.source(file),
+                            at: conn.name.span.into(),
+                            first: (*first).into(),
+                        });
+                    } else {
+                        connector_names.insert(conn.name.node.as_str(), conn.name.span);
+                        connectors.insert(
+                            name,
+                            ConnectorInstFacts {
+                                ast: conn,
+                                type_id: None,
+                                index: connector_index,
+                            },
+                        );
+                        connector_index += 1;
                     }
                 }
                 Member::Instance(inst) => {
@@ -215,8 +277,23 @@ impl<'a> Resolver<'a> {
         }
 
         self.defs[id].ports = ports;
+        self.defs[id].connectors = connectors;
         self.defs[id].instances = instances;
         self.defs[id].nested = nested;
+        id
+    }
+
+    fn register_connector_type(
+        &mut self,
+        connector_type: &'a ast::ConnectorType,
+        file: FileId,
+    ) -> ConnectorTypeId {
+        let id = self.connector_types.len();
+        self.connector_types.push(ConnectorTypeInfo {
+            name: connector_type.name.node.as_str(),
+            file,
+            ast: connector_type,
+        });
         id
     }
 
@@ -254,7 +331,11 @@ impl<'a> Resolver<'a> {
     fn build_scopes(
         &mut self,
         roots_by_file: &[Vec<DefId>],
-    ) -> HashMap<FileId, HashMap<String, DefId>> {
+        connector_types_by_file: &[Vec<ConnectorTypeId>],
+    ) -> (
+        HashMap<FileId, ComponentScope>,
+        HashMap<FileId, ConnectorTypeScope>,
+    ) {
         let path_to_file: HashMap<PathBuf, FileId> = self
             .project
             .files
@@ -264,9 +345,12 @@ impl<'a> Resolver<'a> {
             .collect();
 
         let mut scopes: HashMap<FileId, HashMap<String, DefId>> = HashMap::new();
+        let mut connector_type_scopes: HashMap<FileId, HashMap<String, ConnectorTypeId>> =
+            HashMap::new();
         for (fi, file) in self.project.files.iter().enumerate() {
             let fid = FileId(fi);
             let mut scope: HashMap<String, DefId> = HashMap::new();
+            let mut connector_type_scope: HashMap<String, ConnectorTypeId> = HashMap::new();
 
             for &id in &roots_by_file[fi] {
                 self.insert_type(
@@ -275,6 +359,15 @@ impl<'a> Resolver<'a> {
                     id,
                     fid,
                     self.defs[id].ast.name.span,
+                );
+            }
+            for &id in &connector_types_by_file[fi] {
+                self.insert_connector_type(
+                    &mut connector_type_scope,
+                    self.connector_types[id].name,
+                    id,
+                    fid,
+                    self.connector_types[id].ast.name.span,
                 );
             }
 
@@ -290,15 +383,26 @@ impl<'a> Resolver<'a> {
                     continue;
                 };
                 let wanted = use_decl.name.node.as_str();
-                match roots_by_file[tfid.0]
+                let component = roots_by_file[tfid.0]
                     .iter()
                     .copied()
-                    .find(|&id| self.defs[id].name == wanted)
-                {
-                    Some(id) => {
-                        self.insert_type(&mut scope, wanted, id, fid, use_decl.name.span);
+                    .find(|&id| self.defs[id].name == wanted);
+                let connector_type = connector_types_by_file[tfid.0]
+                    .iter()
+                    .copied()
+                    .find(|&id| self.connector_types[id].name == wanted);
+                match (component, connector_type) {
+                    (Some(id), _) => {
+                        self.insert_type(&mut scope, wanted, id, fid, use_decl.name.span)
                     }
-                    None => self.problems.push(Problem::UnresolvedImport {
+                    (None, Some(id)) => self.insert_connector_type(
+                        &mut connector_type_scope,
+                        wanted,
+                        id,
+                        fid,
+                        use_decl.name.span,
+                    ),
+                    (None, None) => self.problems.push(Problem::UnresolvedImport {
                         name: wanted.to_string(),
                         file: use_decl.path.node.clone(),
                         src: self.project.source(fid),
@@ -308,8 +412,9 @@ impl<'a> Resolver<'a> {
             }
 
             scopes.insert(fid, scope);
+            connector_type_scopes.insert(fid, connector_type_scope);
         }
-        scopes
+        (scopes, connector_type_scopes)
     }
 
     fn insert_type(
@@ -326,6 +431,26 @@ impl<'a> Resolver<'a> {
                 src: self.project.source(file),
                 at: at.into(),
                 first: self.defs[first].ast.name.span.into(),
+            });
+        } else {
+            scope.insert(name.to_string(), id);
+        }
+    }
+
+    fn insert_connector_type(
+        &mut self,
+        scope: &mut HashMap<String, ConnectorTypeId>,
+        name: &str,
+        id: ConnectorTypeId,
+        file: FileId,
+        at: Span,
+    ) {
+        if let Some(&first) = scope.get(name) {
+            self.problems.push(Problem::DuplicateConnectorType {
+                name: name.to_string(),
+                src: self.project.source(file),
+                at: at.into(),
+                first: self.connector_types[first].ast.name.span.into(),
             });
         } else {
             scope.insert(name.to_string(), id);
@@ -383,6 +508,107 @@ impl<'a> Resolver<'a> {
                 }
             }
         }
+    }
+
+    fn resolve_connector_instances(
+        &mut self,
+        connector_type_scope: &HashMap<FileId, HashMap<String, ConnectorTypeId>>,
+    ) {
+        for d in 0..self.defs.len() {
+            let pending: Vec<(ConnectorName, String, Span)> = self.defs[d]
+                .connectors
+                .iter()
+                .map(|(name, facts)| {
+                    (
+                        name.clone(),
+                        facts.ast.type_name.node.as_str().to_string(),
+                        facts.ast.type_name.span,
+                    )
+                })
+                .collect();
+            let file = self.defs[d].file;
+            let env = &connector_type_scope[&file];
+            for (name, type_name, span) in pending {
+                match env.get(&type_name) {
+                    Some(&tid) => {
+                        if let Some(facts) = self.defs[d].connectors.get_mut(&name) {
+                            facts.type_id = Some(tid);
+                        }
+                    }
+                    None => self.problems.push(Problem::UndefinedConnectorType {
+                        name: type_name,
+                        src: self.project.source(file),
+                        at: span.into(),
+                    }),
+                }
+            }
+        }
+    }
+
+    fn apply_connector_bindings(&mut self) {
+        let mut problems = Vec::new();
+        for d in 0..self.defs.len() {
+            let file = self.defs[d].file;
+            let connectors: Vec<(
+                ConnectorName,
+                Option<ConnectorTypeId>,
+                usize,
+                &'a ast::ConnectorInstance,
+            )> = self.defs[d]
+                .connectors
+                .iter()
+                .map(|(name, facts)| (name.clone(), facts.type_id, facts.index, facts.ast))
+                .collect();
+            for (name, type_id, index, ast) in connectors {
+                let Some(type_id) = type_id else { continue };
+                let part = self.connector_types[type_id].ast.description.node.as_str();
+                let connector_name = ast.name.node.as_str();
+                let mut pins: HashMap<u32, Span> = HashMap::new();
+                for binding in &ast.pins {
+                    if let Some(&first) = pins.get(&binding.pin.node) {
+                        problems.push(Problem::DuplicateConnectorPin {
+                            pin: binding.pin.node,
+                            connector: name.to_string(),
+                            src: self.project.source(file),
+                            at: binding.pin.span.into(),
+                            first: first.into(),
+                        });
+                    } else {
+                        pins.insert(binding.pin.node, binding.pin.span);
+                    }
+
+                    let port_name = PortName::from(binding.port.node.as_str());
+                    let Some(port) = self.defs[d].ports.get_mut(&port_name) else {
+                        problems.push(Problem::UnknownPort {
+                            port: binding.port.node.as_str().to_string(),
+                            on: String::new(),
+                            src: self.project.source(file),
+                            at: binding.port.span.into(),
+                        });
+                        continue;
+                    };
+                    match &port.connector {
+                        Some(existing) if existing.name != Some(connector_name) => {
+                            problems.push(Problem::PortConnectorConflict {
+                                port: binding.port.node.as_str().to_string(),
+                                src: self.project.source(file),
+                                at: binding.port.span.into(),
+                            });
+                        }
+                        Some(_) => {}
+                        None => {
+                            port.connector = Some(ConnectorRef {
+                                name: Some(connector_name),
+                                part,
+                                index,
+                            });
+                        }
+                    }
+                    port.pins.push(Pin(binding.pin.node));
+                }
+            }
+        }
+        self.problems.extend(problems);
     }
 
     fn resolve_endpoints(&mut self) {
@@ -795,6 +1021,74 @@ mod tests {
     }
 
     #[test]
+    fn connector_instance_resolves_local_connector_type() {
+        let p = problems(&[(
+            "main.wb",
+            "connector_type ampseal \"AMPSEAL\" { part: \"TE\"; }\ncomponent m { pub port can_h \"CAN H\"; connector x1: ampseal { pin 1 = can_h; } }\n",
+        )]);
+        assert!(p.is_empty(), "unexpected problems: {:?}", codes(&p));
+    }
+
+    #[test]
+    fn connector_instance_resolves_imported_connector_type() {
+        let p = problems(&[
+            (
+                "main.wb",
+                "use ampseal from \"connectors.wb\"\ncomponent m { pub port can_h \"CAN H\"; connector x1: ampseal { pin 1 = can_h; } }\n",
+            ),
+            (
+                "connectors.wb",
+                "connector_type ampseal \"AMPSEAL\" { part: \"TE\"; }\n",
+            ),
+        ]);
+        assert!(p.is_empty(), "unexpected problems: {:?}", codes(&p));
+    }
+
+    #[test]
+    fn unknown_connector_type_errors() {
+        let p = problems(&[(
+            "main.wb",
+            "component m { pub port can_h \"CAN H\"; connector x1: ghost { pin 1 = can_h; } }\n",
+        )]);
+        assert!(
+            has(&p, "wirebug::undefined_connector_type"),
+            "{:?}",
+            codes(&p)
+        );
+    }
+
+    #[test]
+    fn unknown_connector_bound_port_errors() {
+        let p = problems(&[(
+            "main.wb",
+            "connector_type ampseal \"AMPSEAL\" { }\ncomponent m { connector x1: ampseal { pin 1 = nope; } }\n",
+        )]);
+        assert!(has(&p, "wirebug::unknown_port"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn duplicate_connector_pin_errors() {
+        let p = problems(&[(
+            "main.wb",
+            "connector_type ampseal \"AMPSEAL\" { }\ncomponent m { pub port can_h \"CAN H\"; pub port can_l \"CAN L\"; connector x1: ampseal { pin 1 = can_h; pin 1 = can_l; } }\n",
+        )]);
+        assert!(
+            has(&p, "wirebug::duplicate_connector_pin"),
+            "{:?}",
+            codes(&p)
+        );
+    }
+
+    #[test]
+    fn one_port_can_bind_to_multiple_pins_on_one_connector() {
+        let p = problems(&[(
+            "main.wb",
+            "connector_type ampseal \"AMPSEAL\" { }\ncomponent m { pub port gnd \"GND\"; connector x1: ampseal { pin 1 = gnd; pin 2 = gnd; } }\n",
+        )]);
+        assert!(p.is_empty(), "unexpected problems: {:?}", codes(&p));
+    }
+
+    #[test]
     fn cable_endpoints_resolve_like_loose_wires() {
         // An unknown port inside a cable wire is caught just like a loose wire.
         let p = problems(&[(
@@ -826,6 +1120,21 @@ mod tests {
     fn harness_include_resolves_cleanly() {
         let p = harness_view("include l.hv at (0, 0);");
         assert!(p.is_empty(), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn harness_include_resolves_connector_instance() {
+        let p = problems(&[
+            (
+                "main.wb",
+                "use leaf from \"leaf.wb\"\ncomponent m { leaf l; }\nview harness \"H\" { include l.hv at (0, 0); }\n",
+            ),
+            (
+                "leaf.wb",
+                "connector_type hv_2p \"HV 2p\" { }\ncomponent leaf { pub port hv_pos \"HV+\"; connector hv: hv_2p { pin 1 = hv_pos; } }\n",
+            ),
+        ]);
+        assert!(p.is_empty(), "unexpected problems: {:?}", codes(&p));
     }
 
     #[test]

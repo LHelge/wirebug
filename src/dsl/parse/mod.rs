@@ -128,6 +128,35 @@ where
             .map_err(|_| Rich::custom(span, format!("pin must be a whole number, got `{n}`")))
     });
 
+    let connector_property = ident
+        .then_ignore(just(Token::Colon))
+        .then(choice((
+            string.map(ConnectorPropertyValue::Str),
+            number.map(ConnectorPropertyValue::Number),
+        )))
+        .then_ignore(just(Token::Semicolon))
+        .map_with(|(key, value), e| ConnectorProperty {
+            key,
+            value,
+            span: e.span(),
+        });
+
+    let connector_type = just(Token::ConnectorType)
+        .ignore_then(ident)
+        .then(string)
+        .then(
+            connector_property
+                .repeated()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+        )
+        .map_with(|((name, description), properties), e| ConnectorType {
+            name,
+            description,
+            properties,
+            span: e.span(),
+        });
+
     // --- Ports & connectors ---
 
     let single_pin = just(Token::Pin).ignore_then(pin).map(|p| vec![p]);
@@ -173,6 +202,34 @@ where
             name,
             part,
             ports,
+            span: e.span(),
+        });
+
+    let pin_binding = just(Token::Pin)
+        .ignore_then(pin)
+        .then_ignore(just(Token::Equals))
+        .then(ident)
+        .then_ignore(just(Token::Semicolon))
+        .map_with(|(pin, port), e| PinBinding {
+            pin,
+            port,
+            span: e.span(),
+        });
+
+    let connector_instance = just(Token::Connector)
+        .ignore_then(ident)
+        .then_ignore(just(Token::Colon))
+        .then(ident)
+        .then(
+            pin_binding
+                .repeated()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+        )
+        .map_with(|((name, type_name), pins), e| ConnectorInstance {
+            name,
+            type_name,
+            pins,
             span: e.span(),
         });
 
@@ -440,6 +497,7 @@ where
     let definition = recursive(|definition| {
         let member = choice((
             port.map(Member::Port),
+            connector_instance.map(Member::ConnectorInstance),
             connector.map(Member::Connector),
             wire.map(Member::Wire),
             cable.map(Member::Cable),
@@ -463,7 +521,11 @@ where
 
     // --- File ---
 
-    let item = choice((definition.map(Item::Definition), view.map(Item::View)));
+    let item = choice((
+        definition.map(Item::Definition),
+        connector_type.map(Item::ConnectorType),
+        view.map(Item::View),
+    ));
 
     let use_decl = just(Token::Use)
         .ignore_then(ident)
@@ -584,6 +646,46 @@ mod tests {
         };
         assert_eq!(conn.name.as_ref().map(|n| n.node.as_str()), Some("hv"));
         assert_eq!(conn.part.node, "HV DC 2p");
+    }
+
+    #[test]
+    fn connector_type_carries_shared_metadata() {
+        let file = parse_ok(
+            r#"connector_type ampseal_35p "AMPSEAL 35p" { part: "TE 776164-1"; cavities: 35; }"#,
+        );
+        let Item::ConnectorType(conn) = &file.items[0] else {
+            panic!("expected a connector type");
+        };
+        assert_eq!(conn.name.node.as_str(), "ampseal_35p");
+        assert_eq!(conn.description.node, "AMPSEAL 35p");
+        assert_eq!(conn.properties.len(), 2);
+        assert_eq!(conn.properties[0].key.node.as_str(), "part");
+        assert!(matches!(
+            conn.properties[1].value,
+            ConnectorPropertyValue::Number(_)
+        ));
+    }
+
+    #[test]
+    fn connector_instance_binds_pins_to_existing_ports() {
+        let file = parse_ok(
+            r#"component c {
+                pub port can_h "CAN H";
+                pub port can_l "CAN L";
+                connector x1: ampseal_35p {
+                    pin 1 = can_h;
+                    pin 2 = can_l;
+                }
+            }"#,
+        );
+        let Member::ConnectorInstance(conn) = &members(&file)[2] else {
+            panic!("expected a connector instance");
+        };
+        assert_eq!(conn.name.node.as_str(), "x1");
+        assert_eq!(conn.type_name.node.as_str(), "ampseal_35p");
+        assert_eq!(conn.pins.len(), 2);
+        assert_eq!(conn.pins[0].pin.node, 1);
+        assert_eq!(conn.pins[0].port.node.as_str(), "can_h");
     }
 
     #[test]

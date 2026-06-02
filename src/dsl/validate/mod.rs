@@ -48,6 +48,17 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
                         validate_pin_numbers(port, def.file, resolved, &mut problems);
                     }
                 }
+                Member::ConnectorInstance(connector) => {
+                    for binding in &connector.pins {
+                        if binding.pin.node == 0 {
+                            problems.push(Problem::InvalidPin {
+                                value: binding.pin.node,
+                                src: src(),
+                                at: binding.pin.span.into(),
+                            });
+                        }
+                    }
+                }
                 Member::Cable(cable) => {
                     // A conductor is point-to-point: shared rails stay loose.
                     for wire in &cable.wires {
@@ -107,6 +118,9 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
                 d.instances
                     .values()
                     .any(|i| i.ast.type_name.node.as_str() == name)
+                    || d.connectors
+                        .values()
+                        .any(|c| c.ast.type_name.node.as_str() == name)
             });
             if !used {
                 problems.push(Problem::UnusedImport {
@@ -255,6 +269,24 @@ mod tests {
     }
 
     #[test]
+    fn connector_type_import_used_by_connector_instance_does_not_warn() {
+        let codes = validate_files(&[
+            (
+                "main.wb",
+                "use ampseal from \"connectors.wb\"\ncomponent m { pub port a \"A\"; connector x1: ampseal { pin 1 = a; } }\n",
+            ),
+            (
+                "connectors.wb",
+                "connector_type ampseal \"AMPSEAL\" { part: \"TE\"; }\n",
+            ),
+        ]);
+        assert!(
+            !codes.iter().any(|c| c == "wirebug::unused_import"),
+            "{codes:?}"
+        );
+    }
+
+    #[test]
     fn bare_port_pin_warns() {
         let codes = validate_files(&[("main.wb", "component m { pub port a \"A\" pin 1; }\n")]);
         assert!(
@@ -280,6 +312,18 @@ mod tests {
         let codes = validate_files(&[(
             "main.wb",
             "component m { connector j1 \"J1\" { pub port a \"A\" pins (1, 0, 2); } }\n",
+        )]);
+        assert!(
+            codes.iter().any(|c| c == "wirebug::invalid_pin"),
+            "{codes:?}"
+        );
+    }
+
+    #[test]
+    fn connector_instance_pin_zero_errors() {
+        let codes = validate_files(&[(
+            "main.wb",
+            "connector_type ampseal \"AMPSEAL\" { }\ncomponent m { pub port a \"A\"; connector x1: ampseal { pin 0 = a; } }\n",
         )]);
         assert!(
             codes.iter().any(|c| c == "wirebug::invalid_pin"),

@@ -56,6 +56,7 @@ pub struct Use {
 #[derive(Debug, Clone)]
 pub enum Item {
     Definition(Definition),
+    ConnectorType(ConnectorType),
     View(View),
 }
 
@@ -63,9 +64,21 @@ impl Item {
     pub fn span(&self) -> Span {
         match self {
             Item::Definition(d) => d.span,
+            Item::ConnectorType(c) => c.span,
             Item::View(v) => v.span,
         }
     }
+}
+
+/// `connector_type <name> "<description>" { <property>* }` — a reusable
+/// physical connector definition. Layout lands here in a later feature
+/// slice; for now it carries the shared part description and metadata.
+#[derive(Debug, Clone)]
+pub struct ConnectorType {
+    pub name: Spanned<Ident>,
+    pub description: Spanned<String>,
+    pub properties: Vec<ConnectorProperty>,
+    pub span: Span,
 }
 
 /// `component <name> { <members> }` — a component *type*.
@@ -81,6 +94,7 @@ pub struct Definition {
 pub enum Member {
     Port(Port),
     Connector(Connector),
+    ConnectorInstance(ConnectorInstance),
     Instance(Instance),
     Wire(Wire),
     Cable(Cable),
@@ -93,6 +107,7 @@ impl Member {
         match self {
             Member::Port(p) => p.span,
             Member::Connector(c) => c.span,
+            Member::ConnectorInstance(c) => c.span,
             Member::Instance(i) => i.span,
             Member::Wire(w) => w.span,
             Member::Cable(c) => c.span,
@@ -128,6 +143,40 @@ pub struct Connector {
     pub part: Spanned<String>,
     pub ports: Vec<Port>,
     pub span: Span,
+}
+
+/// `connector <name>: <type> { pin N = <port>; ... }` — a component-owned
+/// connector instance backed by a reusable top-level connector type.
+#[derive(Debug, Clone)]
+pub struct ConnectorInstance {
+    pub name: Spanned<Ident>,
+    pub type_name: Spanned<Ident>,
+    pub pins: Vec<PinBinding>,
+    pub span: Span,
+}
+
+/// `pin N = <port>;` inside a [`ConnectorInstance`].
+#[derive(Debug, Clone)]
+pub struct PinBinding {
+    pub pin: Spanned<u32>,
+    pub port: Spanned<Ident>,
+    pub span: Span,
+}
+
+/// `<key>: <value>;` inside a top-level `connector_type` body. Keys are
+/// intentionally metadata for now; validation can tighten them later.
+#[derive(Debug, Clone)]
+pub struct ConnectorProperty {
+    pub key: Spanned<Ident>,
+    pub value: ConnectorPropertyValue,
+    pub span: Span,
+}
+
+/// The right-hand side of a connector property — a quoted string or number.
+#[derive(Debug, Clone)]
+pub enum ConnectorPropertyValue {
+    Str(Spanned<String>),
+    Number(Spanned<f64>),
 }
 
 /// `<Type> <name> ["<label>"] ;` — a placement of a definition.
