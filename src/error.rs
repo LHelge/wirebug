@@ -21,6 +21,11 @@ pub enum Error {
     #[error("view subject {subject:?} has no instance in the design")]
     UnknownSubject { subject: String },
 
+    /// A render view referenced a connector that does not exist on its
+    /// subject instance.
+    #[error("unknown connector {connector:?} on view subject {subject:?}")]
+    UnknownConnector { subject: String, connector: String },
+
     /// A view's `grid:` step was zero or negative.
     #[error("grid step must be positive, got {grid}")]
     NonPositiveGrid { grid: f64 },

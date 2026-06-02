@@ -15,6 +15,7 @@ use crate::error::{Error, Result};
 
 pub mod geometry;
 pub mod harness;
+pub mod pinout;
 pub mod png;
 pub mod schematic;
 pub(crate) mod stamp;
@@ -40,6 +41,10 @@ impl RenderedView {
     pub fn is_harness(&self) -> bool {
         self.kind.is_harness()
     }
+
+    pub fn is_pinout(&self) -> bool {
+        self.kind.is_pinout()
+    }
 }
 
 /// Render every view in `design` to SVG, in declaration order.
@@ -64,7 +69,7 @@ pub fn render_views(design: &Design, embed: bool) -> Result<Vec<RenderedView>> {
                 schematic::SchematicRenderer.render(design, subject, view, embed)?
             }
             ViewKind::Harness => harness::HarnessRenderer.render(design, subject, view, embed)?,
-            ViewKind::Pinout => return Err(Error::UnknownViewKind("pinout".to_string())),
+            ViewKind::Pinout => pinout::PinoutRenderer.render(design, subject, view, embed)?,
             ViewKind::Other(other) => return Err(Error::UnknownViewKind(other.clone())),
         };
         rendered.push(RenderedView {
@@ -141,6 +146,7 @@ struct IndexTemplate<'a> {
     /// tab and pick a sensible default selection.
     has_schematic: bool,
     has_harness: bool,
+    has_pinout: bool,
 }
 
 /// Render the HTML index for `views`. Shared by `render` (static, no
@@ -163,6 +169,7 @@ pub fn index_html(
         live_reload,
         has_schematic: views.iter().any(RenderedView::is_schematic),
         has_harness: views.iter().any(RenderedView::is_harness),
+        has_pinout: views.iter().any(RenderedView::is_pinout),
     }
     .render()
     .map_err(Error::Template)
@@ -295,13 +302,16 @@ mod tests {
         let views = vec![
             view("Overview", "overview.svg", "schematic"),
             view("Main Harness", "main_harness.svg", "harness"),
+            view("X1 Pinout", "x1_pinout.svg", "pinout"),
         ];
         let html = index_html(&views, None, false).unwrap();
-        // Both tab controls present when both kinds exist.
+        // All tab controls present when all kinds exist.
         assert!(html.contains("Schematics"));
         assert!(html.contains("Harnesses"));
+        assert!(html.contains("Pinouts"));
         assert!(html.contains("id=\"tab-schematic\""));
         assert!(html.contains("id=\"tab-harness\""));
+        assert!(html.contains("id=\"tab-pinout\""));
     }
 
     #[test]
@@ -310,6 +320,7 @@ mod tests {
         let html = index_html(&views, None, false).unwrap();
         assert!(html.contains("id=\"tab-schematic\""));
         assert!(!html.contains("id=\"tab-harness\""));
+        assert!(!html.contains("id=\"tab-pinout\""));
     }
 
     #[test]
@@ -332,6 +343,7 @@ mod tests {
         let views = vec![
             view("HV Overview", "hv_overview.svg", "schematic"),
             view("Main Harness", "main_harness.svg", "harness"),
+            view("X1 Pinout", "x1_pinout.svg", "pinout"),
         ];
         let manifest = embed_manifest(&views, None);
         let json = serde_json::to_string(&manifest).expect("serializes");
@@ -339,7 +351,7 @@ mod tests {
 
         assert!(parsed["project"].is_null());
         let entries = parsed["views"].as_array().expect("views array");
-        assert_eq!(entries.len(), 2);
+        assert_eq!(entries.len(), 3);
         // Order matches the input (view declaration order from the design).
         assert_eq!(entries[0]["title"], "HV Overview");
         assert_eq!(entries[0]["filename"], "hv_overview.svg");
@@ -347,6 +359,9 @@ mod tests {
         assert_eq!(entries[1]["title"], "Main Harness");
         assert_eq!(entries[1]["filename"], "main_harness.svg");
         assert_eq!(entries[1]["kind"], "harness");
+        assert_eq!(entries[2]["title"], "X1 Pinout");
+        assert_eq!(entries[2]["filename"], "x1_pinout.svg");
+        assert_eq!(entries[2]["kind"], "pinout");
     }
 
     #[test]
