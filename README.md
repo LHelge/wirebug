@@ -162,6 +162,17 @@ wires that share a channel so a bundle draws as distinct parallel lines.
 cargo build --release
 ```
 
+For the local development loop, install [`bacon`](https://dystroy.org/bacon/):
+
+```sh
+cargo install bacon --locked
+```
+
+Then run `bacon` (or `bacon serve`) to serve `examples/` with wirebug's live
+reload while Bacon watches `src/` and restarts the app when the Rust code
+changes. `bacon render` watches the app and example project sources, rendering
+the example SVGs into `examples/out/` whenever either changes.
+
 ## License
 
 MIT.
