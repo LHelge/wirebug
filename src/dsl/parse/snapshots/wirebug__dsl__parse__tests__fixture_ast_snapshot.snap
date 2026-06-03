@@ -1,6 +1,5 @@
 ---
 source: src/dsl/parse/mod.rs
-assertion_line: 869
 expression: file
 ---
 File {
@@ -11,10 +10,12 @@ File {
     items: [
         Definition(
             Definition {
+                kind: Component,
                 name: battery @ 10..17,
                 members: [
                     Definition(
                         Definition {
+                            kind: Component,
                             name: cell_pack @ 34..43,
                             members: [
                                 Port(

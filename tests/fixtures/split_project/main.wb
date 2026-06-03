@@ -1,0 +1,23 @@
+// The `vehicle` root is authored across two files: this one holds the HV
+// battery, `traction.wb` adds the inverter and the HV bus. `use` loads the
+// fragment; `extend vehicle` in traction.wb merges into this `component`.
+use battery from "components/battery.wb"
+use vehicle from "traction.wb"
+
+component vehicle {
+    battery pack "Battery";
+}
+
+// The overview view sees the whole merged component: `inv` lives in the
+// traction fragment, yet this view in main.wb can include it.
+view schematic "System Overview" {
+    grid 20;
+
+    include pack at (6, 8) ports {
+        east: hv_pos, hv_neg;
+    };
+
+    include inv at (26, 8) ports {
+        west: dc_pos, dc_neg;
+    };
+}

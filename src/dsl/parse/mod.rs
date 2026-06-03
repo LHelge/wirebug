@@ -593,15 +593,19 @@ where
             definition.map(Member::Definition),
             instance.map(Member::Instance),
         ));
-        just(Token::Component)
-            .ignore_then(ident)
+        let head = choice((
+            just(Token::Component).to(DefKind::Component),
+            just(Token::Extend).to(DefKind::Extend),
+        ));
+        head.then(ident)
             .then(
                 member
                     .repeated()
                     .collect::<Vec<_>>()
                     .delimited_by(just(Token::LBrace), just(Token::RBrace)),
             )
-            .map_with(|(name, members), e| Definition {
+            .map_with(|((kind, name), members), e| Definition {
+                kind,
                 name,
                 members,
                 span: e.span(),

@@ -114,7 +114,7 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
         let fid = FileId(fi);
         for use_decl in &file.ast.uses {
             let name = use_decl.name.node.as_str();
-            let used = resolved.defs.iter().filter(|d| d.file == fid).any(|d| {
+            let instantiated = resolved.defs.iter().filter(|d| d.file == fid).any(|d| {
                 d.instances
                     .values()
                     .any(|i| i.ast.type_name.node.as_str() == name)
@@ -122,7 +122,16 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
                         .values()
                         .any(|c| c.ast.type_name.node.as_str() == name)
             });
-            if !used {
+            // A fragment pull (`use vehicle from "traction.wb"`) isn't
+            // instantiated — it merges. It counts as used when this file owns a
+            // same-named top-level definition that joined a merge group.
+            let merged = resolved.defs.iter().enumerate().any(|(id, d)| {
+                d.file == fid
+                    && d.parent.is_none()
+                    && d.name == name
+                    && resolved.fragments(id).len() > 1
+            });
+            if !instantiated && !merged {
                 problems.push(Problem::UnusedImport {
                     name: name.to_string(),
                     src: resolved.project.source(fid),

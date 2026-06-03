@@ -89,30 +89,31 @@ impl Elaborator<'_> {
         }
         type_stack.push(def);
 
-        let info = &self.resolved.defs[def];
-        let ports = info
-            .ports
-            .iter()
-            .map(|(name, facts)| {
-                (
-                    name.clone(),
-                    Port {
-                        name: name.clone(),
-                        label: facts.label.to_string(),
-                        visibility: match facts.visibility {
-                            ast::Visibility::Public => Visibility::Public,
-                            ast::Visibility::Private => Visibility::Private,
-                        },
-                        connector: facts.connector.as_ref().map(|c| ConnectorRef {
-                            name: c.name.map(ConnectorName::from),
-                            part: c.part.to_string(),
-                            index: c.index,
-                        }),
-                        pins: facts.pins.clone(),
+        // A merged component is authored as several fragments (a `component`
+        // plus its `extend`s); they share one flat namespace, so stamp the
+        // union of every fragment's ports, wires, connectors, and children.
+        // `fragments` is canonical-first and just `[def]` for an unmerged type.
+        let fragments = self.resolved.fragments(def);
+
+        let mut ports: IndexMap<PortName, Port> = IndexMap::new();
+        for &frag in &fragments {
+            for (name, facts) in &self.resolved.defs[frag].ports {
+                ports.entry(name.clone()).or_insert_with(|| Port {
+                    name: name.clone(),
+                    label: facts.label.to_string(),
+                    visibility: match facts.visibility {
+                        ast::Visibility::Public => Visibility::Public,
+                        ast::Visibility::Private => Visibility::Private,
                     },
-                )
-            })
-            .collect();
+                    connector: facts.connector.as_ref().map(|c| ConnectorRef {
+                        name: c.name.map(ConnectorName::from),
+                        part: c.part.to_string(),
+                        index: c.index,
+                    }),
+                    pins: facts.pins.clone(),
+                });
+            }
+        }
 
         // Loose wires keep `cable: None`; a cable's conductors are tagged with
         // its designator and its metadata recorded separately. Property and
@@ -121,49 +122,52 @@ impl Elaborator<'_> {
         let mut wires = Vec::new();
         let mut cables: IndexMap<CableName, CableMeta> = IndexMap::new();
         let mut connectors: IndexMap<ConnectorName, Connector> = IndexMap::new();
-        for m in &info.ast.members {
-            match m {
-                Member::Wire(w) => wires.push(rewrite_wire(w, None)),
-                Member::Cable(c) => {
-                    let name = CableName::from(c.name.node.as_str());
-                    cables.insert(name.clone(), cable_meta(c));
-                    for w in &c.wires {
-                        wires.push(rewrite_wire(w, Some(name.clone())));
+        for &frag in &fragments {
+            let info = &self.resolved.defs[frag];
+            for m in &info.ast.members {
+                match m {
+                    Member::Wire(w) => wires.push(rewrite_wire(w, None)),
+                    Member::Cable(c) => {
+                        let name = CableName::from(c.name.node.as_str());
+                        cables.insert(name.clone(), cable_meta(c));
+                        for w in &c.wires {
+                            wires.push(rewrite_wire(w, Some(name.clone())));
+                        }
                     }
-                }
-                Member::Connector(conn) => {
-                    if let Some(name) = &conn.name {
-                        let name = ConnectorName::from(name.node.as_str());
-                        connectors.insert(name.clone(), inline_connector(name, conn));
+                    Member::Connector(conn) => {
+                        if let Some(name) = &conn.name {
+                            let name = ConnectorName::from(name.node.as_str());
+                            connectors.insert(name.clone(), inline_connector(name, conn));
+                        }
                     }
+                    Member::ConnectorInstance(conn) => {
+                        let name = ConnectorName::from(conn.name.node.as_str());
+                        let Some(facts) = info.connectors.get(&name) else {
+                            continue;
+                        };
+                        let Some(type_id) = facts.type_id else {
+                            continue;
+                        };
+                        let connector_type = self.resolved.connector_types[type_id].ast;
+                        connectors
+                            .insert(name.clone(), typed_connector(name, conn, connector_type));
+                    }
+                    _ => {}
                 }
-                Member::ConnectorInstance(conn) => {
-                    let name = ConnectorName::from(conn.name.node.as_str());
-                    let Some(facts) = info.connectors.get(&name) else {
-                        continue;
-                    };
-                    let Some(type_id) = facts.type_id else {
-                        continue;
-                    };
-                    let connector_type = self.resolved.connector_types[type_id].ast;
-                    connectors.insert(name.clone(), typed_connector(name, conn, connector_type));
-                }
-                _ => {}
             }
         }
 
         // Resolve child placements (skip instances whose type didn't
         // resolve — that error is already reported).
         let mut children = IndexMap::new();
-        let child_jobs: Vec<(InstanceName, DefId, Option<String>)> = info
-            .instances
-            .iter()
-            .filter_map(|(name, inst)| {
-                let tid = inst.type_id?;
+        let mut child_jobs: Vec<(InstanceName, DefId, Option<String>)> = Vec::new();
+        for &frag in &fragments {
+            for (name, inst) in &self.resolved.defs[frag].instances {
+                let Some(tid) = inst.type_id else { continue };
                 let label = inst.ast.label.as_ref().map(|l| l.node.clone());
-                Some((name.clone(), tid, label))
-            })
-            .collect();
+                child_jobs.push((name.clone(), tid, label));
+            }
+        }
         for (name, _, _) in &child_jobs {
             children.insert(name.clone(), path.child(name.clone()));
         }
@@ -172,7 +176,7 @@ impl Elaborator<'_> {
             path.clone(),
             Instance {
                 path: path.clone(),
-                type_name: TypeName::from(info.name),
+                type_name: TypeName::from(self.resolved.defs[def].name),
                 label,
                 ports,
                 children,
@@ -459,6 +463,46 @@ mod tests {
 
         // Views came through, bound to their type.
         assert!(design.views.iter().any(|v| v.subject.as_str() == "vehicle"));
+    }
+
+    #[test]
+    fn extend_fragments_merge_into_one_instance() {
+        let (design, problems) = elaborate_files(&[
+            (
+                "main.wb",
+                "use vehicle from \"frag.wb\"\nuse leaf from \"leaf.wb\"\n\
+                 component vehicle { leaf pack \"Pack\"; }\n",
+            ),
+            (
+                "frag.wb",
+                "use leaf from \"leaf.wb\"\n\
+                 extend vehicle { leaf inv \"Inv\"; wire red 1 [pack.a, inv.a]; }\n",
+            ),
+            ("leaf.wb", "component leaf { pub port a \"A\"; }\n"),
+        ]);
+        assert!(problems.is_empty(), "{problems:?}");
+        let design = design.unwrap();
+        assert_eq!(design.root.to_string(), "vehicle");
+
+        // Children from both fragments are stamped under the one merged root.
+        let root = InstancePath::root(InstanceName::from("vehicle"));
+        let pack = root.clone().child(InstanceName::from("pack"));
+        let inv = root.clone().child(InstanceName::from("inv"));
+        assert_eq!(design.get(&pack).unwrap().type_name.as_str(), "leaf");
+        assert_eq!(design.get(&inv).unwrap().type_name.as_str(), "leaf");
+
+        // The fragment's wire — written in frag.wb but reaching `pack` from
+        // main.wb — lands on the merged root as a `Child`→`Child` net.
+        let vehicle = design.get(&design.root).unwrap();
+        assert_eq!(vehicle.wires.len(), 1);
+        assert!(
+            vehicle.wires[0]
+                .endpoints
+                .iter()
+                .all(|e| matches!(e, WireEnd::Child { .. })),
+            "cross-fragment endpoints rewrite to children: {:?}",
+            vehicle.wires[0].endpoints
+        );
     }
 
     #[test]

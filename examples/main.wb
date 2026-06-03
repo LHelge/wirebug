@@ -1,43 +1,26 @@
 // Aphid EV conversion — top-level vehicle wiring
+//
+// The high-voltage subsystem (batteries, HV junction box, inverter, OBC/DC-DC,
+// and the HV bus) lives in `hv.wb` as an `extend vehicle` fragment, merged in
+// here with `use vehicle`. Everything below — the motor phases, CAN bus,
+// interlock chain, 12V distribution, ground, and every view — freely reaches
+// those HV instances through the merged flat namespace.
 
-use front_battery from "components/front_battery.wb"
-use rear_battery  from "components/rear_battery.wb"
-use hv_junction_box from "components/hv_junction_box.wb"
+use vehicle       from "hv.wb"
 use msd           from "components/msd.wb"
-use inverter      from "components/inverter.wb"
 use motor         from "components/motor.wb"
-use obc_dcdc      from "components/obc_dcdc.wb"
 use vcm           from "components/vcm.wb"
 use fuse_box      from "components/fuse_box.wb"
 use e_stop        from "components/e_stop.wb"
 
 component vehicle {
-    // --- Instances ---
+    // --- Instances (the non-HV remainder; HV instances live in hv.wb) ---
 
-    front_battery front   "Front Battery";
-    rear_battery  rear    "Rear Battery";
-    hv_junction_box hvjb  "HV Junction Box";
     msd           msd     "MSD";
-    inverter      inv     "Inverter";
     motor         mot     "Motor";
-    obc_dcdc      charger "OBC/DC-DC";
     vcm           vcm     "VCM";
     fuse_box      fuses   "Fuse Box";
     e_stop        e_stop  "E-Stop";
-
-    // --- HV system ---
-    // The battery packs are wired in series before the completed string enters
-    // the HV junction box. The front battery negative leg passes through the
-    // MSD before becoming the pack negative input.
-
-    wire orange 50 "Series link" [front.hv_pos, rear.hv_neg];
-    wire orange 50 "Pack HV+" [rear.hv_pos, hvjb.pack_pos_in];
-    wire orange 50 "Front HV-" [front.hv_neg, msd.hv_in];
-    wire orange 50 "Pack HV-" [msd.hv_out, hvjb.pack_neg_in];
-    wire orange 50 "Inverter HV+" [hvjb.inv_pos, inv.dc_pos];
-    wire orange 50 "Inverter HV-" [hvjb.inv_neg, inv.dc_neg];
-    wire orange 50 "OBC HV+" [hvjb.obc_pos, charger.dc_pos];
-    wire orange 50 "OBC HV-" [hvjb.obc_neg, charger.dc_neg];
 
     // --- Motor phases ---
     // A real point-to-point cable: three conductors, inverter to motor.

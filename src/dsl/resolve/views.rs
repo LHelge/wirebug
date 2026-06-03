@@ -62,7 +62,7 @@ impl<'a> Resolver<'a> {
         file: FileId,
         problems: &mut Vec<Problem>,
     ) {
-        match self.defs[tid].ports.get(&PortName::from(port)) {
+        match self.lookup_port(tid, &PortName::from(port)) {
             None => problems.push(Problem::UnknownPort {
                 port: port.to_string(),
                 on: format!(" on `{}`", self.defs[tid].name),
@@ -286,13 +286,16 @@ impl<'a> Resolver<'a> {
     }
 
     fn connector_exists(&self, tid: DefId, wanted: &str) -> bool {
-        self.defs[tid]
-            .connectors
-            .contains_key(&ConnectorName::from(wanted))
-            || self.defs[tid]
-                .ports
-                .values()
-                .any(|p| p.connector.and_then(|c| c.name) == Some(wanted))
+        // A connector may be declared in any fragment of a merged component.
+        self.groups.fragments(tid).into_iter().any(|f| {
+            self.defs[f]
+                .connectors
+                .contains_key(&ConnectorName::from(wanted))
+                || self.defs[f]
+                    .ports
+                    .values()
+                    .any(|p| p.connector.and_then(|c| c.name) == Some(wanted))
+        })
     }
 
     /// Validate that a view doesn't include the same rendered target twice.
@@ -358,8 +361,11 @@ impl<'a> Resolver<'a> {
                         });
                     }
                 }
+                // A view in a fragment file binds to that fragment's top-level
+                // definition; canonicalize so it documents — and sees the whole
+                // merged namespace of — the one component it extends.
                 let subject = if roots.len() == 1 {
-                    Some(roots[0])
+                    Some(self.groups.canonical(roots[0]))
                 } else {
                     problems.push(Problem::ViewSubject {
                         src: self.project.source(FileId(fi)),
@@ -377,7 +383,7 @@ impl<'a> Resolver<'a> {
                             continue;
                         }
                         let name = inc.instance.node.as_str();
-                        match self.defs[s].instances.get(&InstanceName::from(name)) {
+                        match self.lookup_instance(s, &InstanceName::from(name)) {
                             None => problems.push(Problem::UnknownInclude {
                                 name: name.to_string(),
                                 src: self.project.source(FileId(fi)),
