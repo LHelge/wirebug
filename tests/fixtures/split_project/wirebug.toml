@@ -1,0 +1,4 @@
+[project]
+name = "split-project"
+version = "0.1.0"
+description = "Fixture splitting one component across files with `extend`"

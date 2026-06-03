@@ -153,6 +153,38 @@ pub enum Problem {
         first: SourceSpan,
     },
 
+    /// `extend <name>` was written for a component that no reachable file
+    /// introduces with `component <name>`.
+    #[error("`extend {name}` has no `component {name}` to extend")]
+    #[diagnostic(
+        code(wirebug::orphan_fragment),
+        help(
+            "introduce the component once with `component {name} {{ … }}`; other files add to it with `extend {name}`"
+        )
+    )]
+    OrphanFragment {
+        name: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("nothing to extend")]
+        at: SourceSpan,
+    },
+
+    /// `extend` was used on a definition nested inside another component.
+    #[error("`extend` is only allowed at the top level, not nested")]
+    #[diagnostic(
+        code(wirebug::nested_extend),
+        help(
+            "nested definitions are private to their parent; only a top-level component can be split into `extend` fragments"
+        )
+    )]
+    NestedExtend {
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("nested `extend`")]
+        at: SourceSpan,
+    },
+
     /// Two instances in one component share a name.
     #[error("duplicate instance name `{name}`")]
     #[diagnostic(code(wirebug::duplicate_instance))]

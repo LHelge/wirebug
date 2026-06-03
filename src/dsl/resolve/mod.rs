@@ -74,12 +74,70 @@ pub struct ConnectorInstFacts<'a> {
 pub struct DefInfo<'a> {
     pub name: &'a str,
     pub file: FileId,
+    pub kind: ast::DefKind,
     pub ast: &'a ast::Definition,
     pub parent: Option<DefId>,
     pub ports: IndexMap<PortName, PortFacts<'a>>,
     pub connectors: IndexMap<ConnectorName, ConnectorInstFacts<'a>>,
     pub instances: IndexMap<InstanceName, InstFacts<'a>>,
     pub nested: Vec<DefId>,
+}
+
+/// Sets of same-named definition fragments — one `component` root plus its
+/// `extend` fragments — that elaborate as a single component sharing a flat
+/// namespace. Each group keeps its canonical id (the lone non-`extend` root)
+/// first. A definition in no group is a singleton: its own canonical.
+#[derive(Default)]
+pub struct MergeGroups {
+    groups: Vec<Vec<DefId>>,
+    of: HashMap<DefId, usize>,
+}
+
+impl MergeGroups {
+    /// The representative id for `d`'s merged component (itself if unmerged).
+    pub fn canonical(&self, d: DefId) -> DefId {
+        match self.of.get(&d) {
+            Some(&g) => self.groups[g][0],
+            None => d,
+        }
+    }
+
+    /// Every fragment id of `d`'s component, canonical first (just `[d]` when
+    /// `d` belongs to no merge group).
+    pub fn fragments(&self, d: DefId) -> Vec<DefId> {
+        match self.of.get(&d) {
+            Some(&g) => self.groups[g].clone(),
+            None => vec![d],
+        }
+    }
+
+    /// Union `a` and `b` into one group, creating or joining as needed.
+    fn link(&mut self, a: DefId, b: DefId) {
+        match (self.of.get(&a).copied(), self.of.get(&b).copied()) {
+            (None, None) => {
+                let g = self.groups.len();
+                self.groups.push(vec![a, b]);
+                self.of.insert(a, g);
+                self.of.insert(b, g);
+            }
+            (Some(g), None) => {
+                self.groups[g].push(b);
+                self.of.insert(b, g);
+            }
+            (None, Some(g)) => {
+                self.groups[g].push(a);
+                self.of.insert(a, g);
+            }
+            (Some(ga), Some(gb)) if ga != gb => {
+                let moved = std::mem::take(&mut self.groups[gb]);
+                for &d in &moved {
+                    self.of.insert(d, ga);
+                }
+                self.groups[ga].extend(moved);
+            }
+            _ => {}
+        }
+    }
 }
 
 /// A view bound to the component it documents.
@@ -93,10 +151,18 @@ pub struct ViewBinding<'a> {
 pub struct Resolved<'a> {
     pub defs: Vec<DefInfo<'a>>,
     pub connector_types: Vec<ConnectorTypeInfo<'a>>,
+    pub groups: MergeGroups,
     pub root: Option<DefId>,
     pub views: Vec<ViewBinding<'a>>,
     pub problems: Vec<Problem>,
     pub project: &'a Project,
+}
+
+impl Resolved<'_> {
+    /// Every fragment id of `d`'s merged component, canonical first.
+    pub fn fragments(&self, d: DefId) -> Vec<DefId> {
+        self.groups.fragments(d)
+    }
 }
 
 /// Resolve every name in `project`.
@@ -105,6 +171,7 @@ pub fn resolve(project: &Project) -> Resolved<'_> {
         project,
         defs: Vec::new(),
         connector_types: Vec::new(),
+        groups: MergeGroups::default(),
         problems: Vec::new(),
     };
 
@@ -128,9 +195,16 @@ pub fn resolve(project: &Project) -> Resolved<'_> {
         }
     }
 
-    // Pass 2: scopes, then references.
-    let (file_scope, connector_type_scope) =
+    // Pass 2: scopes (which discover merge groups), then references. The
+    // merge groups are finalized before any reference pass so that endpoint
+    // and view lookups see the flat merged namespace, and instance-type
+    // scopes resolve to canonical ids.
+    let (mut file_scope, connector_type_scope) =
         r.build_scopes(&roots_by_file, &connector_types_by_file);
+    r.finalize_groups();
+    r.report_orphan_fragments();
+    r.validate_merge_groups();
+    r.canonicalize_scopes(&mut file_scope);
     let envs: Vec<HashMap<String, DefId>> = (0..r.defs.len())
         .map(|d| r.visible_types(d, &file_scope))
         .collect();
@@ -141,13 +215,14 @@ pub fn resolve(project: &Project) -> Resolved<'_> {
     let views = r.resolve_views(&roots_by_file);
 
     let root = match roots_by_file[project.root.0].as_slice() {
-        [only] => Some(*only),
+        [only] => Some(r.groups.canonical(*only)),
         _ => None,
     };
 
     Resolved {
         defs: r.defs,
         connector_types: r.connector_types,
+        groups: r.groups,
         root,
         views,
         problems: r.problems,
@@ -159,7 +234,15 @@ struct Resolver<'a> {
     project: &'a Project,
     defs: Vec<DefInfo<'a>>,
     connector_types: Vec<ConnectorTypeInfo<'a>>,
+    groups: MergeGroups,
     problems: Vec<Problem>,
+}
+
+/// Move `id` to the front of `group`, preserving the relative order of the
+/// rest. Used to seat a merge group's canonical fragment first.
+fn move_first(group: &mut Vec<DefId>, id: DefId) {
+    group.retain(|&d| d != id);
+    group.insert(0, id);
 }
 
 impl<'a> Resolver<'a> {
@@ -167,9 +250,18 @@ impl<'a> Resolver<'a> {
     /// and collecting instances. Returns the new [`DefId`].
     fn register(&mut self, def: &'a ast::Definition, file: FileId, parent: Option<DefId>) -> DefId {
         let id = self.defs.len();
+        // `extend` only splits a top-level component; nested fragments make no
+        // sense (a nested definition is private to its parent).
+        if def.kind == ast::DefKind::Extend && parent.is_some() {
+            self.problems.push(Problem::NestedExtend {
+                src: self.project.source(file),
+                at: def.name.span.into(),
+            });
+        }
         self.defs.push(DefInfo {
             name: def.name.node.as_str(),
             file,
+            kind: def.kind,
             ast: def,
             parent,
             ports: IndexMap::new(),
@@ -426,12 +518,26 @@ impl<'a> Resolver<'a> {
         at: Span,
     ) {
         if let Some(&first) = scope.get(name) {
-            self.problems.push(Problem::DuplicateType {
-                name: name.to_string(),
-                src: self.project.source(file),
-                at: at.into(),
-                first: self.defs[first].ast.name.span.into(),
-            });
+            // A same-named collision is a merge — not an error — as soon as
+            // either side is an `extend` fragment. Two plain `component`s stay
+            // a genuine duplicate. The group's canonical (its lone root
+            // `component`) is settled in `finalize_groups`; keep a root in the
+            // scope slot when we can so the entry already points at it.
+            let first_extend = self.defs[first].kind == ast::DefKind::Extend;
+            let new_extend = self.defs[id].kind == ast::DefKind::Extend;
+            if first_extend || new_extend {
+                self.groups.link(first, id);
+                if first_extend && !new_extend {
+                    scope.insert(name.to_string(), id);
+                }
+            } else {
+                self.problems.push(Problem::DuplicateType {
+                    name: name.to_string(),
+                    src: self.project.source(file),
+                    at: at.into(),
+                    first: self.defs[first].ast.name.span.into(),
+                });
+            }
         } else {
             scope.insert(name.to_string(), id);
         }
@@ -455,6 +561,136 @@ impl<'a> Resolver<'a> {
         } else {
             scope.insert(name.to_string(), id);
         }
+    }
+
+    /// Settle every merge group's canonical (the lone root `component`) into
+    /// first position, and report groups that lack a root (`OrphanFragment`)
+    /// or carry two (`DuplicateType`).
+    fn finalize_groups(&mut self) {
+        let mut groups = std::mem::take(&mut self.groups.groups);
+        for group in &mut groups {
+            if group.is_empty() {
+                continue;
+            }
+            let roots: Vec<DefId> = group
+                .iter()
+                .copied()
+                .filter(|&d| self.defs[d].kind == ast::DefKind::Component)
+                .collect();
+            match roots.as_slice() {
+                // Rootless groups (pure `extend`s) are reported by
+                // `report_orphan_fragments`; leave their order untouched.
+                [] => {}
+                [root] => move_first(group, *root),
+                [first, rest @ ..] => {
+                    for &dup in rest {
+                        self.problems.push(Problem::DuplicateType {
+                            name: self.defs[dup].name.to_string(),
+                            src: self.project.source(self.defs[dup].file),
+                            at: self.defs[dup].ast.name.span.into(),
+                            first: self.defs[*first].ast.name.span.into(),
+                        });
+                    }
+                    move_first(group, *first);
+                }
+            }
+        }
+        self.groups.groups = groups;
+    }
+
+    /// Report every top-level `extend` that never found a `component` to
+    /// anchor it — a lone fragment, or a group of fragments with no root.
+    /// One diagnostic per orphaned component (keyed on the group's canonical).
+    fn report_orphan_fragments(&mut self) {
+        let mut orphans = Vec::new();
+        for d in 0..self.defs.len() {
+            if self.defs[d].kind != ast::DefKind::Extend || self.defs[d].parent.is_some() {
+                continue;
+            }
+            let canon = self.groups.canonical(d);
+            // A merged fragment canonicalizes onto its root `component`; if the
+            // representative is still an `extend`, the component is missing.
+            if d == canon && self.defs[canon].kind == ast::DefKind::Extend {
+                orphans.push(d);
+            }
+        }
+        for d in orphans {
+            self.problems.push(Problem::OrphanFragment {
+                name: self.defs[d].name.to_string(),
+                src: self.project.source(self.defs[d].file),
+                at: self.defs[d].ast.name.span.into(),
+            });
+        }
+    }
+
+    /// Flat-namespace guards: within a merged component, an instance or port
+    /// name declared in two fragments is a duplicate, reported once.
+    fn validate_merge_groups(&mut self) {
+        let groups = std::mem::take(&mut self.groups.groups);
+        let mut problems = Vec::new();
+        for group in &groups {
+            if group.len() < 2 {
+                continue;
+            }
+            let mut instances: HashMap<String, Span> = HashMap::new();
+            let mut ports: HashMap<String, Span> = HashMap::new();
+            for &f in group {
+                let file = self.defs[f].file;
+                for (name, facts) in &self.defs[f].instances {
+                    if let Some(first) = instances.get(name.as_str()).copied() {
+                        problems.push(Problem::DuplicateInstance {
+                            name: name.to_string(),
+                            src: self.project.source(file),
+                            at: facts.ast.name.span.into(),
+                            first: first.into(),
+                        });
+                    } else {
+                        instances.insert(name.to_string(), facts.ast.name.span);
+                    }
+                }
+                for (name, facts) in &self.defs[f].ports {
+                    if let Some(first) = ports.get(name.as_str()).copied() {
+                        problems.push(Problem::DuplicatePort {
+                            name: name.to_string(),
+                            src: self.project.source(file),
+                            at: facts.span.into(),
+                            first: first.into(),
+                        });
+                    } else {
+                        ports.insert(name.to_string(), facts.span);
+                    }
+                }
+            }
+        }
+        self.groups.groups = groups;
+        self.problems.extend(problems);
+    }
+
+    /// Rewrite every type-scope entry to its group's canonical id, so an
+    /// instance of a merged type resolves to the one representative def.
+    fn canonicalize_scopes(&self, scopes: &mut HashMap<FileId, ComponentScope>) {
+        for scope in scopes.values_mut() {
+            for id in scope.values_mut() {
+                *id = self.groups.canonical(*id);
+            }
+        }
+    }
+
+    /// Find an instance by name across every fragment of `d`'s merged
+    /// component (the flat namespace).
+    fn lookup_instance(&self, d: DefId, name: &InstanceName) -> Option<&InstFacts<'a>> {
+        self.groups
+            .fragments(d)
+            .into_iter()
+            .find_map(|f| self.defs[f].instances.get(name))
+    }
+
+    /// Find a port by name across every fragment of `d`'s merged component.
+    fn lookup_port(&self, d: DefId, name: &PortName) -> Option<&PortFacts<'a>> {
+        self.groups
+            .fragments(d)
+            .into_iter()
+            .find_map(|f| self.defs[f].ports.get(name))
     }
 
     /// Types instantiable inside definition `d`: the file scope overlaid
@@ -636,9 +872,12 @@ impl<'a> Resolver<'a> {
     fn check_endpoint(&self, d: DefId, ep: &ast::Endpoint) -> Option<Problem> {
         let file = self.defs[d].file;
         let port = ep.port.node.as_str();
+        // Flat namespace: an endpoint resolves against the merged instances
+        // and ports of `d`'s whole component, so one fragment's wire may reach
+        // an instance or own-port declared in another fragment.
         match &ep.instance {
             None => {
-                if self.defs[d].ports.contains_key(&PortName::from(port)) {
+                if self.lookup_port(d, &PortName::from(port)).is_some() {
                     None
                 } else {
                     Some(Problem::UnknownPort {
@@ -651,7 +890,7 @@ impl<'a> Resolver<'a> {
             }
             Some(inst) => {
                 let iname = inst.node.as_str();
-                let Some(facts) = self.defs[d].instances.get(&InstanceName::from(iname)) else {
+                let Some(facts) = self.lookup_instance(d, &InstanceName::from(iname)) else {
                     return Some(Problem::UnknownInstance {
                         name: iname.to_string(),
                         src: self.project.source(file),
@@ -1231,5 +1470,165 @@ mod tests {
             view pinout \"X1\" { include x1 at (0, 0) ports { west: can_h; }; }\n",
         )]);
         assert!(has(&p, "wirebug::wrong_include_form"), "{:?}", codes(&p));
+    }
+
+    // --- `extend` fragments (split a component across files) ---
+
+    /// Load + resolve a multi-file project and hand the registry to `check`.
+    /// (Mirrors `problems`, but exposes the merged `Resolved`.)
+    fn with_resolved(files: &[(&str, &str)], check: impl FnOnce(&Resolved)) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("wirebug.toml"),
+            "[project]\nname = \"t\"\nversion = \"0.0.0\"\n",
+        )
+        .expect("write wirebug.toml");
+        for (name, body) in files {
+            std::fs::write(dir.path().join(name), body).expect("write");
+        }
+        let (project, load_problems) = load(&dir.path().join("main.wb"));
+        assert!(load_problems.is_empty(), "load: {load_problems:?}");
+        let project = project.expect("loads");
+        check(&resolve(&project));
+    }
+
+    const LEAF: &str = "component leaf { pub port a \"A\"; pub port b \"B\"; }\n";
+
+    #[test]
+    fn extend_fragment_merges_into_the_root_component() {
+        with_resolved(
+            &[
+                (
+                    "main.wb",
+                    "use vehicle from \"traction.wb\"\nuse leaf from \"leaf.wb\"\n\
+                     component vehicle { leaf pack \"Pack\"; }\n",
+                ),
+                (
+                    "traction.wb",
+                    "use leaf from \"leaf.wb\"\n\
+                     extend vehicle { leaf inv \"Inv\"; wire red 1 [pack.a, inv.a]; }\n",
+                ),
+                ("leaf.wb", LEAF),
+            ],
+            |r| {
+                assert!(r.problems.is_empty(), "problems: {:?}", codes(&r.problems));
+                let root = r.root.expect("vehicle is the root");
+                // The merged component owns instances from both fragments,
+                // flat in one namespace.
+                let names: Vec<&str> = r
+                    .fragments(root)
+                    .into_iter()
+                    .flat_map(|f| r.defs[f].instances.keys())
+                    .map(|n| n.as_str())
+                    .collect();
+                assert!(names.contains(&"pack"), "{names:?}");
+                assert!(names.contains(&"inv"), "{names:?}");
+            },
+        );
+    }
+
+    #[test]
+    fn fragment_wire_reaches_an_instance_from_another_fragment() {
+        // `traction` wires to `pack`, declared only in `main`'s fragment.
+        let p = problems(&[
+            (
+                "main.wb",
+                "use vehicle from \"traction.wb\"\nuse leaf from \"leaf.wb\"\n\
+                 component vehicle { leaf pack \"Pack\"; }\n",
+            ),
+            (
+                "traction.wb",
+                "use leaf from \"leaf.wb\"\n\
+                 extend vehicle { leaf inv \"Inv\"; wire red 1 [pack.a, inv.a]; }\n",
+            ),
+            ("leaf.wb", LEAF),
+        ]);
+        assert!(p.is_empty(), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn wire_to_an_instance_in_no_fragment_is_unknown() {
+        let p = problems(&[
+            (
+                "main.wb",
+                "use vehicle from \"traction.wb\"\nuse leaf from \"leaf.wb\"\n\
+                 component vehicle { leaf pack \"Pack\"; }\n",
+            ),
+            (
+                "traction.wb",
+                "use leaf from \"leaf.wb\"\n\
+                 extend vehicle { leaf inv \"Inv\"; wire red 1 [ghost.a, inv.a]; }\n",
+            ),
+            ("leaf.wb", LEAF),
+        ]);
+        assert!(has(&p, "wirebug::unknown_instance"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn extend_without_a_root_component_is_orphan() {
+        // `main` is its own root (`shell`); the imported `extend vehicle` has
+        // no `component vehicle` anywhere.
+        let p = problems(&[
+            (
+                "main.wb",
+                "use vehicle from \"frag.wb\"\ncomponent shell { }\n",
+            ),
+            ("frag.wb", "extend vehicle { }\n"),
+        ]);
+        assert!(has(&p, "wirebug::orphan_fragment"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn two_plain_components_with_one_name_still_duplicate() {
+        let p = problems(&[(
+            "main.wb",
+            "component dup { }\ncomponent dup { }\ncomponent root { dup d; }\n",
+        )]);
+        assert!(has(&p, "wirebug::duplicate_type"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn nested_extend_is_rejected() {
+        let p = problems(&[("main.wb", "component outer { extend inner { } }\n")]);
+        assert!(has(&p, "wirebug::nested_extend"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn instance_declared_in_two_fragments_is_duplicate() {
+        let p = problems(&[
+            (
+                "main.wb",
+                "use vehicle from \"traction.wb\"\nuse leaf from \"leaf.wb\"\n\
+                 component vehicle { leaf dup \"D\"; }\n",
+            ),
+            (
+                "traction.wb",
+                "use leaf from \"leaf.wb\"\nextend vehicle { leaf dup \"D2\"; }\n",
+            ),
+            ("leaf.wb", LEAF),
+        ]);
+        assert!(has(&p, "wirebug::duplicate_instance"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn fragment_view_includes_an_instance_from_another_fragment() {
+        // A schematic in `traction.wb` includes `pack`, which lives in `main`.
+        let p = problems(&[
+            (
+                "main.wb",
+                "use vehicle from \"traction.wb\"\nuse leaf from \"leaf.wb\"\n\
+                 component vehicle { leaf pack \"Pack\"; }\n",
+            ),
+            (
+                "traction.wb",
+                "use leaf from \"leaf.wb\"\nextend vehicle { leaf inv \"Inv\"; }\n\
+                 view schematic \"Traction\" {\n\
+                   include pack at (2, 2) ports { east: a; };\n\
+                   include inv  at (8, 2) ports { west: a; };\n\
+                 }\n",
+            ),
+            ("leaf.wb", LEAF),
+        ]);
+        assert!(p.is_empty(), "{:?}", codes(&p));
     }
 }

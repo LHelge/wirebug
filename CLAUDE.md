@@ -63,12 +63,28 @@ with the version and description below it.
 
 - **AST** — a faithful parse of one `.wb` file. `Definition` (a component
   *type*) holds `Port`/`Connector`/`Instance`/`Wire`/nested-`Definition`
-  members; `View`s are top-level siblings. Every node carries a `Span`;
-  type/instance/port references are *unresolved* `Spanned<Ident>`.
+  members; `View`s are top-level siblings. A `Definition.kind` marks it
+  `component` (introduces the type) or `extend` (a fragment merged into a
+  same-named component). Every node carries a `Span`; type/instance/port
+  references are *unresolved* `Spanned<Ident>`.
 - **Resolved registry** — every definition (top-level and nested) keyed by
   `DefId`, with flattened ports (connectors are grouping metadata, not a
   namespace — port names are unique per component), per-file type scopes
   (own defs + `use` imports), and resolved instance/endpoint/include refs.
+- **Merge groups (`extend`)** — a top-level component may be authored across
+  files: `main.wb` has `component vehicle { … }`, other files
+  `extend vehicle { … }`, and `main.wb` pulls each in with the usual
+  `use vehicle from "traction.wb"`. A same-name collision in a file's scope
+  is a *merge* (not the `duplicate_type` error) as soon as either side is an
+  `extend`. `resolve::MergeGroups` records the fragment set with one
+  **canonical** id (the lone root `component`, kept first); `Resolved::
+  fragments(d)` yields a component's fragments (just `[d]` when unmerged).
+  Type resolution stays per-fragment (each carries its own `use` imports), but
+  the merged component is one **flat namespace**: endpoints (`check_endpoint`),
+  view includes/enclosures (`resolve/views.rs`), and elaboration all consult
+  the union across fragments, so a wire or view in one file freely references
+  an instance/port declared in another. `extend` is top-level only; a fragment
+  with no root `component` is an `orphan_fragment`.
 - **IR (`ir::Design`)** — the elaboration: a flat
   `IndexMap<InstancePath, Instance>` (hierarchical semantics, no recursive
   ownership; the tree lives in `children` links). One node per placement,
@@ -190,8 +206,12 @@ so one run reports many. Errors fail the run; warnings fail only under
   private-port access (a non-`pub` port referenced from outside), unknown
   view include, ambiguous view subject, duplicate connector designator
   (`duplicate_connector_name`), duplicate cable designator
-  (`duplicate_cable_name`). A cable's wire endpoints resolve exactly like a
-  loose wire's. View `ports { }` placements get the
+  (`duplicate_cable_name`). `extend` fragments add: a fragment nested inside a
+  component (`nested_extend`); an `extend` with no root `component` of that
+  name (`orphan_fragment`); an instance/port name declared in two fragments of
+  one merged component (the ordinary `duplicate_instance`/`duplicate_port`,
+  reported once across the group). A cable's wire endpoints resolve exactly
+  like a loose wire's. View `ports { }` placements get the
   same treatment as wire endpoints: unknown side (`unknown_port_side`),
   unknown/private port, and a duplicate-port-in-one-include guard
   (`duplicate_view_port`). Includes are checked per view kind: a `harness`

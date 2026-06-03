@@ -90,6 +90,52 @@ component cell_module {
 }
 ```
 
+## Splitting a component across files (`extend`)
+
+A large top-level component — the vehicle root, say — can be authored across
+several files. One file introduces it with `component`; others add to it with
+`extend`. `main.wb` pulls the fragments in with ordinary `use` statements:
+
+```
+// main.wb
+use vehicle from "traction.wb"
+use vehicle from "charging.wb"
+use battery from "components/battery.wb"
+
+component vehicle {
+    battery pack "Battery";          // shared HV battery lives here
+}
+```
+
+```
+// traction.wb
+use inverter from "components/inverter.wb"
+
+extend vehicle {
+    inverter inv "Inverter";
+    wire orange 50 "HV+" [pack.hv_pos, inv.dc_pos];   // pack is from main.wb
+    wire orange 50 "HV-" [pack.hv_neg, inv.dc_neg];
+}
+```
+
+Rules:
+
+- The fragments merge into one component. `component vehicle` (in `main.wb`) is
+  the **root fragment**; each `extend vehicle` adds members. `main.wb` must
+  still declare exactly one top-level `component`.
+- A `use vehicle from "traction.wb"` both loads the file and triggers the
+  merge (a same-name collision with `extend` on either side merges instead of
+  erroring). Without `extend`, two same-named `component`s are still a
+  duplicate-type error.
+- Each fragment carries its **own** `use` imports for the types it
+  instantiates (`traction.wb` imports `inverter` itself).
+- The merged component is **one flat namespace**: a wire or view in any
+  fragment may reference an instance or port declared in any other fragment
+  (`traction.wb` wires to `pack`, declared in `main.wb`). Views always see the
+  whole merged component.
+- `extend` is top-level only (not nested), and every `extend <name>` needs a
+  `component <name>` somewhere — a lone `extend` is an error.
+
 ## Ports
 
 ```

@@ -116,9 +116,20 @@ pub struct ConnectorCavity {
     pub span: Span,
 }
 
-/// `component <name> { <members> }` — a component *type*.
+/// Whether a definition introduces a component type or extends one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DefKind {
+    /// `component <name> { … }` — introduces the type.
+    Component,
+    /// `extend <name> { … }` — a fragment merged into a same-named component.
+    Extend,
+}
+
+/// `component <name> { <members> }` (or `extend <name> { … }`) — a
+/// component *type*, possibly authored as one of several merged fragments.
 #[derive(Debug, Clone)]
 pub struct Definition {
+    pub kind: DefKind,
     pub name: Spanned<Ident>,
     pub members: Vec<Member>,
     pub span: Span,
