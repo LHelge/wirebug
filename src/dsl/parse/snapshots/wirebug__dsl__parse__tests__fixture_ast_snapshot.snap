@@ -11,40 +11,40 @@ File {
         Definition(
             Definition {
                 kind: Component,
-                name: battery @ 10..17,
+                name: Battery @ 10..17,
                 members: [
                     Definition(
                         Definition {
                             kind: Component,
-                            name: cell_pack @ 34..43,
+                            name: CellPack @ 34..42,
                             members: [
                                 Port(
                                     Port {
                                         visibility: Public,
-                                        name: hv_pos @ 63..69,
-                                        label: "HV+" @ 70..75,
+                                        name: hv_pos @ 62..68,
+                                        label: "HV+" @ 69..74,
                                         pins: [],
                                         span: Span {
                                             file: FileId(
                                                 0,
                                             ),
-                                            start: 54,
-                                            end: 76,
+                                            start: 53,
+                                            end: 75,
                                         },
                                     },
                                 ),
                                 Port(
                                     Port {
                                         visibility: Public,
-                                        name: hv_neg @ 94..100,
-                                        label: "HV-" @ 101..106,
+                                        name: hv_neg @ 93..99,
+                                        label: "HV-" @ 100..105,
                                         pins: [],
                                         span: Span {
                                             file: FileId(
                                                 0,
                                             ),
-                                            start: 85,
-                                            end: 107,
+                                            start: 84,
+                                            end: 106,
                                         },
                                     },
                                 ),
@@ -54,61 +54,61 @@ File {
                                     0,
                                 ),
                                 start: 24,
-                                end: 113,
+                                end: 112,
                             },
                         },
                     ),
                     Instance(
                         Instance {
-                            type_name: cell_pack @ 119..128,
-                            name: pack @ 129..133,
+                            type_name: CellPack @ 124..132,
+                            name: pack @ 118..122,
                             label: Some(
-                                "Cells" @ 134..141,
+                                "Cells" @ 133..140,
                             ),
                             span: Span {
                                 file: FileId(
                                     0,
                                 ),
-                                start: 119,
-                                end: 142,
+                                start: 118,
+                                end: 141,
                             },
                         },
                     ),
                     Connector(
                         Connector {
                             name: Some(
-                                hv @ 158..160,
+                                hv @ 157..159,
                             ),
-                            part: "HV 2p" @ 161..168,
+                            part: "HV 2p" @ 160..167,
                             ports: [
                                 Port {
                                     visibility: Public,
-                                    name: hv_pos @ 188..194,
-                                    label: "HV+" @ 195..200,
+                                    name: hv_pos @ 187..193,
+                                    label: "HV+" @ 194..199,
                                     pins: [
-                                        1 @ 205..206,
+                                        1 @ 204..205,
                                     ],
                                     span: Span {
                                         file: FileId(
                                             0,
                                         ),
-                                        start: 179,
-                                        end: 207,
+                                        start: 178,
+                                        end: 206,
                                     },
                                 },
                                 Port {
                                     visibility: Public,
-                                    name: hv_neg @ 225..231,
-                                    label: "HV-" @ 232..237,
+                                    name: hv_neg @ 224..230,
+                                    label: "HV-" @ 231..236,
                                     pins: [
-                                        2 @ 242..243,
+                                        2 @ 241..242,
                                     ],
                                     span: Span {
                                         file: FileId(
                                             0,
                                         ),
-                                        start: 216,
-                                        end: 244,
+                                        start: 215,
+                                        end: 243,
                                     },
                                 },
                             ],
@@ -116,39 +116,39 @@ File {
                                 file: FileId(
                                     0,
                                 ),
-                                start: 148,
-                                end: 250,
+                                start: 147,
+                                end: 249,
                             },
                         },
                     ),
                     Wire(
                         Wire {
-                            color: orange @ 261..267,
-                            gauge: 50.0 @ 268..270,
+                            color: orange @ 260..266,
+                            gauge: 50.0 @ 267..269,
                             label: None,
                             endpoints: [
                                 Endpoint {
                                     instance: None,
-                                    port: hv_pos @ 272..278,
+                                    port: hv_pos @ 271..277,
                                     span: Span {
                                         file: FileId(
                                             0,
                                         ),
-                                        start: 272,
-                                        end: 278,
+                                        start: 271,
+                                        end: 277,
                                     },
                                 },
                                 Endpoint {
                                     instance: Some(
-                                        pack @ 280..284,
+                                        pack @ 279..283,
                                     ),
-                                    port: hv_pos @ 285..291,
+                                    port: hv_pos @ 284..290,
                                     span: Span {
                                         file: FileId(
                                             0,
                                         ),
-                                        start: 280,
-                                        end: 291,
+                                        start: 279,
+                                        end: 290,
                                     },
                                 },
                             ],
@@ -156,39 +156,39 @@ File {
                                 file: FileId(
                                     0,
                                 ),
-                                start: 256,
-                                end: 293,
+                                start: 255,
+                                end: 292,
                             },
                         },
                     ),
                     Wire(
                         Wire {
-                            color: orange @ 303..309,
-                            gauge: 50.0 @ 310..312,
+                            color: orange @ 302..308,
+                            gauge: 50.0 @ 309..311,
                             label: None,
                             endpoints: [
                                 Endpoint {
                                     instance: None,
-                                    port: hv_neg @ 314..320,
+                                    port: hv_neg @ 313..319,
                                     span: Span {
                                         file: FileId(
                                             0,
                                         ),
-                                        start: 314,
-                                        end: 320,
+                                        start: 313,
+                                        end: 319,
                                     },
                                 },
                                 Endpoint {
                                     instance: Some(
-                                        pack @ 322..326,
+                                        pack @ 321..325,
                                     ),
-                                    port: hv_neg @ 327..333,
+                                    port: hv_neg @ 326..332,
                                     span: Span {
                                         file: FileId(
                                             0,
                                         ),
-                                        start: 322,
-                                        end: 333,
+                                        start: 321,
+                                        end: 332,
                                     },
                                 },
                             ],
@@ -196,8 +196,8 @@ File {
                                 file: FileId(
                                     0,
                                 ),
-                                start: 298,
-                                end: 335,
+                                start: 297,
+                                end: 334,
                             },
                         },
                     ),
@@ -207,14 +207,14 @@ File {
                         0,
                     ),
                     start: 0,
-                    end: 337,
+                    end: 336,
                 },
             },
         ),
         View(
             View {
-                kind: schematic @ 344..353,
-                title: "Battery Detail" @ 354..370,
+                kind: schematic @ 343..352,
+                title: "Battery Detail" @ 353..369,
                 grid: Some(
                     20.0 @ 382..384,
                 ),
@@ -288,7 +288,7 @@ File {
                                 0,
                             ),
                             start: 472,
-                            end: 556,
+                            end: 555,
                         },
                     },
                 ],
@@ -298,8 +298,8 @@ File {
                     file: FileId(
                         0,
                     ),
-                    start: 339,
-                    end: 558,
+                    start: 338,
+                    end: 557,
                 },
             },
         ),
@@ -309,6 +309,6 @@ File {
             0,
         ),
         start: 0,
-        end: 558,
+        end: 557,
     },
 }

@@ -1,10 +1,10 @@
-component battery {
-    component cell_pack {
+component Battery {
+    component CellPack {
         pub port hv_pos "HV+";
         pub port hv_neg "HV-";
     }
 
-    cell_pack pack "Cells";
+    pack: CellPack "Cells";
 
     connector hv "HV 2p" {
         pub port hv_pos "HV+" pin 1;

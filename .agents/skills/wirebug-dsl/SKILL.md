@@ -7,7 +7,9 @@ description: Use this skill whenever editing, creating, reviewing, or discussing
 
 wirebug is a text-defined DSL for describing electrical systems — components, wires, and the views that render them. Source files end in `.wb`. The DSL was designed for the Aphid EV conversion project but the syntax is general-purpose.
 
-**This skill exists because the wirebug parser is not yet implemented.** The DSL is being designed by writing realistic models first, then implementing the parser to match. Treat the syntax here as authoritative for editing tasks; treat parseability as a future concern. Avoid inventing syntax that isn't documented here or already present in the project's existing `.wb` files — when in doubt, ask.
+The syntax here is authoritative and matches the implemented parser (`cargo run -- check <project>` validates a project). Avoid inventing syntax that isn't documented here or already present in the project's existing `.wb` files — when in doubt, ask.
+
+The surface syntax deliberately borrows Rust's feel: `use` imports, `pub` visibility, `//` comments, `;`-terminated statements, brace blocks with no trailing `;`, `name: Type` instantiation, and CamelCase type names against snake_case value names.
 
 ## Project structure
 
@@ -42,8 +44,8 @@ Comments are `//` line comments only. Block comments are not supported.
 ## Imports
 
 ```
-use cell_module from "cell_module.wb"
-use contactor   from "components/contactor.wb"
+use CellModule from "cell_module.wb";
+use Contactor  from "components/contactor.wb";
 ```
 
 Paths are relative to the importing file. A `use` brings one named top-level component definition into the current file's scope. Only top-level definitions can be imported — definitions nested inside other components are private to their parent.
@@ -51,8 +53,8 @@ Paths are relative to the importing file. A `use` brings one named top-level com
 If multiple imports come from the same file, repeat the statement (no list form yet):
 
 ```
-use cell_module from "components/cell_module.wb"
-use contactor   from "components/contactor.wb"
+use CellModule from "components/cell_module.wb";
+use Contactor  from "components/contactor.wb";
 ```
 
 ## Component definitions
@@ -62,7 +64,7 @@ A component is a **type**, not an instance. It defines an interface (its `pub` p
 A minimal primitive component (no internals, just an interface):
 
 ```
-component contactor {
+component Contactor {
     pub port in     "IN";
     pub port out    "OUT";
     pub port coil_p "COIL+";
@@ -73,22 +75,68 @@ component contactor {
 Components can nest. A definition inside another component is scoped to its parent and is not exported — it can only be instantiated by code inside the containing definition:
 
 ```
-component cell_module {
-    component cell_pack {       // private to cell_module
+component CellModule {
+    component CellPack {        // private to CellModule
         pub port hv_pos "+";
         pub port hv_neg "-";
         // ...
     }
 
-    cell_pack pack;             // instantiate the nested type
+    pack: CellPack;             // instantiate the nested type
 
-    pub port hv_pos "HV+";      // external interface of cell_module
+    pub port hv_pos "HV+";      // external interface of CellModule
     pub port hv_neg "HV-";
 
     wire orange 50 [hv_pos, pack.hv_pos];   // external port wired to internal
     wire orange 50 [hv_neg, pack.hv_neg];
 }
 ```
+
+## Splitting a component across files (`extend`)
+
+A large top-level component — the vehicle root, say — can be authored across
+several files. One file introduces it with `component`; others add to it with
+`extend`. `main.wb` pulls the fragments in with ordinary `use` statements:
+
+```
+// main.wb
+use Vehicle from "traction.wb";
+use Vehicle from "charging.wb";
+use Battery from "components/battery.wb";
+
+component Vehicle {
+    pack: Battery "Battery";         // shared HV battery lives here
+}
+```
+
+```
+// traction.wb
+use Inverter from "components/inverter.wb";
+
+extend Vehicle {
+    inv: Inverter "Inverter";
+    wire orange 50 "HV+" [pack.hv_pos, inv.dc_pos];   // pack is from main.wb
+    wire orange 50 "HV-" [pack.hv_neg, inv.dc_neg];
+}
+```
+
+Rules:
+
+- The fragments merge into one component. `component Vehicle` (in `main.wb`) is
+  the **root fragment**; each `extend Vehicle` adds members. `main.wb` must
+  still declare exactly one top-level `component`.
+- A `use Vehicle from "traction.wb"` both loads the file and triggers the
+  merge (a same-name collision with `extend` on either side merges instead of
+  erroring). Without `extend`, two same-named `component`s are still a
+  duplicate-type error.
+- Each fragment carries its **own** `use` imports for the types it
+  instantiates (`traction.wb` imports `Inverter` itself).
+- The merged component is **one flat namespace**: a wire or view in any
+  fragment may reference an instance or port declared in any other fragment
+  (`traction.wb` wires to `pack`, declared in `main.wb`). Views always see the
+  whole merged component.
+- `extend` is top-level only (not nested), and every `extend <name>` needs a
+  `component <name>` somewhere — a lone `extend` is an error.
 
 ## Ports
 
@@ -121,11 +169,11 @@ connector "Molex MX-150 12p" {
 }
 ```
 
-**Visibility does not propagate automatically.** If `cell_pack` declares `pub port hv_pos`, that port is visible when `cell_pack` is instantiated — but the containing `cell_module` does *not* automatically expose it. To re-export, the parent declares its own `pub port` and wires it through:
+**Visibility does not propagate automatically.** If `CellPack` declares `pub port hv_pos`, that port is visible when `CellPack` is instantiated — but the containing `CellModule` does *not* automatically expose it. To re-export, the parent declares its own `pub port` and wires it through:
 
 ```
-component cell_module {
-    cell_pack pack;
+component CellModule {
+    pack: CellPack;
     pub port hv_pos "HV+";                  // explicit external port
     wire orange 50 [hv_pos, pack.hv_pos];   // wired to inner port
 }
@@ -138,7 +186,7 @@ This is more verbose than implicit propagation but does useful work: documents t
 A `connector` block groups ports that physically belong to a single connector part (a JST XH 15p, a Deutsch DT06-12S, etc.). The block carries an **optional designator** (a snake_case reference name) and the part description as a string, and contains port declarations with optional pin assignments.
 
 ```
-component cell_monitor {
+component CellMonitor {
     connector cells "JST XH 15p" {       // `cells` is the designator
         port c0 "C0" pin 1;
         port c1 "C1" pin 2;
@@ -165,7 +213,7 @@ layouts out of component definitions. A component instantiates a connector type
 and binds the physical pins to its flat ports.
 
 ```
-connector_type jst_xh_8p "JST XH 8p" {
+connector_type JstXh8p "JST XH 8p" {
     part: "B8B-XH-A";
 
     layout grid {
@@ -175,19 +223,19 @@ connector_type jst_xh_8p "JST XH 8p" {
     }
 }
 
-component controller {
+component Controller {
     pub port can_h "CAN H";
     pub port can_l "CAN L";
 
-    connector x1: jst_xh_8p {
-        pin 1 = can_h;
-        pin 2 = can_l;
+    connector x1: JstXh8p {
+        pin 1: can_h;
+        pin 2: can_l;
     }
 }
 ```
 
 `connector_type` definitions are top-level items, like components and views.
-They can be imported with `use` and referenced by `connector <name>: <type>`.
+They can be imported with `use` and referenced by `connector <name>: <Type>`.
 Connector instance names are the designators used in harness and pinout views.
 Pins in a connector instance must be positive integers; a pin can bind to only
 one port, but one port may bind to several pins when cavities are ganged for
@@ -200,7 +248,7 @@ mirror it before entering the layout.
 Simple rectangular connectors use a grid:
 
 ```
-connector_type linear_8p "Linear 8p" {
+connector_type Linear8p "Linear 8p" {
     layout grid {
         rows: 1;
         cols: 8;
@@ -208,7 +256,7 @@ connector_type linear_8p "Linear 8p" {
     }
 }
 
-connector_type dual_16p "Dual row 16p" {
+connector_type Dual16p "Dual row 16p" {
     layout grid {
         rows: 2;
         cols: 8;
@@ -228,7 +276,7 @@ Supported grid numbering modes:
 Complex connectors use an explicit face layout:
 
 ```
-connector_type inverter_control "Inverter control 47+13p" {
+connector_type InverterControl "Inverter control 47+13p" {
     layout face {
         cavity 47 at (1, 0) size large;
         cavity 46 at (3, 0) size large;
@@ -256,21 +304,21 @@ slots are not shown as extra padding.
 
 ## Instantiation
 
-A *type* is a definition; an *instance* is a placement of that definition. To instantiate:
+A *type* is a definition; an *instance* is a placement of that definition. To instantiate, write the instance name first, then a colon and the type — like a Rust `let` binding or struct field:
 
 ```
-<TypeName> <instance_name> "<optional label>";
+<instance_name>: <TypeName> "<optional label>";
 ```
 
 Examples:
 
 ```
-component vehicle {
-    battery_pack pack    "HV Battery";
-    inverter     inv     "Motor Controller";
-    motor        m       "Drive Motor";
-    obc          charger "On-Board Charger";
-    dcdc         conv    "DC-DC Converter";
+component Vehicle {
+    pack:    BatteryPack "HV Battery";
+    inv:     Inverter    "Motor Controller";
+    m:       Motor       "Drive Motor";
+    charger: Obc         "On-Board Charger";
+    conv:    Dcdc        "DC-DC Converter";
 }
 ```
 
@@ -340,17 +388,17 @@ Each `schematic` include also says which of that component's ports to show, on w
 
 ```
 view schematic "System Overview" {
-    grid 20;
+    grid: 20;
 
     include pack at (2, 5) ports {
         east: hv_pos, hv_neg, can_h, can_l;
-    };
+    }
 
     include inv at (15, 2) ports {
         west:  dc_pos, dc_neg, can_h, can_l;
         east:  phase_u, phase_v, phase_w;
         south: enable;
-    };
+    }
 
     include conv at (15, 18);   // bare box: no ports shown
 }
@@ -359,8 +407,8 @@ view schematic "System Overview" {
 Format:
 
 - `view <kind> "<title>" { ... }` — `kind` is `schematic`, `harness`, or `pinout`.
-- `grid <n>;` — pixels per grid cell. Optional; a sensible default applies.
-- `include <name> at (x, y) [ports { ... }];` — place a component by its instance name in the surrounding scope, at grid-cell coordinates. The trailing `;` is always required.
+- `grid: <n>;` — pixels per grid cell. Optional; a sensible default applies.
+- `include <name> at (x, y);` or `include <name> at (x, y) ports { ... }` — place a component by its instance name in the surrounding scope, at grid-cell coordinates. A bare include is a statement and ends with `;`; an include with a `ports { }` block ends at the closing brace, with **no** trailing `;` (like any other brace block).
 - `ports { <side>: <port>, <port>; ... }` — optional. Each line lists the ports on one `side` (`north`, `east`, `south`, `west`), in the order they should appear on that edge. A `west: a, b;` line puts `a` above `b` on the west edge. List the same side more than once and the lines concatenate.
 
 **The `ports` block controls both layout and scope.** A port is drawn only if it's listed; everything else is hidden. An include with no `ports` block is a bare labelled box.
@@ -375,7 +423,7 @@ A `harness` include selects a whole **connector** by its designator and draws it
 
 ```
 view harness "Main HV harness" {
-    grid 20;
+    grid: 20;
 
     include front.hv   at (4, 8);     // <instance>.<connector designator>
     include rear.hv     at (4, 22);
@@ -398,7 +446,7 @@ is useful for connector reference drawings when building a harness.
 
 ```
 view pinout "Inverter pinouts" {
-    grid 20;
+    grid: 20;
 
     include hv at (0, 0);
     include control at (14, 22);
@@ -412,11 +460,11 @@ view pinout "Inverter pinouts" {
   layout and pin bindings.
 - The drawing uses the harness-side convention described above.
 
-Views live in the same file as the component they primarily document — like unit tests in Rust source. A view of the system overview belongs in `main.wb` where `vehicle` is defined. A view of the battery pack detail belongs in the file where `battery_pack` is defined. This keeps views close to the data they describe.
+Views live in the same file as the component they primarily document — like unit tests in Rust source. A view of the system overview belongs in `main.wb` where `Vehicle` is defined. A view of the battery pack detail belongs in the file where `BatteryPack` is defined. This keeps views close to the data they describe.
 
 ## Naming conventions
 
-- **Types and instances both use snake_case.** `cell_module` is a type; `cell_module_1` is an instance. The grammar disambiguates by position.
+- **Types are CamelCase; instances are snake_case** — Rust's convention. `CellModule` is a type (component or connector_type); `module_1` is an instance. The grammar accepts any identifier in either position (case is convention, not enforced), but follow the convention in all authored files.
 - **Port names** are short, snake_case: `hv_pos`, `coil_p`, `iso_spi_up_h`. Polarity suffixes: `_p`/`_n` for signal pairs, `_pos`/`_neg` for power, `_h`/`_l` for differential pairs.
 - **Port labels** are short, human-readable, quoted: `"HV+"`, `"COIL+"`, `"ISO SPI+"`.
 - **Instance names** can carry role: `c_main_pos`, `c_precharge`, `module_1`, `inv`. Short is fine when context is clear.

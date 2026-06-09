@@ -1,10 +1,10 @@
-component battery {
-    component cell_pack {
+component Battery {
+    component CellPack {
         pub port hv_pos "HV+";
         pub port hv_neg "HV-";
     }
 
-    cell_pack pack "Cells";
+    pack: CellPack "Cells";
 
     connector hv "HV 2p" {
         pub port hv_pos "HV+" pin 1;
@@ -16,7 +16,7 @@ component battery {
 }
 
 view schematic "Battery Detail" {
-    grid 20;
+    grid: 20;
 
     enclosure {
         hv_pos at (west, 4);
@@ -26,5 +26,5 @@ view schematic "Battery Detail" {
     include pack at (10, 4) ports {
         west:  hv_pos;
         east:  hv_neg;
-    };
+    }
 }

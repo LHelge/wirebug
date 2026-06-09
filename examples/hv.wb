@@ -6,18 +6,18 @@
 // imports for the types it instantiates; the HV bus wires reach `msd`
 // (declared in main.wb) through the merged flat namespace.
 
-use front_battery   from "components/front_battery.wb"
-use rear_battery    from "components/rear_battery.wb"
-use hv_junction_box from "components/hv_junction_box.wb"
-use inverter        from "components/inverter.wb"
-use obc_dcdc        from "components/obc_dcdc.wb"
+use FrontBattery  from "components/front_battery.wb";
+use RearBattery   from "components/rear_battery.wb";
+use HvJunctionBox from "components/hv_junction_box.wb";
+use Inverter      from "components/inverter.wb";
+use ObcDcdc       from "components/obc_dcdc.wb";
 
-extend vehicle {
-    front_battery   front   "Front Battery";
-    rear_battery    rear    "Rear Battery";
-    hv_junction_box hvjb    "HV Junction Box";
-    inverter        inv     "Inverter";
-    obc_dcdc        charger "OBC/DC-DC";
+extend Vehicle {
+    front:   FrontBattery  "Front Battery";
+    rear:    RearBattery   "Rear Battery";
+    hvjb:    HvJunctionBox "HV Junction Box";
+    inv:     Inverter      "Inverter";
+    charger: ObcDcdc       "OBC/DC-DC";
 
     // --- HV system ---
     // The battery packs are wired in series before the completed string enters

@@ -4,7 +4,7 @@
 // Interlock terminates here — VCM uses it internally to gate
 // the high-side switch that sources safe power.
 
-component vcm {
+component Vcm {
     // CAN1 — powertrain link, straight to the inverter.
     connector can1 "CAN 4p" {
         pub port can1_h "CAN1 H" pin 1;

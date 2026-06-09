@@ -642,8 +642,8 @@ mod tests {
         let design = design_from(
             r#"
 component sys {
-    blk a;
-    blk b;
+    a: blk;
+    b: blk;
     wire red 1 [a.p, b.p];
     component blk {
         pub port p "P";
@@ -673,9 +673,9 @@ component sys {
         let design = design_from(
             r#"
 component sys {
-    blk a;
-    blk b;
-    blk c;
+    a: blk;
+    b: blk;
+    c: blk;
     wire red 1 [a.p, b.p, c.p];
     component blk {
         pub port p "P";
@@ -702,8 +702,8 @@ component sys {
         let design = design_from(
             r#"
 component sys {
-    blk a;
-    pad b;
+    a: blk;
+    b: pad;
     wire red 1 [a.p, b.p];
     component blk {
         pub port p "P";
@@ -735,8 +735,8 @@ component sys {
         let design = design_from(
             r#"
 component sys {
-    blk a;
-    pad b;
+    a: blk;
+    b: pad;
     wire red 1 [a.p, b.p];
     component blk {
         pub port p "P";
@@ -771,7 +771,7 @@ component sys {
         let design = design_from(
             r#"
 component sys {
-    blk a;
+    a: blk;
     pub port out "OUT";
     wire red 1 [a.p, out];
     component blk {
@@ -780,11 +780,11 @@ component sys {
 }
 
 view schematic "T" {
-    grid 10;
+    grid: 10;
     enclosure {
         out at (east, 0);
     }
-    include a at (0, 0) ports { west: p; };
+    include a at (0, 0) ports { west: p; }
 }
 "#,
         );
@@ -809,8 +809,8 @@ view schematic "T" {
         let design = design_from(
             r#"
 component sys {
-    blk a;
-    blk b;
+    a: blk;
+    b: blk;
     wire red 1 [a.p, b.p];
     component blk {
         pub port p "P";
@@ -835,14 +835,14 @@ component sys {
         let design = design_from(
             r#"
 component sys {
-    blk a;
+    a: blk;
     component blk {
         pub port p "P";
     }
 }
 
 view schematic "T" {
-    grid 10;
+    grid: 10;
     enclosure {
     }
     include a at (0, 0);
@@ -873,7 +873,7 @@ component sys {
 }
 
 view schematic "T" {
-    grid 10;
+    grid: 10;
     enclosure {
         a at (west, 0);
         b at (east, 2);
@@ -901,8 +901,8 @@ view schematic "T" {
         let design = design_from(
             r#"
 component sys {
-    blk a;
-    blk b;
+    a: blk;
+    b: blk;
     wire red 1 [a.p1, b.p];
     wire red 1 [a.p2, b.p];
     wire red 1 [a.p3, b.p];

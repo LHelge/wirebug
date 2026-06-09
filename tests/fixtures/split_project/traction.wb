@@ -1,17 +1,17 @@
 // A `vehicle` fragment: the traction subsystem. It carries its own `use` for
 // the types it instantiates, and wires to `pack` — declared in main.wb — via
 // the flat merged namespace.
-use inverter from "components/inverter.wb"
+use Inverter from "components/inverter.wb";
 
-extend vehicle {
-    inverter inv "Inverter";
+extend Vehicle {
+    inv: Inverter "Inverter";
 
     wire orange 50 "HV+" [pack.hv_pos, inv.dc_pos];
     wire orange 50 "HV-" [pack.hv_neg, inv.dc_neg];
 }
 
 view harness "Main Harness" {
-    grid 20;
+    grid: 20;
 
     include pack.hv at (4, 8);
     include inv.hv  at (28, 8);

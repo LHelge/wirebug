@@ -435,20 +435,20 @@ mod tests {
         assert!(problems.is_empty(), "elaboration problems: {problems:?}");
         let design = design.expect("a design");
 
-        assert_eq!(design.root.to_string(), "vehicle");
+        assert_eq!(design.root.to_string(), "Vehicle");
 
         // Deep path materialized down through the hierarchy.
-        let pack = InstancePath::root(InstanceName::from("vehicle"))
+        let pack = InstancePath::root(InstanceName::from("Vehicle"))
             .child(InstanceName::from("pack"))
             .child(InstanceName::from("pack"));
-        let pack_inst = design.get(&pack).expect("vehicle.pack.pack exists");
-        assert_eq!(pack_inst.type_name.as_str(), "cell_pack");
+        let pack_inst = design.get(&pack).expect("Vehicle.pack.pack exists");
+        assert_eq!(pack_inst.type_name.as_str(), "CellPack");
         assert!(pack_inst.ports.contains_key(&PortName::from("hv_pos")));
 
         // Imported child instances are stamped at the root level.
         let battery =
-            InstancePath::root(InstanceName::from("vehicle")).child(InstanceName::from("pack"));
-        assert_eq!(design.get(&battery).unwrap().type_name.as_str(), "battery");
+            InstancePath::root(InstanceName::from("Vehicle")).child(InstanceName::from("pack"));
+        assert_eq!(design.get(&battery).unwrap().type_name.as_str(), "Battery");
 
         // The root owns two point-to-point HV wires between the included
         // battery and inverter.
@@ -462,7 +462,7 @@ mod tests {
         );
 
         // Views came through, bound to their type.
-        assert!(design.views.iter().any(|v| v.subject.as_str() == "vehicle"));
+        assert!(design.views.iter().any(|v| v.subject.as_str() == "Vehicle"));
     }
 
     #[test]
@@ -470,13 +470,13 @@ mod tests {
         let (design, problems) = elaborate_files(&[
             (
                 "main.wb",
-                "use vehicle from \"frag.wb\"\nuse leaf from \"leaf.wb\"\n\
-                 component vehicle { leaf pack \"Pack\"; }\n",
+                "use vehicle from \"frag.wb\";\nuse leaf from \"leaf.wb\";\n\
+                 component vehicle { pack: leaf \"Pack\"; }\n",
             ),
             (
                 "frag.wb",
-                "use leaf from \"leaf.wb\"\n\
-                 extend vehicle { leaf inv \"Inv\"; wire red 1 [pack.a, inv.a]; }\n",
+                "use leaf from \"leaf.wb\";\n\
+                 extend vehicle { inv: leaf \"Inv\"; wire red 1 [pack.a, inv.a]; }\n",
             ),
             ("leaf.wb", "component leaf { pub port a \"A\"; }\n"),
         ]);
@@ -556,8 +556,8 @@ mod tests {
                 pub port can_h \"CAN H\";
                 pub port can_l \"CAN L\";
                 connector x1: ampseal {
-                    pin 1 = can_h;
-                    pin 2 = can_l;
+                    pin 1: can_h;
+                    pin 2: can_l;
                 }
             }\n",
         )]);
@@ -631,7 +631,7 @@ mod tests {
     fn direct_containment_cycle_is_reported() {
         // A single top-level component that instantiates itself.
         let (_design, problems) =
-            elaborate_files(&[("main.wb", "component knot { knot inner; }\n")]);
+            elaborate_files(&[("main.wb", "component knot { inner: knot; }\n")]);
         assert!(
             problems
                 .iter()

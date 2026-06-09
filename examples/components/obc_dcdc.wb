@@ -2,7 +2,7 @@
 // Self-powered from HV bus. Charges from 1-phase AC inlet.
 // Provides 12V output to the vehicle electrical system.
 
-component obc_dcdc {
+component ObcDcdc {
     connector hv "HV DC 2p" {
         pub port dc_pos "DC+" pin 1;
         pub port dc_neg "DC-" pin 2;

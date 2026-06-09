@@ -3,7 +3,7 @@
 // controls up to 3 contactors (low-side drivers),
 // reports on CAN bus.
 
-component bms_master {
+component BmsMaster {
     connector "ISO-SPI 2p" {
         pub port iso_spi_h "ISO SPI+" pin 1;
         pub port iso_spi_l "ISO SPI-" pin 2;

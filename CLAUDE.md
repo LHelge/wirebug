@@ -14,9 +14,9 @@ Three CLI commands share it:
 - **`render` (`src/render/`)** — runs the same DSL pipeline, then draws
   every view in the resulting `ir::Design` to SVG (one file per view) plus
   an `index.html` (`render::index_html`) that embeds them all for browsing,
-  grouped into **Schematics** / **Harnesses** tabs by view kind. Two view
-  kinds render today: `schematic` (`render/schematic/`) and `harness`
-  (`render/harness/`). `--png` rasterises each view to PNG instead
+  grouped into **Schematics** / **Harnesses** tabs by view kind. Three view
+  kinds render today: `schematic` (`render/schematic/`), `harness`
+  (`render/harness/`), and `pinout` (`render/pinout/`). `--png` rasterises each view to PNG instead
   (`render/png.rs`, via `resvg`); `--embed` emits host-styled "naked" SVGs
   plus a `manifest.json` sidecar in place of the HTML index (see below).
   The legacy YAML model/view loader has been removed; `ir::Design` is the
@@ -72,9 +72,9 @@ with the version and description below it.
   namespace — port names are unique per component), per-file type scopes
   (own defs + `use` imports), and resolved instance/endpoint/include refs.
 - **Merge groups (`extend`)** — a top-level component may be authored across
-  files: `main.wb` has `component vehicle { … }`, other files
-  `extend vehicle { … }`, and `main.wb` pulls each in with the usual
-  `use vehicle from "traction.wb"`. A same-name collision in a file's scope
+  files: `main.wb` has `component Vehicle { … }`, other files
+  `extend Vehicle { … }`, and `main.wb` pulls each in with the usual
+  `use Vehicle from "traction.wb";`. A same-name collision in a file's scope
   is a *merge* (not the `duplicate_type` error) as soon as either side is an
   `extend`. `resolve::MergeGroups` records the fragment set with one
   **canonical** id (the lone root `component`, kept first); `Resolved::
@@ -88,7 +88,8 @@ with the version and description below it.
 - **IR (`ir::Design`)** — the elaboration: a flat
   `IndexMap<InstancePath, Instance>` (hierarchical semantics, no recursive
   ownership; the tree lives in `children` links). One node per placement,
-  addressed by a dotted path (`vehicle.front.module_1.pack`), with
+  addressed by a dotted path (`Vehicle.front.module_1.pack` — the root
+  instance is named after its component type), with
   materialized ports and wires rewritten to `WireEnd::Own`/`Child`.
   Definitions vanish here; only concrete instances flow to the IR.
   A `cable` is flat too: its metadata lands in `Instance.cables`
@@ -105,7 +106,8 @@ The renderer consumes `ir::Design` directly — there is no separate model.
 component *type* and is rendered against the first instance of that type
 (the root for a top-level view). The subject instance's **direct children**
 are the includable things; the subject's own **wires** are the connections.
-`view.kind` dispatches: `schematic` (below) or `harness` (after it).
+`view.kind` dispatches: `schematic` (below), `harness` (after it), or
+`pinout` (`render/pinout/`).
 
 The DSL view authors each include's ports: `include <inst> at (x, y) ports {
 <side>: <port>, ...; }`. That `ports` block is the single source of both
@@ -242,7 +244,7 @@ phases above). Render adds only geometry/dispatch errors, in the slim
 `error::Error` enum (`src/error.rs` — render-path only; DSL problems are
 miette `Diagnostic`s):
 
-- an unknown view `kind:` (`schematic` and `harness` render today);
+- an unknown view `kind:` (`schematic`, `harness`, and `pinout` render today);
 - a view subject type with no instance in the design;
 - a non-positive `grid:`, or a `grid:` finer than a port label needs;
 - file IO when writing the SVGs.
@@ -265,6 +267,10 @@ redesign each when it lands.
 - Per-port styling (input/output, voltage class, gauge, etc.)
 - Explicit `junction`/`splice` elements (shared rails stay loose
   multi-endpoint wires for now; `cable` conductors are point-to-point)
+- Port re-export aliases (`pub port x "X" = inner.port;` — a pure boundary
+  mapping with no wire). Decided against for now (2026-06): the wire-through
+  pattern stays; revisit when a BOM view makes invented color/gauge on
+  zero-length boundary wires actually hurt.
 
 ## Architecture
 
@@ -314,12 +320,14 @@ src/
 │   │           ├── order.rs     # §6.1 order routes within a channel
 │   │           ├── place.rs     # §6.2 final placement (two axis passes)
 │   │           └── vpsc.rs      # separation-constraint solver
-│   └── harness/     # WireViz-style trunk-and-bezier renderer (kind: harness)
-│       ├── mod.rs       # HarnessRenderer; render orchestration + STYLE
-│       ├── layout.rs    # pin-table nodes, spine + facing, cable boxes
-│       │                #   (centroid placement + de-overlap), loose wires
-│       ├── bezier.rs    # horizontally-flexed cubic bezier math (FLEX)
-│       └── draw.rs      # SVG emission: pin tables, cable boxes, bezier wires
+│   ├── harness/     # WireViz-style trunk-and-bezier renderer (kind: harness)
+│   │   ├── mod.rs       # HarnessRenderer; render orchestration + STYLE
+│   │   ├── layout.rs    # pin-table nodes, spine + facing, cable boxes
+│   │   │                #   (centroid placement + de-overlap), loose wires
+│   │   ├── bezier.rs    # horizontally-flexed cubic bezier math (FLEX)
+│   │   └── draw.rs      # SVG emission: pin tables, cable boxes, bezier wires
+│   └── pinout/      # connector-face + pin-table renderer (kind: pinout)
+│       └── mod.rs       # PinoutRenderer; cavity faces from connector layouts
 │
 │  # ── live-reloading dev server (`serve`) ──
 ├── serve/

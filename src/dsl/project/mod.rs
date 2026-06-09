@@ -295,7 +295,7 @@ mod tests {
         let main = dir.path().join("main.wb");
         std::fs::write(
             &main,
-            "use missing from \"does_not_exist.wb\"\ncomponent c { pub port a \"A\"; }\n",
+            "use missing from \"does_not_exist.wb\";\ncomponent c { pub port a \"A\"; }\n",
         )
         .expect("write main.wb");
 
@@ -320,15 +320,15 @@ mod tests {
         write("leaf.wb", "component leaf { pub port a \"A\" @; }\n");
         write(
             "a.wb",
-            "use leaf from \"leaf.wb\"\ncomponent a { leaf l; }\n",
+            "use leaf from \"leaf.wb\";\ncomponent a { l: leaf; }\n",
         );
         write(
             "b.wb",
-            "use leaf from \"leaf.wb\"\ncomponent b { leaf l; }\n",
+            "use leaf from \"leaf.wb\";\ncomponent b { l: leaf; }\n",
         );
         write(
             "main.wb",
-            "use a from \"a.wb\"\nuse b from \"b.wb\"\ncomponent m { a x; b y; }\n",
+            "use a from \"a.wb\";\nuse b from \"b.wb\";\ncomponent m { x: a; y: b; }\n",
         );
 
         let (_project, problems) = load(&dir.path().join("main.wb"));

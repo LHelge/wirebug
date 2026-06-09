@@ -2,10 +2,10 @@
 // Contains an 8s2p cell pack with measurement taps + NTC sensors
 // and a BMS slave board that monitors the cells and communicates via ISO-SPI.
 
-component cell_module {
+component CellModule {
     // --- Nested private types ---
 
-    component cell_pack {
+    component CellPack {
         pub port hv_pos "HV+";
         pub port hv_neg "HV-";
 
@@ -26,7 +26,7 @@ component cell_module {
         }
     }
 
-    component bms_slave {
+    component BmsSlave {
         connector "Cell taps 9p" {
             pub port c0  "C0" pin 1;
             pub port c1  "C1" pin 2;
@@ -59,8 +59,8 @@ component cell_module {
 
     // --- Instances ---
 
-    cell_pack pack;
-    bms_slave slave;
+    pack: CellPack;
+    slave: BmsSlave;
 
     // --- External interface ---
 
@@ -107,7 +107,7 @@ component cell_module {
 // terminals and the ISO-SPI daisy chain) leaves on the wrapping enclosure.
 
 view schematic "Cell Module" {
-    grid 20;
+    grid: 20;
 
     enclosure {
         hv_pos at (west, 7);
@@ -122,13 +122,13 @@ view schematic "Cell Module" {
     include pack at (6, 8) ports {
         west: hv_pos, hv_neg;
         east: c0, c1, c2, c3, c4, c5, c6, c7, c8, ntc1_p, ntc1_n, ntc2_p, ntc2_n;
-    };
+    }
 
     include slave at (20, 8) ports {
         west:  c0, c1, c2, c3, c4, c5, c6, c7, c8, ntc1_p, ntc1_n, ntc2_p, ntc2_n;
         north: iso_spi_up_h, iso_spi_up_l;
         south: iso_spi_down_h, iso_spi_down_l;
-    };
+    }
 
     text pack_note at (6, 24) "8s2p cell pack from a Renault Zoe";
 }

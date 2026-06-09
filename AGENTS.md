@@ -5,7 +5,7 @@ future work on the codebase. Keep it short; don't restate the README.
 
 ## One pipeline
 
-The only input is the **`.wb` DSL** (spec: `.Codex/skills/wirebug-dsl/`).
+The only input is the **`.wb` DSL** (spec: `.agents/skills/wirebug-dsl/`).
 Three CLI commands share it:
 
 - **`check` (`src/dsl/`)** — lex → parse → load project → resolve →
@@ -14,18 +14,21 @@ Three CLI commands share it:
 - **`render` (`src/render/`)** — runs the same DSL pipeline, then draws
   every view in the resulting `ir::Design` to SVG (one file per view) plus
   an `index.html` (`render::index_html`) that embeds them all for browsing,
-  grouped into **Schematics** / **Harnesses** tabs by view kind. Two view
-  kinds render today: `schematic` (`render/schematic/`) and `harness`
-  (`render/harness/`). The legacy YAML model/view loader has been removed;
-  `ir::Design` is the only thing the renderer consumes.
+  grouped into **Schematics** / **Harnesses** tabs by view kind. Three view
+  kinds render today: `schematic` (`render/schematic/`), `harness`
+  (`render/harness/`), and `pinout` (`render/pinout/`). `--png` rasterises each view to PNG instead
+  (`render/png.rs`, via `resvg`); `--embed` emits host-styled "naked" SVGs
+  plus a `manifest.json` sidecar in place of the HTML index (see below).
+  The legacy YAML model/view loader has been removed; `ir::Design` is the
+  only thing the renderer consumes.
 - **`serve` (`src/serve/`)** — a live-reloading dev server. Renders the
   project into memory (the same `render_views` + `index_html` pipeline,
   `live_reload` on), serves it over axum, and watches the project tree for
   `.wb` and `wirebug.toml` changes; each save re-renders and pushes a
-  websocket reload. Nothing hits disk. A failing `check` serves a
-  diagnostics page that still live-reloads, so it recovers once fixed.
-  `serve` is the only async command: `main` stays synchronous and spins a
-  Tokio runtime just for this arm.
+  websocket reload. Nothing hits disk. A failing `check` serves a diagnostics
+  page that still live-reloads, so it recovers once fixed. `serve` is the
+  only async command: `main` stays synchronous and spins a Tokio runtime just
+  for this arm.
 
 The `index.html` is an [`askama`] compile-time template (`templates/`),
 rendered by `render::index_html(views, live_reload)` — shared by `render`
@@ -33,26 +36,60 @@ rendered by `render::index_html(views, live_reload)` — shared by `render`
 
 ## Project manifest
 
-Every project carries a `wirebug.toml` beside `main.wb`. The manifest is
-the project marker: like Cargo, `check`, `render`, and `serve` walk up from
-the current directory until they find it. Commands can also point directly
-at the project root or at `wirebug.toml`; `main.wb` remains the entry `.wb`
-file beside the manifest.
+Every project carries a `wirebug.toml` beside `main.wb` — a small TOML
+manifest with a single `[project]` table. `name` and `version` are
+required; `description`, `authors`, `license`, `revision`, and `date`
+(parsed as `chrono::NaiveDate`) are optional. Unknown keys are a parse
+error (`#[serde(deny_unknown_fields)]`).
+
+The manifest is the project marker. The CLI deliberately follows Cargo's
+shape here: from inside a project, `check`, `render`, and `serve` walk up
+parent directories until they find `wirebug.toml`; commands may also point
+directly at the project root or at the manifest. `main.wb` remains the
+entry `.wb` file beside the manifest.
+
+If `revision` is omitted, the loader fills it from git: the short HEAD
+SHA, suffixed `-dirty` when the working tree has changes. An authored
+`revision` always wins; outside a git repo (or without `git` on PATH)
+the field stays `None`.
+
+The parsed `Manifest` rides on `Project` → `ir::Design` (as an
+`Option<Manifest>` so synthetic test designs need not invent one).
+Renderers stamp `<name> v<version> · rev … (date)` in the SVG's
+bottom-right corner; the HTML index puts the project name in `<h1>`
+with the version and description below it.
 
 ## DSL mental model
 
 - **AST** — a faithful parse of one `.wb` file. `Definition` (a component
   *type*) holds `Port`/`Connector`/`Instance`/`Wire`/nested-`Definition`
-  members; `View`s are top-level siblings. Every node carries a `Span`;
-  type/instance/port references are *unresolved* `Spanned<Ident>`.
+  members; `View`s are top-level siblings. A `Definition.kind` marks it
+  `component` (introduces the type) or `extend` (a fragment merged into a
+  same-named component). Every node carries a `Span`; type/instance/port
+  references are *unresolved* `Spanned<Ident>`.
 - **Resolved registry** — every definition (top-level and nested) keyed by
   `DefId`, with flattened ports (connectors are grouping metadata, not a
   namespace — port names are unique per component), per-file type scopes
   (own defs + `use` imports), and resolved instance/endpoint/include refs.
+- **Merge groups (`extend`)** — a top-level component may be authored across
+  files: `main.wb` has `component Vehicle { … }`, other files
+  `extend Vehicle { … }`, and `main.wb` pulls each in with the usual
+  `use Vehicle from "traction.wb";`. A same-name collision in a file's scope
+  is a *merge* (not the `duplicate_type` error) as soon as either side is an
+  `extend`. `resolve::MergeGroups` records the fragment set with one
+  **canonical** id (the lone root `component`, kept first); `Resolved::
+  fragments(d)` yields a component's fragments (just `[d]` when unmerged).
+  Type resolution stays per-fragment (each carries its own `use` imports), but
+  the merged component is one **flat namespace**: endpoints (`check_endpoint`),
+  view includes/enclosures (`resolve/views.rs`), and elaboration all consult
+  the union across fragments, so a wire or view in one file freely references
+  an instance/port declared in another. `extend` is top-level only; a fragment
+  with no root `component` is an `orphan_fragment`.
 - **IR (`ir::Design`)** — the elaboration: a flat
   `IndexMap<InstancePath, Instance>` (hierarchical semantics, no recursive
   ownership; the tree lives in `children` links). One node per placement,
-  addressed by a dotted path (`vehicle.front.module_1.pack`), with
+  addressed by a dotted path (`Vehicle.front.module_1.pack` — the root
+  instance is named after its component type), with
   materialized ports and wires rewritten to `WireEnd::Own`/`Child`.
   Definitions vanish here; only concrete instances flow to the IR.
   A `cable` is flat too: its metadata lands in `Instance.cables`
@@ -69,7 +106,8 @@ The renderer consumes `ir::Design` directly — there is no separate model.
 component *type* and is rendered against the first instance of that type
 (the root for a top-level view). The subject instance's **direct children**
 are the includable things; the subject's own **wires** are the connections.
-`view.kind` dispatches: `schematic` (below) or `harness` (after it).
+`view.kind` dispatches: `schematic` (below), `harness` (after it), or
+`pinout` (`render/pinout/`).
 
 The DSL view authors each include's ports: `include <inst> at (x, y) ports {
 <side>: <port>, ...; }`. That `ports` block is the single source of both
@@ -109,8 +147,12 @@ box is always an even number of steps, so its centre and every port land on
 a grid line. The side margin (corner to first port) is a full pitch (two
 steps). Boxes always size from the busiest side's port count — width also
 respects a text minimum (`MIN_WIDTH`); there is no explicit `width`/`height`
-in the DSL. The routing clearance and nudge gap are one grid step, so wire
-bundles stay grid-integral; routing otherwise sees only world geometry.
+in the DSL. The routing clearance (box keepout) is one grid step; the nudge
+gap is the port pitch (two steps), so parallel wires in a channel space out
+like the ports they fan from. Both keep bundles grid-integral, and routing
+otherwise sees only world geometry. (Matching the keepout to the pitch was
+tried and reverted: at two steps the inflated box rects overlap on tightly
+packed views and close off the only corridor, so routing fails.)
 Because the pitch is two steps, the grid must be at least
 `MIN_PORT_PITCH / 2`; a finer grid errors.
 
@@ -121,9 +163,12 @@ include names a **connector** (`include <inst>.<connector> at (x,y)`), placed
 at its authored centre; that whole connector becomes a **pin table** (header =
 instance label + `<designator> · <part>`, one row per pin = number + label,
 ordered by pin). The renderer derives a vertical **spine** at the x-midpoint of
-the connectors (`layout.rs::spine_x`); each node faces the spine
-(`face_spine` — left of it faces East, right faces West, replacing the old
-per-node vote). Connections are the *same* chain-decomposed subject wires, kept
+the connectors (`layout.rs::spine_x`); each **pin** faces the connector its
+conductor reaches (`face_pins` — East when that connector is to the right, West
+when to the left, voting across the pin's conductors; an unwired pin or a tie
+falls back to the spine side). So a node bridging both directions sends each
+pin the short way rather than forcing the whole table to one side; `ConnectorNode.facing`
+is kept as the node's dominant pin side. Connections are the *same* chain-decomposed subject wires, kept
 only when both ends land on *included* connectors — a port's connector is found
 via `ir::ConnectorRef.name`, so a connectorless / excluded / `Own` end drops
 silently (like an unlisted port in a schematic).
@@ -144,8 +189,9 @@ within the endpoints' x-span, so the curve never overshoots its bounding box
 `stroke`) and annotated `<label> · <gauge>mm²`.
 
 Two deliberate departures from the schematic's no-inference rule: pin
-**facing** is derived from the spine (above), and wire routing is the bezier
-flex above — no object avoidance, unlike the schematic's orthogonal router.
+**facing** is derived per pin from where its conductor goes (above), and wire
+routing is the bezier flex above — no object avoidance, unlike the schematic's
+orthogonal router.
 **Shields/drain wires are not drawn** (the IR carries no shield flag); reusing
 the orthogonal router and adding shields are noted future refinements.
 
@@ -162,8 +208,12 @@ so one run reports many. Errors fail the run; warnings fail only under
   private-port access (a non-`pub` port referenced from outside), unknown
   view include, ambiguous view subject, duplicate connector designator
   (`duplicate_connector_name`), duplicate cable designator
-  (`duplicate_cable_name`). A cable's wire endpoints resolve exactly like a
-  loose wire's. View `ports { }` placements get the
+  (`duplicate_cable_name`). `extend` fragments add: a fragment nested inside a
+  component (`nested_extend`); an `extend` with no root `component` of that
+  name (`orphan_fragment`); an instance/port name declared in two fragments of
+  one merged component (the ordinary `duplicate_instance`/`duplicate_port`,
+  reported once across the group). A cable's wire endpoints resolve exactly
+  like a loose wire's. View `ports { }` placements get the
   same treatment as wire endpoints: unknown side (`unknown_port_side`),
   unknown/private port, and a duplicate-port-in-one-include guard
   (`duplicate_view_port`). Includes are checked per view kind: a `harness`
@@ -194,7 +244,7 @@ phases above). Render adds only geometry/dispatch errors, in the slim
 `error::Error` enum (`src/error.rs` — render-path only; DSL problems are
 miette `Diagnostic`s):
 
-- an unknown view `kind:` (`schematic` and `harness` render today);
+- an unknown view `kind:` (`schematic`, `harness`, and `pinout` render today);
 - a view subject type with no instance in the design;
 - a non-positive `grid:`, or a `grid:` finer than a port label needs;
 - file IO when writing the SVGs.
@@ -217,6 +267,10 @@ redesign each when it lands.
 - Per-port styling (input/output, voltage class, gauge, etc.)
 - Explicit `junction`/`splice` elements (shared rails stay loose
   multi-endpoint wires for now; `cable` conductors are point-to-point)
+- Port re-export aliases (`pub port x "X" = inner.port;` — a pure boundary
+  mapping with no wire). Decided against for now (2026-06): the wire-through
+  pattern stays; revisit when a BOM view makes invented color/gauge on
+  zero-length boundary wires actually hurt.
 
 ## Architecture
 
@@ -234,6 +288,7 @@ src/
 │   │   └── token.rs     # Token, Trivia, Lexeme
 │   ├── ast/mod.rs       # spanned AST; refs are unresolved Spanned<Ident>
 │   ├── parse/mod.rs     # chumsky parser over &[(Token, Span)] → ast::File
+│   ├── manifest/        # wirebug.toml loader + git-revision auto-fill
 │   ├── project/mod.rs   # walk-up discovery + transitive `use` loading → Project
 │   ├── resolve/mod.rs   # DefId registry, scopes, flattened ports, reference checks
 │   ├── elaborate/mod.rs # AST/registry → ir::Design; containment-cycle guard
@@ -245,7 +300,10 @@ src/
 ├── render/
 │   ├── mod.rs       # render_views: subject lookup + per-view dispatch + slug;
 │   │                #   RenderedView{title,filename,kind,svg} + index_html (tabs)
+│   │                #   + embed_manifest (manifest.json sidecar for --embed)
 │   ├── geometry.rs  # Point; re-exports ir::Side (sides are authored)
+│   ├── png.rs       # SVG → PNG rasterisation for --png (resvg/usvg/tiny_skia)
+│   ├── stamp.rs     # project-identity stamp text/element (corner of every SVG)
 │   ├── schematic/   # rectangle-based SVG renderer (kind: schematic)
 │   │   ├── mod.rs       # SchematicRenderer; render orchestration
 │   │   ├── layout.rs    # Placement: derive sides + boxes/ports in world coords
@@ -262,12 +320,14 @@ src/
 │   │           ├── order.rs     # §6.1 order routes within a channel
 │   │           ├── place.rs     # §6.2 final placement (two axis passes)
 │   │           └── vpsc.rs      # separation-constraint solver
-│   └── harness/     # WireViz-style trunk-and-bezier renderer (kind: harness)
-│       ├── mod.rs       # HarnessRenderer; render orchestration + STYLE
-│       ├── layout.rs    # pin-table nodes, spine + facing, cable boxes
-│       │                #   (centroid placement + de-overlap), loose wires
-│       ├── bezier.rs    # horizontally-flexed cubic bezier math (FLEX)
-│       └── draw.rs      # SVG emission: pin tables, cable boxes, bezier wires
+│   ├── harness/     # WireViz-style trunk-and-bezier renderer (kind: harness)
+│   │   ├── mod.rs       # HarnessRenderer; render orchestration + STYLE
+│   │   ├── layout.rs    # pin-table nodes, spine + facing, cable boxes
+│   │   │                #   (centroid placement + de-overlap), loose wires
+│   │   ├── bezier.rs    # horizontally-flexed cubic bezier math (FLEX)
+│   │   └── draw.rs      # SVG emission: pin tables, cable boxes, bezier wires
+│   └── pinout/      # connector-face + pin-table renderer (kind: pinout)
+│       └── mod.rs       # PinoutRenderer; cavity faces from connector layouts
 │
 │  # ── live-reloading dev server (`serve`) ──
 ├── serve/
@@ -400,6 +460,10 @@ Runtime:
 
 - [`chumsky`] — parser combinators (span-carrying `Rich` errors) for the
   `.wb` DSL. The lexer is hand-written; chumsky is confined to `dsl/parse/`.
+- [`toml`] / [`serde`] (with `derive`) — parse `wirebug.toml` into the
+  project manifest. Confined to `dsl/manifest/`.
+- [`chrono`] (with `serde`) — `NaiveDate` for the manifest's optional
+  `date` field; ISO `YYYY-MM-DD` parsing rides serde.
 - [`miette`] (feature `fancy`) — `Diagnostic` derives plus the pretty
   terminal renderer for `check` (`--format json` uses `JSONReportHandler`).
 - [`indexmap`] — order-preserving maps (DSL registry/IR).
@@ -407,6 +471,8 @@ Runtime:
 - [`thiserror`] — typed library error enums; underpins the `Diagnostic`s.
 - [`anyhow`] — error glue in `main` only.
 - [`svg`] — SVG document emission with escaping handled (render path).
+- [`resvg`] — SVG → PNG rasterisation for `render --png` (`render/png.rs`).
+- [`serde_json`] — serialises the `--embed` `manifest.json` sidecar.
 - [`pathfinding`] — A* over the orthogonal visibility graph for
   object-avoiding connector routing (render path).
 - [`askama`] — compile-time HTML templates (`templates/`); the `index.html`
@@ -422,12 +488,19 @@ Dev / test:
 - [`insta`] — snapshot tests.
 - [`assert_cmd`] — black-box CLI tests.
 - [`predicates`] — assertions for `assert_cmd`.
+- [`tempfile`] — scratch project dirs for pipeline/render tests.
 
 [`chumsky`]: https://docs.rs/chumsky
+[`toml`]: https://docs.rs/toml
+[`serde`]: https://docs.rs/serde
+[`chrono`]: https://docs.rs/chrono
 [`miette`]: https://docs.rs/miette
 [`indexmap`]: https://docs.rs/indexmap
 [`clap`]: https://docs.rs/clap
 [`svg`]: https://docs.rs/svg
+[`resvg`]: https://docs.rs/resvg
+[`serde_json`]: https://docs.rs/serde_json
+[`tempfile`]: https://docs.rs/tempfile
 [`pathfinding`]: https://docs.rs/pathfinding
 [`askama`]: https://docs.rs/askama
 [`axum`]: https://docs.rs/axum
@@ -457,6 +530,8 @@ cargo run -- check --strict --format json examples
 
 # render every view in a .wb project to SVG (one file per view, into --out)
 cargo run --release -- render examples --out out/
+cargo run --release -- render examples --out out/ --png    # rasterise to PNG
+cargo run --release -- render examples --out out/ --embed  # naked SVGs + manifest.json
 
 # serve a project with live reload (re-renders on every .wb save)
 cargo run -- serve examples --port 3000   # then open http://localhost:3000
