@@ -20,15 +20,15 @@ fn split_root_merges_and_checks_clean() {
     );
 
     let design = report.design.expect("a design was elaborated");
-    assert_eq!(design.root.to_string(), "vehicle");
+    assert_eq!(design.root.to_string(), "Vehicle");
 
     // `pack` is declared in main.wb, `inv` in traction.wb — both end up as
     // children of the one merged `vehicle`.
-    let vehicle = InstancePath::root(InstanceName::from("vehicle"));
+    let vehicle = InstancePath::root(InstanceName::from("Vehicle"));
     let pack = vehicle.clone().child(InstanceName::from("pack"));
     let inv = vehicle.clone().child(InstanceName::from("inv"));
-    assert_eq!(design.get(&pack).unwrap().type_name.as_str(), "battery");
-    assert_eq!(design.get(&inv).unwrap().type_name.as_str(), "inverter");
+    assert_eq!(design.get(&pack).unwrap().type_name.as_str(), "Battery");
+    assert_eq!(design.get(&inv).unwrap().type_name.as_str(), "Inverter");
 
     // The two HV wires, authored in traction.wb against `pack` (from main.wb),
     // land on the merged root.
@@ -43,5 +43,5 @@ fn split_root_merges_and_checks_clean() {
     // harness (traction.wb), each documenting the merged `vehicle`.
     assert_eq!(design.views.len(), 2);
     assert!(design.views.iter().any(|v| v.kind.is_harness()));
-    assert!(design.views.iter().all(|v| v.subject.as_str() == "vehicle"));
+    assert!(design.views.iter().all(|v| v.subject.as_str() == "Vehicle"));
 }

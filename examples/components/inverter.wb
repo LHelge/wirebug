@@ -1,7 +1,7 @@
 // Motor inverter / motor controller
 // Converts DC from HV bus to 3-phase AC for the drive motor
 
-connector_type can_4p "CAN 4p" {
+connector_type Can4p "CAN 4p" {
     layout grid {
         rows: 2;
         cols: 2;
@@ -9,7 +9,7 @@ connector_type can_4p "CAN 4p" {
     }
 }
 
-connector_type grid_row_major_8p "Grid row-major 2x4" {
+connector_type GridRowMajor8p "Grid row-major 2x4" {
     layout grid {
         rows: 2;
         cols: 4;
@@ -17,7 +17,7 @@ connector_type grid_row_major_8p "Grid row-major 2x4" {
     }
 }
 
-connector_type grid_odd_even_8p "Grid odd-even 2x4" {
+connector_type GridOddEven8p "Grid odd-even 2x4" {
     layout grid {
         rows: 2;
         cols: 4;
@@ -25,7 +25,7 @@ connector_type grid_odd_even_8p "Grid odd-even 2x4" {
     }
 }
 
-connector_type grid_clockwise_8p "Grid clockwise 2x4" {
+connector_type GridClockwise8p "Grid clockwise 2x4" {
     layout grid {
         rows: 2;
         cols: 4;
@@ -33,7 +33,7 @@ connector_type grid_clockwise_8p "Grid clockwise 2x4" {
     }
 }
 
-connector_type grid_counter_clockwise_8p "Grid counter-clockwise 2x4" {
+connector_type GridCounterClockwise8p "Grid counter-clockwise 2x4" {
     layout grid {
         rows: 2;
         cols: 4;
@@ -41,7 +41,7 @@ connector_type grid_counter_clockwise_8p "Grid counter-clockwise 2x4" {
     }
 }
 
-connector_type inverter_control "Inverter control 47+13p" {
+connector_type InverterControl "Inverter control 47+13p" {
     layout face {
         cavity 47 at (0, 0) size large;
         cavity 46 at (2, 0) size large;
@@ -100,7 +100,7 @@ connector_type inverter_control "Inverter control 47+13p" {
     }
 }
 
-component inverter {
+component Inverter {
     connector hv "HV DC 2p" {
         pub port dc_pos "DC+" pin 1;
         pub port dc_neg "DC-" pin 2;
@@ -115,9 +115,9 @@ component inverter {
     pub port can_h "CAN H";
     pub port can_l "CAN L";
 
-    connector can: can_4p {
-        pin 1 = can_h;
-        pin 2 = can_l;
+    connector can: Can4p {
+        pin 1: can_h;
+        pin 2: can_l;
     }
 
     connector lv "12V 4p" {
@@ -135,28 +135,28 @@ component inverter {
     pub port control_1  "WAKE";
     pub port control_2  "READY";
 
-    connector control: inverter_control {
-        pin 47 = control_47;
-        pin 48 = control_48;
-        pin 1 = control_1;
-        pin 2 = control_2;
+    connector control: InverterControl {
+        pin 47: control_47;
+        pin 48: control_48;
+        pin 1: control_1;
+        pin 2: control_2;
     }
 
-    connector demo_row_major: grid_row_major_8p {
+    connector demo_row_major: GridRowMajor8p {
     }
 
-    connector demo_odd_even: grid_odd_even_8p {
+    connector demo_odd_even: GridOddEven8p {
     }
 
-    connector demo_clockwise: grid_clockwise_8p {
+    connector demo_clockwise: GridClockwise8p {
     }
 
-    connector demo_counter_clockwise: grid_counter_clockwise_8p {
+    connector demo_counter_clockwise: GridCounterClockwise8p {
     }
 }
 
 view pinout "Inverter pinouts" {
-    grid 20;
+    grid: 20;
 
     include hv     at (0, 0);
     include phases at (12, 0);

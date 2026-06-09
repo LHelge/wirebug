@@ -6,21 +6,21 @@
 // interlock chain, 12V distribution, ground, and every view — freely reaches
 // those HV instances through the merged flat namespace.
 
-use vehicle       from "hv.wb"
-use msd           from "components/msd.wb"
-use motor         from "components/motor.wb"
-use vcm           from "components/vcm.wb"
-use fuse_box      from "components/fuse_box.wb"
-use e_stop        from "components/e_stop.wb"
+use Vehicle from "hv.wb";
+use Msd     from "components/msd.wb";
+use Motor   from "components/motor.wb";
+use Vcm     from "components/vcm.wb";
+use FuseBox from "components/fuse_box.wb";
+use EStop   from "components/e_stop.wb";
 
-component vehicle {
+component Vehicle {
     // --- Instances (the non-HV remainder; HV instances live in hv.wb) ---
 
-    msd           msd     "MSD";
-    motor         mot     "Motor";
-    vcm           vcm     "VCM";
-    fuse_box      fuses   "Fuse Box";
-    e_stop        e_stop  "E-Stop";
+    msd:    Msd     "MSD";
+    mot:    Motor   "Motor";
+    vcm:    Vcm     "VCM";
+    fuses:  FuseBox "Fuse Box";
+    e_stop: EStop   "E-Stop";
 
     // --- Motor phases ---
     // A real point-to-point cable: three conductors, inverter to motor.
@@ -81,61 +81,61 @@ component vehicle {
 // --- View: HV System Overview ---
 
 view schematic "HV System Overview" {
-    grid 20;
+    grid: 20;
 
     // The fuse box appears only as its interlock feed: a single port wired
     // into the e-stop, which is the head of the HV interlock loop.
     include fuses at (6, 26) ports {
         east: interlock;
-    };
+    }
 
     include msd at (10, 10) ports {
         east:  hv_in;
         west:  hv_out;
         south: interlock_in, interlock_out;
-    };
+    }
 
     include front at (25, 10) ports {
         west: hv_neg;
         east: hv_pos;
         south: interlock_in, safe_pwr, interlock_out;
-    };
+    }
 
     include rear at (40, 10) ports {
         west: hv_neg;
         east: hv_pos;
         south: interlock_in, safe_pwr, interlock_out;
-    };
+    }
 
     include hvjb at (55, 11) ports {
         west:  pack_pos_in, pack_neg_in;
         east:  inv_pos, inv_neg, obc_pos, obc_neg;
         south: interlock_in, interlock_out;
-    };
+    }
 
     include inv at (80, 9) ports {
         west:  dc_pos, dc_neg;
         east:  phase_u, phase_v, phase_w;
         south: interlock_in, interlock_out;
-    };
+    }
 
     include charger at (75, 25) ports {
         west:  dc_pos, dc_neg;
         south: interlock_out, interlock_in;
-    };
+    }
 
     include mot at (95, 9) ports {
         west: phase_u, phase_v, phase_w;
-    };
+    }
 
     include e_stop at (20, 25) ports {
         west: interlock_out, interlock_in;
-    };
+    }
 
     include vcm at (55, 30) ports {
         west:  safe_pwr;
         east: interlock;
-    };
+    }
 }
 
 // --- View: CAN bus ---
@@ -146,30 +146,30 @@ view schematic "HV System Overview" {
 // BMS and the VCM (the two 120 Ω notes).
 
 view schematic "CAN bus" {
-    grid 20;
+    grid: 20;
 
     text front_term at (8, 4)  "120 Ω termination";
     text vcm_term   at (56, 4) "120 Ω termination";
 
     include front at (8, 12) ports {
         south: can_h, can_l;
-    };
+    }
 
     include rear at (24, 12) ports {
         south: can_h, can_l;
-    };
+    }
 
     include charger at (40, 12) ports {
         south: can_h, can_l;
-    };
+    }
 
     include vcm at (56, 12) ports {
         south: can2_h, can2_l, can1_h, can1_l;
-    };
+    }
 
     include inv at (72, 12) ports {
         south: can_h, can_l;
-    };
+    }
 }
 
 // --- View: Main HV harness ---
@@ -177,7 +177,7 @@ view schematic "CAN bus" {
 // the shared positive/negative rails as cable bundles between them.
 
 view harness "Main HV harness" {
-    grid 20;
+    grid: 20;
 
     // Pack-string bundle: the series-linked batteries and the MSD on the
     // left fan into the junction box's pack connector on the right —
@@ -200,7 +200,7 @@ view harness "Main HV harness" {
 // phase connectors as pin tables, the cable as a labelled box between them.
 
 view harness "Motor phase harness" {
-    grid 20;
+    grid: 20;
 
     include inv.phases at (4, 10);
     include mot.power  at (32, 10);

@@ -122,7 +122,7 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
                         .values()
                         .any(|c| c.ast.type_name.node.as_str() == name)
             });
-            // A fragment pull (`use vehicle from "traction.wb"`) isn't
+            // A fragment pull (`use Vehicle from "traction.wb";`) isn't
             // instantiated — it merges. It counts as used when this file owns a
             // same-named top-level definition that joined a merge group.
             let merged = resolved.defs.iter().enumerate().any(|(id, d)| {
@@ -268,7 +268,7 @@ mod tests {
     #[test]
     fn unused_import_warns() {
         let codes = validate_files(&[
-            ("main.wb", "use leaf from \"leaf.wb\"\ncomponent m { }\n"),
+            ("main.wb", "use leaf from \"leaf.wb\";\ncomponent m { }\n"),
             ("leaf.wb", "component leaf { pub port a \"A\"; }\n"),
         ]);
         assert!(
@@ -282,7 +282,7 @@ mod tests {
         let codes = validate_files(&[
             (
                 "main.wb",
-                "use ampseal from \"connectors.wb\"\ncomponent m { pub port a \"A\"; connector x1: ampseal { pin 1 = a; } }\n",
+                "use ampseal from \"connectors.wb\";\ncomponent m { pub port a \"A\"; connector x1: ampseal { pin 1: a; } }\n",
             ),
             (
                 "connectors.wb",
@@ -332,7 +332,7 @@ mod tests {
     fn connector_instance_pin_zero_errors() {
         let codes = validate_files(&[(
             "main.wb",
-            "connector_type ampseal \"AMPSEAL\" { }\ncomponent m { pub port a \"A\"; connector x1: ampseal { pin 0 = a; } }\n",
+            "connector_type ampseal \"AMPSEAL\" { }\ncomponent m { pub port a \"A\"; connector x1: ampseal { pin 0: a; } }\n",
         )]);
         assert!(
             codes.iter().any(|c| c == "wirebug::invalid_pin"),

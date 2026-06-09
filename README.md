@@ -43,7 +43,7 @@ A leaf component (one file), and a top-level component that wires two instances 
 
 ```
 // components/battery.wb
-component battery {
+component Battery {
     pub port hv_pos "HV+";
     pub port hv_neg "HV-";
 }
@@ -51,12 +51,12 @@ component battery {
 
 ```
 // main.wb
-use battery  from "components/battery.wb"
-use inverter from "components/inverter.wb"
+use Battery  from "components/battery.wb";
+use Inverter from "components/inverter.wb";
 
-component vehicle {
-    battery  pack "HV Battery";
-    inverter inv  "Motor Controller";
+component Vehicle {
+    pack: Battery  "HV Battery";
+    inv:  Inverter "Motor Controller";
 
     // shared HV bus: a multi-endpoint wire is a shared rail
     wire orange 50 [pack.hv_pos, inv.dc_pos];
@@ -65,13 +65,13 @@ component vehicle {
 
 // a view lives next to the component it documents
 view schematic "HV Power Path" {
-    grid 20;
+    grid: 20;
     include pack at (5, 5) ports {
         east: hv_pos, hv_neg;
-    };
+    }
     include inv at (20, 5) ports {
         west: dc_pos, dc_neg;
-    };
+    }
 }
 ```
 
@@ -92,7 +92,7 @@ Problems are reported with source snippets and carets (via miette); a clean run 
 
 **Port** — a named connection point with a human-readable label. `pub` exposes it to instantiators; visibility does not propagate automatically — a parent re-exports by declaring its own `pub` port and wiring it through.
 
-**Connector** — physical grouping metadata (a part description and pin assignments). It is *not* a namespace: a port `c0` inside a connector is still referenced as `instance.c0`, and port names are unique across the whole component. Reusable `connector_type` definitions can carry shared metadata and pinout layout, then components instantiate them with `connector x1: type_name { pin 1 = port; }`.
+**Connector** — physical grouping metadata (a part description and pin assignments). It is *not* a namespace: a port `c0` inside a connector is still referenced as `instance.c0`, and port names are unique across the whole component. Reusable `connector_type` definitions can carry shared metadata and pinout layout, then components instantiate them with `connector x1: TypeName { pin 1: port; }`.
 
 **Instance** — a placement of a component type, with a name (used in wires) and an optional label (shown in diagrams).
 
@@ -136,7 +136,7 @@ Pinout views document the physical connector face from the **harness side**. Thi
 Reusable connector types keep verbose physical metadata out of component definitions:
 
 ```
-connector_type jst_xh_8p "JST XH 8p" {
+connector_type JstXh8p "JST XH 8p" {
     part: "B8B-XH-A";
 
     layout grid {
@@ -146,18 +146,18 @@ connector_type jst_xh_8p "JST XH 8p" {
     }
 }
 
-component controller {
+component Controller {
     pub port can_h "CAN H";
     pub port can_l "CAN L";
 
-    connector x1: jst_xh_8p {
-        pin 1 = can_h;
-        pin 2 = can_l;
+    connector x1: JstXh8p {
+        pin 1: can_h;
+        pin 2: can_l;
     }
 }
 
 view pinout "Controller pinouts" {
-    grid 20;
+    grid: 20;
     include x1 at (0, 0);
 }
 ```
@@ -165,7 +165,7 @@ view pinout "Controller pinouts" {
 A two-row connector can choose a numbering convention. `odd_even` fills columns first (`1,2` in the first column, `3,4` in the second), while `clockwise` and `counter_clockwise` walk the perimeter:
 
 ```
-connector_type mx150_16p "MX150 16p" {
+connector_type Mx150_16p "MX150 16p" {
     layout grid {
         rows: 2;
         cols: 8;
@@ -177,7 +177,7 @@ connector_type mx150_16p "MX150 16p" {
 For sectioned connectors with mixed cavity sizes, use an explicit face layout. Coordinates are small grid slots, still harness-side; `size large` spans a 2x2 cavity.
 
 ```
-connector_type inverter_control "Inverter control 47+13p" {
+connector_type InverterControl "Inverter control 47+13p" {
     layout face {
         cavity 47 at (1, 0) size large;
         cavity 46 at (3, 0) size large;

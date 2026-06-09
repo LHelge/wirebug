@@ -2,7 +2,7 @@
 // Receives the completed pack string and distributes it to the inverter and
 // OBC/DC-DC.
 
-component hv_junction_box {
+component HvJunctionBox {
     connector pack "Pack string HV 2p" {
         pub port pack_pos_in "PACK HV+" pin 1;
         pub port pack_neg_in "PACK HV-" pin 2;

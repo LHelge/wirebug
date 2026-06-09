@@ -246,7 +246,7 @@ mod tests {
     fn connector_type_and_pin_binding_punctuation_lex() {
         assert_eq!(
             tokens(
-                "connector_type ampseal \"A\" { part: \"TE\"; } connector x1: ampseal { pin 1 = a; }"
+                "connector_type ampseal \"A\" { part: \"TE\"; } connector x1: ampseal { pin 1: a; }"
             ),
             vec![
                 Token::ConnectorType,
@@ -265,7 +265,7 @@ mod tests {
                 Token::LBrace,
                 Token::Pin,
                 Token::Number("1".into()),
-                Token::Equals,
+                Token::Colon,
                 Token::Ident("a".into()),
                 Token::Semicolon,
                 Token::RBrace,

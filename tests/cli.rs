@@ -140,7 +140,7 @@ fn render_embed_writes_manifest_and_no_index() {
 fn render_rejects_a_project_that_does_not_check() {
     let tmp = tempdir().expect("tempdir");
     let main = tmp.path().join("main.wb");
-    std::fs::write(&main, "use missing from \"nope.wb\"\ncomponent c { }\n")
+    std::fs::write(&main, "use missing from \"nope.wb\";\ncomponent c { }\n")
         .expect("write main.wb");
 
     Command::cargo_bin("wirebug")
@@ -259,7 +259,7 @@ fn check_rejects_a_dangling_use() {
     let main = tmp.path().join("main.wb");
     std::fs::write(
         &main,
-        "use missing from \"nope.wb\"\ncomponent c { pub port a \"A\"; }\n",
+        "use missing from \"nope.wb\";\ncomponent c { pub port a \"A\"; }\n",
     )
     .expect("write main.wb");
 
@@ -283,8 +283,8 @@ fn check_accepts_use_after_a_component() {
     std::fs::write(
         &main,
         r#"
-component m { leaf l; }
-use leaf from "leaf.wb"
+component m { l: leaf; }
+use leaf from "leaf.wb";
 view schematic "M" { include l at (0, 0); }
 "#,
     )

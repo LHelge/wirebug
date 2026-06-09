@@ -1,13 +1,13 @@
 // Mechanical Service Disconnect
 // Opens the front battery negative leg and carries the HV interlock loop.
 
-component msd {
-    component fuse_250a {
+component Msd {
+    component Fuse250a {
         pub port in  "IN";
         pub port out "OUT";
     }
 
-    fuse_250a fuse "250A fuse";
+    fuse: Fuse250a "250A fuse";
 
     connector hv "MSD HV 2p" {
         pub port hv_in  "HV IN" pin 1;

@@ -1,6 +1,6 @@
 // Precharge resistor
 
-component resistor {
+component Resistor {
     pub port a "A";
     pub port b "B";
 }

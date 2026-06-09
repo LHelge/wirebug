@@ -976,7 +976,7 @@ mod tests {
 
     #[test]
     fn undefined_type_is_reported() {
-        let p = problems(&[("main.wb", "component m { ghost g; }\n")]);
+        let p = problems(&[("main.wb", "component m { g: ghost; }\n")]);
         assert!(has(&p, "wirebug::undefined_type"), "{:?}", codes(&p));
     }
 
@@ -984,7 +984,7 @@ mod tests {
     fn duplicate_instance_name_is_reported() {
         let p = problems(&[(
             "main.wb",
-            "component leaf { pub port a \"A\"; }\ncomponent m { leaf x; leaf x; }\n",
+            "component leaf { pub port a \"A\"; }\ncomponent m { x: leaf; x: leaf; }\n",
         )]);
         assert!(has(&p, "wirebug::duplicate_instance"), "{:?}", codes(&p));
     }
@@ -1002,7 +1002,7 @@ mod tests {
     fn private_port_access_is_reported() {
         let p = problems(&[(
             "main.wb",
-            "component leaf { port secret \"S\"; }\ncomponent m { leaf l; wire red 1 [l.secret, l.secret]; }\n",
+            "component leaf { port secret \"S\"; }\ncomponent m { l: leaf; wire red 1 [l.secret, l.secret]; }\n",
         )]);
         assert!(has(&p, "wirebug::private_port"), "{:?}", codes(&p));
     }
@@ -1011,7 +1011,7 @@ mod tests {
     fn unknown_port_on_instance_is_reported() {
         let p = problems(&[(
             "main.wb",
-            "component leaf { pub port a \"A\"; }\ncomponent m { leaf l; wire red 1 [l.nope, l.a]; }\n",
+            "component leaf { pub port a \"A\"; }\ncomponent m { l: leaf; wire red 1 [l.nope, l.a]; }\n",
         )]);
         assert!(has(&p, "wirebug::unknown_port"), "{:?}", codes(&p));
     }
@@ -1030,7 +1030,7 @@ mod tests {
         let p = problems(&[
             (
                 "main.wb",
-                "use missing from \"leaf.wb\"\ncomponent m { missing x; }\n",
+                "use missing from \"leaf.wb\";\ncomponent m { x: missing; }\n",
             ),
             ("leaf.wb", "component other { pub port a \"A\"; }\n"),
         ]);
@@ -1054,7 +1054,7 @@ mod tests {
             (
                 "main.wb",
                 &format!(
-                    "use leaf from \"leaf.wb\"\ncomponent m {{ leaf l; }}\nview schematic \"V\" {{ include l at (0, 0) ports {{ {ports_body} }}; }}\n"
+                    "use leaf from \"leaf.wb\";\ncomponent m {{ l: leaf; }}\nview schematic \"V\" {{ include l at (0, 0) ports {{ {ports_body} }} }}\n"
                 ),
             ),
             ("leaf.wb", &format!("component leaf {{ {leaf_body} }}\n")),
@@ -1093,7 +1093,7 @@ mod tests {
             (
                 "main.wb",
                 &format!(
-                    "use leaf from \"leaf.wb\"\ncomponent m {{ leaf l; pub port a \"A\"; port secret \"S\"; wire red 1 [a, l.p]; }}\nview schematic \"V\" {{ enclosure {{ {enclosure_body} }} include l at (0, 0) ports {{ west: p; }}; }}\n"
+                    "use leaf from \"leaf.wb\";\ncomponent m {{ l: leaf; pub port a \"A\"; port secret \"S\"; wire red 1 [a, l.p]; }}\nview schematic \"V\" {{ enclosure {{ {enclosure_body} }} include l at (0, 0) ports {{ west: p; }} }}\n"
                 ),
             ),
             ("leaf.wb", "component leaf { pub port p \"P\"; }\n"),
@@ -1144,7 +1144,7 @@ mod tests {
         let p = problems(&[
             (
                 "main.wb",
-                "use leaf from \"leaf.wb\"\ncomponent m { leaf l; pub port a \"A\"; wire red 1 [a, l.p]; }\nview schematic \"V\" { include l at (0,0) ports { west: p; }; enclosure { a at (west, 2); } grid 10; }\n",
+                "use leaf from \"leaf.wb\";\ncomponent m { l: leaf; pub port a \"A\"; wire red 1 [a, l.p]; }\nview schematic \"V\" { include l at (0,0) ports { west: p; } enclosure { a at (west, 2); } grid: 10; }\n",
             ),
             ("leaf.wb", "component leaf { pub port p \"P\"; }\n"),
         ]);
@@ -1155,7 +1155,7 @@ mod tests {
     fn duplicate_grid_in_view_is_reported() {
         let p = problems(&[(
             "main.wb",
-            "component m { } view schematic \"V\" { grid 10; grid 20; }\n",
+            "component m { } view schematic \"V\" { grid: 10; grid: 20; }\n",
         )]);
         assert!(has(&p, "wirebug::duplicate_view_item"), "{:?}", codes(&p));
     }
@@ -1183,7 +1183,7 @@ mod tests {
         let p = problems(&[
             (
                 "main.wb",
-                "use leaf from \"leaf.wb\"\ncomponent m { leaf l; }\nview schematic \"V\" { include l at (0, 0); include l at (2, 0); }\n",
+                "use leaf from \"leaf.wb\";\ncomponent m { l: leaf; }\nview schematic \"V\" { include l at (0, 0); include l at (2, 0); }\n",
             ),
             ("leaf.wb", "component leaf { pub port p \"P\"; }\n"),
         ]);
@@ -1199,7 +1199,7 @@ mod tests {
         let p = problems(&[
             (
                 "main.wb",
-                "use leaf from \"leaf.wb\"\ncomponent m { leaf l; }\nview harness \"H\" { include l.j1 at (0, 0); include l.j1 at (2, 0); }\n",
+                "use leaf from \"leaf.wb\";\ncomponent m { l: leaf; }\nview harness \"H\" { include l.j1 at (0, 0); include l.j1 at (2, 0); }\n",
             ),
             (
                 "leaf.wb",
@@ -1218,7 +1218,7 @@ mod tests {
         let p = problems(&[
             (
                 "main.wb",
-                "use leaf from \"leaf.wb\"\ncomponent m { leaf l; }\nview harness \"H\" { include l.j1 at (0, 0); include l.j2 at (2, 0); }\n",
+                "use leaf from \"leaf.wb\";\ncomponent m { l: leaf; }\nview harness \"H\" { include l.j1 at (0, 0); include l.j2 at (2, 0); }\n",
             ),
             (
                 "leaf.wb",
@@ -1263,7 +1263,7 @@ mod tests {
     fn connector_instance_resolves_local_connector_type() {
         let p = problems(&[(
             "main.wb",
-            "connector_type ampseal \"AMPSEAL\" { part: \"TE\"; }\ncomponent m { pub port can_h \"CAN H\"; connector x1: ampseal { pin 1 = can_h; } }\n",
+            "connector_type ampseal \"AMPSEAL\" { part: \"TE\"; }\ncomponent m { pub port can_h \"CAN H\"; connector x1: ampseal { pin 1: can_h; } }\n",
         )]);
         assert!(p.is_empty(), "unexpected problems: {:?}", codes(&p));
     }
@@ -1273,7 +1273,7 @@ mod tests {
         let p = problems(&[
             (
                 "main.wb",
-                "use ampseal from \"connectors.wb\"\ncomponent m { pub port can_h \"CAN H\"; connector x1: ampseal { pin 1 = can_h; } }\n",
+                "use ampseal from \"connectors.wb\";\ncomponent m { pub port can_h \"CAN H\"; connector x1: ampseal { pin 1: can_h; } }\n",
             ),
             (
                 "connectors.wb",
@@ -1287,7 +1287,7 @@ mod tests {
     fn unknown_connector_type_errors() {
         let p = problems(&[(
             "main.wb",
-            "component m { pub port can_h \"CAN H\"; connector x1: ghost { pin 1 = can_h; } }\n",
+            "component m { pub port can_h \"CAN H\"; connector x1: ghost { pin 1: can_h; } }\n",
         )]);
         assert!(
             has(&p, "wirebug::undefined_connector_type"),
@@ -1300,7 +1300,7 @@ mod tests {
     fn unknown_connector_bound_port_errors() {
         let p = problems(&[(
             "main.wb",
-            "connector_type ampseal \"AMPSEAL\" { }\ncomponent m { connector x1: ampseal { pin 1 = nope; } }\n",
+            "connector_type ampseal \"AMPSEAL\" { }\ncomponent m { connector x1: ampseal { pin 1: nope; } }\n",
         )]);
         assert!(has(&p, "wirebug::unknown_port"), "{:?}", codes(&p));
     }
@@ -1309,7 +1309,7 @@ mod tests {
     fn duplicate_connector_pin_errors() {
         let p = problems(&[(
             "main.wb",
-            "connector_type ampseal \"AMPSEAL\" { }\ncomponent m { pub port can_h \"CAN H\"; pub port can_l \"CAN L\"; connector x1: ampseal { pin 1 = can_h; pin 1 = can_l; } }\n",
+            "connector_type ampseal \"AMPSEAL\" { }\ncomponent m { pub port can_h \"CAN H\"; pub port can_l \"CAN L\"; connector x1: ampseal { pin 1: can_h; pin 1: can_l; } }\n",
         )]);
         assert!(
             has(&p, "wirebug::duplicate_connector_pin"),
@@ -1322,7 +1322,7 @@ mod tests {
     fn one_port_can_bind_to_multiple_pins_on_one_connector() {
         let p = problems(&[(
             "main.wb",
-            "connector_type ampseal \"AMPSEAL\" { }\ncomponent m { pub port gnd \"GND\"; connector x1: ampseal { pin 1 = gnd; pin 2 = gnd; } }\n",
+            "connector_type ampseal \"AMPSEAL\" { }\ncomponent m { pub port gnd \"GND\"; connector x1: ampseal { pin 1: gnd; pin 2: gnd; } }\n",
         )]);
         assert!(p.is_empty(), "unexpected problems: {:?}", codes(&p));
     }
@@ -1345,7 +1345,7 @@ mod tests {
             (
                 "main.wb",
                 &format!(
-                    "use leaf from \"leaf.wb\"\ncomponent m {{ leaf l; }}\nview harness \"H\" {{ {include} }}\n"
+                    "use leaf from \"leaf.wb\";\ncomponent m {{ l: leaf; }}\nview harness \"H\" {{ {include} }}\n"
                 ),
             ),
             (
@@ -1366,11 +1366,11 @@ mod tests {
         let p = problems(&[
             (
                 "main.wb",
-                "use leaf from \"leaf.wb\"\ncomponent m { leaf l; }\nview harness \"H\" { include l.hv at (0, 0); }\n",
+                "use leaf from \"leaf.wb\";\ncomponent m { l: leaf; }\nview harness \"H\" { include l.hv at (0, 0); }\n",
             ),
             (
                 "leaf.wb",
-                "connector_type hv_2p \"HV 2p\" { }\ncomponent leaf { pub port hv_pos \"HV+\"; connector hv: hv_2p { pin 1 = hv_pos; } }\n",
+                "connector_type hv_2p \"HV 2p\" { }\ncomponent leaf { pub port hv_pos \"HV+\"; connector hv: hv_2p { pin 1: hv_pos; } }\n",
             ),
         ]);
         assert!(p.is_empty(), "unexpected problems: {:?}", codes(&p));
@@ -1390,7 +1390,7 @@ mod tests {
 
     #[test]
     fn ports_block_on_harness_include_errors() {
-        let p = harness_view("include l.hv at (0, 0) ports { west: hv_pos; };");
+        let p = harness_view("include l.hv at (0, 0) ports { west: hv_pos; }");
         assert!(has(&p, "wirebug::wrong_include_form"), "{:?}", codes(&p));
     }
 
@@ -1399,7 +1399,7 @@ mod tests {
         let p = problems(&[
             (
                 "main.wb",
-                "use leaf from \"leaf.wb\"\ncomponent m { leaf l; }\nview schematic \"S\" { include l.hv at (0, 0); }\n",
+                "use leaf from \"leaf.wb\";\ncomponent m { l: leaf; }\nview schematic \"S\" { include l.hv at (0, 0); }\n",
             ),
             (
                 "leaf.wb",
@@ -1416,7 +1416,7 @@ mod tests {
             "connector_type ampseal \"AMPSEAL\" { }
             component m {
                 pub port can_h \"CAN H\";
-                connector x1: ampseal { pin 1 = can_h; }
+                connector x1: ampseal { pin 1: can_h; }
             }
             view pinout \"X1\" { include x1 at (0, 0); }\n",
         )]);
@@ -1451,7 +1451,7 @@ mod tests {
             "connector_type ampseal \"AMPSEAL\" { }
             component m {
                 pub port can_h \"CAN H\";
-                connector x1: ampseal { pin 1 = can_h; }
+                connector x1: ampseal { pin 1: can_h; }
             }
             view pinout \"X1\" { include child.x1 at (0, 0); }\n",
         )]);
@@ -1465,9 +1465,9 @@ mod tests {
             "connector_type ampseal \"AMPSEAL\" { }
             component m {
                 pub port can_h \"CAN H\";
-                connector x1: ampseal { pin 1 = can_h; }
+                connector x1: ampseal { pin 1: can_h; }
             }
-            view pinout \"X1\" { include x1 at (0, 0) ports { west: can_h; }; }\n",
+            view pinout \"X1\" { include x1 at (0, 0) ports { west: can_h; } }\n",
         )]);
         assert!(has(&p, "wirebug::wrong_include_form"), "{:?}", codes(&p));
     }
@@ -1500,13 +1500,13 @@ mod tests {
             &[
                 (
                     "main.wb",
-                    "use vehicle from \"traction.wb\"\nuse leaf from \"leaf.wb\"\n\
-                     component vehicle { leaf pack \"Pack\"; }\n",
+                    "use vehicle from \"traction.wb\";\nuse leaf from \"leaf.wb\";\n\
+                     component vehicle { pack: leaf \"Pack\"; }\n",
                 ),
                 (
                     "traction.wb",
-                    "use leaf from \"leaf.wb\"\n\
-                     extend vehicle { leaf inv \"Inv\"; wire red 1 [pack.a, inv.a]; }\n",
+                    "use leaf from \"leaf.wb\";\n\
+                     extend vehicle { inv: leaf \"Inv\"; wire red 1 [pack.a, inv.a]; }\n",
                 ),
                 ("leaf.wb", LEAF),
             ],
@@ -1533,13 +1533,13 @@ mod tests {
         let p = problems(&[
             (
                 "main.wb",
-                "use vehicle from \"traction.wb\"\nuse leaf from \"leaf.wb\"\n\
-                 component vehicle { leaf pack \"Pack\"; }\n",
+                "use vehicle from \"traction.wb\";\nuse leaf from \"leaf.wb\";\n\
+                 component vehicle { pack: leaf \"Pack\"; }\n",
             ),
             (
                 "traction.wb",
-                "use leaf from \"leaf.wb\"\n\
-                 extend vehicle { leaf inv \"Inv\"; wire red 1 [pack.a, inv.a]; }\n",
+                "use leaf from \"leaf.wb\";\n\
+                 extend vehicle { inv: leaf \"Inv\"; wire red 1 [pack.a, inv.a]; }\n",
             ),
             ("leaf.wb", LEAF),
         ]);
@@ -1551,13 +1551,13 @@ mod tests {
         let p = problems(&[
             (
                 "main.wb",
-                "use vehicle from \"traction.wb\"\nuse leaf from \"leaf.wb\"\n\
-                 component vehicle { leaf pack \"Pack\"; }\n",
+                "use vehicle from \"traction.wb\";\nuse leaf from \"leaf.wb\";\n\
+                 component vehicle { pack: leaf \"Pack\"; }\n",
             ),
             (
                 "traction.wb",
-                "use leaf from \"leaf.wb\"\n\
-                 extend vehicle { leaf inv \"Inv\"; wire red 1 [ghost.a, inv.a]; }\n",
+                "use leaf from \"leaf.wb\";\n\
+                 extend vehicle { inv: leaf \"Inv\"; wire red 1 [ghost.a, inv.a]; }\n",
             ),
             ("leaf.wb", LEAF),
         ]);
@@ -1571,7 +1571,7 @@ mod tests {
         let p = problems(&[
             (
                 "main.wb",
-                "use vehicle from \"frag.wb\"\ncomponent shell { }\n",
+                "use vehicle from \"frag.wb\";\ncomponent shell { }\n",
             ),
             ("frag.wb", "extend vehicle { }\n"),
         ]);
@@ -1582,7 +1582,7 @@ mod tests {
     fn two_plain_components_with_one_name_still_duplicate() {
         let p = problems(&[(
             "main.wb",
-            "component dup { }\ncomponent dup { }\ncomponent root { dup d; }\n",
+            "component dup { }\ncomponent dup { }\ncomponent root { d: dup; }\n",
         )]);
         assert!(has(&p, "wirebug::duplicate_type"), "{:?}", codes(&p));
     }
@@ -1598,12 +1598,12 @@ mod tests {
         let p = problems(&[
             (
                 "main.wb",
-                "use vehicle from \"traction.wb\"\nuse leaf from \"leaf.wb\"\n\
-                 component vehicle { leaf dup \"D\"; }\n",
+                "use vehicle from \"traction.wb\";\nuse leaf from \"leaf.wb\";\n\
+                 component vehicle { dup: leaf \"D\"; }\n",
             ),
             (
                 "traction.wb",
-                "use leaf from \"leaf.wb\"\nextend vehicle { leaf dup \"D2\"; }\n",
+                "use leaf from \"leaf.wb\";\nextend vehicle { dup: leaf \"D2\"; }\n",
             ),
             ("leaf.wb", LEAF),
         ]);
@@ -1616,15 +1616,15 @@ mod tests {
         let p = problems(&[
             (
                 "main.wb",
-                "use vehicle from \"traction.wb\"\nuse leaf from \"leaf.wb\"\n\
-                 component vehicle { leaf pack \"Pack\"; }\n",
+                "use vehicle from \"traction.wb\";\nuse leaf from \"leaf.wb\";\n\
+                 component vehicle { pack: leaf \"Pack\"; }\n",
             ),
             (
                 "traction.wb",
-                "use leaf from \"leaf.wb\"\nextend vehicle { leaf inv \"Inv\"; }\n\
+                "use leaf from \"leaf.wb\";\nextend vehicle { inv: leaf \"Inv\"; }\n\
                  view schematic \"Traction\" {\n\
-                   include pack at (2, 2) ports { east: a; };\n\
-                   include inv  at (8, 2) ports { west: a; };\n\
+                   include pack at (2, 2) ports { east: a; }\n\
+                   include inv  at (8, 2) ports { west: a; }\n\
                  }\n",
             ),
             ("leaf.wb", LEAF),

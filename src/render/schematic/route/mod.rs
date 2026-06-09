@@ -254,9 +254,9 @@ mod tests {
         let design = design_from(
             r#"
 component sys {
-    node a;
-    node b;
-    node c;
+    a: node;
+    b: node;
+    c: node;
     wire red 1 [a.p, c.p];
     component node {
         pub port p "P";

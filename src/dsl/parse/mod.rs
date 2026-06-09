@@ -296,7 +296,7 @@ where
 
     let pin_binding = just(Token::Pin)
         .ignore_then(pin)
-        .then_ignore(just(Token::Equals))
+        .then_ignore(just(Token::Colon))
         .then(ident)
         .then_ignore(just(Token::Semicolon))
         .map_with(|(pin, port), e| PinBinding {
@@ -325,10 +325,11 @@ where
     // --- Instances ---
 
     let instance = ident
+        .then_ignore(just(Token::Colon))
         .then(ident)
         .then(string.or_not())
         .then_ignore(just(Token::Semicolon))
-        .map_with(|((type_name, name), label), e| Instance {
+        .map_with(|((name, type_name), label), e| Instance {
             type_name,
             name,
             label,
@@ -495,8 +496,11 @@ where
                 .then(number)
                 .delimited_by(just(Token::LParen), just(Token::RParen)),
         )
-        .then(ports_block.or_not())
-        .then_ignore(just(Token::Semicolon))
+        .then(choice((
+            // A ports block ends the include — no trailing `;` after `}`.
+            ports_block.map(Some),
+            just(Token::Semicolon).to(None),
+        )))
         .map_with(|(((instance, connector), (x, y)), ports), e| Include {
             instance,
             connector,
@@ -526,6 +530,7 @@ where
         });
 
     let grid = just(Token::Grid)
+        .ignore_then(just(Token::Colon))
         .ignore_then(number)
         .then_ignore(just(Token::Semicolon));
 
@@ -624,6 +629,7 @@ where
         .ignore_then(ident)
         .then_ignore(just(Token::From))
         .then(string)
+        .then_ignore(just(Token::Semicolon))
         .map_with(|(name, path), e| Use {
             name,
             path,
@@ -887,8 +893,8 @@ inverter_control = face 47@(1, 0) large 21@(5, 0) 13@(16, 3)
                 pub port can_h "CAN H";
                 pub port can_l "CAN L";
                 connector x1: ampseal_35p {
-                    pin 1 = can_h;
-                    pin 2 = can_l;
+                    pin 1: can_h;
+                    pin 2: can_l;
                 }
             }"#,
         );
@@ -998,7 +1004,7 @@ inverter_control = face 47@(1, 0) large 21@(5, 0) 13@(16, 3)
     #[test]
     fn instance_with_and_without_label() {
         let file =
-            parse_ok(r#"component c { cell_pack pack; front_battery front "Front Battery"; }"#);
+            parse_ok(r#"component c { pack: cell_pack; front: front_battery "Front Battery"; }"#);
         let Member::Instance(a) = &members(&file)[0] else {
             panic!("expected instance");
         };
@@ -1045,7 +1051,7 @@ inverter_control = face 47@(1, 0) large 21@(5, 0) 13@(16, 3)
 
     #[test]
     fn nested_definition() {
-        let file = parse_ok(r#"component outer { component inner { pub port a "A"; } inner i; }"#);
+        let file = parse_ok(r#"component outer { component inner { pub port a "A"; } i: inner; }"#);
         let ms = members(&file);
         assert!(matches!(ms[0], Member::Definition(_)));
         assert!(matches!(ms[1], Member::Instance(_)));
@@ -1054,7 +1060,7 @@ inverter_control = face 47@(1, 0) large 21@(5, 0) 13@(16, 3)
     #[test]
     fn view_with_and_without_grid() {
         let file = parse_ok(
-            r#"view schematic "Overview" { grid 20; include a at (3, 4); include b at (5, 6); }"#,
+            r#"view schematic "Overview" { grid: 20; include a at (3, 4); include b at (5, 6); }"#,
         );
         let Item::View(v) = &file.items[0] else {
             panic!("expected view");
@@ -1077,7 +1083,7 @@ inverter_control = face 47@(1, 0) large 21@(5, 0) 13@(16, 3)
     #[test]
     fn include_ports_block_flattens_in_order() {
         let file = parse_ok(
-            r#"view schematic "V" { include a at (1, 2) ports { west: p, q; east: r; }; }"#,
+            r#"view schematic "V" { include a at (1, 2) ports { west: p, q; east: r; } }"#,
         );
         let Item::View(v) = &file.items[0] else {
             panic!("expected view");
@@ -1110,7 +1116,7 @@ inverter_control = face 47@(1, 0) large 21@(5, 0) 13@(16, 3)
     #[test]
     fn use_declaration() {
         let file = parse_ok(
-            "use cell_module from \"components/cell_module.wb\"\ncomponent c { pub port a \"A\"; }",
+            "use cell_module from \"components/cell_module.wb\";\ncomponent c { pub port a \"A\"; }",
         );
         assert_eq!(file.uses.len(), 1);
         assert_eq!(file.uses[0].name.node.as_str(), "cell_module");
@@ -1122,9 +1128,9 @@ inverter_control = face 47@(1, 0) large 21@(5, 0) 13@(16, 3)
         let file = parse_ok(
             r#"
 component a { }
-use leaf from "leaf.wb"
+use leaf from "leaf.wb";
 view schematic "A" { }
-use relay from "relay.wb"
+use relay from "relay.wb";
 component b { }
 "#,
         );

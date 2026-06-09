@@ -192,8 +192,8 @@ mod tests {
         design_from(
             r#"
 component sys {
-    src a "Source";
-    snk b "Sink";
+    a: src "Source";
+    b: snk "Sink";
     wire orange 50 "V+" [a.pos, b.pos];
     wire black 50 [a.neg, b.neg];
     component src {
@@ -265,8 +265,8 @@ component sys {
         design_from(
             r#"
 component sys {
-    src a "Source";
-    snk b "Sink";
+    a: src "Source";
+    b: snk "Sink";
     cable feed "Power feed" {
         type: "2-core";
         length: 0.8;
@@ -332,9 +332,9 @@ component sys {
         design_from(
             r#"
 component sys {
-    end l "Left";
-    mid m "Mid";
-    end r "Right";
+    l: end "Left";
+    m: mid "Mid";
+    r: end "Right";
     wire orange 1 [l.p, m.w];
     wire orange 1 [m.e, r.p];
     component end {
@@ -394,8 +394,8 @@ component sys {
         design_from(
             r#"
 component sys {
-    src a "A";
-    snk b "B";
+    a: src "A";
+    b: snk "B";
     cable feed "Feed" {
         wire red   1 "hi" [a.p2, b.p2];
         wire green 1 "lo" [a.p1, b.p1];

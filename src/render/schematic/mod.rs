@@ -231,8 +231,8 @@ pub(crate) mod tests {
         design_from(
             r#"
 component sys {
-    alpha a;
-    beta b;
+    a: alpha;
+    b: beta;
     wire red 1 [a.p, b.p];
     component alpha {
         pub port p "Out" pin 1;

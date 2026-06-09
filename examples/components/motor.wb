@@ -1,6 +1,6 @@
 // Electric drive motor with resolver position feedback
 
-component motor {
+component Motor {
     connector power "Power 3p" {
         pub port phase_u "U" pin 1;
         pub port phase_v "V" pin 2;

@@ -1,7 +1,7 @@
 // High-voltage contactor
 // Normally-open relay with power terminals and coil drive
 
-component contactor {
+component Contactor {
     pub port in     "IN";
     pub port out    "OUT";
     pub port coil_p "COIL+";

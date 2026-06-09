@@ -1,24 +1,24 @@
 // Front battery pack
 // 6 cell modules in series, BMS master, 2 contactors (pos + neg)
 
-use cell_module from "cell_module.wb"
-use bms_master  from "bms_master.wb"
-use contactor   from "contactor.wb"
+use CellModule from "cell_module.wb";
+use BmsMaster  from "bms_master.wb";
+use Contactor  from "contactor.wb";
 
-component front_battery {
+component FrontBattery {
     // --- Instances ---
 
-    cell_module module_1 "Module 1";
-    cell_module module_2 "Module 2";
-    cell_module module_3 "Module 3";
-    cell_module module_4 "Module 4";
-    cell_module module_5 "Module 5";
-    cell_module module_6 "Module 6";
+    module_1: CellModule "Module 1";
+    module_2: CellModule "Module 2";
+    module_3: CellModule "Module 3";
+    module_4: CellModule "Module 4";
+    module_5: CellModule "Module 5";
+    module_6: CellModule "Module 6";
 
-    bms_master bms "BMS Master";
+    bms: BmsMaster "BMS Master";
 
-    contactor c_pos "Contactor +";
-    contactor c_neg "Contactor -";
+    c_pos: Contactor "Contactor +";
+    c_neg: Contactor "Contactor -";
 
     // --- External interface ---
 
@@ -95,7 +95,7 @@ component front_battery {
 // --- View: Front Battery Detail ---
 
 view schematic "Front Battery" {
-    grid 20;
+    grid: 20;
 
     // The pack's external interface, drawn on the wrapping enclosure: HV
     // terminals leave east/west, the signal connector's CAN + 12V leave south,
@@ -117,42 +117,42 @@ view schematic "Front Battery" {
         west:  in;
         east:  out;
         south: coil_n;
-    };
+    }
 
     include module_1 at (15, 4) ports {
         west: hv_pos, iso_spi_up_h, iso_spi_up_l;
         east: hv_neg, iso_spi_down_h, iso_spi_down_l;
-    };
+    }
     include module_2 at (26, 4) ports {
         west: hv_pos, iso_spi_up_h, iso_spi_up_l;
         east: hv_neg, iso_spi_down_h, iso_spi_down_l;
-    };
+    }
     include module_3 at (37, 4) ports {
         west: hv_pos, iso_spi_up_h, iso_spi_up_l;
         east: hv_neg, iso_spi_down_h, iso_spi_down_l;
-    };
+    }
     include module_4 at (48, 4) ports {
         west: hv_pos, iso_spi_up_h, iso_spi_up_l;
         east: hv_neg, iso_spi_down_h, iso_spi_down_l;
-    };
+    }
     include module_5 at (59, 4) ports {
         west: hv_pos, iso_spi_up_h, iso_spi_up_l;
         east: hv_neg, iso_spi_down_h, iso_spi_down_l;
-    };
+    }
     include module_6 at (70, 4) ports {
         west: hv_pos, iso_spi_up_h, iso_spi_up_l;
         east: hv_neg, iso_spi_down_h, iso_spi_down_l;
-    };
+    }
 
     include c_neg at (81, 2) ports {
         west:  in;
         east:  out;
         south: coil_n;
-    };
+    }
 
     include bms at (42, 25) ports {
         west:  iso_spi_l, iso_spi_h, cont_1_n;
         east:  cont_2_n;
         south: b_pos, gnd, can_h, can_l;
-    };
+    }
 }

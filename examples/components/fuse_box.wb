@@ -2,7 +2,7 @@
 // Positive-only — chassis ground is implicit.
 // Each output is an individually fused +12V feed.
 
-component fuse_box {
+component FuseBox {
     // Input from DC-DC converter
     pub port batt_in "BATT IN";
 

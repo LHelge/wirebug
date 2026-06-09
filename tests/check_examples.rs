@@ -20,25 +20,25 @@ fn fixture_project_checks_clean_and_elaborates() {
     );
 
     let design = report.design.expect("a design was elaborated");
-    assert_eq!(design.root.to_string(), "vehicle");
+    assert_eq!(design.root.to_string(), "Vehicle");
 
     // The hierarchy is stamped out to the leaves.
-    let pack = InstancePath::root(InstanceName::from("vehicle"))
+    let pack = InstancePath::root(InstanceName::from("Vehicle"))
         .child(InstanceName::from("pack"))
         .child(InstanceName::from("pack"));
-    let pack = design.get(&pack).expect("vehicle.pack.pack");
-    assert_eq!(pack.type_name.as_str(), "cell_pack");
+    let pack = design.get(&pack).expect("Vehicle.pack.pack");
+    assert_eq!(pack.type_name.as_str(), "CellPack");
     assert!(pack.ports.contains_key(&PortName::from("hv_pos")));
 
     // Imported child instances are present and distinct types.
     let battery =
-        InstancePath::root(InstanceName::from("vehicle")).child(InstanceName::from("pack"));
+        InstancePath::root(InstanceName::from("Vehicle")).child(InstanceName::from("pack"));
     let inverter =
-        InstancePath::root(InstanceName::from("vehicle")).child(InstanceName::from("inv"));
-    assert_eq!(design.get(&battery).unwrap().type_name.as_str(), "battery");
+        InstancePath::root(InstanceName::from("Vehicle")).child(InstanceName::from("inv"));
+    assert_eq!(design.get(&battery).unwrap().type_name.as_str(), "Battery");
     assert_eq!(
         design.get(&inverter).unwrap().type_name.as_str(),
-        "inverter"
+        "Inverter"
     );
 
     assert_eq!(design.views.len(), 3);
