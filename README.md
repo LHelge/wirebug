@@ -29,6 +29,7 @@ What works today:
   - a **pinout** renderer (connector cavity faces plus pin tables, authored from the harness side).
 - `wirebug render` to disk (SVG, or `--png` rasterised, or `--embed` for naked SVGs + a `manifest.json` sidecar).
 - `wirebug serve` — a live-reloading dev server that re-renders on `.wb` or `wirebug.toml` saves.
+- A VSCode extension ([`editors/vscode/`](editors/vscode/)) — syntax highlighting plus live diagnostics and context-aware completion via `wirebug lsp`, a language server over stdio.
 
 In transition / not yet:
 
