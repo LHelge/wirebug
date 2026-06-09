@@ -9,6 +9,7 @@
 
 pub mod dsl;
 pub mod error;
+pub mod lsp;
 pub mod render;
 pub mod serve;
 

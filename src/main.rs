@@ -101,8 +101,22 @@ fn run(cli: Cli) -> Result<ExitCode> {
             png,
             embed,
         } => render_command(target.as_deref(), &out, strict, png, embed),
+        Command::Lsp => lsp_command(),
         Command::Serve { target, port } => serve_command(target.as_deref(), port),
     }
+}
+
+/// Run the language server. Stdout is the protocol channel, so tracing
+/// must write to stderr — the only difference from `serve`'s setup.
+fn lsp_command() -> Result<ExitCode> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .with_writer(std::io::stderr)
+        .init();
+    wirebug::lsp::run()?;
+    Ok(ExitCode::SUCCESS)
 }
 
 /// Run the live-reloading dev server. `serve` is the only async command, so

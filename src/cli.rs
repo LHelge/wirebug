@@ -79,6 +79,8 @@ pub enum Command {
         #[arg(long)]
         embed: bool,
     },
+    /// Run the language server over stdio (for editor integration).
+    Lsp,
     /// Serve a project with live reload, re-rendering on every change.
     Serve {
         /// A project manifest, project directory, or `.wb` file. Defaults
