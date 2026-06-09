@@ -6,7 +6,7 @@ future work on the codebase. Keep it short; don't restate the README.
 ## One pipeline
 
 The only input is the **`.wb` DSL** (spec: `.agents/skills/wirebug-dsl/`).
-Three CLI commands share it:
+Four CLI commands share it:
 
 - **`check` (`src/dsl/`)** — lex → parse → load project → resolve →
   elaborate → validate. Turns a multi-file `.wb` project into an
@@ -29,6 +29,19 @@ Three CLI commands share it:
   page that still live-reloads, so it recovers once fixed. `serve` is the
   only async command: `main` stays synchronous and spins a Tokio runtime just
   for this arm.
+- **`lsp` (`src/lsp/`)** — a Language Server Protocol server over stdio,
+  for editor integration (the VSCode extension in `editors/vscode/`).
+  Synchronous (lsp-server's channel loop; stdout is the protocol, logs go
+  to stderr). Per change it re-runs the whole check pipeline with open
+  buffers shadowing the disk (`project::Overlay`), publishes per-file
+  diagnostics (miette `Problem` → LSP via each problem's labels/severity/
+  code, with explicit empty publishes so fixed files clear cross-file),
+  and serves context-aware completion: an owned snapshot of `Resolved`
+  (per-file scopes + merged components) consulted by a token-stack scan
+  of the live buffer — lex-only, so completion survives parse breakage,
+  and a file that fails to load keeps its last-good scope
+  (`CompletionIndex::update_with`). Hover/goto-def/rename/semantic
+  tokens/formatting are deliberately later.
 
 The `index.html` is an [`askama`] compile-time template (`templates/`),
 rendered by `render::index_html(views, live_reload)` — shared by `render`
@@ -279,7 +292,7 @@ redesign each when it lands.
 
 ```
 src/
-├── main.rs          # clap CLI: `check`, `render`, `serve` (all over the .wb DSL)
+├── main.rs          # clap CLI: `check`, `render`, `serve`, `lsp` (all over the .wb DSL)
 ├── lib.rs           # re-exports; dsl::check_project + render::render_views
 │
 │  # ── DSL parse-and-check pipeline (the only input: .wb) ──
@@ -340,8 +353,24 @@ src/
 │   ├── server.rs     # axum router: GET / (index), /ws, fallback SVG-by-name
 │   ├── livereload.rs # websocket handler broadcasting "reload"
 │   └── watcher.rs    # notify watcher, 200ms debounce, .wb-only filter → rebuild+swap
+│
+│  # ── language server (`lsp`) ──
+├── lsp/
+│   ├── mod.rs        # run(): stdio Connection, capabilities, batched message loop
+│   ├── state.rs      # ServerState: overlay, open docs, published set, index
+│   ├── line_index.rs # byte offset ↔ LSP line / UTF-16 column
+│   ├── uri.rs        # file path ↔ file:// URI (lsp-types 0.97 has no helpers)
+│   ├── diagnostics.rs# check cycle → Problem → LSP diagnostics, publish/clear
+│   └── complete.rs   # CompletionIndex (owned Resolved snapshot, per-file
+│                     #   last-good) + token-stack cursor contexts
 └── error.rs         # thiserror types (render path; incl. askama Template)
 ```
+
+The VSCode extension lives at `editors/vscode/`: a TextMate grammar +
+language config (declarative highlighting, no server needed) and a thin
+`vscode-languageclient` in `src/extension.ts` that spawns `wirebug lsp`
+(`wirebug.server.path` setting → newest repo `target/` build → PATH).
+`npm run package` builds the installable `.vsix`; see its README.
 
 The `serve` module renders into memory only; `templates/index.html` (askama)
 is the shared index template for both `render` and `serve`.
@@ -484,7 +513,12 @@ Runtime:
 - [`tokio`] — async runtime, built only for `serve`'s command arm.
 - [`tower-http`] (feature `set-header`) — `no-store` dev cache header.
 - [`notify`] — filesystem watcher behind `serve`'s rebuild loop.
-- [`tracing`] / [`tracing-subscriber`] (feature `env-filter`) — `serve` logs.
+- [`tracing`] / [`tracing-subscriber`] (feature `env-filter`) — `serve` and
+  `lsp` logs (the latter to stderr; stdout is the protocol).
+- [`lsp-server`] — rust-analyzer's synchronous stdio transport for the
+  `lsp` command; no async runtime needed (matching `serve`-only-async).
+- [`lsp-types`] — the protocol types. 0.97 dropped `url::Url`, so the
+  file-path↔URI round-trip is hand-rolled in `lsp/uri.rs`.
 
 Dev / test:
 
@@ -512,6 +546,8 @@ Dev / test:
 [`notify`]: https://docs.rs/notify
 [`tracing`]: https://docs.rs/tracing
 [`tracing-subscriber`]: https://docs.rs/tracing-subscriber
+[`lsp-server`]: https://docs.rs/lsp-server
+[`lsp-types`]: https://docs.rs/lsp-types
 [`thiserror`]: https://docs.rs/thiserror
 [`anyhow`]: https://docs.rs/anyhow
 [`insta`]: https://docs.rs/insta
@@ -538,6 +574,13 @@ cargo run --release -- render examples --out out/ --embed  # naked SVGs + manife
 
 # serve a project with live reload (re-renders on every .wb save)
 cargo run -- serve examples --port 3000   # then open http://localhost:3000
+
+# the language server runs over stdio — editors spawn it, not humans
+cargo run -- lsp
+
+# build + install the VSCode extension (see editors/vscode/README.md)
+cd editors/vscode && npm install && npm run package
+code --install-extension wirebug-*.vsix
 ```
 
 ## Done definition for the MVP
