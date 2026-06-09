@@ -103,11 +103,48 @@ fn is_manifest(path: &Path) -> bool {
         .is_some_and(|name| name == manifest::FILE_NAME)
 }
 
+/// In-memory source overrides, keyed by canonical path and checked before
+/// the filesystem. The LSP loads through this so unsaved editor buffers
+/// participate in a check; an empty overlay reads straight from disk.
+///
+/// A file that exists *only* in the overlay can be the entry, but a `use`
+/// can't reach it: import targets are resolved by canonicalizing a real
+/// path on disk.
+#[derive(Default)]
+pub struct Overlay(HashMap<PathBuf, String>);
+
+impl Overlay {
+    /// Set the text for `path`, replacing the on-disk content during loads.
+    /// The key is canonicalized with the loader's own fallback, so a
+    /// relative or symlinked path still matches the loaded file.
+    pub fn insert(&mut self, path: &Path, text: String) {
+        self.0.insert(canonical(path), text);
+    }
+
+    /// Drop the override for `path`; loads see the file on disk again.
+    pub fn remove(&mut self, path: &Path) {
+        self.0.remove(&canonical(path));
+    }
+
+    fn read_to_string(&self, path: &Path) -> std::io::Result<String> {
+        match self.0.get(path) {
+            Some(text) => Ok(text.clone()),
+            None => std::fs::read_to_string(path),
+        }
+    }
+}
+
 /// Load `entry` and every file reachable through `use`, collecting all
 /// lex/parse/import problems. Returns `None` for the project only if the
 /// entry file itself couldn't be loaded.
 pub fn load(entry: &Path) -> (Option<Project>, Vec<Problem>) {
+    load_with(entry, &Overlay::default())
+}
+
+/// [`load`], with open-buffer text from `overlay` shadowing the disk.
+pub fn load_with(entry: &Path, overlay: &Overlay) -> (Option<Project>, Vec<Problem>) {
     let mut loader = Loader {
+        overlay,
         files: Vec::new(),
         by_path: HashMap::new(),
         attempted: HashSet::new(),
@@ -143,7 +180,8 @@ fn canonical(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
-struct Loader {
+struct Loader<'a> {
+    overlay: &'a Overlay,
     files: Vec<LoadedFile>,
     /// Successfully loaded files, by canonical path.
     by_path: HashMap<PathBuf, FileId>,
@@ -154,7 +192,7 @@ struct Loader {
     problems: Vec<Problem>,
 }
 
-impl Loader {
+impl Loader<'_> {
     /// Load one canonical path (and its imports), returning its id. Reuses
     /// an already-loaded file. Returns `None` if the file can't be read or
     /// parsed into an AST.
@@ -166,7 +204,7 @@ impl Loader {
         }
 
         let id = FileId(self.files.len());
-        let src = match std::fs::read_to_string(path) {
+        let src = match self.overlay.read_to_string(path) {
             Ok(src) => src,
             Err(source) => {
                 self.problems.push(Problem::Io {
@@ -252,6 +290,14 @@ fn lex_message(err: &crate::dsl::lex::LexError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn write_manifest(dir: &Path) {
+        std::fs::write(
+            dir.join(manifest::FILE_NAME),
+            "[project]\nname = \"test\"\nversion = \"0.0.0\"\n",
+        )
+        .expect("write wirebug.toml");
+    }
 
     fn fixture_main() -> PathBuf {
         PathBuf::from(concat!(
@@ -340,6 +386,60 @@ mod tests {
             lex_errors, 1,
             "diamond import should report once: {problems:?}"
         );
+    }
+
+    #[test]
+    fn overlay_text_replaces_disk_content() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_manifest(dir.path());
+        let main = dir.path().join("main.wb");
+        std::fs::write(&main, "component Broken { @ }\n").expect("write main.wb");
+
+        // The broken file on disk is shadowed by a fixed buffer…
+        let mut overlay = Overlay::default();
+        overlay.insert(&main, "component Fixed { pub port a \"A\"; }\n".to_string());
+        let (project, problems) = load_with(&main, &overlay);
+        assert!(problems.is_empty(), "overlay should win: {problems:?}");
+        assert!(
+            project
+                .expect("loads")
+                .file(FileId(0))
+                .src
+                .contains("Fixed")
+        );
+
+        // …and a broken buffer shadows a good file once the override flips.
+        std::fs::write(&main, "component Fine { pub port a \"A\"; }\n").expect("rewrite main.wb");
+        overlay.insert(&main, "component Broken { @ }\n".to_string());
+        let (_, problems) = load_with(&main, &overlay);
+        assert!(
+            problems.iter().any(|p| matches!(p, Problem::Lex { .. })),
+            "expected the overlay's lex error, got {problems:?}"
+        );
+
+        // Removing the override restores disk truth.
+        overlay.remove(&main);
+        let (_, problems) = load_with(&main, &overlay);
+        assert!(problems.is_empty(), "disk is fine again: {problems:?}");
+    }
+
+    #[test]
+    fn overlay_keys_are_canonical_paths() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        write_manifest(dir.path());
+        std::fs::create_dir(dir.path().join("sub")).expect("mkdir");
+        let main = dir.path().join("main.wb");
+        std::fs::write(&main, "component Broken { @ }\n").expect("write main.wb");
+
+        // Inserted via an unnormalized path, found via the canonical one.
+        let mut overlay = Overlay::default();
+        let roundabout = dir.path().join("sub").join("..").join("main.wb");
+        overlay.insert(
+            &roundabout,
+            "component Fixed { pub port a \"A\"; }\n".to_string(),
+        );
+        let (_, problems) = load_with(&main, &overlay);
+        assert!(problems.is_empty(), "canonical keys match: {problems:?}");
     }
 
     #[test]
