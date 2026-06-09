@@ -1,0 +1,35 @@
+{
+  "name": "wirebug",
+  "displayName": "Wirebug",
+  "description": "Language support for the wirebug electrical schematic and wiring harness DSL (.wb)",
+  "version": "0.1.0",
+  "publisher": "wirebug",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "wirebug",
+        "extensions": [
+          ".wb"
+        ],
+        "aliases": [
+          "Wirebug",
+          "wirebug"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "wirebug",
+        "scopeName": "source.wirebug",
+        "path": "./syntaxes/wirebug.tmLanguage.json"
+      }
+    ]
+  }
+}

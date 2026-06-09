@@ -1,0 +1,147 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Wirebug",
+  "scopeName": "source.wirebug",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#type-declaration" },
+    { "include": "#use-import" },
+    { "include": "#view-kind" },
+    { "include": "#numbering-mode" },
+    { "include": "#wire-color" },
+    { "include": "#ports-block" },
+    { "include": "#at-coordinates" },
+    { "include": "#keywords" },
+    { "include": "#type-name" },
+    { "include": "#numbers" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comments": {
+      "match": "//.*$",
+      "name": "comment.line.double-slash.wirebug"
+    },
+    "strings": {
+      "match": "\"[^\"]*\"",
+      "name": "string.quoted.double.wirebug"
+    },
+    "type-declaration": {
+      "match": "\\b(component|extend|connector_type)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "storage.type.wirebug" },
+        "2": { "name": "entity.name.type.declaration.wirebug" }
+      }
+    },
+    "use-import": {
+      "match": "\\b(use)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.control.import.wirebug" },
+        "2": { "name": "entity.name.type.wirebug" }
+      }
+    },
+    "view-kind": {
+      "match": "\\b(view)\\s+(schematic|harness|pinout)\\b",
+      "captures": {
+        "1": { "name": "storage.type.wirebug" },
+        "2": { "name": "support.constant.view-kind.wirebug" }
+      }
+    },
+    "numbering-mode": {
+      "match": "\\b(numbering)\\s*(:)\\s*(row_major|odd_even|clockwise|counter_clockwise)\\b",
+      "captures": {
+        "1": { "name": "keyword.other.wirebug" },
+        "2": { "name": "punctuation.separator.key-value.wirebug" },
+        "3": { "name": "support.constant.numbering.wirebug" }
+      }
+    },
+    "wire-color": {
+      "match": "\\b(wire)\\s+([a-z_][a-z0-9_]*)\\b",
+      "captures": {
+        "1": { "name": "storage.type.wirebug" },
+        "2": { "name": "support.constant.color.wirebug" }
+      }
+    },
+    "ports-block": {
+      "begin": "\\b(ports)\\s*(\\{)",
+      "end": "\\}",
+      "beginCaptures": {
+        "1": { "name": "keyword.other.wirebug" },
+        "2": { "name": "punctuation.section.block.begin.wirebug" }
+      },
+      "endCaptures": {
+        "0": { "name": "punctuation.section.block.end.wirebug" }
+      },
+      "patterns": [
+        { "include": "#comments" },
+        {
+          "match": "\\b(north|east|south|west)\\b(?=\\s*:)",
+          "name": "constant.language.side.wirebug"
+        },
+        { "include": "#punctuation" }
+      ]
+    },
+    "at-coordinates": {
+      "begin": "\\b(at)\\s*(\\()",
+      "end": "\\)",
+      "beginCaptures": {
+        "1": { "name": "keyword.other.wirebug" },
+        "2": { "name": "punctuation.section.parens.begin.wirebug" }
+      },
+      "endCaptures": {
+        "0": { "name": "punctuation.section.parens.end.wirebug" }
+      },
+      "patterns": [
+        { "include": "#comments" },
+        {
+          "match": "\\b(north|east|south|west)\\b",
+          "name": "constant.language.side.wirebug"
+        },
+        { "include": "#numbers" },
+        { "include": "#punctuation" }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "match": "\\b(use|from)\\b",
+          "name": "keyword.control.import.wirebug"
+        },
+        {
+          "match": "\\b(component|extend|connector_type|connector|port|wire|cable|view|enclosure|text)\\b",
+          "name": "storage.type.wirebug"
+        },
+        {
+          "match": "\\bpub\\b",
+          "name": "storage.modifier.wirebug"
+        },
+        {
+          "match": "\\b(include|at|grid|pin|pins|face|cavity|layout|rows|cols|numbering|size|ports)\\b",
+          "name": "keyword.other.wirebug"
+        }
+      ]
+    },
+    "type-name": {
+      "match": "\\b[A-Z][A-Za-z0-9_]*\\b",
+      "name": "entity.name.type.wirebug"
+    },
+    "numbers": {
+      "match": "(?<!\\w)-?\\d+(\\.\\d+)?\\b",
+      "name": "constant.numeric.wirebug"
+    },
+    "punctuation": {
+      "patterns": [
+        { "match": ";", "name": "punctuation.terminator.statement.wirebug" },
+        { "match": ",", "name": "punctuation.separator.comma.wirebug" },
+        { "match": "\\.", "name": "punctuation.accessor.wirebug" },
+        { "match": ":", "name": "punctuation.separator.key-value.wirebug" },
+        { "match": "\\{", "name": "punctuation.section.block.begin.wirebug" },
+        { "match": "\\}", "name": "punctuation.section.block.end.wirebug" },
+        { "match": "\\[", "name": "punctuation.section.brackets.begin.wirebug" },
+        { "match": "\\]", "name": "punctuation.section.brackets.end.wirebug" },
+        { "match": "\\(", "name": "punctuation.section.parens.begin.wirebug" },
+        { "match": "\\)", "name": "punctuation.section.parens.end.wirebug" }
+      ]
+    }
+  }
+}
