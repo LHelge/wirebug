@@ -207,9 +207,7 @@ fn handle_notification(state: &mut ServerState, notification: ServerNotification
 fn publish(connection: &Connection, state: &mut ServerState) -> Result<(), Error> {
     let (mut by_uri, index) =
         diagnostics::check_open_documents(state.open.values(), &state.overlay);
-    if !index.is_empty() {
-        state.index = index;
-    }
+    state.index.update_with(index);
     diagnostics::clear_stale(&mut by_uri, &state.published);
     state.published = by_uri
         .iter()

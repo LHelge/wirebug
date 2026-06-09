@@ -8,7 +8,7 @@
 //! overlay text: it is lexed (not parsed) and a block stack derives the
 //! completion context, so completion works in code the parser rejects.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use lsp_types::{CompletionItem, CompletionItemKind};
@@ -177,8 +177,40 @@ impl CompletionIndex {
         self.next_key += other.next_key;
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
-        self.files.is_empty()
+    /// Replace this index with `new`, except that files `new` *lost* keep
+    /// their previous scope and the component data it references. A buffer
+    /// mid-edit routinely fails to parse, which drops its file from the
+    /// load — without this, one broken keystroke kills completion in that
+    /// file (and a broken entry file would kill the whole project's).
+    pub(crate) fn update_with(&mut self, new: CompletionIndex) {
+        self.files.retain(|path, _| !new.files.contains_key(path));
+        if self.files.is_empty() {
+            *self = new;
+            return;
+        }
+        self.retain_reachable();
+        self.absorb(new);
+    }
+
+    /// Drop component entries unreachable from the remaining file scopes,
+    /// so retained leftovers can't accumulate across rebuilds.
+    fn retain_reachable(&mut self) {
+        let mut queue: Vec<ComponentKey> = self
+            .files
+            .values()
+            .flat_map(|scope| scope.top_level.values().copied().chain(scope.subject))
+            .collect();
+        let mut keep = HashSet::new();
+        while let Some(key) = queue.pop() {
+            if !keep.insert(key) {
+                continue;
+            }
+            if let Some(entry) = self.components.get(&key) {
+                queue.extend(entry.nested.values().copied());
+                queue.extend(entry.instances.iter().filter_map(|i| i.type_key));
+            }
+        }
+        self.components.retain(|key, _| keep.contains(key));
     }
 
     /// Complete at byte `offset` in the live `text` of the document at
@@ -855,6 +887,93 @@ mod tests {
             "use Root from \"hv.wb\";\ncomponent Root {\n    pub port feed \"F\";\n    wire red 1 [‸];\n}\n",
         );
         assert!(labels.contains(&"h".to_string()), "{labels:?}");
+    }
+
+    // ── the live-edit flow against the real examples/ project ──
+    //
+    // These mirror the server exactly: index from the pristine project,
+    // then a rebuild with the mid-edit buffer shadowing the disk folded in
+    // via `update_with` — the file being typed in usually fails to parse
+    // and must keep its last-good scope.
+
+    fn examples_complete(doc: &str, live: &str) -> Vec<String> {
+        let entry = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("examples/main.wb")
+            .canonicalize()
+            .unwrap();
+        let doc_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(doc)
+            .canonicalize()
+            .unwrap();
+
+        let offset = live.find('‸').expect("cursor marker");
+        let text = live.replace('‸', "");
+
+        let (pristine, _) = project::load(&entry);
+        let pristine = pristine.expect("examples load");
+        let mut index = build_index(&pristine, &resolve::resolve(&pristine));
+
+        let mut overlay = crate::dsl::project::Overlay::default();
+        overlay.insert(&doc_path, text.clone());
+        let (live_project, _) = project::load_with(&entry, &overlay);
+        let rebuilt = live_project
+            .map(|p| build_index(&p, &resolve::resolve(&p)))
+            .unwrap_or_default();
+        index.update_with(rebuilt);
+
+        index
+            .complete(&doc_path, &text, offset)
+            .into_iter()
+            .map(|i| i.label)
+            .collect()
+    }
+
+    #[test]
+    fn mid_edit_entry_file_keeps_type_completion() {
+        let disk =
+            std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/main.wb"))
+                .unwrap();
+        let live = disk.replace(
+            "    msd:    Msd     \"MSD\";",
+            "    x: ‸\n    msd:    Msd     \"MSD\";",
+        );
+        let labels = examples_complete("examples/main.wb", &live);
+        assert!(labels.iter().any(|l| l == "Msd"), "{labels:?}");
+    }
+
+    #[test]
+    fn mid_edit_entry_file_keeps_instance_port_completion() {
+        let disk =
+            std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/main.wb"))
+                .unwrap();
+        let live = disk.replace(
+            "    wire blue 0.5 [front.can_h, rear.can_h, charger.can_h, vcm.can2_h];",
+            "    wire blue 0.5 [front.‸];",
+        );
+        let labels = examples_complete("examples/main.wb", &live);
+        assert!(labels.iter().any(|l| l == "can_h"), "{labels:?}");
+    }
+
+    #[test]
+    fn mid_edit_component_file_keeps_numbering_completion() {
+        let disk = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/components/inverter.wb"),
+        )
+        .unwrap();
+        let live = disk.replace("        numbering: row_major;", "        numbering: ‸");
+        let labels = examples_complete("examples/components/inverter.wb", &live);
+        assert!(labels.iter().any(|l| l == "row_major"), "{labels:?}");
+    }
+
+    #[test]
+    fn mid_edit_component_file_keeps_view_kind_completion() {
+        let disk = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/components/motor.wb"),
+        )
+        .unwrap();
+        let live = format!("{disk}\nview ‸\n");
+        let labels = examples_complete("examples/components/motor.wb", &live);
+        assert!(labels.iter().any(|l| l == "schematic"), "{labels:?}");
     }
 
     #[test]
