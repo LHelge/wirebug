@@ -49,7 +49,6 @@ pub enum Token {
     Semicolon,
     Dot,
     Colon,
-    Equals,
 
     // Leaves. Raw text is preserved so a future `fmt` can round-trip and
     // so the parser can interpret a [`Number`](Token::Number) as either a
@@ -136,7 +135,6 @@ impl fmt::Display for Token {
             Token::Semicolon => ";",
             Token::Dot => ".",
             Token::Colon => ":",
-            Token::Equals => "=",
             Token::Ident(name) => name,
             Token::Str(s) => return write!(f, "{s:?}"),
             Token::Number(n) => n,

@@ -15,8 +15,8 @@ component ObcDcdc {
     }
 
     connector lv "12V output 4p" {
-        pub port out_pos "12V OUT+" pins (1, 2);
-        pub port out_neg "12V OUT-" pins (3, 4);
+        pub port out_pos "12V OUT+" pins [1, 2];
+        pub port out_neg "12V OUT-" pins [3, 4];
     }
 
     connector can "CAN 4p" {

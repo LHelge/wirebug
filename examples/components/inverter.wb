@@ -122,7 +122,7 @@ component Inverter {
 
     connector lv "12V 4p" {
         pub port b_pos "B+" pin 1;
-        pub port gnd   "GND" pins (2, 3, 4);
+        pub port gnd   "GND" pins [2, 3, 4];
     }
 
     connector intlk "Interlock 2p" {

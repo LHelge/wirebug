@@ -16,7 +16,7 @@ component BmsMaster {
 
     connector "Power 4p" {
         pub port b_pos "B+" pin 1;
-        pub port gnd   "GND" pins (2, 3, 4);
+        pub port gnd   "GND" pins [2, 3, 4];
     }
 
     // Low-side contactor drivers

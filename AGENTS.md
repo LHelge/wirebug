@@ -213,7 +213,9 @@ so one run reports many. Errors fail the run; warnings fail only under
   name (`orphan_fragment`); an instance/port name declared in two fragments of
   one merged component (the ordinary `duplicate_instance`/`duplicate_port`,
   reported once across the group). A cable's wire endpoints resolve exactly
-  like a loose wire's. View `ports { }` placements get the
+  like a loose wire's. A view kind no renderer implements is
+  `unknown_view_kind` (so `check` catches it; render's own guard is a
+  backstop for hand-built designs). View `ports { }` placements get the
   same treatment as wire endpoints: unknown side (`unknown_port_side`),
   unknown/private port, and a duplicate-port-in-one-include guard
   (`duplicate_view_port`). Includes are checked per view kind: a `harness`
@@ -244,7 +246,8 @@ phases above). Render adds only geometry/dispatch errors, in the slim
 `error::Error` enum (`src/error.rs` — render-path only; DSL problems are
 miette `Diagnostic`s):
 
-- an unknown view `kind:` (`schematic`, `harness`, and `pinout` render today);
+- an unknown view `kind:` (`schematic`, `harness`, and `pinout` render
+  today) — normally caught earlier by resolve's `unknown_view_kind`;
 - a view subject type with no instance in the design;
 - a non-positive `grid:`, or a `grid:` finer than a port label needs;
 - file IO when writing the SVGs.

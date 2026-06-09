@@ -335,6 +335,13 @@ impl<'a> Resolver<'a> {
             for item in &file.ast.items {
                 let Item::View(view) = item else { continue };
                 let view_kind = ViewKind::from(view.kind.node.as_str());
+                if let ViewKind::Other(kind) = &view_kind {
+                    problems.push(Problem::UnknownViewKind {
+                        kind: kind.clone(),
+                        src: self.project.source(FileId(fi)),
+                        at: view.kind.span.into(),
+                    });
+                }
                 for dup in &view.duplicate_items {
                     problems.push(Problem::DuplicateViewItem {
                         kind: dup.node.to_string(),

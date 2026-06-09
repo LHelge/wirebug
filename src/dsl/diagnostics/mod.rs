@@ -471,6 +471,20 @@ pub enum Problem {
         at: SourceSpan,
     },
 
+    /// A view names a kind no renderer implements.
+    #[error("unknown view kind `{kind}`")]
+    #[diagnostic(
+        code(wirebug::unknown_view_kind),
+        help("supported view kinds are `schematic`, `harness`, and `pinout`")
+    )]
+    UnknownViewKind {
+        kind: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("not a supported view kind")]
+        at: SourceSpan,
+    },
+
     /// A view declares `grid` or `enclosure` more than once. The body takes
     /// items in any order, but at most one of each.
     #[error("view declares `{kind}` more than once")]

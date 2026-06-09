@@ -251,9 +251,10 @@ where
     let single_pin = just(Token::Pin).ignore_then(pin).map(|p| vec![p]);
     let multi_pins = just(Token::Pins).ignore_then(
         pin.separated_by(just(Token::Comma))
+            .allow_trailing()
             .at_least(1)
             .collect::<Vec<_>>()
-            .delimited_by(just(Token::LParen), just(Token::RParen)),
+            .delimited_by(just(Token::LBracket), just(Token::RBracket)),
     );
     let pins = choice((single_pin, multi_pins))
         .or_not()
@@ -360,6 +361,7 @@ where
         .then(
             endpoint
                 .separated_by(just(Token::Comma))
+                .allow_trailing()
                 .at_least(1)
                 .collect::<Vec<_>>()
                 .delimited_by(just(Token::LBracket), just(Token::RBracket)),
@@ -431,6 +433,7 @@ where
         .then(
             ident
                 .separated_by(just(Token::Comma))
+                .allow_trailing()
                 .at_least(1)
                 .collect::<Vec<_>>(),
         )
@@ -713,7 +716,7 @@ mod tests {
 
     #[test]
     fn port_with_ganged_pins() {
-        let file = parse_ok(r#"component c { pub port gnd "GND" pins (2, 3, 4); }"#);
+        let file = parse_ok(r#"component c { pub port gnd "GND" pins [2, 3, 4]; }"#);
         let Member::Port(p) = &members(&file)[0] else {
             panic!("expected a port");
         };
@@ -1047,6 +1050,41 @@ inverter_control = face 47@(1, 0) large 21@(5, 0) 13@(16, 3)
             panic!("expected wire");
         };
         assert_eq!(w.gauge.node, 0.25);
+    }
+
+    #[test]
+    fn trailing_commas_are_allowed_in_lists() {
+        let file = parse_ok(
+            r#"component c {
+                pub port gnd "GND" pins [2, 3,];
+                wire orange 50 [
+                    a.p,
+                    b.p,
+                ];
+            }
+            view schematic "V" { include a at (1, 2) ports { west: p, q,; } }"#,
+        );
+        let Member::Port(p) = &members(&file)[0] else {
+            panic!("expected a port");
+        };
+        assert_eq!(p.pins.len(), 2);
+        let Member::Wire(w) = &members(&file)[1] else {
+            panic!("expected a wire");
+        };
+        assert_eq!(w.endpoints.len(), 2);
+        let Item::View(v) = &file.items[1] else {
+            panic!("expected a view");
+        };
+        assert_eq!(v.includes[0].ports.len(), 2);
+    }
+
+    #[test]
+    fn negative_coordinates_parse() {
+        let file = parse_ok(r#"view schematic "V" { include a at (-2, -0.5); }"#);
+        let Item::View(v) = &file.items[0] else {
+            panic!("expected a view");
+        };
+        assert_eq!((v.includes[0].x.node, v.includes[0].y.node), (-2.0, -0.5));
     }
 
     #[test]
