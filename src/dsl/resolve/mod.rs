@@ -1038,6 +1038,12 @@ mod tests {
     }
 
     #[test]
+    fn unknown_view_kind_is_reported() {
+        let p = problems(&[("main.wb", "component m { } view schemtic \"V\" { }\n")]);
+        assert!(has(&p, "wirebug::unknown_view_kind"), "{:?}", codes(&p));
+    }
+
+    #[test]
     fn unknown_view_include_is_reported() {
         let p = problems(&[(
             "main.wb",

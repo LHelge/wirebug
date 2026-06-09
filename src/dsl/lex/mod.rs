@@ -100,8 +100,12 @@ pub fn lex(src: &str, file: FileId) -> Result<Vec<SpannedLexeme>, LexError> {
                 i += 1; // closing quote
                 push(&mut out, Lexeme::Token(Token::Str(content)), start, i);
             }
-            b'0'..=b'9' => {
-                i += 1;
+            // A `-` is only a sign: it lexes when a digit follows (negative
+            // grid coordinates), there is no standalone minus token.
+            c @ (b'0'..=b'9' | b'-')
+                if c != b'-' || (i + 1 < n && bytes[i + 1].is_ascii_digit()) =>
+            {
+                i += 1; // sign or first digit
                 while i < n && bytes[i].is_ascii_digit() {
                     i += 1;
                 }
@@ -137,7 +141,6 @@ pub fn lex(src: &str, file: FileId) -> Result<Vec<SpannedLexeme>, LexError> {
                     b';' => Some(Token::Semicolon),
                     b'.' => Some(Token::Dot),
                     b':' => Some(Token::Colon),
-                    b'=' => Some(Token::Equals),
                     _ => None,
                 };
                 match token {
@@ -228,18 +231,45 @@ mod tests {
     #[test]
     fn pins_list_lexes() {
         assert_eq!(
-            tokens("pins (2, 3, 4)"),
+            tokens("pins [2, 3, 4]"),
             vec![
                 Token::Pins,
-                Token::LParen,
+                Token::LBracket,
                 Token::Number("2".into()),
                 Token::Comma,
                 Token::Number("3".into()),
                 Token::Comma,
                 Token::Number("4".into()),
+                Token::RBracket,
+            ]
+        );
+    }
+
+    #[test]
+    fn negative_numbers_lex_as_one_token() {
+        assert_eq!(
+            tokens("at (-2, -0.5)"),
+            vec![
+                Token::At,
+                Token::LParen,
+                Token::Number("-2".into()),
+                Token::Comma,
+                Token::Number("-0.5".into()),
                 Token::RParen,
             ]
         );
+    }
+
+    #[test]
+    fn minus_without_a_digit_is_an_error() {
+        // `-` exists only as a numeric sign; `=` left the grammar with the
+        // `pin N: port` binding form.
+        for src in ["a - b", "pin 1 = a;"] {
+            assert!(
+                matches!(lex(src, F), Err(LexError::UnexpectedChar { .. })),
+                "{src:?} should not lex"
+            );
+        }
     }
 
     #[test]

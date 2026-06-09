@@ -41,6 +41,8 @@ A `.wb` file contains zero or more of, in any order:
 
 Comments are `//` line comments only. Block comments are not supported.
 
+Statements end with `;`; brace blocks end at the closing brace with no trailing `;`. Comma-separated lists — `pins [ ]`, wire endpoint lists, and view `ports` side lists — allow a trailing comma, so multi-line lists diff cleanly. Numbers may be negative (`at (-2, 4)`); there is no other arithmetic.
+
 ## Imports
 
 ```
@@ -153,7 +155,7 @@ Ports inside a `connector` block can declare which physical pin(s) they map to. 
 
 ```
 port name "Label" pin N;            // single pin
-port name "Label" pins (N, N, N);   // multiple pins (e.g. ground or high-current)
+port name "Label" pins [N, N, N];   // multiple pins (e.g. ground or high-current)
 ```
 
 Pin numbers are positive integers. A port may span multiple pins when several connector pins are ganged for current capacity (common for power and ground). Pin assignment is optional — omit it when the physical pin-out is unknown or irrelevant.
@@ -163,7 +165,7 @@ Example:
 ```
 connector "Molex MX-150 12p" {
     pub port b_pos "B+" pin 1;
-    pub port gnd   "GND" pins (2, 3, 4);
+    pub port gnd   "GND" pins [2, 3, 4];
     pub port can_h "CAN H" pin 5;
     pub port can_l "CAN L" pin 6;
 }
@@ -408,7 +410,7 @@ Format:
 
 - `view <kind> "<title>" { ... }` — `kind` is `schematic`, `harness`, or `pinout`.
 - `grid: <n>;` — pixels per grid cell. Optional; a sensible default applies.
-- `include <name> at (x, y);` or `include <name> at (x, y) ports { ... }` — place a component by its instance name in the surrounding scope, at grid-cell coordinates. A bare include is a statement and ends with `;`; an include with a `ports { }` block ends at the closing brace, with **no** trailing `;` (like any other brace block).
+- `include <name> at (x, y);` or `include <name> at (x, y) ports { ... }` — place a component by its instance name in the surrounding scope, at grid-cell coordinates (negative is fine). A bare include is a statement and ends with `;`; an include with a `ports { }` block ends at the closing brace, with **no** trailing `;` (like any other brace block).
 - `ports { <side>: <port>, <port>; ... }` — optional. Each line lists the ports on one `side` (`north`, `east`, `south`, `west`), in the order they should appear on that edge. A `west: a, b;` line puts `a` above `b` on the west edge. List the same side more than once and the lines concatenate.
 
 **The `ports` block controls both layout and scope.** A port is drawn only if it's listed; everything else is hidden. An include with no `ports` block is a bare labelled box.

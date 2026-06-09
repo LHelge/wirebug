@@ -320,7 +320,7 @@ mod tests {
     fn ganged_pin_zero_errors() {
         let codes = validate_files(&[(
             "main.wb",
-            "component m { connector j1 \"J1\" { pub port a \"A\" pins (1, 0, 2); } }\n",
+            "component m { connector j1 \"J1\" { pub port a \"A\" pins [1, 0, 2]; } }\n",
         )]);
         assert!(
             codes.iter().any(|c| c == "wirebug::invalid_pin"),
