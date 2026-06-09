@@ -14,6 +14,7 @@
 // string itself, so the lint's hazard doesn't apply.
 #![allow(clippy::mutable_key_type)]
 
+mod complete;
 mod diagnostics;
 mod line_index;
 mod state;
@@ -26,9 +27,9 @@ use lsp_types::notification::{
 };
 use lsp_types::request::{Completion, Request as _};
 use lsp_types::{
-    CompletionOptions, CompletionResponse, DidChangeTextDocumentParams, DidCloseTextDocumentParams,
-    DidOpenTextDocumentParams, PublishDiagnosticsParams, ServerCapabilities,
-    TextDocumentSyncCapability, TextDocumentSyncKind,
+    CompletionItem, CompletionOptions, CompletionParams, CompletionResponse,
+    DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
+    PublishDiagnosticsParams, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
 };
 use thiserror::Error;
 
@@ -114,13 +115,17 @@ fn main_loop(connection: &Connection) -> Result<(), Error> {
 
 fn handle_request(
     connection: &Connection,
-    _state: &ServerState,
+    state: &ServerState,
     request: Request,
 ) -> Result<(), Error> {
     let response = match request.method.as_str() {
-        // Items land with the completion index; an empty list keeps
-        // clients from waiting on the trigger characters until then.
-        Completion::METHOD => Response::new_ok(request.id, CompletionResponse::Array(Vec::new())),
+        Completion::METHOD => {
+            let items = serde_json::from_value::<CompletionParams>(request.params)
+                .ok()
+                .map(|params| completion_items(state, &params))
+                .unwrap_or_default();
+            Response::new_ok(request.id, CompletionResponse::Array(items))
+        }
         _ => Response::new_err(
             request.id,
             lsp_server::ErrorCode::MethodNotFound as i32,
@@ -128,6 +133,22 @@ fn handle_request(
         ),
     };
     send(connection, Message::Response(response))
+}
+
+/// Answer one completion request from the last-good index and the live
+/// overlay text of the document.
+fn completion_items(state: &ServerState, params: &CompletionParams) -> Vec<CompletionItem> {
+    let position = &params.text_document_position;
+    let Some(path) = state.open.get(&position.text_document.uri) else {
+        return Vec::new();
+    };
+    let Some(text) = state.overlay.get(path) else {
+        return Vec::new();
+    };
+    // The index is keyed by the loader's canonical paths.
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+    let offset = line_index::LineIndex::new(text).offset(text, position.position);
+    state.index.complete(&canonical, text, offset)
 }
 
 /// Apply one notification to the server state; `true` means the document
@@ -184,7 +205,11 @@ fn handle_notification(state: &mut ServerState, notification: ServerNotification
 /// Re-check every open project and publish per-URI diagnostics, including
 /// explicit empty sets for URIs whose problems went away.
 fn publish(connection: &Connection, state: &mut ServerState) -> Result<(), Error> {
-    let mut by_uri = diagnostics::check_open_documents(state.open.values(), &state.overlay);
+    let (mut by_uri, index) =
+        diagnostics::check_open_documents(state.open.values(), &state.overlay);
+    if !index.is_empty() {
+        state.index = index;
+    }
     diagnostics::clear_stale(&mut by_uri, &state.published);
     state.published = by_uri
         .iter()
