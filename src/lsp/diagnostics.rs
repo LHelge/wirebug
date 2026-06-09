@@ -15,18 +15,19 @@ use crate::dsl::diagnostics::Problem;
 use crate::dsl::project::{self, Overlay};
 use crate::dsl::{elaborate, resolve, validate};
 
+use super::complete::{self, CompletionIndex};
 use super::line_index::LineIndex;
 use super::uri;
 
-/// Check every distinct project containing an open document and group the
-/// diagnostics by file URI. Documents outside any project (no
-/// `wirebug.toml` above them) are checked as single-file entries — lex and
-/// parse problems still surface, at the cost of project-level noise like
-/// `no_root`.
+/// Check every distinct project containing an open document: diagnostics
+/// grouped by file URI, plus the completion index over everything that
+/// resolved. Documents outside any project (no `wirebug.toml` above them)
+/// are checked as single-file entries — lex and parse problems still
+/// surface, at the cost of project-level noise like `no_root`.
 pub(crate) fn check_open_documents<'a>(
     open: impl Iterator<Item = &'a PathBuf>,
     overlay: &Overlay,
-) -> HashMap<Uri, Vec<Diagnostic>> {
+) -> (HashMap<Uri, Vec<Diagnostic>>, CompletionIndex) {
     let mut entries = BTreeSet::new();
     for doc in open {
         let parent = doc.parent().unwrap_or(Path::new("."));
@@ -35,20 +36,27 @@ pub(crate) fn check_open_documents<'a>(
     }
 
     let mut by_uri: HashMap<Uri, Vec<Diagnostic>> = HashMap::new();
+    let mut index = CompletionIndex::default();
     for entry in entries {
-        for (uri, diagnostic) in check_one(&entry, overlay) {
+        let (located, contribution) = check_one(&entry, overlay);
+        for (uri, diagnostic) in located {
             by_uri.entry(uri).or_default().push(diagnostic);
         }
+        if let Some(contribution) = contribution {
+            index.absorb(contribution);
+        }
     }
-    by_uri
+    (by_uri, index)
 }
 
 /// Run the pipeline for one project entry — `check_project`'s stages over
-/// the overlay — and convert each problem to a located diagnostic.
-fn check_one(entry: &Path, overlay: &Overlay) -> Vec<(Uri, Diagnostic)> {
+/// the overlay — converting each problem to a located diagnostic and
+/// snapshotting the resolved registry for completion.
+fn check_one(entry: &Path, overlay: &Overlay) -> (Vec<(Uri, Diagnostic)>, Option<CompletionIndex>) {
     let (project, mut problems) = project::load_with(entry, overlay);
 
     let mut files = HashMap::new();
+    let mut index = None;
     if let Some(project) = &project {
         for file in &project.files {
             if let Some(uri) = uri::to_uri(&file.path) {
@@ -59,15 +67,17 @@ fn check_one(entry: &Path, overlay: &Overlay) -> Vec<(Uri, Diagnostic)> {
 
         let mut resolved = resolve::resolve(project);
         problems.append(&mut resolved.problems);
+        index = Some(complete::build_index(project, &resolved));
         let (_, elab_problems) = elaborate::elaborate(&resolved);
         problems.extend(elab_problems);
         problems.extend(validate::validate(&resolved));
     }
 
-    problems
+    let located = problems
         .iter()
         .filter_map(|problem| convert(problem, &files, entry))
-        .collect()
+        .collect();
+    (located, index)
 }
 
 type FileTable<'a> = HashMap<String, (Uri, LineIndex, &'a str)>;
@@ -200,7 +210,7 @@ mod tests {
             "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n    pub port p \"P\";\n    wire red 1 [p, l.bogus];\n}\n",
         );
 
-        let by_uri = check_open_documents([main.clone()].iter(), &Overlay::default());
+        let (by_uri, _) = check_open_documents([main.clone()].iter(), &Overlay::default());
         let main_uri = uri::to_uri(&main.canonicalize().unwrap()).unwrap();
         let diags = by_uri.get(&main_uri).expect("diagnostics on main.wb");
 
@@ -229,7 +239,7 @@ mod tests {
 
         let mut overlay = Overlay::default();
         overlay.insert(&main, "component Root { pub port p \"P\" @ }\n".to_string());
-        let by_uri = check_open_documents([main.clone()].iter(), &overlay);
+        let (by_uri, _) = check_open_documents([main.clone()].iter(), &overlay);
         let main_uri = uri::to_uri(&main.canonicalize().unwrap()).unwrap();
         assert!(
             by_uri.get(&main_uri).is_some_and(|d| !d.is_empty()),
@@ -253,7 +263,7 @@ mod tests {
             "use Lamp from \"lamp.wb\";\ncomponent Root { pub port p \"P\"; }\n",
         );
 
-        let by_uri = check_open_documents([main.clone()].iter(), &Overlay::default());
+        let (by_uri, _) = check_open_documents([main.clone()].iter(), &Overlay::default());
         let main_uri = uri::to_uri(&main.canonicalize().unwrap()).unwrap();
         let diags = by_uri.get(&main_uri).expect("diagnostics on main.wb");
         assert!(

@@ -1,0 +1,868 @@
+//! Context-aware completion: an owned snapshot of the resolved registry
+//! plus a token-stack scan of the live buffer.
+//!
+//! The index is rebuilt from [`Resolved`] after every check and kept as
+//! *last-good* when the current buffer is too broken to load — mid-edit
+//! buffers usually are, and the instance/port sets are stable across a
+//! keystroke. The buffer at the cursor, by contrast, is always the live
+//! overlay text: it is lexed (not parsed) and a block stack derives the
+//! completion context, so completion works in code the parser rejects.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+use lsp_types::{CompletionItem, CompletionItemKind};
+
+use crate::dsl::lex::{Token, lex, significant};
+use crate::dsl::project::Project;
+use crate::dsl::resolve::Resolved;
+use crate::dsl::span::FileId;
+
+const SIDES: [&str; 4] = ["north", "east", "south", "west"];
+const VIEW_KINDS: [&str; 3] = ["schematic", "harness", "pinout"];
+const NUMBERING_MODES: [&str; 4] = ["row_major", "odd_even", "clockwise", "counter_clockwise"];
+
+/// Key of a merged component in [`CompletionIndex::components`]. Stable
+/// only within one index build.
+type ComponentKey = usize;
+
+#[derive(Default)]
+pub(crate) struct CompletionIndex {
+    /// Per-file scope, keyed by the loader's canonical path.
+    files: HashMap<PathBuf, FileScope>,
+    components: HashMap<ComponentKey, ComponentEntry>,
+    /// First key unused by this index; [`absorb`](Self::absorb) shifts an
+    /// incoming index past it so keys never collide across projects.
+    next_key: ComponentKey,
+}
+
+#[derive(Default)]
+struct FileScope {
+    /// Component type names usable in this file (own top-level + imports).
+    component_types: Vec<String>,
+    /// Connector type names usable in this file (own + imports).
+    connector_types: Vec<String>,
+    /// The file's top-level components by name (canonical across `extend`).
+    top_level: HashMap<String, ComponentKey>,
+    /// The file's lone top-level component — the subject of its views.
+    subject: Option<ComponentKey>,
+}
+
+#[derive(Default)]
+struct ComponentEntry {
+    instances: Vec<InstanceEntry>,
+    ports: Vec<PortEntry>,
+    /// Connector designators: named inline `connector` groups and typed
+    /// connector instances (what harness/pinout includes refer to).
+    connectors: Vec<String>,
+    /// Nested component types, visible only inside this component.
+    nested: HashMap<String, ComponentKey>,
+}
+
+struct InstanceEntry {
+    name: String,
+    type_name: String,
+    type_key: Option<ComponentKey>,
+}
+
+struct PortEntry {
+    name: String,
+    label: String,
+    public: bool,
+}
+
+/// Build the snapshot for one resolved project.
+pub(crate) fn build_index(project: &Project, resolved: &Resolved) -> CompletionIndex {
+    let mut components: HashMap<ComponentKey, ComponentEntry> = HashMap::new();
+
+    // Fragments of a merged component all contribute to the canonical key,
+    // so a wire in main.wb completes against instances declared in hv.wb.
+    for (id, def) in resolved.defs.iter().enumerate() {
+        let entry = components.entry(resolved.groups.canonical(id)).or_default();
+        for (name, facts) in &def.ports {
+            entry.ports.push(PortEntry {
+                name: name.to_string(),
+                label: facts.label.to_string(),
+                public: facts.visibility == crate::dsl::ast::Visibility::Public,
+            });
+            if let Some(designator) = facts.connector.as_ref().and_then(|c| c.name)
+                && !entry.connectors.iter().any(|c| c == designator)
+            {
+                entry.connectors.push(designator.to_string());
+            }
+        }
+        for (name, inst) in &def.instances {
+            entry.instances.push(InstanceEntry {
+                name: name.to_string(),
+                type_name: inst.ast.type_name.node.as_str().to_string(),
+                type_key: inst.type_id.map(|t| resolved.groups.canonical(t)),
+            });
+        }
+        for name in def.connectors.keys() {
+            entry.connectors.push(name.to_string());
+        }
+        for &nested in &def.nested {
+            entry.nested.insert(
+                resolved.defs[nested].name.to_string(),
+                resolved.groups.canonical(nested),
+            );
+        }
+    }
+
+    let connector_type_names: Vec<&str> =
+        resolved.connector_types.iter().map(|ct| ct.name).collect();
+
+    let mut files = HashMap::new();
+    for (fi, file) in project.files.iter().enumerate() {
+        let mut scope = FileScope::default();
+        let mut top_level_here = Vec::new();
+        for (id, def) in resolved.defs.iter().enumerate() {
+            if def.file == FileId(fi) && def.parent.is_none() {
+                let key = resolved.groups.canonical(id);
+                scope.component_types.push(def.name.to_string());
+                scope.top_level.insert(def.name.to_string(), key);
+                top_level_here.push(key);
+            }
+        }
+        if let [only] = top_level_here.as_slice() {
+            scope.subject = Some(*only);
+        }
+        for ct in &resolved.connector_types {
+            if ct.file == FileId(fi) {
+                scope.connector_types.push(ct.name.to_string());
+            }
+        }
+        // An import is a component or a connector type; sort each name into
+        // the bucket its definition says it belongs to.
+        for import in &file.ast.uses {
+            let name = import.name.node.as_str();
+            if connector_type_names.contains(&name) {
+                scope.connector_types.push(name.to_string());
+            } else {
+                scope.component_types.push(name.to_string());
+            }
+        }
+        files.insert(file.path.clone(), scope);
+    }
+
+    let next_key = resolved.defs.len();
+    CompletionIndex {
+        files,
+        components,
+        next_key,
+    }
+}
+
+impl CompletionIndex {
+    /// Merge `other` (another project's index) in, shifting its component
+    /// keys so they cannot collide with ours.
+    pub(crate) fn absorb(&mut self, other: CompletionIndex) {
+        let base = self.next_key;
+        for (key, mut entry) in other.components {
+            for inst in &mut entry.instances {
+                inst.type_key = inst.type_key.map(|k| k + base);
+            }
+            for key in entry.nested.values_mut() {
+                *key += base;
+            }
+            self.components.insert(key + base, entry);
+        }
+        for (path, mut scope) in other.files {
+            for key in scope.top_level.values_mut() {
+                *key += base;
+            }
+            scope.subject = scope.subject.map(|k| k + base);
+            self.files.insert(path, scope);
+        }
+        self.next_key += other.next_key;
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.files.is_empty()
+    }
+
+    /// Complete at byte `offset` in the live `text` of the document at
+    /// `path` (the loader-canonical path the index is keyed by).
+    pub(crate) fn complete(&self, path: &Path, text: &str, offset: usize) -> Vec<CompletionItem> {
+        let Some(scope) = self.files.get(path) else {
+            return Vec::new();
+        };
+        let cursor = scan(text, offset);
+        self.items(scope, &cursor)
+    }
+
+    fn component(&self, key: ComponentKey) -> Option<&ComponentEntry> {
+        self.components.get(&key)
+    }
+
+    /// Resolve the cursor's innermost component by walking the block stack
+    /// from the file's top level down through nested definitions.
+    fn current_component(&self, scope: &FileScope, cursor: &Cursor) -> Option<ComponentKey> {
+        let mut key: Option<ComponentKey> = None;
+        for block in &cursor.blocks {
+            if let Block::Component { name } = block {
+                key = match key.and_then(|k| self.component(k)) {
+                    Some(entry) => entry.nested.get(name).copied(),
+                    None => scope.top_level.get(name).copied(),
+                };
+            }
+        }
+        key
+    }
+
+    /// Component types usable at the cursor: the file scope plus the
+    /// nested types of every enclosing component.
+    fn visible_types(&self, scope: &FileScope, cursor: &Cursor) -> Vec<CompletionItem> {
+        let mut items: Vec<CompletionItem> = scope
+            .component_types
+            .iter()
+            .map(|name| item(name, CompletionItemKind::CLASS, "component"))
+            .collect();
+        let mut key: Option<ComponentKey> = None;
+        for block in &cursor.blocks {
+            if let Block::Component { name } = block {
+                key = match key.and_then(|k| self.component(k)) {
+                    Some(entry) => entry.nested.get(name).copied(),
+                    None => scope.top_level.get(name).copied(),
+                };
+                if let Some(entry) = key.and_then(|k| self.component(k)) {
+                    items.extend(
+                        entry
+                            .nested
+                            .keys()
+                            .map(|name| item(name, CompletionItemKind::CLASS, "nested component")),
+                    );
+                }
+            }
+        }
+        items
+    }
+
+    fn ports(&self, key: ComponentKey, public_only: bool) -> Vec<CompletionItem> {
+        self.component(key)
+            .map(|entry| {
+                entry
+                    .ports
+                    .iter()
+                    .filter(|p| !public_only || p.public)
+                    .map(|p| item(&p.name, CompletionItemKind::FIELD, &p.label))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn instances(&self, key: ComponentKey) -> Vec<CompletionItem> {
+        self.component(key)
+            .map(|entry| {
+                entry
+                    .instances
+                    .iter()
+                    .map(|i| item(&i.name, CompletionItemKind::VARIABLE, &i.type_name))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn connectors(&self, key: ComponentKey) -> Vec<CompletionItem> {
+        self.component(key)
+            .map(|entry| {
+                entry
+                    .connectors
+                    .iter()
+                    .map(|c| item(c, CompletionItemKind::STRUCT, "connector"))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// The pub ports of a named instance's type within `component`.
+    fn instance_ports(&self, component: ComponentKey, instance: &str) -> Vec<CompletionItem> {
+        self.component(component)
+            .and_then(|entry| entry.instances.iter().find(|i| i.name == instance))
+            .and_then(|i| i.type_key)
+            .map(|key| self.ports(key, true))
+            .unwrap_or_default()
+    }
+
+    fn items(&self, scope: &FileScope, cursor: &Cursor) -> Vec<CompletionItem> {
+        // `numbering: ` takes its closed mode set wherever it appears.
+        if cursor.after(&[Token::Numbering, Token::Colon]) {
+            return constants(&NUMBERING_MODES);
+        }
+        if cursor.after(&[Token::View]) {
+            return constants(&VIEW_KINDS);
+        }
+
+        let component = self.current_component(scope, cursor);
+
+        // Wire endpoint lists complete the same way in a component body
+        // and inside a cable.
+        if cursor.in_list {
+            let Some(component) = component else {
+                return Vec::new();
+            };
+            if let [.., Token::Ident(instance), Token::Dot] = cursor.tail() {
+                return self.instance_ports(component, instance);
+            }
+            let mut items = self.instances(component);
+            items.extend(self.ports(component, false));
+            return items;
+        }
+
+        match cursor.blocks.last() {
+            None => {
+                if let [.., Token::Use, Token::Ident(_)] = cursor.tail() {
+                    return keywords(&["from"]);
+                }
+                if cursor.at_statement_start() {
+                    return keywords(&["use", "component", "extend", "connector_type", "view"]);
+                }
+                Vec::new()
+            }
+            Some(Block::Component { .. }) => match cursor.tail() {
+                [.., Token::Connector, Token::Ident(_), Token::Colon] => scope
+                    .connector_types
+                    .iter()
+                    .map(|name| item(name, CompletionItemKind::INTERFACE, "connector type"))
+                    .collect(),
+                [.., Token::Ident(_), Token::Colon] => self.visible_types(scope, cursor),
+                [.., Token::Pub] => keywords(&["port"]),
+                _ if cursor.at_statement_start() => {
+                    keywords(&["pub", "port", "wire", "cable", "connector", "component"])
+                }
+                _ => Vec::new(),
+            },
+            Some(Block::Cable) => {
+                if cursor.at_statement_start() {
+                    let mut items = keywords(&["wire"]);
+                    items.push(property("type"));
+                    items.push(property("length"));
+                    return items;
+                }
+                Vec::new()
+            }
+            Some(Block::Connector) => match cursor.tail() {
+                [.., Token::Pin, Token::Number(_), Token::Colon] => component
+                    .map(|key| self.ports(key, false))
+                    .unwrap_or_default(),
+                [.., Token::Pub] => keywords(&["port"]),
+                _ if cursor.at_statement_start() => keywords(&["pub", "port", "pin"]),
+                _ => Vec::new(),
+            },
+            Some(Block::View { kind }) => match cursor.tail() {
+                [.., Token::Include, Token::Ident(instance), Token::Dot] => scope
+                    .subject
+                    .map(|s| self.instance_connectors(s, instance))
+                    .unwrap_or_default(),
+                [.., Token::Include] => {
+                    let Some(subject) = scope.subject else {
+                        return Vec::new();
+                    };
+                    match kind.as_deref() {
+                        Some("pinout") => self.connectors(subject),
+                        _ => self.instances(subject),
+                    }
+                }
+                _ if cursor.at_statement_start() => {
+                    keywords(&["grid", "include", "text", "enclosure"])
+                }
+                _ => Vec::new(),
+            },
+            Some(Block::Ports { instance }) => {
+                if matches!(cursor.tail(), [.., Token::Colon] | [.., Token::Comma]) {
+                    let (Some(subject), Some(instance)) = (scope.subject, instance) else {
+                        return Vec::new();
+                    };
+                    return self.instance_ports(subject, instance);
+                }
+                if cursor.at_statement_start() {
+                    return SIDES
+                        .iter()
+                        .map(|side| CompletionItem {
+                            insert_text: Some(format!("{side}: ")),
+                            ..item(side, CompletionItemKind::CONSTANT, "side")
+                        })
+                        .collect();
+                }
+                Vec::new()
+            }
+            Some(Block::Enclosure) => {
+                if cursor.in_at_parens {
+                    return constants(&SIDES);
+                }
+                if cursor.at_statement_start() {
+                    return scope
+                        .subject
+                        .map(|s| self.ports(s, true))
+                        .unwrap_or_default();
+                }
+                Vec::new()
+            }
+            Some(Block::ConnectorType | Block::Other) => Vec::new(),
+        }
+    }
+
+    /// The connector designators of a named instance's type — what a
+    /// harness `include inst.<connector>` refers to.
+    fn instance_connectors(&self, subject: ComponentKey, instance: &str) -> Vec<CompletionItem> {
+        self.component(subject)
+            .and_then(|entry| entry.instances.iter().find(|i| i.name == instance))
+            .and_then(|i| i.type_key)
+            .map(|key| self.connectors(key))
+            .unwrap_or_default()
+    }
+}
+
+fn item(label: &str, kind: CompletionItemKind, detail: &str) -> CompletionItem {
+    CompletionItem {
+        label: label.to_string(),
+        kind: Some(kind),
+        detail: Some(detail.to_string()),
+        ..CompletionItem::default()
+    }
+}
+
+fn keywords(words: &[&str]) -> Vec<CompletionItem> {
+    words
+        .iter()
+        .map(|w| item(w, CompletionItemKind::KEYWORD, "keyword"))
+        .collect()
+}
+
+fn constants(values: &[&str]) -> Vec<CompletionItem> {
+    values
+        .iter()
+        .map(|v| item(v, CompletionItemKind::CONSTANT, ""))
+        .collect()
+}
+
+fn property(key: &str) -> CompletionItem {
+    CompletionItem {
+        insert_text: Some(format!("{key}: ")),
+        ..item(key, CompletionItemKind::PROPERTY, "cable property")
+    }
+}
+
+/// One nesting level at the cursor, tagged by its governing keyword.
+enum Block {
+    Component { name: String },
+    ConnectorType,
+    Connector,
+    Cable,
+    View { kind: Option<String> },
+    Ports { instance: Option<String> },
+    Enclosure,
+    Other,
+}
+
+/// Everything the item rules need to know about the cursor: the block
+/// stack, list/paren flags, and the significant tokens before it.
+struct Cursor {
+    blocks: Vec<Block>,
+    in_list: bool,
+    in_at_parens: bool,
+    tokens: Vec<Token>,
+}
+
+impl Cursor {
+    /// The last few tokens before the cursor (for slice-pattern lookback).
+    fn tail(&self) -> &[Token] {
+        let n = self.tokens.len();
+        &self.tokens[n.saturating_sub(4)..]
+    }
+
+    fn after(&self, suffix: &[Token]) -> bool {
+        self.tokens.ends_with(suffix)
+    }
+
+    fn at_statement_start(&self) -> bool {
+        matches!(
+            self.tokens.last(),
+            None | Some(Token::LBrace | Token::RBrace | Token::Semicolon)
+        )
+    }
+}
+
+/// Lex the live buffer and fold the tokens before `offset` into a
+/// [`Cursor`]. A lexically broken buffer degrades to its valid prefix —
+/// the cursor usually sits past the text that still lexes.
+fn scan(text: &str, offset: usize) -> Cursor {
+    let lexemes = match lex(text, FileId(0)) {
+        Ok(lexemes) => lexemes,
+        Err(err) => {
+            let cut = err.span().start.min(text.len());
+            lex(&text[..cut], FileId(0)).unwrap_or_default()
+        }
+    };
+    let mut tokens: Vec<(Token, crate::dsl::span::Span)> = significant(&lexemes)
+        .into_iter()
+        .filter(|(_, span)| span.end <= offset)
+        .collect();
+
+    // A word the cursor touches is the one being typed; context comes from
+    // what precedes it. (A fully-typed keyword lexes as that keyword, so
+    // this drops keywords and idents alike.)
+    if let Some((token, span)) = tokens.last()
+        && span.end == offset
+        && is_wordlike(token)
+    {
+        tokens.pop();
+    }
+
+    let mut cursor = Cursor {
+        blocks: Vec::new(),
+        in_list: false,
+        in_at_parens: false,
+        tokens: Vec::new(),
+    };
+    let mut list_depth = 0usize;
+    let mut paren_depth = 0usize;
+
+    let tokens: Vec<Token> = tokens.into_iter().map(|(t, _)| t).collect();
+    for (i, token) in tokens.iter().enumerate() {
+        match token {
+            Token::LBrace => cursor.blocks.push(classify(&tokens[..i])),
+            Token::RBrace => {
+                cursor.blocks.pop();
+            }
+            Token::LBracket => list_depth += 1,
+            Token::RBracket => list_depth = list_depth.saturating_sub(1),
+            Token::LParen => {
+                if paren_depth == 0 {
+                    cursor.in_at_parens = matches!(tokens.get(i.wrapping_sub(1)), Some(Token::At));
+                }
+                paren_depth += 1;
+            }
+            Token::RParen => {
+                paren_depth = paren_depth.saturating_sub(1);
+                if paren_depth == 0 {
+                    cursor.in_at_parens = false;
+                }
+            }
+            _ => {}
+        }
+    }
+    cursor.in_list = list_depth > 0;
+    cursor.in_at_parens = cursor.in_at_parens && paren_depth > 0;
+    cursor.tokens = tokens;
+    cursor
+}
+
+/// Identify the block a `{` opens from the tokens before it: skip back
+/// over the header (names, labels, coordinates) to the governing keyword.
+fn classify(before: &[Token]) -> Block {
+    for (i, token) in before.iter().enumerate().rev() {
+        match token {
+            Token::Component | Token::Extend => {
+                let name = match before.get(i + 1) {
+                    Some(Token::Ident(name)) => name.clone(),
+                    _ => String::new(),
+                };
+                return Block::Component { name };
+            }
+            Token::View => {
+                let kind = match before.get(i + 1) {
+                    Some(Token::Ident(kind)) => Some(kind.clone()),
+                    _ => None,
+                };
+                return Block::View { kind };
+            }
+            Token::Ports => {
+                return Block::Ports {
+                    instance: include_instance(&before[..i]),
+                };
+            }
+            Token::Enclosure => return Block::Enclosure,
+            Token::Cable => return Block::Cable,
+            Token::Connector => return Block::Connector,
+            Token::ConnectorType => return Block::ConnectorType,
+            // Header tokens between the keyword and its `{`.
+            Token::Ident(_)
+            | Token::Str(_)
+            | Token::Number(_)
+            | Token::Colon
+            | Token::Comma
+            | Token::At
+            | Token::LParen
+            | Token::RParen => {}
+            _ => return Block::Other,
+        }
+    }
+    Block::Other
+}
+
+/// The instance a `ports { }` block belongs to: the ident right after the
+/// nearest `include` in the same statement.
+fn include_instance(before: &[Token]) -> Option<String> {
+    for (i, token) in before.iter().enumerate().rev() {
+        match token {
+            Token::Include => {
+                return match before.get(i + 1) {
+                    Some(Token::Ident(name)) => Some(name.clone()),
+                    _ => None,
+                };
+            }
+            Token::Semicolon | Token::LBrace | Token::RBrace => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+fn is_wordlike(token: &Token) -> bool {
+    !matches!(
+        token,
+        Token::Str(_)
+            | Token::Number(_)
+            | Token::LBrace
+            | Token::RBrace
+            | Token::LBracket
+            | Token::RBracket
+            | Token::LParen
+            | Token::RParen
+            | Token::Comma
+            | Token::Semicolon
+            | Token::Dot
+            | Token::Colon
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dsl::{project, resolve};
+
+    /// Build an index from `files` (written to a temp project) and run
+    /// completion on `live`, a version of `main.wb` with the cursor marked
+    /// by `‸`. Returns the item labels.
+    fn complete_in(files: &[(&str, &str)], live: &str) -> Vec<String> {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("wirebug.toml"),
+            "[project]\nname = \"t\"\nversion = \"0.0.0\"\n",
+        )
+        .expect("write manifest");
+        for (name, body) in files {
+            std::fs::write(dir.path().join(name), body).expect("write file");
+        }
+        let entry = dir.path().join("main.wb");
+        let (project, problems) = project::load(&entry);
+        let project = project.unwrap_or_else(|| panic!("project loads: {problems:?}"));
+        let resolved = resolve::resolve(&project);
+        let index = build_index(&project, &resolved);
+
+        let offset = live.find('‸').expect("cursor marker");
+        let text = live.replace('‸', "");
+        let path = entry.canonicalize().expect("canonical entry");
+        index
+            .complete(&path, &text, offset)
+            .into_iter()
+            .map(|i| i.label)
+            .collect()
+    }
+
+    const LAMP: (&str, &str) = (
+        "lamp.wb",
+        "component Lamp {\n    pub port anode \"A+\";\n    pub port cathode \"A-\";\n    port heater \"H\";\n    connector plug \"Plug 2p\" {\n        pub port live \"L\" pin 1;\n        pub port neutral \"N\" pin 2;\n    }\n}\n",
+    );
+
+    const MAIN: (&str, &str) = (
+        "main.wb",
+        "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n    pub port feed \"F\";\n    port internal \"I\";\n    wire red 1 [feed, l.anode];\n}\nview schematic \"S\" {\n    grid: 20;\n    include l at (4, 4) ports {\n        west: anode;\n    }\n}\n",
+    );
+
+    #[test]
+    fn component_statement_start_offers_member_keywords() {
+        let labels = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    ‸\n}\n",
+        );
+        for expected in ["pub", "port", "wire", "cable", "connector", "component"] {
+            assert!(
+                labels.contains(&expected.to_string()),
+                "{expected}: {labels:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn instantiation_colon_offers_types_in_scope() {
+        let labels = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: ‸\n}\n",
+        );
+        assert!(labels.contains(&"Lamp".to_string()), "{labels:?}");
+        assert!(labels.contains(&"Root".to_string()), "{labels:?}");
+    }
+
+    #[test]
+    fn endpoint_list_offers_instances_and_own_ports() {
+        let labels = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n    pub port feed \"F\";\n    port internal \"I\";\n    wire red 1 [‸];\n}\n",
+        );
+        assert!(labels.contains(&"l".to_string()), "instance: {labels:?}");
+        assert!(labels.contains(&"feed".to_string()), "own pub: {labels:?}");
+        assert!(
+            labels.contains(&"internal".to_string()),
+            "own private ports are wirable bare: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn endpoint_dot_offers_only_pub_ports_of_the_instance() {
+        let labels = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n    wire red 1 [l.‸];\n}\n",
+        );
+        assert!(labels.contains(&"anode".to_string()), "{labels:?}");
+        assert!(
+            labels.contains(&"live".to_string()),
+            "connector port: {labels:?}"
+        );
+        assert!(
+            !labels.contains(&"heater".to_string()),
+            "private port must not leak: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn endpoint_dot_works_on_a_partially_typed_port() {
+        let labels = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n    wire red 1 [l.an‸];\n}\n",
+        );
+        assert!(labels.contains(&"anode".to_string()), "{labels:?}");
+    }
+
+    #[test]
+    fn connector_colon_offers_connector_types() {
+        let files = [
+            ("types.wb", "connector_type Can4p \"CAN 4p\" {\n}\n"),
+            (
+                "main.wb",
+                "use Can4p from \"types.wb\";\ncomponent Root {\n    pub port a \"A\";\n    connector can: Can4p {\n        pin 1: a;\n    }\n}\n",
+            ),
+        ];
+        let labels = complete_in(
+            &files,
+            "use Can4p from \"types.wb\";\ncomponent Root {\n    connector can: ‸\n}\n",
+        );
+        assert!(labels.contains(&"Can4p".to_string()), "{labels:?}");
+        assert!(!labels.contains(&"Root".to_string()), "{labels:?}");
+    }
+
+    #[test]
+    fn pin_map_offers_component_ports() {
+        let files = [
+            ("types.wb", "connector_type Can4p \"CAN 4p\" {\n}\n"),
+            (
+                "main.wb",
+                "use Can4p from \"types.wb\";\ncomponent Root {\n    pub port a \"A\";\n    port b \"B\";\n    connector can: Can4p {\n        pin 1: a;\n    }\n}\n",
+            ),
+        ];
+        let labels = complete_in(
+            &files,
+            "use Can4p from \"types.wb\";\ncomponent Root {\n    pub port a \"A\";\n    port b \"B\";\n    connector can: Can4p {\n        pin 1: ‸\n    }\n}\n",
+        );
+        assert!(labels.contains(&"a".to_string()), "{labels:?}");
+        assert!(
+            labels.contains(&"b".to_string()),
+            "own private ok: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn view_keyword_offers_kinds() {
+        let labels = complete_in(&[LAMP, MAIN], "view ‸");
+        assert_eq!(labels, ["schematic", "harness", "pinout"]);
+    }
+
+    #[test]
+    fn schematic_include_offers_subject_instances() {
+        let labels = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n}\nview schematic \"S\" {\n    include ‸\n}\n",
+        );
+        assert_eq!(labels, ["l"]);
+    }
+
+    #[test]
+    fn harness_include_dot_offers_instance_connectors() {
+        let labels = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n}\nview harness \"H\" {\n    include l.‸\n}\n",
+        );
+        assert_eq!(labels, ["plug"]);
+    }
+
+    #[test]
+    fn ports_block_offers_sides_then_pub_ports() {
+        let at_side = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n}\nview schematic \"S\" {\n    include l at (4, 4) ports {\n        ‸\n    }\n}\n",
+        );
+        assert!(at_side.contains(&"west".to_string()), "{at_side:?}");
+
+        let at_port = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n}\nview schematic \"S\" {\n    include l at (4, 4) ports {\n        west: ‸\n    }\n}\n",
+        );
+        assert!(at_port.contains(&"anode".to_string()), "{at_port:?}");
+        assert!(!at_port.contains(&"heater".to_string()), "{at_port:?}");
+    }
+
+    #[test]
+    fn enclosure_offers_subject_pub_ports_and_sides_in_anchors() {
+        let at_port = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    pub port feed \"F\";\n    port internal \"I\";\n}\nview schematic \"S\" {\n    enclosure {\n        ‸\n    }\n}\n",
+        );
+        assert!(at_port.contains(&"feed".to_string()), "{at_port:?}");
+        assert!(!at_port.contains(&"internal".to_string()), "{at_port:?}");
+
+        let at_anchor = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    pub port feed \"F\";\n}\nview schematic \"S\" {\n    enclosure {\n        feed at (‸\n    }\n}\n",
+        );
+        assert!(at_anchor.contains(&"west".to_string()), "{at_anchor:?}");
+    }
+
+    #[test]
+    fn numbering_colon_offers_modes() {
+        let labels = complete_in(
+            &[LAMP, MAIN],
+            "connector_type C \"c\" {\n    layout: grid {\n        numbering: ‸\n    }\n}\n",
+        );
+        assert_eq!(labels, NUMBERING_MODES);
+    }
+
+    #[test]
+    fn merged_component_completes_across_fragments() {
+        let files = [
+            (
+                "hv.wb",
+                "extend Root {\n    h: Heater;\n    component Heater {\n        pub port coil \"C\";\n    }\n}\n",
+            ),
+            (
+                "main.wb",
+                "use Root from \"hv.wb\";\ncomponent Root {\n    pub port feed \"F\";\n    wire red 1 [feed, h.coil];\n}\n",
+            ),
+        ];
+        // The instance `h` lives in hv.wb; completing in main.wb must see it.
+        let labels = complete_in(
+            &files,
+            "use Root from \"hv.wb\";\ncomponent Root {\n    pub port feed \"F\";\n    wire red 1 [‸];\n}\n",
+        );
+        assert!(labels.contains(&"h".to_string()), "{labels:?}");
+    }
+
+    #[test]
+    fn lexically_broken_buffer_still_completes_before_the_break() {
+        let labels = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n    wire red 1 [l.‸]\n}\n@@@",
+        );
+        assert!(labels.contains(&"anode".to_string()), "{labels:?}");
+    }
+}

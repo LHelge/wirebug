@@ -126,6 +126,11 @@ impl Overlay {
         self.0.remove(&canonical(path));
     }
 
+    /// The override for `path`, if one is set.
+    pub fn get(&self, path: &Path) -> Option<&str> {
+        self.0.get(&canonical(path)).map(String::as_str)
+    }
+
     fn read_to_string(&self, path: &Path) -> std::io::Result<String> {
         match self.0.get(path) {
             Some(text) => Ok(text.clone()),

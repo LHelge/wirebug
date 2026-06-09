@@ -34,6 +34,21 @@ impl LineIndex {
             .sum();
         Position::new(line as u32, column as u32)
     }
+
+    /// The byte offset of `pos`, clamped to the end of its line (and of
+    /// `src`).
+    pub(crate) fn offset(&self, src: &str, pos: Position) -> usize {
+        let line = (pos.line as usize).min(self.line_starts.len() - 1);
+        let start = self.line_starts[line];
+        let mut units = 0usize;
+        for (i, c) in src[start..].char_indices() {
+            if c == '\n' || units >= pos.character as usize {
+                return start + i;
+            }
+            units += c.len_utf16();
+        }
+        src.len()
+    }
 }
 
 fn floor_char_boundary(src: &str, mut i: usize) -> usize {
@@ -73,6 +88,26 @@ mod tests {
         let index = LineIndex::new(src);
         assert_eq!(index.position(src, 9), Position::new(1, 0));
         assert_eq!(index.position(src, 14), Position::new(1, 5));
+    }
+
+    #[test]
+    fn offset_past_line_end_clamps_to_newline() {
+        let src = "short\nlonger line\n";
+        let index = LineIndex::new(src);
+        assert_eq!(index.offset(src, Position::new(0, 99)), 5, "stops at \\n");
+        assert_eq!(index.offset(src, Position::new(99, 0)), src.len());
+    }
+
+    #[test]
+    fn position_offset_round_trip() {
+        let src = "component Vehicle {\n    msd: Msd \"MSD\";\n}\n";
+        let index = LineIndex::new(src);
+        for offset in 0..=src.len() {
+            if src.is_char_boundary(offset) {
+                let pos = index.position(src, offset);
+                assert_eq!(index.offset(src, pos), offset, "offset {offset}");
+            }
+        }
     }
 
     #[test]
