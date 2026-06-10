@@ -40,8 +40,12 @@ Four CLI commands share it:
   (per-file scopes + merged components) consulted by a token-stack scan
   of the live buffer — lex-only, so completion survives parse breakage,
   and a file that fails to load keeps its last-good scope
-  (`CompletionIndex::update_with`). Hover/goto-def/rename/semantic
-  tokens/formatting are deliberately later.
+  (`CompletionIndex::update_with`). An open `.wb` file its project never
+  loads (not reachable from `main.wb` via `use`) gets one info-severity
+  `unlinked_file` notice instead of silence — rust-analyzer's
+  unlinked-file move; its contents stay unchecked (lex/parse-only
+  checking of orphans is a possible later step). Hover/goto-def/rename/
+  semantic tokens/formatting are deliberately later.
 
 The `index.html` is an [`askama`] compile-time template (`templates/`),
 rendered by `render::index_html(views, live_reload)` — shared by `render`
