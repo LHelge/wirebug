@@ -4,6 +4,7 @@
   "description": "Language support for the wirebug electrical schematic and wiring harness DSL (.wb)",
   "version": "0.1.0",
   "publisher": "wirebug",
+  "icon": "icon.png",
   "engines": {
     "vscode": "^1.90.0"
   },
