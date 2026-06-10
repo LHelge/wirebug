@@ -2,7 +2,7 @@
 //! open document (with the overlay applied) and convert the resulting
 //! [`Problem`]s into LSP diagnostics grouped by file URI.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use lsp_types::{
@@ -23,22 +23,29 @@ use super::uri;
 /// grouped by file URI, plus the completion index over everything that
 /// resolved. Documents outside any project (no `wirebug.toml` above them)
 /// are checked as single-file entries — lex and parse problems still
-/// surface, at the cost of project-level noise like `no_root`.
+/// surface, at the cost of project-level noise like `no_root`. An open
+/// `.wb` file *inside* a project that no `use` chain from its entry
+/// reaches is invisible to the pipeline; it gets an explicit
+/// `unlinked_file` notice instead of silence (rust-analyzer's
+/// unlinked-file move), though its contents stay unchecked for now.
 pub(crate) fn check_open_documents<'a>(
     open: impl Iterator<Item = &'a PathBuf>,
     overlay: &Overlay,
 ) -> (HashMap<Uri, Vec<Diagnostic>>, CompletionIndex) {
-    let mut entries = BTreeSet::new();
-    for doc in open {
-        let parent = doc.parent().unwrap_or(Path::new("."));
-        let entry = project::discover(Some(parent)).unwrap_or_else(|_| doc.clone());
-        entries.insert(entry);
-    }
+    let docs: Vec<(&PathBuf, PathBuf)> = open
+        .map(|doc| {
+            let parent = doc.parent().unwrap_or(Path::new("."));
+            let entry = project::discover(Some(parent)).unwrap_or_else(|_| doc.clone());
+            (doc, entry)
+        })
+        .collect();
+    let entries: BTreeSet<&Path> = docs.iter().map(|(_, entry)| entry.as_path()).collect();
 
     let mut by_uri: HashMap<Uri, Vec<Diagnostic>> = HashMap::new();
     let mut index = CompletionIndex::default();
+    let mut loaded = HashSet::new();
     for entry in entries {
-        let (located, contribution) = check_one(&entry, overlay);
+        let (located, contribution) = check_one(entry, overlay, &mut loaded);
         for (uri, diagnostic) in located {
             by_uri.entry(uri).or_default().push(diagnostic);
         }
@@ -46,19 +53,60 @@ pub(crate) fn check_open_documents<'a>(
             index.absorb(contribution);
         }
     }
+
+    for (doc, entry) in &docs {
+        // A doc that is its own entry was loaded (or failed loudly) above;
+        // non-`.wb` docs (the manifest) are never in the loaded set.
+        if *doc == entry || doc.extension().is_none_or(|ext| ext != "wb") {
+            continue;
+        }
+        let canonical = doc.canonicalize().unwrap_or_else(|_| (*doc).clone());
+        if loaded.contains(&canonical) {
+            continue;
+        }
+        if let Some(uri) = uri::to_uri(doc) {
+            by_uri.entry(uri).or_default().push(unlinked(entry));
+        }
+    }
     (by_uri, index)
+}
+
+/// The notice for an open file its project never loads: anchored at the
+/// top of the file, severity information. It is the only diagnostic such
+/// a file can carry — nothing else looks at its contents.
+fn unlinked(entry: &Path) -> Diagnostic {
+    let entry = entry
+        .file_name()
+        .map_or_else(|| entry.display().to_string(), |n| n.display().to_string());
+    Diagnostic {
+        range: Range::default(),
+        severity: Some(DiagnosticSeverity::INFORMATION),
+        code: Some(NumberOrString::String("wirebug::unlinked_file".to_string())),
+        source: Some("wirebug".to_string()),
+        message: format!(
+            "file is not included in the project: no `use` chain from `{entry}` reaches it, so it is not checked\nadd `use <Component> from \"<path>\";` in a project file to include it"
+        ),
+        ..Diagnostic::default()
+    }
 }
 
 /// Run the pipeline for one project entry — `check_project`'s stages over
 /// the overlay — converting each problem to a located diagnostic and
-/// snapshotting the resolved registry for completion.
-fn check_one(entry: &Path, overlay: &Overlay) -> (Vec<(Uri, Diagnostic)>, Option<CompletionIndex>) {
+/// snapshotting the resolved registry for completion. Every file the load
+/// pulled in is recorded (by its loader-canonical path) into `loaded`, so
+/// the caller can spot open documents no project reached.
+fn check_one(
+    entry: &Path,
+    overlay: &Overlay,
+    loaded: &mut HashSet<PathBuf>,
+) -> (Vec<(Uri, Diagnostic)>, Option<CompletionIndex>) {
     let (project, mut problems) = project::load_with(entry, overlay);
 
     let mut files = HashMap::new();
     let mut index = None;
     if let Some(project) = &project {
         for file in &project.files {
+            loaded.insert(file.path.clone());
             if let Some(uri) = uri::to_uri(&file.path) {
                 let key = file.path.display().to_string();
                 files.insert(key, (uri, LineIndex::new(&file.src), file.src.as_str()));
@@ -272,6 +320,83 @@ mod tests {
                 .any(|d| d.severity == Some(DiagnosticSeverity::WARNING)),
             "expected a warning: {diags:?}"
         );
+    }
+
+    fn unlinked_notice(diags: &[Diagnostic]) -> Option<&Diagnostic> {
+        diags.iter().find(
+            |d| matches!(&d.code, Some(NumberOrString::String(c)) if c == "wirebug::unlinked_file"),
+        )
+    }
+
+    /// A `.wb` file inside a project that nothing `use`s from the entry is
+    /// never loaded — it must get the explicit unlinked-file notice rather
+    /// than silence.
+    #[test]
+    fn file_outside_the_use_tree_gets_an_unlinked_notice() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        manifest(dir.path());
+        write(
+            dir.path(),
+            "main.wb",
+            "component Root { pub port p \"P\"; }\n",
+        );
+        let orphan = write(
+            dir.path(),
+            "orphan.wb",
+            "component Orphan { pub port a \"A\"; }\n",
+        );
+
+        let (by_uri, _) = check_open_documents([orphan.clone()].iter(), &Overlay::default());
+        let orphan_uri = uri::to_uri(&orphan).unwrap();
+        let diags = by_uri.get(&orphan_uri).expect("a notice on orphan.wb");
+        let notice = unlinked_notice(diags).expect("the unlinked_file notice");
+        assert_eq!(notice.severity, Some(DiagnosticSeverity::INFORMATION));
+        assert_eq!(notice.range, Range::default(), "anchored at the top");
+        assert!(
+            notice.message.contains("main.wb"),
+            "names the entry: {}",
+            notice.message
+        );
+    }
+
+    /// A file the entry's `use` chain reaches is loaded and checked — no
+    /// unlinked notice.
+    #[test]
+    fn used_file_gets_no_unlinked_notice() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        manifest(dir.path());
+        let lamp = write(
+            dir.path(),
+            "lamp.wb",
+            "component Lamp { pub port a \"A\"; }\n",
+        );
+        write(
+            dir.path(),
+            "main.wb",
+            "use Lamp from \"lamp.wb\";\ncomponent Root { l: Lamp; }\n",
+        );
+
+        let (by_uri, _) = check_open_documents([lamp.clone()].iter(), &Overlay::default());
+        let lamp_uri = uri::to_uri(&lamp).unwrap();
+        let diags = by_uri.get(&lamp_uri).map(Vec::as_slice).unwrap_or(&[]);
+        assert!(unlinked_notice(diags).is_none(), "{diags:?}");
+    }
+
+    /// A `.wb` file with no `wirebug.toml` above it is checked as its own
+    /// single-file entry — out of scope for the unlinked notice.
+    #[test]
+    fn file_outside_any_project_gets_no_unlinked_notice() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let lone = write(
+            dir.path(),
+            "lone.wb",
+            "component Lone { pub port a \"A\"; }\n",
+        );
+
+        let (by_uri, _) = check_open_documents([lone.clone()].iter(), &Overlay::default());
+        let lone_uri = uri::to_uri(&lone).unwrap();
+        let diags = by_uri.get(&lone_uri).map(Vec::as_slice).unwrap_or(&[]);
+        assert!(unlinked_notice(diags).is_none(), "{diags:?}");
     }
 
     #[test]
