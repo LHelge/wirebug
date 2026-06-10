@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- Placeholder marketplace icon: two schematic boxes joined by an
+       orthogonal wire. Rasterize with:
+       rsvg-convert -w 256 -h 256 icon.svg -o icon.png -->
+  <rect width="256" height="256" rx="48" fill="#20262e"/>
+  <g fill="#3a4351">
+    <circle cx="32" cy="32" r="3"/><circle cx="96" cy="32" r="3"/><circle cx="160" cy="32" r="3"/><circle cx="224" cy="32" r="3"/>
+    <circle cx="32" cy="96" r="3"/><circle cx="96" cy="96" r="3"/><circle cx="160" cy="96" r="3"/><circle cx="224" cy="96" r="3"/>
+    <circle cx="32" cy="160" r="3"/><circle cx="96" cy="160" r="3"/><circle cx="160" cy="160" r="3"/><circle cx="224" cy="160" r="3"/>
+    <circle cx="32" cy="224" r="3"/><circle cx="96" cy="224" r="3"/><circle cx="160" cy="224" r="3"/><circle cx="224" cy="224" r="3"/>
+  </g>
+  <rect x="40" y="48" width="64" height="56" rx="6" fill="#2b3340" stroke="#cfd6e4" stroke-width="5"/>
+  <rect x="152" y="152" width="64" height="56" rx="6" fill="#2b3340" stroke="#cfd6e4" stroke-width="5"/>
+  <path d="M104 76 H128 V180 H152" fill="none" stroke="#f0a437" stroke-width="8"/>
+  <circle cx="104" cy="76" r="8" fill="#f0a437"/>
+  <circle cx="152" cy="180" r="8" fill="#f0a437"/>
+  <g fill="#8a94a6">
+    <circle cx="40" cy="64" r="5"/>
+    <circle cx="40" cy="88" r="5"/>
+    <circle cx="216" cy="168" r="5"/>
+    <circle cx="216" cy="192" r="5"/>
+  </g>
+</svg>
