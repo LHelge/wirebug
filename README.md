@@ -233,6 +233,13 @@ wires that share a channel so a bundle draws as distinct parallel lines.
 cargo build --release
 ```
 
+To put the `wirebug` CLI on your `PATH` — which is also how the VSCode
+extension finds its language server (`wirebug lsp`):
+
+```sh
+cargo install --path .
+```
+
 For the local development loop, install [`bacon`](https://dystroy.org/bacon/):
 
 ```sh
