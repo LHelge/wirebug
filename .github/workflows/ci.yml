@@ -25,6 +25,12 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      # `render --png` rasterises text through resvg, which needs fonts on
+      # the machine. The runner ships none, so install a sans-serif family
+      # for the PNG tests (and to mirror the feature's runtime requirement).
+      - name: Install fonts
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-dejavu-core
+
       # Caches ~/.cargo and ./target keyed on the lockfile + toolchain, so
       # clippy and test reuse one warm build.
       - name: Cache Rust build
