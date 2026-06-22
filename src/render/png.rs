@@ -21,8 +21,34 @@ impl PngRasterizer {
     /// Build a rasteriser with the system fonts loaded.
     #[must_use]
     pub fn new() -> Self {
+        use resvg::usvg::fontdb::{Family, Query};
+
         let mut options = resvg::usvg::Options::default();
-        options.fontdb_mut().load_system_fonts();
+        let db = options.fontdb_mut();
+        db.load_system_fonts();
+
+        // Our labels ask for the generic `sans-serif`, which fontdb maps to a
+        // default family name (`Arial`). A minimal host — e.g. a CI runner —
+        // may have fonts but not that exact name, and usvg then drops the text
+        // entirely rather than substituting. Point the generic at a present
+        // face so labels survive anywhere a font exists.
+        let resolves = db
+            .query(&Query {
+                families: &[Family::SansSerif],
+                ..Query::default()
+            })
+            .is_some();
+        if !resolves {
+            let fallback = db
+                .faces()
+                .next()
+                .and_then(|f| f.families.first())
+                .map(|(name, _)| name.clone());
+            if let Some(name) = fallback {
+                db.set_sans_serif_family(name);
+            }
+        }
+
         Self { options }
     }
 
@@ -78,7 +104,7 @@ mod tests {
         let canvas = r#"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="60">"#;
         let blank = format!("{canvas}</svg>");
         let labelled = format!(
-            r#"{canvas}<text x="10" y="40" font="20px sans-serif">Hello wirebug</text></svg>"#
+            r#"{canvas}<text x="10" y="40" font-family="sans-serif" font-size="20">Hello wirebug</text></svg>"#
         );
         let r = PngRasterizer::new();
         let blank_png = r.to_png(&blank, 2.0).expect("blank renders");
