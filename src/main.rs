@@ -55,13 +55,15 @@ impl RenderFormat {
                 Ok(views)
             }
             Self::Png { scale } => {
+                let rasterizer = wirebug::render::png::PngRasterizer::new();
                 let mut index_views = Vec::with_capacity(views.len());
                 for view in views {
                     let filename = Path::new(&view.filename)
                         .with_extension("png")
                         .to_string_lossy()
                         .into_owned();
-                    let bytes = wirebug::render::png::svg_to_png(&view.svg, scale)
+                    let bytes = rasterizer
+                        .to_png(&view.svg, scale)
                         .context("rasterising view to PNG")?;
                     write_file(out_dir, &filename, &bytes)?;
                     index_views.push(wirebug::render::RenderedView {
