@@ -85,7 +85,7 @@ view schematic "HV System Overview" {
 
     // The fuse box appears only as its interlock feed: a single port wired
     // into the e-stop, which is the head of the HV interlock loop.
-    include fuses at (6, 26) ports {
+    include fuses at (4, 26) ports {
         east: interlock;
     }
 

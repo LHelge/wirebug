@@ -3,6 +3,10 @@
 User-facing intro is in `README.md`. This file is for context that helps
 future work on the codebase. Keep it short; don't restate the README.
 
+This is the Copilot-facing mirror of `CLAUDE.md`. The DSL skill lives at
+`.agents/skills/wirebug-dsl/` and should stay in sync with the Claude copy at
+`.claude/skills/wirebug-dsl/`.
+
 ## One pipeline
 
 The only input is the **`.wb` DSL** (spec: `.agents/skills/wirebug-dsl/`).
