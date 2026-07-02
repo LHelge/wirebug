@@ -47,6 +47,34 @@ extend Vehicle {
         wire orange 35 "V" [inv.phase_v, mot.phase_v];
         wire orange 35 "W" [inv.phase_w, mot.phase_w];
     }
+
+    // --- Motor feedback ---
+    // The resolver excitation/sin/cos pairs and the winding NTC travel
+    // together as one shielded loom, inverter control plug to the motor's
+    // feedback connector. Each signal twists as a pair; the minus leg
+    // carries a black tracer.
+
+    cable motor_feedback "Motor feedback" {
+        type:   "Shielded 4x twisted pair";
+        length: 1.2;
+
+        twisted {
+            wire yellow 0.5 "EX+" [inv.res_ex_pos, mot.res_ex_pos];
+            wire yellow/black 0.5 "EX-" [inv.res_ex_neg, mot.res_ex_neg];
+        }
+        twisted {
+            wire green 0.5 "SIN+" [inv.res_sin_pos, mot.res_sin_pos];
+            wire green/black 0.5 "SIN-" [inv.res_sin_neg, mot.res_sin_neg];
+        }
+        twisted {
+            wire blue 0.5 "COS+" [inv.res_cos_pos, mot.res_cos_pos];
+            wire blue/black 0.5 "COS-" [inv.res_cos_neg, mot.res_cos_neg];
+        }
+        twisted {
+            wire white 0.5 "TEMP+" [inv.motor_temp_pos, mot.temp_pos];
+            wire white/black 0.5 "TEMP-" [inv.motor_temp_neg, mot.temp_neg];
+        }
+    }
 }
 
 // --- View: Motor phase harness ---
@@ -58,4 +86,16 @@ view harness "Motor phase harness" {
 
     include inv.phases at (4, 10);
     include mot.power  at (32, 10);
+}
+
+// --- View: Motor feedback harness ---
+// The feedback loom WireViz-style: the inverter control connector and the
+// motor's feedback connector as pin tables, the four twisted pairs braided
+// inside the cable box between them.
+
+view harness "Motor feedback harness" {
+    grid: 20;
+
+    include inv.control  at (0, 4);
+    include mot.inverter at (44, 8);
 }

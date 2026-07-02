@@ -1,98 +1,7 @@
 // Motor inverter / motor controller
 // Converts DC from HV bus to 3-phase AC for the drive motor
 
-use Can4p from "../connectors.wb";
-
-connector_type GridRowMajor8p "Grid row-major 2x4" {
-    layout grid {
-        rows: 2;
-        cols: 4;
-        numbering: row_major;
-    }
-}
-
-connector_type GridOddEven8p "Grid odd-even 2x4" {
-    layout grid {
-        rows: 2;
-        cols: 4;
-        numbering: odd_even;
-    }
-}
-
-connector_type GridClockwise8p "Grid clockwise 2x4" {
-    layout grid {
-        rows: 2;
-        cols: 4;
-        numbering: clockwise;
-    }
-}
-
-connector_type GridCounterClockwise8p "Grid counter-clockwise 2x4" {
-    layout grid {
-        rows: 2;
-        cols: 4;
-        numbering: counter_clockwise;
-    }
-}
-
-connector_type InverterControl "Inverter control 47+13p" {
-    layout face {
-        cavity 47 at (0, 0) size large;
-        cavity 46 at (2, 0) size large;
-        cavity 49 at (0, 2) size large;
-        cavity 48 at (2, 2) size large;
-
-        cavity 21 at (4, 0);
-        cavity 20 at (5, 0);
-        cavity 19 at (6, 0);
-        cavity 18 at (7, 0);
-        cavity 17 at (8, 0);
-        cavity 16 at (9, 0);
-        cavity 15 at (10, 0);
-        cavity 14 at (11, 0);
-
-        cavity 29 at (4, 1);
-        cavity 28 at (5, 1);
-        cavity 27 at (6, 1);
-        cavity 26 at (7, 1);
-        cavity 25 at (8, 1);
-        cavity 24 at (9, 1);
-        cavity 23 at (10, 1);
-        cavity 22 at (11, 1);
-
-        cavity 37 at (4, 2);
-        cavity 36 at (5, 2);
-        cavity 35 at (6, 2);
-        cavity 34 at (7, 2);
-        cavity 33 at (8, 2);
-        cavity 32 at (9, 2);
-        cavity 31 at (10, 2);
-        cavity 30 at (11, 2);
-
-        cavity 45 at (4, 3);
-        cavity 44 at (5, 3);
-        cavity 43 at (6, 3);
-        cavity 42 at (7, 3);
-        cavity 41 at (8, 3);
-        cavity 40 at (9, 3);
-        cavity 39 at (10, 3);
-        cavity 38 at (11, 3);
-
-        cavity 1 at (16, 0);
-        cavity 2 at (15, 0);
-        cavity 3 at (16, 1);
-        cavity 4 at (15, 1);
-        cavity 5 at (14, 1);
-        cavity 6 at (13, 1);
-        cavity 7 at (16, 2);
-        cavity 8 at (15, 2);
-        cavity 9 at (14, 2);
-        cavity 10 at (13, 2);
-        cavity 11 at (16, 3);
-        cavity 12 at (15, 3);
-        cavity 13 at (14, 3);
-    }
-}
+use InverterControl from "../connectors.wb";
 
 component Inverter {
     connector hv "HV DC 2p" {
@@ -106,60 +15,57 @@ component Inverter {
         pub port phase_w "W" pin 3;
     }
 
+    // CAN-bus
     pub port can_h "CAN H";
     pub port can_l "CAN L";
 
-    connector can: Can4p {
-        pin 1: can_h;
-        pin 2: can_l;
-    }
+    // Motor connections — resolver + temperature, motor-side nomenclature
+    pub port res_ex_pos  "EX+";
+    pub port res_ex_neg  "EX-";
+    pub port res_sin_pos "SIN+";
+    pub port res_sin_neg "SIN-";
+    pub port res_cos_pos "COS+";
+    pub port res_cos_neg "COS-";
+    pub port motor_temp_neg "TEMP-";
+    pub port motor_temp_pos "TEMP+";
 
-    connector lv "12V 4p" {
-        pub port b_pos "B+" pin 1;
-        pub port gnd   "GND" pins [2, 3, 4];
-    }
+    // Control
+    pub port ignition "IGNITION";
 
-    connector intlk "Interlock 2p" {
-        pub port interlock_in  "INTLK IN" pin 1;
-        pub port interlock_out "INTLK OUT" pin 2;
-    }
+    // Power — B+ and B- each ganged over two cavities for current
+    pub port b_pos "B+";
+    pub port b_neg "B-";
 
-    pub port control_47 "HV AUX+";
-    pub port control_48 "HV AUX-";
-    pub port control_1  "WAKE";
-    pub port control_2  "READY";
+    // Interlock
+    pub port interlock_in  "INTLK IN";
+    pub port interlock_out "INTLK OUT";
 
     connector control: InverterControl {
-        pin 47: control_47;
-        pin 48: control_48;
-        pin 1: control_1;
-        pin 2: control_2;
-    }
+        pin 14: can_h;
+        pin 15: can_l;
 
-    connector demo_row_major: GridRowMajor8p {
-    }
+        pin 17: res_sin_neg;
+        pin 18: res_cos_neg;
+        pin 19: res_ex_pos;
+        pin 20: res_sin_pos;
+        pin 21: res_cos_pos;
+        pin 27: res_ex_neg;
+        pin 44: motor_temp_neg;
+        pin 45: motor_temp_pos;
 
-    connector demo_odd_even: GridOddEven8p {
-    }
+        // Control
+        pin 42: ignition;
 
-    connector demo_clockwise: GridClockwise8p {
-    }
-
-    connector demo_counter_clockwise: GridCounterClockwise8p {
+        // Power
+        pin 46: b_pos;
+        pin 47: b_neg;
+        pin 48: b_pos;
+        pin 49: b_neg;
     }
 }
 
 view pinout "Inverter pinouts" {
     grid: 20;
 
-    include hv     at (0, 0);
-    include phases at (12, 0);
-    include can    at (0, 8);
-    include lv     at (12, 8);
-    include intlk  at (24, 8);
-    include control at (14, 22);
-    include demo_row_major at (0, 40);
-    include demo_odd_even at (12, 40);
-    include demo_clockwise at (24, 40);
-    include demo_counter_clockwise at (36, 40);
+    include control at (0, 0);
 }

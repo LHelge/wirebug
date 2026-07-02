@@ -1,5 +1,7 @@
 // Electric drive motor with resolver position feedback
 
+use YazakiRH_8p from "../connectors.wb";
+
 component Motor {
     connector power "Power 3p" {
         pub port phase_u "U" pin 1;
@@ -7,12 +9,29 @@ component Motor {
         pub port phase_w "W" pin 3;
     }
 
-    connector resolver "Resolver 6p" {
-        pub port res_exc_p "EXC+" pin 1;
-        pub port res_exc_n "EXC-" pin 2;
-        pub port res_sin_p "SIN+" pin 3;
-        pub port res_sin_n "SIN-" pin 4;
-        pub port res_cos_p "COS+" pin 5;
-        pub port res_cos_n "COS-" pin 6;
+    pub port temp_neg "TEMP-";
+    pub port temp_pos "TEMP+";
+    pub port res_ex_pos "EX+";
+    pub port res_ex_neg "EX-";
+    pub port res_sin_pos "SIN+";
+    pub port res_sin_neg "SIN-";
+    pub port res_cos_pos "COS+";
+    pub port res_cos_neg "COS-";
+
+    connector inverter: YazakiRH_8p {
+        pin 1: temp_neg;
+        pin 2: temp_pos;
+        pin 3: res_ex_pos;
+        pin 4: res_ex_neg;
+        pin 5: res_sin_pos;
+        pin 6: res_sin_neg;
+        pin 7: res_cos_neg;
+        pin 8: res_cos_pos;
     }
+}
+
+view pinout "Motor pinout" {
+    grid: 20;
+
+    include inverter at (0, 0);
 }

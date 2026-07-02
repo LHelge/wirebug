@@ -4,10 +4,70 @@
 // authored from the harness side — mirror device-side datasheet
 // drawings before entering them here.
 
-connector_type Can4p "CAN 4p" {
+connector_type YazakiRH_8p "Yazaki RH 8p" {
     layout grid {
         rows: 2;
-        cols: 2;
+        cols: 4;
         numbering: row_major;
+    }
+}
+
+
+connector_type InverterControl "Inverter control 47+13p" {
+    layout face {
+        cavity 47 at (0, 0) size large;
+        cavity 46 at (2, 0) size large;
+        cavity 49 at (0, 2) size large;
+        cavity 48 at (2, 2) size large;
+
+        cavity 21 at (4, 0);
+        cavity 20 at (5, 0);
+        cavity 19 at (6, 0);
+        cavity 18 at (7, 0);
+        cavity 17 at (8, 0);
+        cavity 16 at (9, 0);
+        cavity 15 at (10, 0);
+        cavity 14 at (11, 0);
+
+        cavity 29 at (4, 1);
+        cavity 28 at (5, 1);
+        cavity 27 at (6, 1);
+        cavity 26 at (7, 1);
+        cavity 25 at (8, 1);
+        cavity 24 at (9, 1);
+        cavity 23 at (10, 1);
+        cavity 22 at (11, 1);
+
+        cavity 37 at (4, 2);
+        cavity 36 at (5, 2);
+        cavity 35 at (6, 2);
+        cavity 34 at (7, 2);
+        cavity 33 at (8, 2);
+        cavity 32 at (9, 2);
+        cavity 31 at (10, 2);
+        cavity 30 at (11, 2);
+
+        cavity 45 at (4, 3);
+        cavity 44 at (5, 3);
+        cavity 43 at (6, 3);
+        cavity 42 at (7, 3);
+        cavity 41 at (8, 3);
+        cavity 40 at (9, 3);
+        cavity 39 at (10, 3);
+        cavity 38 at (11, 3);
+
+        cavity 1 at (16, 0);
+        cavity 2 at (15, 0);
+        cavity 3 at (16, 1);
+        cavity 4 at (15, 1);
+        cavity 5 at (14, 1);
+        cavity 6 at (13, 1);
+        cavity 7 at (16, 2);
+        cavity 8 at (15, 2);
+        cavity 9 at (14, 2);
+        cavity 10 at (13, 2);
+        cavity 11 at (16, 3);
+        cavity 12 at (15, 3);
+        cavity 13 at (14, 3);
     }
 }

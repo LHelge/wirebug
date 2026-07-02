@@ -47,5 +47,5 @@ view harness "CAN harness" {
     include vcm.can2    at (42, 14);
 
     include vcm.can1 at (0, 20);
-    include inv.can  at (42, 20);
+    include inv.control  at (42, 20);
 }
