@@ -510,7 +510,11 @@ fn build_cable_box(
 
     let widest = strands
         .iter()
-        .map(|s| wire_annotation(s.label.as_deref(), s.gauge).chars().count())
+        .map(|s| {
+            wire_annotation(s.label.as_deref(), s.gauge, &s.color)
+                .chars()
+                .count()
+        })
         .max()
         .unwrap_or(0)
         .max(title.chars().count())

@@ -6,6 +6,7 @@ use svg::node::element::{Circle, Group, Line, Path, Rectangle, Text};
 use super::bezier::{FLEX, flex};
 use super::layout::{CableBox, ConnectorNode, LooseWire};
 use super::{HEADER_HEIGHT, NODE_PAD, PIN_COL_WIDTH, PIN_DOT_RADIUS, ROW_HEIGHT};
+use crate::render::color::iec_code;
 use crate::render::geometry::{Point, Side};
 
 /// A `cable-wire` path with the given SVG path data, stroked in `color`.
@@ -17,6 +18,14 @@ fn wire_path(d: String, color: &str) -> Path {
         .set("stroke", color)
         .set("data-color", color)
         .set("d", d)
+}
+
+/// The black casing drawn under a strand — the same path, stroked wider —
+/// so any core color, white included, reads against any background
+/// (WireViz's trick). Every casing of a strand is emitted before its cores,
+/// or a later casing would overdraw the core at the segment joins.
+fn casing_path(d: String) -> Path {
+    Path::new().set("class", "cable-wire-casing").set("d", d)
 }
 
 /// A connector as a titled pin table: header (instance + connector), then
@@ -155,21 +164,26 @@ pub(super) fn render_cable_box(cb: &CableBox) -> Group {
         let entry = Point::new(left_edge.x, strand.row_y);
         let exit = Point::new(right_edge.x, strand.row_y);
 
-        let lead_in = flex(strand.left_attach, entry, FLEX);
-        let lead_out = flex(exit, strand.right_attach, FLEX);
+        let lead_in = flex(strand.left_attach, entry, FLEX).path_d();
+        let run = format!("M{},{} L{},{}", entry.x, entry.y, exit.x, exit.y);
+        let lead_out = flex(exit, strand.right_attach, FLEX).path_d();
         group = group
-            .add(wire_path(lead_in.path_d(), &strand.color))
-            .add(wire_path(
-                format!("M{},{} L{},{}", entry.x, entry.y, exit.x, exit.y),
-                &strand.color,
-            ))
-            .add(wire_path(lead_out.path_d(), &strand.color));
+            .add(casing_path(lead_in.clone()))
+            .add(casing_path(run.clone()))
+            .add(casing_path(lead_out.clone()))
+            .add(wire_path(lead_in, &strand.color))
+            .add(wire_path(run, &strand.color))
+            .add(wire_path(lead_out, &strand.color));
 
         group = group.add(
-            Text::new(wire_annotation(strand.label.as_deref(), strand.gauge))
-                .set("class", "cable-label")
-                .set("x", ox + cb.width / 2.0)
-                .set("y", strand.row_y - 4.0),
+            Text::new(wire_annotation(
+                strand.label.as_deref(),
+                strand.gauge,
+                &strand.color,
+            ))
+            .set("class", "cable-label")
+            .set("x", ox + cb.width / 2.0)
+            .set("y", strand.row_y - 4.0),
         );
     }
 
@@ -183,23 +197,31 @@ pub(super) fn render_loose(wire: &LooseWire) -> Group {
     let mid = curve.point_at(0.5);
     Group::new()
         .set("class", "cable")
+        .add(casing_path(curve.path_d()))
         .add(wire_path(curve.path_d(), &wire.color))
         .add(
-            Text::new(wire_annotation(wire.label.as_deref(), wire.gauge))
-                .set("class", "cable-label")
-                .set("x", mid.x)
-                .set("y", mid.y - 2.0),
+            Text::new(wire_annotation(
+                wire.label.as_deref(),
+                wire.gauge,
+                &wire.color,
+            ))
+            .set("class", "cable-label")
+            .set("x", mid.x)
+            .set("y", mid.y - 2.0),
         )
 }
 
-/// The text shown along a wire: `<label> · <gauge>mm²`, or just the gauge
-/// when the wire is unlabelled. `f64`'s shortest-round-trip formatting already
-/// drops a trailing `.0` (`50.0` → `50`, `0.25` stays `0.25`).
-pub(super) fn wire_annotation(label: Option<&str>, gauge: f64) -> String {
-    let gauge = format!("{gauge}mm²");
+/// The text shown along a wire: `<label> · <gauge>mm² · <color code>`,
+/// dropping the label part when the wire is unlabelled. The color code is
+/// IEC 60757 where known (`render/color.rs`), so the strand stays
+/// identifiable in grayscale print where the stroke color doesn't help.
+/// `f64`'s shortest-round-trip formatting already drops a trailing `.0`
+/// (`50.0` → `50`, `0.25` stays `0.25`).
+pub(super) fn wire_annotation(label: Option<&str>, gauge: f64, color: &str) -> String {
+    let tail = format!("{gauge}mm² · {}", iec_code(color));
     match label {
-        Some(l) => format!("{l} · {gauge}"),
-        None => gauge,
+        Some(l) => format!("{l} · {tail}"),
+        None => tail,
     }
 }
 
@@ -208,8 +230,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn annotation_combines_label_and_gauge() {
-        assert_eq!(wire_annotation(Some("HV+"), 50.0), "HV+ · 50mm²");
-        assert_eq!(wire_annotation(None, 0.25), "0.25mm²");
+    fn annotation_combines_label_gauge_and_color_code() {
+        assert_eq!(
+            wire_annotation(Some("HV+"), 50.0, "orange"),
+            "HV+ · 50mm² · OG"
+        );
+        assert_eq!(wire_annotation(None, 0.25, "white"), "0.25mm² · WH");
+        assert_eq!(
+            wire_annotation(None, 1.0, "chartreuse"),
+            "1mm² · chartreuse"
+        );
     }
 }
