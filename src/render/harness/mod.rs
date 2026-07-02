@@ -58,6 +58,7 @@ const STYLE: &str = "\
 .pin-num { font: italic 10px sans-serif; fill: #555; text-anchor: middle; }
 .pin-label { font: 11px sans-serif; }
 .pin-dot { fill: black; }
+.cable-wire-casing { fill: none; stroke: black; stroke-width: 4; stroke-linecap: butt; }
 .cable-wire { fill: none; stroke-width: 2; }
 .cable-label { font: 9px sans-serif; text-anchor: middle; fill: #333; }
 .title { font: bold 14px sans-serif; }
@@ -224,9 +225,11 @@ component sys {
         assert!(svg.contains("class=\"cable-wire\""));
         // Both wires of the cable survive (pos–pos and neg–neg).
         assert_eq!(svg.matches("class=\"cable-wire\"").count(), 2);
-        // The labelled wire's annotation shows; colors pass through as stroke.
-        assert!(svg.contains("V+ · 50mm²"));
+        // The labelled wire's annotation shows (with its color code);
+        // colors pass through as stroke, over a black casing.
+        assert!(svg.contains("V+ · 50mm² · OG"));
         assert!(svg.contains("stroke=\"orange\""));
+        assert!(svg.contains("class=\"cable-wire-casing\""));
         assert!(svg.contains("Source"));
     }
 

@@ -206,7 +206,9 @@ Every wire segment is one horizontally-flexed cubic bezier (`bezier.rs::flex`,
 a loose wire is one curve. Control points share each endpoint's y and stay
 within the endpoints' x-span, so the curve never overshoots its bounding box
 (no viewbox padding needed). Each strand is stroked with `wire.color` (the SVG
-`stroke`) and annotated `<label> · <gauge>mm²`.
+`stroke`) over a wider black casing path (WireViz's trick, so light
+colors read on any background) and annotated
+`<label> · <gauge>mm² · <color code>` (IEC 60757 via `render/color.rs`).
 
 Two deliberate departures from the schematic's no-inference rule: pin
 **facing** is derived per pin from where its conductor goes (above), and wire
