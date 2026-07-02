@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 
 use lsp_types::{CompletionItem, CompletionItemKind};
 
+use crate::dsl::ir::ColorName;
 use crate::dsl::lex::{Token, lex, significant};
 use crate::dsl::project::Project;
 use crate::dsl::resolve::Resolved;
@@ -324,6 +325,12 @@ impl CompletionIndex {
         if cursor.after(&[Token::View]) {
             return constants(&VIEW_KINDS);
         }
+        // `wire <color>` and the tracer of a two-tone `<base>/<tracer>`
+        // both take the closed IEC 60757 color set.
+        if let [.., Token::Wire] | [.., Token::Wire, Token::Ident(_), Token::Slash] = cursor.tail()
+        {
+            return colors();
+        }
 
         let component = self.current_component(scope, cursor);
 
@@ -366,10 +373,16 @@ impl CompletionIndex {
             },
             Some(Block::Cable) => {
                 if cursor.at_statement_start() {
-                    let mut items = keywords(&["wire"]);
+                    let mut items = keywords(&["wire", "twisted"]);
                     items.push(property("type"));
                     items.push(property("length"));
                     return items;
+                }
+                Vec::new()
+            }
+            Some(Block::Twisted) => {
+                if cursor.at_statement_start() {
+                    return keywords(&["wire"]);
                 }
                 Vec::new()
             }
@@ -468,6 +481,14 @@ fn constants(values: &[&str]) -> Vec<CompletionItem> {
         .collect()
 }
 
+/// The IEC 60757 colors, canonical name labelled with its letter code.
+fn colors() -> Vec<CompletionItem> {
+    ColorName::STANDARD
+        .iter()
+        .map(|c| item(c.css(), CompletionItemKind::COLOR, c.code()))
+        .collect()
+}
+
 fn property(key: &str) -> CompletionItem {
     CompletionItem {
         insert_text: Some(format!("{key}: ")),
@@ -481,6 +502,7 @@ enum Block {
     ConnectorType,
     Connector,
     Cable,
+    Twisted,
     View { kind: Option<String> },
     Ports { instance: Option<String> },
     Enclosure,
@@ -606,6 +628,7 @@ fn classify(before: &[Token]) -> Block {
             }
             Token::Enclosure => return Block::Enclosure,
             Token::Cable => return Block::Cable,
+            Token::Twisted => return Block::Twisted,
             Token::Connector => return Block::Connector,
             Token::ConnectorType => return Block::ConnectorType,
             // Header tokens between the keyword and its `{`.
@@ -656,6 +679,7 @@ fn is_wordlike(token: &Token) -> bool {
             | Token::Semicolon
             | Token::Dot
             | Token::Colon
+            | Token::Slash
     )
 }
 
@@ -867,6 +891,70 @@ mod tests {
             "connector_type C \"c\" {\n    layout: grid {\n        numbering: ‸\n    }\n}\n",
         );
         assert_eq!(labels, NUMBERING_MODES);
+    }
+
+    #[test]
+    fn wire_keyword_offers_iec_colors() {
+        let labels = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    wire ‸\n}\n",
+        );
+        assert!(labels.contains(&"red".to_string()), "{labels:?}");
+        assert!(labels.contains(&"turquoise".to_string()), "{labels:?}");
+        assert!(
+            !labels.contains(&"purple".to_string()),
+            "synonyms are not canonical: {labels:?}"
+        );
+    }
+
+    #[test]
+    fn wire_color_completes_while_partially_typed() {
+        let labels = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    wire gr‸\n}\n",
+        );
+        assert!(labels.contains(&"green".to_string()), "{labels:?}");
+    }
+
+    #[test]
+    fn tracer_slash_offers_iec_colors() {
+        let labels = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    wire green/‸\n}\n",
+        );
+        assert!(labels.contains(&"yellow".to_string()), "{labels:?}");
+    }
+
+    #[test]
+    fn cable_statement_start_offers_twisted() {
+        let labels = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    cable c \"C\" {\n        ‸\n    }\n}\n",
+        );
+        for expected in ["wire", "twisted", "type", "length"] {
+            assert!(
+                labels.contains(&expected.to_string()),
+                "{expected}: {labels:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn twisted_block_offers_wire() {
+        let labels = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    cable c \"C\" {\n        twisted {\n            ‸\n        }\n    }\n}\n",
+        );
+        assert_eq!(labels, ["wire"]);
+    }
+
+    #[test]
+    fn endpoint_list_completes_inside_a_twisted_group() {
+        let labels = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n    cable c \"C\" {\n        twisted {\n            wire white 0.5 [l.‸]\n        }\n    }\n}\n",
+        );
+        assert!(labels.contains(&"anode".to_string()), "{labels:?}");
     }
 
     #[test]

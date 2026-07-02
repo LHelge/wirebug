@@ -82,6 +82,25 @@ pub enum ColorName {
 }
 
 impl ColorName {
+    /// Every standard IEC 60757 color, in declaration order — the closed
+    /// set completion and documentation enumerate.
+    pub const STANDARD: [Self; 14] = [
+        Self::Black,
+        Self::Brown,
+        Self::Red,
+        Self::Orange,
+        Self::Yellow,
+        Self::Green,
+        Self::Blue,
+        Self::Violet,
+        Self::Grey,
+        Self::White,
+        Self::Pink,
+        Self::Turquoise,
+        Self::Gold,
+        Self::Silver,
+    ];
+
     /// The CSS color this name strokes as. Every IEC 60757 color has an
     /// exact CSS name; `Other` passes through verbatim.
     pub fn css(&self) -> &str {
