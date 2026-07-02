@@ -621,6 +621,22 @@ pub enum Problem {
         at: SourceSpan,
     },
 
+    /// A `twisted { }` group wrapping fewer than two conductors — twisting
+    /// needs partners, so the wrapper does nothing.
+    #[error("a twisted group with {count} conductor(s)")]
+    #[diagnostic(
+        severity(Warning),
+        code(wirebug::twisted_group_arity),
+        help("group at least two conductors, or drop the `twisted {{ }}` wrapper")
+    )]
+    TwistedGroupArity {
+        count: usize,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("twists nothing")]
+        at: SourceSpan,
+    },
+
     /// A wire color outside the IEC 60757 vocabulary. It still renders
     /// (stroke and code pass through verbatim), but it has no standard
     /// code and won't match real wire stock.

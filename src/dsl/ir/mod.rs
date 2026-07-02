@@ -355,9 +355,6 @@ pub struct CableMeta {
     pub r#type: Option<String>,
     /// Length in metres.
     pub length: Option<f64>,
-    /// Whether the conductors are twisted together (`twisted: true;`).
-    /// The harness renderer braids a two-conductor twisted cable.
-    pub twisted: bool,
 }
 
 /// A materialized physical connector on an instance.
@@ -458,6 +455,10 @@ pub struct Wire {
     pub endpoints: Vec<WireEnd>,
     /// The cable this conductor belongs to, if any. Loose wires are `None`.
     pub cable: Option<CableName>,
+    /// The `twisted { }` group this conductor belongs to, numbered per
+    /// cable in source order. Wires of one cable sharing an index are
+    /// twisted together; the harness renderer braids two-conductor groups.
+    pub twisted_group: Option<u32>,
 }
 
 /// A resolved wire endpoint.

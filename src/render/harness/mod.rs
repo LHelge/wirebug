@@ -294,18 +294,16 @@ component sys {
         assert!(!svg.contains("class=\"cable-wire-tracer\""));
     }
 
-    /// Two 2-pin connectors joined by a 2-conductor cable with the given
-    /// properties.
-    fn cabled_pair_design(properties: &str) -> Design {
+    /// Two 2-pin connectors joined by a 2-conductor cable; `body` is the
+    /// cable's conductor block.
+    fn cabled_pair_design(body: &str) -> Design {
         design_from(&format!(
             r#"
 component sys {{
     a: src;
     b: snk;
     cable pair "Pair" {{
-        {properties}
-        wire white/blue 0.5 "H" [a.h, b.h];
-        wire white/red 0.5 "L" [a.l, b.l];
+        {body}
     }}
     component src {{
         connector c "CAN 2p" {{
@@ -339,11 +337,19 @@ component sys {{
     #[test]
     fn twisted_pair_braids_the_box_run() {
         let twisted = render(
-            &cabled_pair_design("twisted: true;"),
+            &cabled_pair_design(
+                r#"twisted {
+                    wire white/blue 0.5 "H" [a.h, b.h];
+                    wire white/red 0.5 "L" [a.l, b.l];
+                }"#,
+            ),
             &harness_view("sys", &[("a", "c", 0.0, 0.0), ("b", "c", 16.0, 0.0)]),
         );
         let straight = render(
-            &cabled_pair_design(""),
+            &cabled_pair_design(
+                r#"wire white/blue 0.5 "H" [a.h, b.h];
+                wire white/red 0.5 "L" [a.l, b.l];"#,
+            ),
             &harness_view("sys", &[("a", "c", 0.0, 0.0), ("b", "c", 16.0, 0.0)]),
         );
 
@@ -365,6 +371,66 @@ component sys {{
         assert!(twisted.contains("class=\"cable-label cable-label-end\""));
         // (Class-attribute form: the selector always exists in the style block.)
         assert!(!straight.contains("class=\"cable-label cable-label-start\""));
+    }
+
+    #[test]
+    fn mixed_cable_braids_only_the_twisted_pair() {
+        let design = design_from(
+            r#"
+component sys {
+    a: src;
+    b: snk;
+    cable loom "Sensor loom" {
+        wire red 1.5 "12V" [a.pwr, b.pwr];
+        twisted {
+            wire white/blue 0.5 "H" [a.h, b.h];
+            wire white/red 0.5 "L" [a.l, b.l];
+        }
+        wire black 1.5 "GND" [a.gnd, b.gnd];
+    }
+    component src {
+        connector c "Sensor 4p" {
+            pub port pwr "12V" pin 1;
+            pub port h "H" pin 2;
+            pub port l "L" pin 3;
+            pub port gnd "GND" pin 4;
+        }
+    }
+    component snk {
+        connector c "Sensor 4p" {
+            pub port pwr "12V" pin 1;
+            pub port h "H" pin 2;
+            pub port l "L" pin 3;
+            pub port gnd "GND" pin 4;
+        }
+    }
+}
+"#,
+        );
+        let view = harness_view("sys", &[("a", "c", 0.0, 0.0), ("b", "c", 24.0, 0.0)]);
+
+        // The pair's strands land in adjacent rows even though the sort is
+        // by endpoint y — groups sort as one unit.
+        let subject = design
+            .instances
+            .values()
+            .find(|i| i.type_name == TypeName::from("sys"))
+            .expect("subject");
+        let layout = HarnessLayout::compute(&design, subject, &view, DEFAULT_GRID);
+        let groups: Vec<Option<u32>> = layout.cable_boxes[0]
+            .strands
+            .iter()
+            .map(|s| s.group)
+            .collect();
+        assert_eq!(groups, [None, Some(0), Some(0), None]);
+
+        let svg = render(&design, &view);
+        // Straight conductors keep their line runs and centred labels; the
+        // pair braids and pushes its labels to the edges.
+        assert!(svg.contains(" L"));
+        assert!(svg.contains("class=\"cable-label\""));
+        assert!(svg.contains("class=\"cable-label cable-label-start\""));
+        assert!(svg.contains("class=\"cable-label cable-label-end\""));
     }
 
     #[test]

@@ -93,6 +93,9 @@ pub(super) struct CableStrand {
     pub(super) color: WireColor,
     pub(super) gauge: f64,
     pub(super) label: Option<String>,
+    /// The strand's `twisted { }` group within its cable; strands sharing
+    /// an index braid together (two-strand groups only).
+    pub(super) group: Option<u32>,
 }
 
 /// A declared `cable`, drawn WireViz-style as a labelled box on the spine,
@@ -105,9 +108,6 @@ pub(super) struct CableBox {
     pub(super) origin: Point,
     pub(super) width: f64,
     pub(super) height: f64,
-    /// The cable's `twisted: true;` — a two-strand twisted box draws its
-    /// run as a braid.
-    pub(super) twisted: bool,
     pub(super) strands: Vec<CableStrand>,
 }
 
@@ -148,6 +148,8 @@ struct RawWire {
     label: Option<String>,
     /// The declared cable this conductor belongs to, if any.
     cable: Option<CableName>,
+    /// The conductor's `twisted { }` group within that cable.
+    twisted_group: Option<u32>,
 }
 
 impl HarnessLayout {
@@ -210,6 +212,7 @@ impl HarnessLayout {
                     gauge: wire.gauge,
                     label: wire.label.clone(),
                     cable: wire.cable.clone(),
+                    twisted_group: wire.twisted_group,
                 });
             }
         }
@@ -481,6 +484,7 @@ fn build_cable_box(
         color: WireColor,
         gauge: f64,
         label: Option<String>,
+        group: Option<u32>,
     }
     let mut strands: Vec<Strand> = raws
         .into_iter()
@@ -494,15 +498,32 @@ fn build_cable_box(
                 color: raw.color,
                 gauge: raw.gauge,
                 label: raw.label,
+                group: raw.twisted_group,
             }
         })
         .collect();
 
-    // The 1D occupancy step: order rows by each conductor's midpoint y.
+    // The 1D occupancy step: order rows by each conductor's midpoint y —
+    // except that a twisted group's strands must land in adjacent rows to
+    // braid, so groups sort as one unit (by the group's centroid), members
+    // by their own midpoint within it.
+    let midpoint = |s: &Strand| (s.left.y + s.right.y) / 2.0;
+    let group_centroid: HashMap<u32, f64> = {
+        let mut sums: HashMap<u32, (f64, f64)> = HashMap::new();
+        for s in &strands {
+            if let Some(g) = s.group {
+                let e = sums.entry(g).or_insert((0.0, 0.0));
+                e.0 += midpoint(s);
+                e.1 += 1.0;
+            }
+        }
+        sums.into_iter().map(|(g, (sum, n))| (g, sum / n)).collect()
+    };
     strands.sort_by(|a, b| {
-        let ma = (a.left.y + a.right.y) / 2.0;
-        let mb = (b.left.y + b.right.y) / 2.0;
-        ma.total_cmp(&mb)
+        let unit = |s: &Strand| s.group.map_or_else(|| midpoint(s), |g| group_centroid[&g]);
+        unit(a)
+            .total_cmp(&unit(b))
+            .then(midpoint(a).total_cmp(&midpoint(b)))
     });
 
     let subtitle = cable_subtitle(meta, strands.len());
@@ -522,16 +543,25 @@ fn build_cable_box(
                 * LABEL_CHAR_WIDTH
         })
         .collect();
-    let twisted = meta.is_some_and(|m| m.twisted);
     let header = title.chars().count().max(subtitle.chars().count()) as f64 * CHAR_WIDTH;
-    // A braided (two-strand twisted) box lays out label zone · braid ·
-    // label zone side by side, so it must be wide enough for all three;
-    // a straight box only needs its widest single annotation.
-    let content = if twisted && annotation_widths.len() == 2 {
-        annotation_widths[0] + annotation_widths[1] + BRAID_SECTION + 2.0 * NODE_PAD
-    } else {
-        annotation_widths.iter().copied().fold(0.0, f64::max)
-    };
+    // A braided pair lays out label zone · braid · label zone side by
+    // side, so it needs room for all three; a straight row only its own
+    // annotation. Take the widest requirement across rows.
+    let pair_partner = braid_partners(strands.iter().map(|s| s.group));
+    let content = strands
+        .iter()
+        .enumerate()
+        .map(|(i, _)| match pair_partner[i] {
+            Some(j) => {
+                let (first, second) = (i.min(j), i.max(j));
+                annotation_widths[first]
+                    + annotation_widths[second]
+                    + BRAID_SECTION
+                    + 2.0 * NODE_PAD
+            }
+            None => annotation_widths[i],
+        })
+        .fold(0.0, f64::max);
     let width = (content.max(header) + 2.0 * NODE_PAD).max(MIN_NODE_WIDTH);
     let height = HEADER_HEIGHT + CABLE_LABEL_PAD + strands.len() as f64 * ROW_HEIGHT;
     let origin = Point::new(spine_x - width / 2.0, cy - height / 2.0);
@@ -545,6 +575,7 @@ fn build_cable_box(
             color: s.color,
             gauge: s.gauge,
             label: s.label,
+            group: s.group,
         })
         .collect();
 
@@ -554,11 +585,35 @@ fn build_cable_box(
         origin,
         width,
         height,
-        twisted,
         strands,
     };
     cable_box.place_rows();
     cable_box
+}
+
+/// For each strand (by index), the index of its braid partner: the other
+/// member of its two-strand `twisted { }` group. A group of any other size
+/// doesn't braid (there is no single partner row to swap with), so its
+/// members get `None` and draw straight.
+pub(super) fn braid_partners(groups: impl Iterator<Item = Option<u32>>) -> Vec<Option<usize>> {
+    let groups: Vec<Option<u32>> = groups.collect();
+    let mut members: HashMap<u32, Vec<usize>> = HashMap::new();
+    for (i, g) in groups.iter().enumerate() {
+        if let Some(g) = g {
+            members.entry(*g).or_default().push(i);
+        }
+    }
+    groups
+        .iter()
+        .enumerate()
+        .map(|(i, g)| {
+            let g = (*g)?;
+            match *members[&g].as_slice() {
+                [a, b] => Some(if i == a { b } else { a }),
+                _ => None,
+            }
+        })
+        .collect()
 }
 
 /// `<type> · <length> m · ×<count>`, omitting the type/length parts that are
@@ -588,6 +643,7 @@ mod tests {
             color: "black".into(),
             gauge: 1.0,
             label: None,
+            group: None,
         }
     }
 
@@ -597,7 +653,6 @@ mod tests {
             label: None,
             r#type: Some("2-core".into()),
             length: Some(0.8),
-            twisted: false,
         };
         assert_eq!(cable_subtitle(Some(&full), 3), "2-core · 0.8 m · ×3");
 
@@ -605,7 +660,6 @@ mod tests {
             label: None,
             r#type: None,
             length: None,
-            twisted: false,
         };
         assert_eq!(cable_subtitle(Some(&bare), 2), "×2");
         assert_eq!(cable_subtitle(None, 1), "×1");
@@ -619,7 +673,6 @@ mod tests {
             origin: Point::new(0.0, 0.0),
             width: 100.0,
             height: HEADER_HEIGHT + 2.0 * ROW_HEIGHT,
-            twisted: false,
             strands: vec![strand(0.0), strand(0.0)],
         };
         cb.place_rows();

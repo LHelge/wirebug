@@ -266,6 +266,34 @@ pub struct Cable {
     pub name: Spanned<Ident>,
     pub label: Option<Spanned<String>>,
     pub properties: Vec<CableProperty>,
+    pub members: Vec<CableMember>,
+    pub span: Span,
+}
+
+impl Cable {
+    /// Every conductor of the cable, loose and twisted alike, in source
+    /// order — for the passes that don't care about grouping (endpoint
+    /// resolution, arity, colors).
+    pub fn wires(&self) -> impl Iterator<Item = &Wire> {
+        self.members.iter().flat_map(|m| match m {
+            CableMember::Wire(w) => std::slice::from_ref(w),
+            CableMember::Twisted(t) => t.wires.as_slice(),
+        })
+    }
+}
+
+/// One conductor entry of a cable body: a plain wire, or a `twisted { }`
+/// group of wires that are twisted together (a pair, typically).
+#[derive(Debug, Clone)]
+pub enum CableMember {
+    Wire(Wire),
+    Twisted(TwistedGroup),
+}
+
+/// `twisted { <wire>* }` inside a cable — the wrapped conductors are
+/// twisted together. Group arity is checked in validation, not here.
+#[derive(Debug, Clone)]
+pub struct TwistedGroup {
     pub wires: Vec<Wire>,
     pub span: Span,
 }

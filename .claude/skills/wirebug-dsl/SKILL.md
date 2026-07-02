@@ -371,11 +371,26 @@ cable motor_phases "Motor phases" {
 Format:
 
 - `cable <name> ["<label>"] { <properties> <wires> }` — `name` is a snake_case designator (unique within the component, like a connector's); the optional quoted label is shown on the cable box (the designator is used when omitted).
-- Properties are `key: value;` lines, before the wires. Three keys are supported:
+- Properties are `key: value;` lines, before the wires. Two keys are supported:
   - `type: "<string>";` — a free-text construction note (e.g. `"Twisted pair"`).
   - `length: <number>;` — length in **metres** (a bare number, e.g. `2.5`; no unit suffix).
-  - `twisted: true;` — the conductors are twisted together (a bare `true`/`false`, default `false`). A two-conductor twisted cable draws its harness box run as a braid; other conductor counts render straight rows regardless.
 - Each `wire` uses the exact same syntax as a loose wire, **but must have exactly two endpoints** — a cable conductor is one physical run from one pin to another. (A shared rail that fans out to three+ pins is not a single conductor; keep it a loose multi-endpoint `wire`, outside any cable.)
+- A `twisted { <wire>* }` group wraps conductors that are twisted together — typically a pair. Groups and plain wires may interleave freely, so one cable can carry straight power conductors alongside a twisted signal pair:
+
+```
+cable sensor_loom "Sensor loom" {
+    length: 2.0;
+
+    wire red 1.5 "12V" [ecu.pwr, sensor.pwr];
+    twisted {
+        wire white/blue 0.5 "SIG H" [ecu.h, sensor.h];
+        wire white/red 0.5 "SIG L" [ecu.l, sensor.l];
+    }
+    wire black 1.5 "GND" [ecu.gnd, sensor.gnd];
+}
+```
+
+In a harness drawing a two-conductor group braids inside the cable box; a group of any other size draws straight rows (there is no single partner to weave with). A group wrapping fewer than two wires raises a `check` warning (`twisted_group_arity`).
 
 A cable's wires are still ordinary connections: they show in schematic views like any other wire. The cable grouping adds the harness box and the BOM metadata.
 
