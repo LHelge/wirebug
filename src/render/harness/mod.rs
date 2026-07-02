@@ -230,6 +230,16 @@ component sys {
         assert!(svg.contains("Source"));
     }
 
+    #[test]
+    fn wires_carry_data_color_for_host_styling() {
+        let design = two_connector_design();
+        let view = harness_view("sys", &[("a", "hv", 0.0, 0.0), ("b", "hv", 12.0, 0.0)]);
+        let svg = render(&design, &view);
+
+        assert!(svg.contains("data-color=\"orange\""));
+        assert!(svg.contains("data-color=\"black\""));
+    }
+
     fn render_embed(design: &Design, view: &View) -> String {
         let subject = design
             .instances
