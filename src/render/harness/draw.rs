@@ -5,7 +5,10 @@ use svg::node::element::{Circle, Group, Line, Path, Rectangle, Text};
 
 use super::bezier::{FLEX, flex};
 use super::layout::{CableBox, ConnectorNode, LooseWire};
-use super::{HEADER_HEIGHT, NODE_PAD, PIN_COL_WIDTH, PIN_DOT_RADIUS, ROW_HEIGHT};
+use super::{
+    HEADER_HEIGHT, LABEL_CHAR_WIDTH, NODE_PAD, PIN_COL_WIDTH, PIN_DOT_RADIUS, ROW_HEIGHT,
+    TWIST_PITCH,
+};
 use crate::dsl::ir::WireColor;
 use crate::render::geometry::{Point, Side};
 
@@ -132,25 +135,26 @@ pub(super) fn render_node(node: &ConnectorNode) -> Group {
     group
 }
 
-/// Nominal width of one half-twist in a braided (twisted-pair) box run.
-/// The actual pitch stretches to divide the run into a whole, even count.
-const TWIST_PITCH: f64 = 28.0;
-
-/// The path data for one strand of a two-strand braid: chained
-/// horizontally-flexed cubics (the same shape as [`flex`]) alternating
-/// between the strand's own row and its partner's. The half-twist count is
-/// even, so the strand exits the box on the row it entered and the
-/// lead-out bezier stays untangled.
-fn braid_d(from: Point, to_x: f64, other_y: f64) -> String {
-    let width = to_x - from.x;
-    let n = ((width / TWIST_PITCH) as usize).max(2) / 2 * 2;
-    let step = width / n as f64;
+/// The path data for one strand of a two-strand twisted pair: a straight
+/// run on its own row, a **symbolic braid section** spanning `xa..xb` —
+/// chained horizontally-flexed cubics (the same shape as [`flex`])
+/// alternating between the strand's row and its partner's — and a straight
+/// run out. The half-twist count is even, so the strand leaves the section
+/// (and the box) on the row it entered; the straight ends are where the
+/// strand is unambiguously on its own row, so its annotation anchors there.
+fn braid_d(from: Point, to_x: f64, other_y: f64, xa: f64, xb: f64) -> String {
+    let section = xb - xa;
+    let n = ((section / TWIST_PITCH).round() as usize).max(2) / 2 * 2;
+    let step = section / n as f64;
 
     let mut d = format!("M{},{}", from.x, from.y);
+    if xa > from.x {
+        d.push_str(&format!(" L{},{}", xa, from.y));
+    }
     let (mut y, mut other) = (from.y, other_y);
     for i in 0..n {
-        let x0 = from.x + i as f64 * step;
-        let x1 = if i == n - 1 { to_x } else { x0 + step };
+        let x0 = xa + i as f64 * step;
+        let x1 = if i == n - 1 { xb } else { x0 + step };
         d.push_str(&format!(
             " C{},{} {},{} {},{}",
             x0 + FLEX * step,
@@ -161,6 +165,9 @@ fn braid_d(from: Point, to_x: f64, other_y: f64) -> String {
             other
         ));
         std::mem::swap(&mut y, &mut other);
+    }
+    if xb < to_x {
+        d.push_str(&format!(" L{},{}", to_x, from.y));
     }
     d
 }
@@ -208,6 +215,28 @@ pub(super) fn render_cable_box(cb: &CableBox) -> Group {
     // to exactly two strands; a twisted cable with another conductor
     // count still draws straight rows.
     let braided = cb.twisted && cb.strands.len() == 2;
+    let annotations: Vec<String> = cb
+        .strands
+        .iter()
+        .map(|s| wire_annotation(s.label.as_deref(), s.gauge, &s.color))
+        .collect();
+
+    // The braid spans the gap between the two label zones (first strand's
+    // label left, second's right — layout sized the box for all three).
+    // A hand-built box too narrow for that still gets a centred minimum
+    // braid; the labels then overlap it, but the pair stays visibly twisted.
+    let braid_span = braided.then(|| {
+        let text = |i: usize| annotations[i].chars().count() as f64 * LABEL_CHAR_WIDTH;
+        let xa = ox + 2.0 * NODE_PAD + text(0);
+        let xb = ox + cb.width - 2.0 * NODE_PAD - text(1);
+        if xb - xa >= 2.0 * TWIST_PITCH {
+            (xa, xb)
+        } else {
+            let mid = ox + cb.width / 2.0;
+            let half = TWIST_PITCH.min(cb.width / 2.0);
+            (mid - half, mid + half)
+        }
+    });
 
     let left_edge = Point::new(ox, 0.0);
     let right_edge = Point::new(ox + cb.width, 0.0);
@@ -216,10 +245,9 @@ pub(super) fn render_cable_box(cb: &CableBox) -> Group {
         let exit = Point::new(right_edge.x, strand.row_y);
 
         let lead_in = flex(strand.left_attach, entry, FLEX).path_d();
-        let run = if braided {
-            braid_d(entry, exit.x, cb.strands[1 - i].row_y)
-        } else {
-            format!("M{},{} L{},{}", entry.x, entry.y, exit.x, exit.y)
+        let run = match braid_span {
+            Some((xa, xb)) => braid_d(entry, exit.x, cb.strands[1 - i].row_y, xa, xb),
+            None => format!("M{},{} L{},{}", entry.x, entry.y, exit.x, exit.y),
         };
         let lead_out = flex(exit, strand.right_attach, FLEX).path_d();
         group = group
@@ -236,16 +264,32 @@ pub(super) fn render_cable_box(cb: &CableBox) -> Group {
                 .add(tracer_path(lead_out, &strand.color, tracer));
         }
 
-        group = group.add(
-            Text::new(wire_annotation(
-                strand.label.as_deref(),
-                strand.gauge,
-                &strand.color,
-            ))
-            .set("class", "cable-label")
-            .set("x", ox + cb.width / 2.0)
-            .set("y", strand.row_y - 4.0),
-        );
+        // A braided run only sits on its own row over the straight ends, so
+        // the label anchors there — first strand left, second right — where
+        // the wire under it is unambiguously the one it names. Straight
+        // runs keep the centred label. The anchor rides as a modifier
+        // class (the `.cable-label` stylesheet rule would override a bare
+        // presentation attribute) plus the attribute itself for embed
+        // mode, where the built-in stylesheet is absent.
+        let mut annotation = Text::new(annotations[i].clone()).set("y", strand.row_y - 4.0);
+        annotation = if braided {
+            if i == 0 {
+                annotation
+                    .set("class", "cable-label cable-label-start")
+                    .set("text-anchor", "start")
+                    .set("x", ox + NODE_PAD)
+            } else {
+                annotation
+                    .set("class", "cable-label cable-label-end")
+                    .set("text-anchor", "end")
+                    .set("x", ox + cb.width - NODE_PAD)
+            }
+        } else {
+            annotation
+                .set("class", "cable-label")
+                .set("x", ox + cb.width / 2.0)
+        };
+        group = group.add(annotation);
     }
 
     group
@@ -294,29 +338,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn braid_has_an_even_half_twist_count_and_exits_on_its_own_row() {
-        let d = braid_d(Point::new(0.0, 10.0), 100.0, 30.0);
-        assert!(d.starts_with("M0,10"));
-        // 100 / 28 → 3, rounded down to 2 half-twists.
-        assert_eq!(d.matches(" C").count(), 2);
-        // Even count: the last segment lands back on the strand's own row
-        // at the box's right edge.
+    fn braid_runs_straight_over_the_label_zones() {
+        // Braid confined to 44..156; straight on the strand's own row
+        // either side — where the annotations sit.
+        let d = braid_d(Point::new(0.0, 10.0), 200.0, 30.0, 44.0, 156.0);
+        assert!(d.starts_with("M0,10 L44,10"), "{d}");
+        // 112 / 28 → 4 half-twists.
+        assert_eq!(d.matches(" C").count(), 4);
+        assert!(d.ends_with(" L200,10"), "{d}");
+        // The strand touches the partner row at every odd crossover.
+        assert!(d.contains(",30 "), "{d}");
+    }
+
+    #[test]
+    fn full_width_braid_has_no_straight_ends() {
+        let d = braid_d(Point::new(0.0, 10.0), 100.0, 30.0, 0.0, 100.0);
+        assert!(d.starts_with("M0,10 C"), "{d}");
+        assert_eq!(d.matches(" C").count(), 4);
+        // Even count: exits on the strand's own row at the box edge.
         assert!(d.ends_with("100,10"), "{d}");
     }
 
     #[test]
-    fn braid_alternates_between_the_two_rows() {
-        let d = braid_d(Point::new(0.0, 10.0), 200.0, 30.0);
-        // 200 / 28 → 7, rounded down to 6 half-twists, ~33.3 wide each:
-        // the strand touches the partner row at every odd crossover.
-        assert_eq!(d.matches(" C").count(), 6);
-        assert!(d.contains(",30 "), "{d}");
-        assert!(d.ends_with(",10"), "{d}");
-    }
-
-    #[test]
-    fn short_braid_still_gets_two_half_twists() {
-        let d = braid_d(Point::new(0.0, 10.0), 30.0, 30.0);
+    fn very_short_braid_still_gets_two_half_twists() {
+        let d = braid_d(Point::new(0.0, 10.0), 30.0, 30.0, 0.0, 30.0);
         assert_eq!(d.matches(" C").count(), 2);
         assert!(d.ends_with("30,10"), "{d}");
     }

@@ -200,9 +200,14 @@ Kept conductors split by `Wire.cable`. A **declared cable** draws as a
 **cable box** (`CableBox`/`render_cable_box`) on the spine: a titled table
 (label + `type · length · ×count`), one coloured strand per row. A
 `twisted: true;` cable with exactly two conductors draws its box run as a
-**braid** (`draw::braid_d` — chained flex cubics swapping rows, an even
-half-twist count so each strand exits on its own row); any other
-conductor count falls back to straight rows. Rows are
+**symbolic braid** (`draw::braid_d` — chained flex cubics swapping rows,
+an even half-twist count so each strand exits on its own row) confined
+between the two annotation zones: the first strand's label anchors left,
+the second's right (`cable-label-start`/`-end` modifier classes — a bare
+`text-anchor` attribute would lose to the `.cable-label` stylesheet
+rule), each over the straight run where its wire is unambiguously on its
+own row. The box is sized label + braid + label (`LABEL_CHAR_WIDTH` for
+the 9px font). Any other conductor count falls back to straight rows. Rows are
 ordered by each conductor's endpoint-y midpoint (the 1D occupancy step), the
 box's vertical centre is its strands' centroid, and multiple boxes are pushed
 apart along the spine (`build_cable_boxes`, gap `CABLE_GAP`). **Loose wires**
