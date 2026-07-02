@@ -506,7 +506,10 @@ fn build_cable_box(
     // The 1D occupancy step: order rows by each conductor's midpoint y —
     // except that a twisted group's strands must land in adjacent rows to
     // braid, so groups sort as one unit (by the group's centroid), members
-    // by their own midpoint within it.
+    // by their own midpoint within it. The group id breaks unit-key ties:
+    // two pairs with equal centroids (or a loose strand landing exactly on
+    // a pair's centroid) would otherwise interleave by raw midpoint and
+    // neither pair could braid.
     let midpoint = |s: &Strand| (s.left.y + s.right.y) / 2.0;
     let group_centroid: HashMap<u32, f64> = {
         let mut sums: HashMap<u32, (f64, f64)> = HashMap::new();
@@ -523,6 +526,7 @@ fn build_cable_box(
         let unit = |s: &Strand| s.group.map_or_else(|| midpoint(s), |g| group_centroid[&g]);
         unit(a)
             .total_cmp(&unit(b))
+            .then_with(|| a.group.cmp(&b.group))
             .then(midpoint(a).total_cmp(&midpoint(b)))
     });
 
@@ -644,6 +648,102 @@ mod tests {
             gauge: 1.0,
             label: None,
             group: None,
+        }
+    }
+
+    /// Two twisted pairs whose row centroids tie exactly (as a real
+    /// resolver loom's EX and SIN pairs can): the group id must break the
+    /// tie so each pair still lands in adjacent rows and can braid, instead
+    /// of interleaving by raw midpoint.
+    #[test]
+    fn tied_centroid_pairs_keep_their_strands_adjacent() {
+        let design = crate::render::schematic::tests::design_from(
+            r#"
+component Root {
+    component Left {
+        connector j "J 4p" {
+            pub port l1 "L1" pin 1;
+            pub port l2 "L2" pin 2;
+            pub port l3 "L3" pin 3;
+            pub port l4 "L4" pin 4;
+        }
+    }
+
+    component Right {
+        connector j "J 4p" {
+            pub port r1 "R1" pin 1;
+            pub port r2 "R2" pin 2;
+            pub port r3 "R3" pin 3;
+            pub port r4 "R4" pin 4;
+        }
+    }
+
+    left:  Left;
+    right: Right;
+
+    // Pair X spans rows (0, 2) and (3, 1); pair Y rows (1, 0) and (2, 3).
+    // Both centroids sit at row 1.5, but the pairs interleave by midpoint.
+    cable c "C" {
+        twisted {
+            wire red 0.5 "X+" [left.l1, right.r3];
+            wire red 0.5 "X-" [left.l4, right.r2];
+        }
+        twisted {
+            wire blue 0.5 "Y+" [left.l2, right.r1];
+            wire blue 0.5 "Y-" [left.l3, right.r4];
+        }
+    }
+}
+"#,
+        );
+        let subject = design
+            .instances
+            .values()
+            .find(|i| i.type_name == TypeName::from("Root"))
+            .expect("root instance");
+        let view = crate::dsl::ir::View {
+            kind: crate::dsl::ir::ViewKind::Harness,
+            title: "Harness".to_string(),
+            grid: None,
+            subject: TypeName::from("Root"),
+            has_enclosure: false,
+            enclosure: Vec::new(),
+            includes: vec![
+                crate::dsl::ir::Include {
+                    instance: InstanceName::from("left"),
+                    connector: Some(ConnectorName::from("j")),
+                    x: 0.0,
+                    y: 0.0,
+                    ports: Vec::new(),
+                },
+                crate::dsl::ir::Include {
+                    instance: InstanceName::from("right"),
+                    connector: Some(ConnectorName::from("j")),
+                    x: 30.0,
+                    y: 0.0,
+                    ports: Vec::new(),
+                },
+            ],
+            texts: Vec::new(),
+        };
+
+        let layout = HarnessLayout::compute(&design, subject, &view, 20.0);
+        let [cable] = layout.cable_boxes.as_slice() else {
+            panic!("expected one cable box");
+        };
+        let partners = braid_partners(cable.strands.iter().map(|s| s.group));
+        assert!(
+            partners.iter().all(Option::is_some),
+            "every strand in this design belongs to a pair"
+        );
+        for (i, partner) in partners.iter().enumerate() {
+            if let Some(j) = partner {
+                assert_eq!(
+                    i.abs_diff(*j),
+                    1,
+                    "pair strands must sit in adjacent rows, got rows {i} and {j}"
+                );
+            }
         }
     }
 
