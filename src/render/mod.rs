@@ -15,10 +15,41 @@ use crate::error::{Error, Result};
 
 pub mod geometry;
 pub mod harness;
+pub mod pdf;
 pub mod pinout;
 pub mod png;
 pub mod schematic;
 pub(crate) mod stamp;
+
+/// How a rendered SVG carries its presentation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SvgMode {
+    /// Self-contained: embedded `<style>` plus the bottom-right
+    /// project-identity stamp.
+    Standalone,
+    /// Self-contained styles, but no in-drawing furniture (view title,
+    /// identity stamp) — for `--pdf`, where the page header carries the
+    /// title and the footer the identity, both at a fixed size instead
+    /// of scaling with the view.
+    Plain,
+    /// Host-styled "naked" SVG for `--embed`: no `<style>`, no stamp, and
+    /// a class-tagged root so a downstream stylesheet owns the look.
+    Embed,
+}
+
+impl SvgMode {
+    pub(crate) fn is_embed(self) -> bool {
+        matches!(self, Self::Embed)
+    }
+
+    pub(crate) fn stamped(self) -> bool {
+        matches!(self, Self::Standalone)
+    }
+
+    pub(crate) fn titled(self) -> bool {
+        !matches!(self, Self::Plain)
+    }
+}
 
 /// One rendered view: the SVG document, the file name it should be
 /// written to (a slug of the view title, without a directory), the human
@@ -54,22 +85,21 @@ impl RenderedView {
 /// view). A view naming a `kind` this build can't render, or a subject
 /// type with no instance, is an error.
 ///
-/// `embed` switches every view to embed-mode output: the built-in
-/// `<style>` is dropped, the bottom-right project-identity stamp is
-/// suppressed, and the root `<svg>` is tagged with a `wirebug` class so
-/// a downstream stylesheet can take full control of the look. Pass
-/// `false` for self-contained SVGs intended to render on their own.
-pub fn render_views(design: &Design, embed: bool) -> Result<Vec<RenderedView>> {
+/// `mode` picks the presentation each SVG carries: [`SvgMode::Standalone`]
+/// for self-contained SVGs intended to render on their own,
+/// [`SvgMode::Plain`] for the PDF export (page furniture replaces the
+/// title and stamp), or [`SvgMode::Embed`] for host-styled naked SVGs.
+pub fn render_views(design: &Design, mode: SvgMode) -> Result<Vec<RenderedView>> {
     let mut filenames = FilenameAllocator::default();
     let mut rendered = Vec::with_capacity(design.views.len());
     for view in &design.views {
         let subject = subject_instance(design, view)?;
         let svg = match &view.kind {
             ViewKind::Schematic => {
-                schematic::SchematicRenderer.render(design, subject, view, embed)?
+                schematic::SchematicRenderer.render(design, subject, view, mode)?
             }
-            ViewKind::Harness => harness::HarnessRenderer.render(design, subject, view, embed)?,
-            ViewKind::Pinout => pinout::PinoutRenderer.render(design, subject, view, embed)?,
+            ViewKind::Harness => harness::HarnessRenderer.render(design, subject, view, mode)?,
+            ViewKind::Pinout => pinout::PinoutRenderer.render(design, subject, view, mode)?,
             ViewKind::Other(other) => return Err(Error::UnknownViewKind(other.clone())),
         };
         rendered.push(RenderedView {
@@ -173,6 +203,16 @@ pub fn index_html(
     }
     .render()
     .map_err(Error::Template)
+}
+
+/// File name for the single-file PDF export: the project name slugged,
+/// `views.pdf` for a manifest-less (synthetic) design.
+#[must_use]
+pub fn pdf_filename(manifest: Option<&Manifest>) -> String {
+    let stem = manifest
+        .map(|m| slug(&m.name))
+        .unwrap_or_else(|| "views".to_string());
+    format!("{stem}.pdf")
 }
 
 /// The instance a view renders against: the first one whose type matches
@@ -283,6 +323,21 @@ mod tests {
             kind: ViewKind::from(kind),
             svg: String::new(),
         }
+    }
+
+    #[test]
+    fn pdf_filename_slugs_the_project_name() {
+        let manifest = Manifest {
+            name: "Aphid EVPack".to_string(),
+            version: "0.1.0".to_string(),
+            description: None,
+            authors: Vec::new(),
+            license: None,
+            revision: None,
+            date: None,
+        };
+        assert_eq!(pdf_filename(Some(&manifest)), "aphid_evpack.pdf");
+        assert_eq!(pdf_filename(None), "views.pdf");
     }
 
     #[test]

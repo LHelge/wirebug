@@ -23,6 +23,7 @@ use svg::node::element::{Group, Style, Text};
 
 use crate::dsl::ir::{Design, Instance, View};
 use crate::error::{Error, Result};
+use crate::render::SvgMode;
 use crate::render::stamp::{STAMP_HEIGHT, STAMP_INSET, stamp_element};
 
 use layout::HarnessLayout;
@@ -91,17 +92,18 @@ impl HarnessRenderer {
     /// Render `view` (documenting `subject`) against `design` to an SVG
     /// string.
     ///
-    /// `embed` switches to embed-mode output for inclusion in another
-    /// document: the built-in `<style>` is dropped (the host owns the
-    /// look), the bottom-right project-identity stamp is suppressed,
-    /// and the root `<svg>` carries `class="wirebug wirebug-harness"`
-    /// so a host stylesheet can scope rules under `.wirebug`.
+    /// `mode` picks the presentation: [`SvgMode::Embed`] drops the
+    /// built-in `<style>` (the host owns the look), suppresses the
+    /// bottom-right project-identity stamp, and class-tags the root
+    /// `<svg>` `wirebug wirebug-harness`; [`SvgMode::Plain`] keeps the
+    /// styles but omits the view title and the stamp (the PDF page
+    /// header/footer carry them instead).
     pub(super) fn render(
         &self,
         design: &Design,
         subject: &Instance,
         view: &View,
-        embed: bool,
+        mode: SvgMode,
     ) -> Result<String> {
         let step = view.grid.unwrap_or(DEFAULT_GRID);
         if step <= 0.0 {
@@ -111,15 +113,15 @@ impl HarnessRenderer {
         let layout = HarnessLayout::compute(design, subject, view, step);
 
         let mut doc = Document::new().set("xmlns", "http://www.w3.org/2000/svg");
-        if embed {
+        if mode.is_embed() {
             doc = doc.set("class", "wirebug wirebug-harness");
         } else {
             doc = doc.add(Style::new(STYLE));
         }
 
-        let has_title = !view.title.is_empty();
+        let has_title = !view.title.is_empty() && mode.titled();
         let mut vb = layout.viewbox(has_title);
-        let manifest = (!embed).then_some(design.manifest.as_ref()).flatten();
+        let manifest = mode.stamped().then_some(design.manifest.as_ref()).flatten();
         if manifest.is_some() {
             vb.height += STAMP_HEIGHT;
         }
@@ -202,7 +204,7 @@ mod tests {
             .find(|i| i.type_name == view.subject)
             .expect("subject instance");
         HarnessRenderer
-            .render(design, subject, view, false)
+            .render(design, subject, view, SvgMode::Standalone)
             .expect("renders")
     }
 
@@ -450,7 +452,7 @@ component sys {
             .find(|i| i.type_name == view.subject)
             .expect("subject instance");
         HarnessRenderer
-            .render(design, subject, view, true)
+            .render(design, subject, view, SvgMode::Embed)
             .expect("renders")
     }
 

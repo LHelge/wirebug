@@ -10,7 +10,7 @@ use miette::{GraphicalReportHandler, GraphicalTheme};
 use super::livereload::ERROR_PAGE_SCRIPT;
 use super::state::Site;
 use crate::dsl::{self, CheckReport};
-use crate::render::{index_html, render_views};
+use crate::render::{SvgMode, index_html, render_views};
 
 /// The outcome of one build: the servable site plus a count of what `check`
 /// reported, so the watcher can log a summary to the console. The browser
@@ -74,7 +74,7 @@ pub(crate) fn build_site(target: Option<&Path>) -> Build {
     // page and count it so the console summary reflects the failure.
     // `serve` always emits self-contained SVGs (built-in style + identity
     // stamp); embed-mode is for static export, not the live browser.
-    let render = render_views(design, false)
+    let render = render_views(design, SvgMode::Standalone)
         .map_err(|e| format!("render failed: {e}"))
         .and_then(|views| {
             index_html(&views, design.manifest.as_ref(), true)

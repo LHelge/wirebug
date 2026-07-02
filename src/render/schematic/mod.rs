@@ -17,6 +17,7 @@ use svg::node::element::{Group, Style, Text};
 
 use crate::dsl::ir::{Design, Instance, View};
 use crate::error::{Error, Result};
+use crate::render::SvgMode;
 use crate::render::geometry::Point;
 use crate::render::stamp::{STAMP_HEIGHT, STAMP_INSET, stamp_element};
 
@@ -69,17 +70,18 @@ impl SchematicRenderer {
     /// Render `view` (documenting `subject`) against `design` to an SVG
     /// string. Wire segments are routed against the placed boxes.
     ///
-    /// `embed` switches to embed-mode output for inclusion in another
-    /// document: the built-in `<style>` is dropped (the host owns the
-    /// look), the bottom-right project-identity stamp is suppressed,
-    /// and the root `<svg>` carries `class="wirebug wirebug-schematic"`
-    /// so a host stylesheet can scope rules under `.wirebug`.
+    /// `mode` picks the presentation: [`SvgMode::Embed`] drops the
+    /// built-in `<style>` (the host owns the look), suppresses the
+    /// bottom-right project-identity stamp, and class-tags the root
+    /// `<svg>` `wirebug wirebug-schematic`; [`SvgMode::Plain`] keeps the
+    /// styles but omits the view title and the stamp (the PDF page
+    /// header/footer carry them instead).
     pub(super) fn render(
         &self,
         design: &Design,
         subject: &Instance,
         view: &View,
-        embed: bool,
+        mode: SvgMode,
     ) -> Result<String> {
         let step = view.grid.unwrap_or(DEFAULT_GRID);
         if step <= 0.0 {
@@ -108,15 +110,15 @@ impl SchematicRenderer {
         let wires = router.route_all(&pairs, grid.pitch())?;
 
         let mut doc = Document::new().set("xmlns", "http://www.w3.org/2000/svg");
-        if embed {
+        if mode.is_embed() {
             doc = doc.set("class", "wirebug wirebug-schematic");
         } else {
             doc = doc.add(Style::new(STYLE));
         }
 
-        let has_title = !view.title.is_empty();
+        let has_title = !view.title.is_empty() && mode.titled();
         let mut viewbox = placement.viewbox(has_title, &wires);
-        let manifest = (!embed).then_some(design.manifest.as_ref()).flatten();
+        let manifest = mode.stamped().then_some(design.manifest.as_ref()).flatten();
         if manifest.is_some() {
             viewbox.height += STAMP_HEIGHT;
         }
@@ -241,7 +243,7 @@ pub(crate) mod tests {
             .values()
             .find(|i| i.type_name == view.subject)
             .expect("subject instance");
-        SchematicRenderer.render(design, subject, view, false)
+        SchematicRenderer.render(design, subject, view, SvgMode::Standalone)
     }
 
     fn two_box_design() -> Design {
@@ -386,7 +388,7 @@ component sys {
             .values()
             .find(|i| i.type_name == view.subject)
             .expect("subject instance");
-        SchematicRenderer.render(design, subject, view, true)
+        SchematicRenderer.render(design, subject, view, SvgMode::Embed)
     }
 
     #[test]
@@ -413,6 +415,41 @@ component sys {
         let view = view_of("sys", &[("a", 0.0, 0.0, &[("p", Side::East)])]);
         let svg = render_embed(&design, &view).expect("renders");
         assert!(svg.contains("class=\"wirebug wirebug-schematic\""));
+    }
+
+    #[test]
+    fn plain_mode_keeps_styles_but_omits_title_and_stamp() {
+        let mut design = two_box_design();
+        design.manifest = Some(crate::dsl::manifest::Manifest {
+            name: "demo".to_string(),
+            version: "1.0.0".to_string(),
+            description: None,
+            authors: Vec::new(),
+            license: None,
+            revision: None,
+            date: None,
+        });
+        let view = view_of("sys", &[("a", 0.0, 0.0, &[("p", Side::East)])]);
+        let subject = design
+            .instances
+            .values()
+            .find(|i| i.type_name == view.subject)
+            .expect("subject instance");
+
+        let standalone = SchematicRenderer
+            .render(&design, subject, &view, SvgMode::Standalone)
+            .expect("renders");
+        assert!(standalone.contains("class=\"stamp\""));
+        assert!(standalone.contains("class=\"title\""));
+
+        // Plain mode strips the in-drawing furniture — the PDF page
+        // header/footer carry the title and identity instead.
+        let plain = SchematicRenderer
+            .render(&design, subject, &view, SvgMode::Plain)
+            .expect("renders");
+        assert!(plain.contains("<style>"));
+        assert!(!plain.contains("class=\"stamp\""));
+        assert!(!plain.contains("class=\"title\""));
     }
 
     #[test]

@@ -27,7 +27,7 @@ What works today:
   - a **schematic** renderer (rectangle blocks, labeled ports, object-avoiding orthogonal wire routing);
   - a **harness** renderer (WireViz-style pin tables, a central spine, and bezier cable bundles);
   - a **pinout** renderer (connector cavity faces plus pin tables, authored from the harness side).
-- `wirebug render` to disk (SVG, or `--png` rasterised, or `--embed` for naked SVGs + a `manifest.json` sidecar).
+- `wirebug render` to disk (SVG, or `--png` rasterised, or `--pdf` for a single A4 PDF with one view per page, or `--embed` for naked SVGs + a `manifest.json` sidecar).
 - `wirebug serve` — a live-reloading dev server that re-renders on `.wb` or `wirebug.toml` saves.
 - A VSCode extension ([`editors/vscode/`](editors/vscode/)) — syntax highlighting plus live diagnostics and context-aware completion via `wirebug lsp`, a language server over stdio.
 
@@ -118,7 +118,7 @@ revision    = "B"             # optional; auto-filled from git when absent
 date        = "2026-05-28"    # optional; ISO date
 ```
 
-`name` and `version` appear in the rendered output: as a small stamp in the bottom-right corner of every SVG, and as the page header on the HTML index. `revision` and `date`, when set, are appended to the stamp.
+`name` and `version` appear in the rendered output: as a small stamp in the bottom-right corner of every SVG, as the page header on the HTML index, and in every PDF page's footer beside the page number. `revision` and `date`, when set, are appended to the stamp.
 
 **Revision from git.** If `revision` is omitted, wirebug shells out to `git rev-parse --short HEAD` in the project directory and uses the result, suffixed `-dirty` when the working tree has uncommitted changes. An explicit `revision = "..."` in the manifest always wins. If `git` isn't on `PATH`, or the directory isn't a git repo, the field stays empty and the stamp simply omits it — no error.
 
@@ -202,6 +202,7 @@ connector_type InverterControl "Inverter control 47+13p" {
 ```sh
 wirebug render                       # discovers wirebug.toml by walking up from the CWD
 wirebug render examples --out out/                  # one SVG per view, into out/
+wirebug render examples --out out/ --pdf            # one A4 PDF, one view per page
 wirebug render examples/wirebug.toml --out out/ --embed  # naked SVGs + manifest.json
 ```
 

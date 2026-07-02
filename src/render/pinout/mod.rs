@@ -12,6 +12,7 @@ use crate::dsl::ir::{
     Connector, ConnectorLayout, ConnectorName, Design, Instance, Pin, PortName, View,
 };
 use crate::error::{Error, Result};
+use crate::render::SvgMode;
 use crate::render::stamp::{STAMP_HEIGHT, STAMP_INSET, stamp_element};
 
 const DEFAULT_GRID: f64 = 20.0;
@@ -52,7 +53,7 @@ impl PinoutRenderer {
         design: &Design,
         subject: &Instance,
         view: &View,
-        embed: bool,
+        mode: SvgMode,
     ) -> Result<String> {
         let step = view.grid.unwrap_or(DEFAULT_GRID);
         if step <= 0.0 {
@@ -74,9 +75,9 @@ impl PinoutRenderer {
             tables.push(Table::new(connector, subject, inc.x * step, inc.y * step));
         }
 
-        let has_title = !view.title.is_empty();
+        let has_title = !view.title.is_empty() && mode.titled();
         let mut vb = viewbox(&tables, has_title);
-        let manifest = (!embed).then_some(design.manifest.as_ref()).flatten();
+        let manifest = mode.stamped().then_some(design.manifest.as_ref()).flatten();
         if manifest.is_some() {
             vb.height += STAMP_HEIGHT;
         }
@@ -87,7 +88,7 @@ impl PinoutRenderer {
                 "viewBox",
                 format!("{} {} {} {}", vb.x, vb.y, vb.width, vb.height),
             );
-        if embed {
+        if mode.is_embed() {
             doc = doc.set("class", "wirebug wirebug-pinout");
         } else {
             doc = doc.add(Style::new(STYLE));
@@ -639,14 +640,14 @@ mod tests {
         }
     }
 
-    fn render(design: &Design, view: &View, embed: bool) -> String {
+    fn render(design: &Design, view: &View, mode: SvgMode) -> String {
         let subject = design
             .instances
             .values()
             .find(|i| i.type_name == view.subject)
             .expect("subject instance");
         PinoutRenderer
-            .render(design, subject, view, embed)
+            .render(design, subject, view, mode)
             .expect("renders")
     }
 
@@ -672,7 +673,11 @@ component m {
 }
 "#,
         );
-        let svg = render(&design, &pinout_view("m", &[("x1", 0.0, 0.0)]), false);
+        let svg = render(
+            &design,
+            &pinout_view("m", &[("x1", 0.0, 0.0)]),
+            SvgMode::Standalone,
+        );
 
         assert!(svg.contains("class=\"pinout\""));
         assert!(svg.contains("x1"));
@@ -693,7 +698,11 @@ component m {
 }
 "#,
         );
-        let svg = render(&design, &pinout_view("m", &[("x1", 0.0, 0.0)]), true);
+        let svg = render(
+            &design,
+            &pinout_view("m", &[("x1", 0.0, 0.0)]),
+            SvgMode::Embed,
+        );
 
         assert!(svg.contains("class=\"wirebug wirebug-pinout\""));
         assert!(!svg.contains("<style>"));
@@ -719,7 +728,11 @@ component m {
 }
 "#,
         );
-        let svg = render(&design, &pinout_view("m", &[("x1", 0.0, 0.0)]), false);
+        let svg = render(
+            &design,
+            &pinout_view("m", &[("x1", 0.0, 0.0)]),
+            SvgMode::Standalone,
+        );
 
         assert!(svg.contains("class=\"pinout-face\""));
         assert_eq!(svg.matches("class=\"cavity\"").count(), 2);
@@ -863,7 +876,7 @@ component m {
                 &design,
                 subject,
                 &pinout_view("m", &[("x1", 0.0, 0.0)]),
-                false,
+                SvgMode::Standalone,
             )
             .expect_err("unknown connector");
         assert!(matches!(err, Error::UnknownConnector { .. }));

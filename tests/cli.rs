@@ -84,6 +84,58 @@ fn render_png_writes_a_png_per_view_and_index_references_png() {
 }
 
 #[test]
+fn render_pdf_writes_a_single_pdf_and_no_svgs_or_index() {
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("pdf");
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args([
+            "render",
+            FIXTURE_MANIFEST,
+            "--out",
+            out.to_str().unwrap(),
+            "--pdf",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("rendered").and(predicate::str::contains("pdf")));
+
+    // One PDF named after the project slug, with the magic header and one
+    // page per view (the fixture has three).
+    let pdf = std::fs::read(out.join("basic_project.pdf")).expect("pdf written");
+    assert_eq!(&pdf[..5], b"%PDF-");
+    assert!(
+        pdf.windows(8).any(|w| w == b"/Count 3"),
+        "expected a three-page tree"
+    );
+    assert!(
+        pdf.windows(7).any(|w| w == b"(1 / 3)"),
+        "expected a page-number footer"
+    );
+
+    // The PDF replaces the normal output: no per-view files, no index.
+    let entries: Vec<String> = std::fs::read_dir(&out)
+        .expect("out dir")
+        .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(entries, ["basic_project.pdf"]);
+}
+
+#[test]
+fn render_rejects_pdf_combined_with_png_or_embed() {
+    for conflicting in ["--png", "--embed"] {
+        Command::cargo_bin("wirebug")
+            .expect("binary present")
+            .args(["render", FIXTURE_MANIFEST, "--out", "unused", "--pdf"])
+            .arg(conflicting)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("cannot be used with"));
+    }
+}
+
+#[test]
 fn render_embed_writes_manifest_and_no_index() {
     let tmp = tempdir().expect("tempdir");
     let out = tmp.path().join("embed");

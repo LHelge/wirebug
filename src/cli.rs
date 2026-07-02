@@ -70,6 +70,12 @@ pub enum Command {
         /// `.png` files.
         #[arg(long)]
         png: bool,
+        /// Export every view into a single A4 PDF (one page per view,
+        /// portrait or landscape chosen per view by aspect ratio) named
+        /// after the project (`<name>.pdf`), instead of per-view SVGs
+        /// and the HTML index.
+        #[arg(long, conflicts_with_all = ["png", "embed"])]
+        pdf: bool,
         /// Emit SVGs suitable for embedding into another document or
         /// site: the built-in `<style>` is dropped (the host owns the
         /// look), the project-identity stamp is suppressed, and the root

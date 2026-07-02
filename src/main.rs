@@ -1,9 +1,10 @@
 //! `wirebug` CLI binary.
 //!
 //! Three subcommands over the `.wb` DSL pipeline: `check` reports problems,
-//! `render` writes one SVG (or PNG) per view in the design, and `serve` runs
-//! a live-reloading dev server. Each discovers the project by walking up to
-//! `wirebug.toml` when given no target.
+//! `render` writes one SVG (or PNG) per view in the design — or, with
+//! `--pdf`, a single multi-page A4 PDF — and `serve` runs a live-reloading
+//! dev server. Each discovers the project by walking up to `wirebug.toml`
+//! when given no target.
 
 mod cli;
 
@@ -101,8 +102,9 @@ fn run(cli: Cli) -> Result<ExitCode> {
             out,
             strict,
             png,
+            pdf,
             embed,
-        } => render_command(target.as_deref(), &out, strict, png, embed),
+        } => render_command(target.as_deref(), &out, strict, png, pdf, embed),
         Command::Lsp => lsp_command(),
         Command::Serve { target, port } => serve_command(target.as_deref(), port),
     }
@@ -175,6 +177,7 @@ fn render_command(
     out_dir: &Path,
     strict: bool,
     png: bool,
+    pdf: bool,
     embed: bool,
 ) -> Result<ExitCode> {
     let report = dsl::check_project(target);
@@ -196,12 +199,38 @@ fn render_command(
         return Ok(ExitCode::FAILURE);
     };
 
-    let views = wirebug::render_views(design, embed).context("rendering views")?;
+    // PDF page furniture carries the view title and project identity at
+    // a fixed size, so its SVGs render plain for a homogeneous look.
+    let mode = if pdf {
+        wirebug::render::SvgMode::Plain
+    } else if embed {
+        wirebug::render::SvgMode::Embed
+    } else {
+        wirebug::render::SvgMode::Standalone
+    };
+    let views = wirebug::render_views(design, mode).context("rendering views")?;
 
     fs::create_dir_all(out_dir).map_err(|source| Error::Write {
         path: out_dir.to_path_buf(),
         source,
     })?;
+
+    // PDF is one artifact for the whole design, not per-view files plus a
+    // sidecar, so it exits before the per-view format machinery.
+    if pdf {
+        let bytes = wirebug::render::pdf::PdfExporter::new()
+            .to_pdf(&views, design.manifest.as_ref())
+            .context("exporting views to PDF")?;
+        let filename = wirebug::render::pdf_filename(design.manifest.as_ref());
+        write_file(out_dir, &filename, &bytes)?;
+        eprintln!(
+            "rendered {} view(s) as pdf to {} ({})",
+            views.len(),
+            out_dir.display(),
+            out_dir.join(&filename).display(),
+        );
+        return Ok(ExitCode::SUCCESS);
+    }
 
     let render_format = RenderFormat::from_png_flag(png);
     let index_views = render_format.write_views(views, out_dir)?;

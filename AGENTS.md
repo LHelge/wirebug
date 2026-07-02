@@ -21,7 +21,14 @@ Four CLI commands share it:
   grouped into **Schematics** / **Harnesses** tabs by view kind. Three view
   kinds render today: `schematic` (`render/schematic/`), `harness`
   (`render/harness/`), and `pinout` (`render/pinout/`). `--png` rasterises each view to PNG instead
-  (`render/png.rs`, via `resvg`); `--embed` emits host-styled "naked" SVGs
+  (`render/png.rs`, via `resvg`); `--pdf` writes one A4 PDF with one view
+  per page (`render/pdf.rs`, via `svg2pdf` + `pdf-writer` — orientation per
+  view by aspect ratio, named `<project-slug>.pdf`, replaces the per-view
+  files and index; views render plain (`SvgMode::Plain`, no in-drawing
+  title or stamp) and fixed-size page furniture carries them instead — a
+  Helvetica-Bold title header, plus a Courier footer with the identity
+  stamp and a `n / total` page number — so every page reads the same
+  regardless of view scale); `--embed` emits host-styled "naked" SVGs
   plus a `manifest.json` sidecar in place of the HTML index (see below).
   The legacy YAML model/view loader has been removed; `ir::Design` is the
   only thing the renderer consumes.
@@ -78,7 +85,8 @@ The parsed `Manifest` rides on `Project` → `ir::Design` (as an
 `Option<Manifest>` so synthetic test designs need not invent one).
 Renderers stamp `<name> v<version> · rev … (date)` in the SVG's
 bottom-right corner; the HTML index puts the project name in `<h1>`
-with the version and description below it.
+with the version and description below it; PDF pages carry the same
+stamp text in their fixed-size footer instead of in the SVG.
 
 ## DSL mental model
 
@@ -512,6 +520,11 @@ Runtime:
 - [`anyhow`] — error glue in `main` only.
 - [`svg`] — SVG document emission with escaping handled (render path).
 - [`resvg`] — SVG → PNG rasterisation for `render --png` (`render/png.rs`).
+- [`svg2pdf`] — vector SVG → PDF conversion for `render --pdf`
+  (`render/pdf.rs`; brings its own `usvg`, a separate version from resvg's).
+- [`pdf-writer`] — assembles the multi-page A4 document around `svg2pdf`'s
+  chunks. Pinned to the version `svg2pdf`'s API exposes (its `to_chunk`
+  returns this crate's types) — bump the two together.
 - [`serde_json`] — serialises the `--embed` `manifest.json` sidecar.
 - [`pathfinding`] — A* over the orthogonal visibility graph for
   object-avoiding connector routing (render path).
@@ -544,6 +557,8 @@ Dev / test:
 [`clap`]: https://docs.rs/clap
 [`svg`]: https://docs.rs/svg
 [`resvg`]: https://docs.rs/resvg
+[`svg2pdf`]: https://docs.rs/svg2pdf
+[`pdf-writer`]: https://docs.rs/pdf-writer
 [`serde_json`]: https://docs.rs/serde_json
 [`tempfile`]: https://docs.rs/tempfile
 [`pathfinding`]: https://docs.rs/pathfinding
@@ -578,6 +593,7 @@ cargo run -- check --strict --format json examples
 # render every view in a .wb project to SVG (one file per view, into --out)
 cargo run --release -- render examples --out out/
 cargo run --release -- render examples --out out/ --png    # rasterise to PNG
+cargo run --release -- render examples --out out/ --pdf    # single A4 PDF, one view per page
 cargo run --release -- render examples --out out/ --embed  # naked SVGs + manifest.json
 
 # serve a project with live reload (re-renders on every .wb save)

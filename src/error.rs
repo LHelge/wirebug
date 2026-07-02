@@ -54,13 +54,18 @@ pub enum Error {
     #[error("failed to render HTML index: {0}")]
     Template(#[from] askama::Error),
 
-    /// Failed to parse our own rendered SVG before rasterising it to PNG.
-    #[error("failed to parse rendered SVG for PNG conversion: {0}")]
+    /// Failed to parse our own rendered SVG before converting it (to PNG
+    /// or PDF).
+    #[error("failed to parse rendered SVG: {0}")]
     SvgParse(String),
 
     /// Failed to allocate or encode a PNG pixmap.
     #[error("failed to encode PNG: {0}")]
     PngEncode(String),
+
+    /// Failed to convert a rendered SVG into PDF objects.
+    #[error("failed to convert SVG to PDF: {0}")]
+    PdfConvert(String),
 }
 
 /// Convenience alias used throughout the crate.
