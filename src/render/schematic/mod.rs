@@ -327,7 +327,7 @@ component sys {
             ],
         );
         let svg = render(&design, &view).expect("renders");
-        assert!(svg.contains(">\nGNYE\n</text>"));
+        assert!(svg.contains(">\nGN/YE\n</text>"));
         assert!(svg.contains("data-color=\"green/yellow\""));
     }
 
