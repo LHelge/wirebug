@@ -34,24 +34,34 @@ component Vehicle {
         wire orange 35 "W" [inv.phase_w, mot.phase_w];
     }
 
-    // --- CAN bus ---
-    // VCM is the gateway. CAN1 is the powertrain link, straight to the
-    // inverter. CAN2 is the vehicle bus, daisy-chained front → rear →
-    // charger → VCM and terminated at its two ends — the front BMS and
-    // the VCM. Each hop is a physical twisted-pair cable, two-tone with
-    // a shared base: CAN H white with a blue tracer, CAN L white with
-    // red — distinct tracer colors, so the pair can't be mixed up the
-    // way mirrored white/blue and blue/white could.
+    // --- Front–rear battery loom ---
+    // Everything running between the two packs travels as one bundle:
+    // safe power, the CAN2 twisted pair, the interlock link, and the
+    // chassis-ground equalisation. The safe-power and ground rails end
+    // at the front pack and reach the rear through this cable.
 
-    cable can2_front_rear "CAN2 · front–rear" {
-        type:   "Twisted pair";
+    cable front_rear "Front–rear loom" {
+        type:   "5-core";
         length: 1.8;
 
+        wire red 2.5 "SAFE PWR" [front.safe_pwr, rear.safe_pwr];
         twisted {
             wire white/blue 0.5 "CAN2 H" [front.can_h, rear.can_h];
             wire white/red 0.5 "CAN2 L" [front.can_l, rear.can_l];
         }
+        wire green 0.5 "INTLK" [front.interlock_out, rear.interlock_in];
+        wire black 6.0 "GND" [front.gnd, rear.gnd];
     }
+
+    // --- CAN bus ---
+    // VCM is the gateway. CAN1 is the powertrain link, straight to the
+    // inverter. CAN2 is the vehicle bus, daisy-chained front → rear →
+    // charger → VCM and terminated at its two ends — the front BMS and
+    // the VCM. The front → rear hop rides in the front–rear loom above;
+    // the remaining hops are their own twisted-pair cables. Two-tone
+    // with a shared base: CAN H white with a blue tracer, CAN L white
+    // with red — distinct tracer colors, so the pair can't be mixed up
+    // the way mirrored white/blue and blue/white could.
 
     cable can2_rear_charger "CAN2 · rear–charger" {
         type:   "Twisted pair";
@@ -85,21 +95,22 @@ component Vehicle {
 
     // --- HV interlock chain ---
     // Fuse box sources 12V → e-stop → MSD → front → rear → hvjb -> inverter → OBC → VCM
+    // (the front → rear link runs in the front–rear loom above)
 
     wire green 0.5 [fuses.interlock, e_stop.interlock_in];
     wire green 0.5 [e_stop.interlock_out, msd.interlock_in];
     wire green 0.5 [msd.interlock_out, front.interlock_in];
-    wire green 0.5 [front.interlock_out, rear.interlock_in];
     wire green 0.5 [rear.interlock_out, hvjb.interlock_in];
     wire green 0.5 [hvjb.interlock_out, inv.interlock_in];
     wire green 0.5 [inv.interlock_out, charger.interlock_in];
     wire green 0.5 [charger.interlock_out, vcm.interlock];
 
     // --- Safe power ---
-    // VCM enables safe power when interlock OK + safety checks pass
-    // Feeds contactor high-side in both battery packs
+    // VCM enables safe power when interlock OK + safety checks pass.
+    // Feeds contactor high-side in both battery packs; the front pack
+    // is fed through the front–rear loom.
 
-    wire red 2.5 [vcm.safe_pwr, rear.safe_pwr, front.safe_pwr];
+    wire red 2.5 [vcm.safe_pwr, rear.safe_pwr];
 
     // --- 12V system ---
     // OBC/DC-DC output feeds fuse box; fuse box distributes to subsystems
@@ -112,8 +123,9 @@ component Vehicle {
     wire red 2.5 [fuses.bms_rear, rear.b_pos];
 
     // --- Chassis ground bus ---
+    // (the rear pack grounds through the front–rear loom)
 
-    wire black 6.0 [charger.out_neg, vcm.gnd, inv.gnd, front.gnd, rear.gnd];
+    wire black 6.0 [charger.out_neg, vcm.gnd, inv.gnd, front.gnd];
 }
 
 // --- View: HV System Overview ---
