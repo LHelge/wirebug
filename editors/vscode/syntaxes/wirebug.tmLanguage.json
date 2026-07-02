@@ -56,10 +56,12 @@
       }
     },
     "wire-color": {
-      "match": "\\b(wire)\\s+([a-z_][a-z0-9_]*)\\b",
+      "match": "\\b(wire)\\s+([a-z_][a-z0-9_]*)(?:\\s*(/)\\s*([a-z_][a-z0-9_]*))?\\b",
       "captures": {
         "1": { "name": "storage.type.wirebug" },
-        "2": { "name": "support.constant.color.wirebug" }
+        "2": { "name": "support.constant.color.wirebug" },
+        "3": { "name": "punctuation.separator.color.wirebug" },
+        "4": { "name": "support.constant.color.wirebug" }
       }
     },
     "ports-block": {
@@ -108,7 +110,7 @@
           "name": "keyword.control.import.wirebug"
         },
         {
-          "match": "\\b(component|extend|connector_type|connector|port|wire|cable|view|enclosure|text)\\b",
+          "match": "\\b(component|extend|connector_type|connector|port|wire|cable|twisted|view|enclosure|text)\\b",
           "name": "storage.type.wirebug"
         },
         {
