@@ -60,7 +60,7 @@ const STYLE: &str = "\
 .pin-dot { fill: black; }
 .cable-wire-casing { fill: none; stroke: black; stroke-width: 4; stroke-linecap: butt; }
 .cable-wire { fill: none; stroke-width: 2; }
-.cable-label { font: 9px sans-serif; text-anchor: middle; fill: #333; }
+.cable-label { font: 9px sans-serif; text-anchor: middle; fill: #333; paint-order: stroke; stroke: white; stroke-width: 3px; stroke-linejoin: round; }
 .title { font: bold 14px sans-serif; }
 .stamp { font: 10px sans-serif; fill: #666; text-anchor: end; }\
 ";
