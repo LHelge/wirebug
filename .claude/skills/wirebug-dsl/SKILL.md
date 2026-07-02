@@ -375,7 +375,7 @@ Format:
   - `type: "<string>";` — a free-text construction note (e.g. `"Twisted pair"`).
   - `length: <number>;` — length in **metres** (a bare number, e.g. `2.5`; no unit suffix).
 - Each `wire` uses the exact same syntax as a loose wire, **but must have exactly two endpoints** — a cable conductor is one physical run from one pin to another. (A shared rail that fans out to three+ pins is not a single conductor; keep it a loose multi-endpoint `wire`, outside any cable.)
-- A `twisted { <wire>* }` group wraps conductors that are twisted together — typically a pair. Groups and plain wires may interleave freely, so one cable can carry straight power conductors alongside a twisted signal pair:
+- A `twisted { <wire> <wire> }` group wraps exactly two conductors that are twisted together as a pair. Groups and plain wires may interleave freely, so one cable can carry straight power conductors alongside a twisted signal pair:
 
 ```
 cable sensor_loom "Sensor loom" {
@@ -390,7 +390,7 @@ cable sensor_loom "Sensor loom" {
 }
 ```
 
-In a harness drawing a two-conductor group braids inside the cable box; a group of any other size draws straight rows (there is no single partner to weave with). A group wrapping fewer than two wires raises a `check` warning (`twisted_group_arity`).
+A `twisted { }` group holds **exactly two** conductors — a twisted pair — and that count is grammar-enforced: any other number of wires inside the braces is a parse error. In a harness drawing the pair braids inside the cable box.
 
 A cable's wires are still ordinary connections: they show in schematic views like any other wire. The cable grouping adds the harness box and the BOM metadata.
 

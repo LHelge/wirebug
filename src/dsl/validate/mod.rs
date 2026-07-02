@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 
-use crate::dsl::ast::{CableMember, CablePropertyValue, Member, Port, Wire};
+use crate::dsl::ast::{CablePropertyValue, Member, Port, Wire};
 use crate::dsl::diagnostics::Problem;
 use crate::dsl::ir::ColorName;
 use crate::dsl::resolve::Resolved;
@@ -74,19 +74,6 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
                             });
                         }
                         validate_wire_colors(wire, def.file, resolved, &mut problems);
-                    }
-                    // Twisting one conductor (or none) is a no-op; the
-                    // author probably meant to wrap more of them.
-                    for member in &cable.members {
-                        if let CableMember::Twisted(t) = member
-                            && t.wires.len() < 2
-                        {
-                            problems.push(Problem::TwistedGroupArity {
-                                count: t.wires.len(),
-                                src: src(),
-                                at: t.span.into(),
-                            });
-                        }
                     }
                     let mut seen: HashMap<&str, Span> = HashMap::new();
                     for p in &cable.properties {
@@ -297,15 +284,6 @@ mod tests {
     fn twisted_group_of_two_is_clean() {
         let codes = cable("twisted { wire red 1 [a, b]; wire blue 1 [a, c]; }");
         assert!(codes.is_empty(), "{codes:?}");
-    }
-
-    #[test]
-    fn twisted_group_of_one_warns() {
-        let codes = cable("twisted { wire red 1 [a, b]; }");
-        assert!(
-            codes.iter().any(|c| c == "wirebug::twisted_group_arity"),
-            "{codes:?}"
-        );
     }
 
     #[test]

@@ -137,7 +137,7 @@ impl Elaborator<'_> {
                                     wires.push(rewrite_wire(w, Some(name.clone()), None));
                                 }
                                 ast::CableMember::Twisted(t) => {
-                                    for w in &t.wires {
+                                    for w in t.wires.iter() {
                                         wires.push(rewrite_wire(
                                             w,
                                             Some(name.clone()),
