@@ -57,69 +57,154 @@ name_newtype!(
     CableName,
     "A cable's designator, grouping its conductor wires."
 );
-/// A wire's authored color: a CSS base color name plus an optional tracer
-/// (stripe) color for two-tone wires (`green/yellow`), both kept verbatim.
-/// `Display` round-trips the authored form — the `data-color` value.
+/// One wire color, in the IEC 60757 vocabulary. `Other` preserves a name
+/// outside the standard set verbatim (mirroring [`ViewKind::Other`]) —
+/// validation warns on it, and `--strict` turns the warning into a
+/// failure. Synonyms fold on parse (`purple` → `Violet`, `gray` →
+/// `Grey`), so `Display`/`css()` emit one canonical name per color.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ColorName {
+    Black,
+    Brown,
+    Red,
+    Orange,
+    Yellow,
+    Green,
+    Blue,
+    Violet,
+    Grey,
+    White,
+    Pink,
+    Turquoise,
+    Gold,
+    Silver,
+    Other(String),
+}
+
+impl ColorName {
+    /// The CSS color this name strokes as. Every IEC 60757 color has an
+    /// exact CSS name; `Other` passes through verbatim.
+    pub fn css(&self) -> &str {
+        match self {
+            Self::Black => "black",
+            Self::Brown => "brown",
+            Self::Red => "red",
+            Self::Orange => "orange",
+            Self::Yellow => "yellow",
+            Self::Green => "green",
+            Self::Blue => "blue",
+            Self::Violet => "violet",
+            Self::Grey => "grey",
+            Self::White => "white",
+            Self::Pink => "pink",
+            Self::Turquoise => "turquoise",
+            Self::Gold => "gold",
+            Self::Silver => "silver",
+            Self::Other(name) => name,
+        }
+    }
+
+    /// The IEC 60757 code (`White` → `WH`); `Other` passes through
+    /// verbatim, so exotic names stay readable rather than vanishing.
+    pub fn code(&self) -> &str {
+        match self {
+            Self::Black => "BK",
+            Self::Brown => "BN",
+            Self::Red => "RD",
+            Self::Orange => "OG",
+            Self::Yellow => "YE",
+            Self::Green => "GN",
+            Self::Blue => "BU",
+            Self::Violet => "VT",
+            Self::Grey => "GY",
+            Self::White => "WH",
+            Self::Pink => "PK",
+            Self::Turquoise => "TQ",
+            Self::Gold => "GD",
+            Self::Silver => "SR",
+            Self::Other(name) => name,
+        }
+    }
+
+    /// False for a name outside the IEC 60757 set (the `Other` escape
+    /// hatch) — what validation warns about.
+    pub fn is_standard(&self) -> bool {
+        !matches!(self, Self::Other(_))
+    }
+}
+
+/// Case-insensitive, folding synonyms to their canonical color
+/// (`purple` → `Violet`, `gray` → `Grey`). Total: anything unrecognised
+/// lands in `Other` carrying the authored spelling.
+impl From<&str> for ColorName {
+    fn from(s: &str) -> Self {
+        match s.to_ascii_lowercase().as_str() {
+            "black" => Self::Black,
+            "brown" => Self::Brown,
+            "red" => Self::Red,
+            "orange" => Self::Orange,
+            "yellow" => Self::Yellow,
+            "green" => Self::Green,
+            "blue" => Self::Blue,
+            "violet" | "purple" => Self::Violet,
+            "gray" | "grey" => Self::Grey,
+            "white" => Self::White,
+            "pink" => Self::Pink,
+            "turquoise" => Self::Turquoise,
+            "gold" => Self::Gold,
+            "silver" => Self::Silver,
+            _ => Self::Other(s.to_string()),
+        }
+    }
+}
+
+impl fmt::Display for ColorName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.css())
+    }
+}
+
+/// A wire's color: an IEC 60757 base plus an optional tracer (stripe)
+/// for two-tone wires (`green/yellow`). `Display` emits the canonical
+/// form (`purple` normalises to `violet`) — the `data-color` value.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct WireColor {
-    base: String,
-    tracer: Option<String>,
+    base: ColorName,
+    tracer: Option<ColorName>,
 }
 
 impl WireColor {
     pub fn new(base: &str, tracer: Option<&str>) -> Self {
         Self {
-            base: base.to_string(),
-            tracer: tracer.map(str::to_string),
+            base: base.into(),
+            tracer: tracer.map(ColorName::from),
         }
     }
 
     /// The CSS color a renderer strokes the wire body with — the base;
     /// a tracer is drawn as an overlay, never as the stroke.
     pub fn css(&self) -> &str {
-        &self.base
+        self.base.css()
     }
 
     /// The tracer (stripe) CSS color of a two-tone wire.
     pub fn tracer(&self) -> Option<&str> {
-        self.tracer.as_deref()
+        self.tracer.as_ref().map(ColorName::css)
     }
 
-    /// The IEC 60757 code for this color (`white` → `WH`), a two-tone
-    /// color as slash-joined codes (`green/yellow` → `GN/YE` — kept
-    /// separated rather than the standard's concatenated `GNYE`, which is
-    /// harder to scan on a dense drawing). Matched case-insensitively; a
-    /// color outside the standard set passes through verbatim, so exotic
-    /// names stay readable rather than vanishing.
+    /// The IEC 60757 code (`white` → `WH`), a two-tone color as
+    /// slash-joined codes (`green/yellow` → `GN/YE` — kept separated
+    /// rather than the standard's concatenated `GNYE`, which is harder
+    /// to scan on a dense drawing).
     pub fn code(&self) -> String {
         match &self.tracer {
-            Some(tracer) => format!("{}/{}", iec_code(&self.base), iec_code(tracer)),
-            None => iec_code(&self.base).to_string(),
+            Some(tracer) => format!("{}/{}", self.base.code(), tracer.code()),
+            None => self.base.code().to_string(),
         }
     }
 }
 
-/// The IEC 60757 code for one CSS color name, or the name itself when it
-/// has no code.
-fn iec_code(color: &str) -> &str {
-    match color.to_ascii_lowercase().as_str() {
-        "black" => "BK",
-        "brown" => "BN",
-        "red" => "RD",
-        "orange" => "OG",
-        "yellow" => "YE",
-        "green" => "GN",
-        "blue" => "BU",
-        "violet" | "purple" => "VT",
-        "gray" | "grey" => "GY",
-        "white" => "WH",
-        "pink" => "PK",
-        "turquoise" => "TQ",
-        _ => color,
-    }
-}
-
-/// Splits on `/`, so the authored surface form round-trips
+/// Splits on `/`, so the authored surface form parses whole
 /// (`"green/yellow"`).
 impl From<&str> for WireColor {
     fn from(s: &str) -> Self {
@@ -140,7 +225,7 @@ impl fmt::Display for WireColor {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.tracer {
             Some(tracer) => write!(f, "{}/{}", self.base, tracer),
-            None => f.write_str(&self.base),
+            None => write!(f, "{}", self.base),
         }
     }
 }
@@ -568,9 +653,34 @@ mod tests {
     }
 
     #[test]
-    fn wire_color_display_round_trips_the_authored_form() {
+    fn wire_color_display_emits_the_canonical_form() {
         assert_eq!(WireColor::from("green/yellow").to_string(), "green/yellow");
         assert_eq!(WireColor::from("orange").to_string(), "orange");
+        // Synonyms normalise — data-color themes against one vocabulary.
+        assert_eq!(WireColor::from("purple").to_string(), "violet");
+        assert_eq!(WireColor::from("gray/PURPLE").to_string(), "grey/violet");
+        // Non-standard names keep their authored spelling.
+        assert_eq!(WireColor::from("chartreuse").to_string(), "chartreuse");
+    }
+
+    #[test]
+    fn every_standard_color_name_round_trips_via_css() {
+        use ColorName::*;
+        for color in [
+            Black, Brown, Red, Orange, Yellow, Green, Blue, Violet, Grey, White, Pink, Turquoise,
+            Gold, Silver,
+        ] {
+            assert_eq!(ColorName::from(color.css()), color);
+            assert!(color.is_standard());
+            assert_eq!(color.code().len(), 2, "{color:?}");
+        }
+        assert!(!ColorName::from("chartreuse").is_standard());
+    }
+
+    #[test]
+    fn gold_and_silver_complete_the_iec_set() {
+        assert_eq!(ColorName::from("gold").code(), "GD");
+        assert_eq!(ColorName::from("silver").code(), "SR");
     }
 
     #[test]

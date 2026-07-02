@@ -15,8 +15,9 @@
 
 use std::collections::HashMap;
 
-use crate::dsl::ast::{CablePropertyValue, Member, Port};
+use crate::dsl::ast::{CablePropertyValue, Member, Port, Wire};
 use crate::dsl::diagnostics::Problem;
+use crate::dsl::ir::ColorName;
 use crate::dsl::resolve::Resolved;
 use crate::dsl::span::{FileId, Span};
 
@@ -28,12 +29,15 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
         let src = || resolved.project.source(def.file);
         for member in &def.ast.members {
             match member {
-                Member::Wire(wire) if wire.endpoints.len() < 2 => {
-                    problems.push(Problem::WireArity {
-                        count: wire.endpoints.len(),
-                        src: src(),
-                        at: wire.span.into(),
-                    });
+                Member::Wire(wire) => {
+                    if wire.endpoints.len() < 2 {
+                        problems.push(Problem::WireArity {
+                            count: wire.endpoints.len(),
+                            src: src(),
+                            at: wire.span.into(),
+                        });
+                    }
+                    validate_wire_colors(wire, def.file, resolved, &mut problems);
                 }
                 Member::Port(port) if !port.pins.is_empty() => {
                     validate_pin_numbers(port, def.file, resolved, &mut problems);
@@ -69,6 +73,7 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
                                 at: wire.span.into(),
                             });
                         }
+                        validate_wire_colors(wire, def.file, resolved, &mut problems);
                     }
                     let mut seen: HashMap<&str, Span> = HashMap::new();
                     for p in &cable.properties {
@@ -142,6 +147,27 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
     }
 
     problems
+}
+
+/// Warn on a base or tracer color outside the IEC 60757 set. The wire
+/// still renders (the name passes through verbatim), so this is a
+/// warning — fatal only under `--strict`.
+fn validate_wire_colors(
+    wire: &Wire,
+    file: FileId,
+    resolved: &Resolved,
+    problems: &mut Vec<Problem>,
+) {
+    let colors = std::iter::once(&wire.color).chain(&wire.tracer);
+    for color in colors {
+        if !ColorName::from(color.node.as_str()).is_standard() {
+            problems.push(Problem::UnknownWireColor {
+                name: color.node.as_str().to_string(),
+                src: resolved.project.source(file),
+                at: color.span.into(),
+            });
+        }
+    }
 }
 
 fn validate_pin_numbers(
@@ -263,6 +289,48 @@ mod tests {
                 .any(|c| c == "wirebug::duplicate_cable_property"),
             "{codes:?}"
         );
+    }
+
+    #[test]
+    fn non_iec_wire_color_warns() {
+        let codes = validate_files(&[(
+            "main.wb",
+            "component m { pub port a \"A\"; pub port b \"B\"; wire chartreuse 1 [a, b]; }\n",
+        )]);
+        assert!(
+            codes.iter().any(|c| c == "wirebug::unknown_wire_color"),
+            "{codes:?}"
+        );
+    }
+
+    #[test]
+    fn non_iec_tracer_color_warns() {
+        let codes = validate_files(&[(
+            "main.wb",
+            "component m { pub port a \"A\"; pub port b \"B\"; wire green/yellowish 1 [a, b]; }\n",
+        )]);
+        assert!(
+            codes.iter().any(|c| c == "wirebug::unknown_wire_color"),
+            "{codes:?}"
+        );
+    }
+
+    #[test]
+    fn non_iec_cable_conductor_color_warns() {
+        let codes = cable("wire beige 1 [a, b];");
+        assert!(
+            codes.iter().any(|c| c == "wirebug::unknown_wire_color"),
+            "{codes:?}"
+        );
+    }
+
+    #[test]
+    fn iec_colors_and_synonyms_are_clean() {
+        let codes = validate_files(&[(
+            "main.wb",
+            "component m { pub port a \"A\"; pub port b \"B\"; wire purple 1 [a, b]; wire gray/gold 1 [a, b]; }\n",
+        )]);
+        assert!(codes.is_empty(), "{codes:?}");
     }
 
     #[test]

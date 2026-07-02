@@ -214,7 +214,10 @@ colors read on any background) and annotated
 `<label> · <gauge>mm² · <color code>` (IEC 60757 via `ir::WireColor::code`).
 A two-tone color (`green/yellow`) adds a dashed tracer overlay on the
 core and slash-joins its codes (`GN/YE`); `WireColor` carries
-`base` + optional `tracer`, split at the `/` by the parser.
+`base` + optional `tracer` (each an `ir::ColorName` — the closed IEC
+60757 enum with an `Other(String)` escape hatch), split at the `/` by
+the parser. Synonyms normalise on parse (`purple` → `violet`, also in
+`data-color`); a non-IEC name warns in `check` but renders verbatim.
 
 Two deliberate departures from the schematic's no-inference rule: pin
 **facing** is derived per pin from where its conductor goes (above), and wire
@@ -259,7 +262,9 @@ so one run reports many. Errors fail the run; warnings fail only under
   arity (a cable conductor that isn't exactly two endpoints,
   `cable_wire_arity`); cable property checks (`unknown_cable_property`,
   `duplicate_cable_property`, `cable_property_type` — `type` wants a string,
-  `length` a number); unused import and bare-port pin (warnings). Cable
+  `length` a number); unused import, bare-port pin, and non-IEC 60757
+  wire color (`unknown_wire_color` — the `ir::ColorName::Other` escape
+  hatch still renders verbatim) as warnings. Cable
   property/arity checks live here (not elaborate) so a type instantiated
   many times reports each once.
 
