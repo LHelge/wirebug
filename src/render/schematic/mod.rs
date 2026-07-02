@@ -158,7 +158,7 @@ impl SchematicRenderer {
 
         let mut wires_group = Group::new().set("class", "wires");
         for (polyline, connection) in wires.iter().zip(&connections) {
-            wires_group = wires_group.add(draw::render_wire(polyline));
+            wires_group = wires_group.add(draw::render_wire(polyline, connection.color));
             if let Some(code) = draw::render_wire_code(polyline, connection.color) {
                 wires_group = wires_group.add(code);
             }
@@ -283,9 +283,11 @@ component sys {
         );
         let svg = render(&design, &view).expect("renders");
 
-        // The `wire red 1` net annotates as its IEC 60757 code.
+        // The `wire red 1` net annotates as its IEC 60757 code and tags
+        // its polyline with the authored color for host stylesheets.
         assert!(svg.contains("class=\"wire-code\""));
         assert!(svg.contains(">\nRD\n</text>"));
+        assert!(svg.contains("data-color=\"red\""));
     }
 
     #[test]

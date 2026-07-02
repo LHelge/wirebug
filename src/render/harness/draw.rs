@@ -9,10 +9,13 @@ use super::{HEADER_HEIGHT, NODE_PAD, PIN_COL_WIDTH, PIN_DOT_RADIUS, ROW_HEIGHT};
 use crate::render::geometry::{Point, Side};
 
 /// A `cable-wire` path with the given SVG path data, stroked in `color`.
+/// The color also rides along as `data-color`, so a host stylesheet can
+/// theme strands by color in embed mode (where the stroke default is gone).
 fn wire_path(d: String, color: &str) -> Path {
     Path::new()
         .set("class", "cable-wire")
         .set("stroke", color)
+        .set("data-color", color)
         .set("d", d)
 }
 

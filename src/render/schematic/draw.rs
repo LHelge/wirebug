@@ -224,14 +224,19 @@ fn outside_pin_placement(side: Side, pos: Point) -> LabelPlacement {
 }
 
 /// Emit a routed connector as a `<polyline>`. `path` is the ordered list
-/// of points produced by [`super::route::Router::route`].
-pub(super) fn render_wire(path: &[Point]) -> Polyline {
+/// of points produced by [`super::route::Router::route`]. The wire's
+/// authored color rides along as `data-color`, so a host stylesheet can
+/// theme wires by color (`.wire[data-color="white"] { … }`) in embed mode.
+pub(super) fn render_wire(path: &[Point], color: &str) -> Polyline {
     let points = path
         .iter()
         .map(|p| format!("{},{}", p.x, p.y))
         .collect::<Vec<_>>()
         .join(" ");
-    Polyline::new().set("class", "wire").set("points", points)
+    Polyline::new()
+        .set("class", "wire")
+        .set("data-color", color)
+        .set("points", points)
 }
 
 /// The wire's color code (IEC 60757 where known, the authored name
