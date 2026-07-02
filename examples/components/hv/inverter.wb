@@ -15,52 +15,31 @@ component Inverter {
         pub port phase_w "W" pin 3;
     }
 
-    // CAN-bus
-    pub port can_h "CAN H";
-    pub port can_l "CAN L";
-
-    // Motor connections — resolver + temperature, motor-side nomenclature
-    pub port res_ex_pos  "EX+";
-    pub port res_ex_neg  "EX-";
-    pub port res_sin_pos "SIN+";
-    pub port res_sin_neg "SIN-";
-    pub port res_cos_pos "COS+";
-    pub port res_cos_neg "COS-";
-    pub port motor_temp_neg "TEMP-";
-    pub port motor_temp_pos "TEMP+";
-
-    // Control
-    pub port ignition "IGNITION";
-
-    // Power — B+ and B- each ganged over two cavities for current
-    pub port b_pos "B+";
-    pub port b_neg "B-";
-
-    // Interlock
+    // Interlock — cavities parked until the datasheet is at hand
     pub port interlock_in  "INTLK IN";
     pub port interlock_out "INTLK OUT";
 
     connector control: InverterControl {
-        pin 14: can_h;
-        pin 15: can_l;
+        // CAN-bus
+        pub port can_h "CAN H" pin 14;
+        pub port can_l "CAN L" pin 15;
 
-        pin 17: res_sin_neg;
-        pin 18: res_cos_neg;
-        pin 19: res_ex_pos;
-        pin 20: res_sin_pos;
-        pin 21: res_cos_pos;
-        pin 27: res_ex_neg;
-        pin 44: motor_temp_neg;
-        pin 45: motor_temp_pos;
+        // Motor connections — resolver + temperature, motor-side nomenclature
+        pub port res_sin_neg "SIN-" pin 17;
+        pub port res_cos_neg "COS-" pin 18;
+        pub port res_ex_pos  "EX+" pin 19;
+        pub port res_sin_pos "SIN+" pin 20;
+        pub port res_cos_pos "COS+" pin 21;
+        pub port res_ex_neg  "EX-" pin 27;
+        pub port motor_temp_neg "TEMP-" pin 44;
+        pub port motor_temp_pos "TEMP+" pin 45;
 
         // Control
-        pin 42: ignition;
+        pub port ignition "IGNITION" pin 42;
 
-        // Power
-        pin 46: b_pos;
-        pin 47: b_neg;
-        pin 48: b_pos;
-        pin 49: b_neg;
+        // Power — B+ and B- each ganged over two cavities for current
+        pub port b_pos "B+" pins [46, 48];
+        pub port b_neg "B-" pins [47, 49];
     }
 }
 

@@ -219,8 +219,10 @@ Connectors are **structural metadata, not a namespace**. A port `c0` inside a co
 ## Connector types and pinout layouts
 
 Reusable connector types keep verbose connector metadata and physical pinout
-layouts out of component definitions. A component instantiates a connector type
-and binds the physical pins to its flat ports.
+layouts out of component definitions. A component instantiates a connector
+type with the **same body as an inline connector** — port declarations with
+their pin assignments — so the two forms differ only in where the part
+metadata comes from (`: Type` versus a free part string).
 
 ```
 connector_type JstXh8p "JST XH 8p" {
@@ -234,12 +236,9 @@ connector_type JstXh8p "JST XH 8p" {
 }
 
 component Controller {
-    pub port can_h "CAN H";
-    pub port can_l "CAN L";
-
     connector x1: JstXh8p {
-        pin 1: can_h;
-        pin 2: can_l;
+        pub port can_h "CAN H" pin 1;
+        pub port can_l "CAN L" pin 2;
     }
 }
 ```
@@ -247,9 +246,10 @@ component Controller {
 `connector_type` definitions are top-level items, like components and views.
 They can be imported with `use` and referenced by `connector <name>: <Type>`.
 Connector instance names are the designators used in harness and pinout views.
-Pins in a connector instance must be positive integers; a pin can bind to only
-one port, but one port may bind to several pins when cavities are ganged for
-current.
+Ports declared inside the block are ordinary flat component ports, exactly as
+in an inline connector. Pins must be positive integers; a pin can belong to
+only one port within a connector, but one port may span several pins with
+`pins [1, 2]` when cavities are ganged for current.
 
 Pinout layouts are authored from the **harness side**. Be explicit about this
 in project docs and connector libraries: if a datasheet drawing is device-side,

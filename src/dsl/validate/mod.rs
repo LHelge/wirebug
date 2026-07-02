@@ -53,14 +53,8 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
                     }
                 }
                 Member::ConnectorInstance(connector) => {
-                    for binding in &connector.pins {
-                        if binding.pin.node == 0 {
-                            problems.push(Problem::InvalidPin {
-                                value: binding.pin.node,
-                                src: src(),
-                                at: binding.pin.span.into(),
-                            });
-                        }
+                    for port in &connector.ports {
+                        validate_pin_numbers(port, def.file, resolved, &mut problems);
                     }
                 }
                 Member::Cable(cable) => {
@@ -383,7 +377,7 @@ mod tests {
         let codes = validate_files(&[
             (
                 "main.wb",
-                "use ampseal from \"connectors.wb\";\ncomponent m { pub port a \"A\"; connector x1: ampseal { pin 1: a; } }\n",
+                "use ampseal from \"connectors.wb\";\ncomponent m { connector x1: ampseal { pub port a \"A\" pin 1; } }\n",
             ),
             (
                 "connectors.wb",
@@ -433,7 +427,7 @@ mod tests {
     fn connector_instance_pin_zero_errors() {
         let codes = validate_files(&[(
             "main.wb",
-            "connector_type ampseal \"AMPSEAL\" { }\ncomponent m { pub port a \"A\"; connector x1: ampseal { pin 0: a; } }\n",
+            "connector_type ampseal \"AMPSEAL\" { }\ncomponent m { connector x1: ampseal { pub port a \"A\" pin 0; } }\n",
         )]);
         assert!(
             codes.iter().any(|c| c == "wirebug::invalid_pin"),

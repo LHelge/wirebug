@@ -191,21 +191,15 @@ pub struct Connector {
     pub span: Span,
 }
 
-/// `connector <name>: <type> { pin N = <port>; ... }` — a component-owned
-/// connector instance backed by a reusable top-level connector type.
+/// `connector <name>: <Type> { <ports> }` — a component-owned connector
+/// instance backed by a reusable top-level connector type. The body is the
+/// same port-declaration list as an inline [`Connector`]; each port's
+/// `pin`/`pins [..]` names the cavities it occupies in the type's layout.
 #[derive(Debug, Clone)]
 pub struct ConnectorInstance {
     pub name: Spanned<Ident>,
     pub type_name: Spanned<Ident>,
-    pub pins: Vec<PinBinding>,
-    pub span: Span,
-}
-
-/// `pin N = <port>;` inside a [`ConnectorInstance`].
-#[derive(Debug, Clone)]
-pub struct PinBinding {
-    pub pin: Spanned<u32>,
-    pub port: Spanned<Ident>,
+    pub ports: Vec<Port>,
     pub span: Span,
 }
 

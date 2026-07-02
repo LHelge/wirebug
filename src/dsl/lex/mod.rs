@@ -288,10 +288,10 @@ mod tests {
     }
 
     #[test]
-    fn connector_type_and_pin_binding_punctuation_lex() {
+    fn connector_type_and_instance_punctuation_lex() {
         assert_eq!(
             tokens(
-                "connector_type ampseal \"A\" { part: \"TE\"; } connector x1: ampseal { pin 1: a; }"
+                "connector_type ampseal \"A\" { part: \"TE\"; } connector x1: ampseal { port a \"A\" pin 1; }"
             ),
             vec![
                 Token::ConnectorType,
@@ -308,10 +308,11 @@ mod tests {
                 Token::Colon,
                 Token::Ident("ampseal".into()),
                 Token::LBrace,
+                Token::Port,
+                Token::Ident("a".into()),
+                Token::Str("A".into()),
                 Token::Pin,
                 Token::Number("1".into()),
-                Token::Colon,
-                Token::Ident("a".into()),
                 Token::Semicolon,
                 Token::RBrace,
             ]

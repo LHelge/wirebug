@@ -1,12 +1,9 @@
 use Hv2p from "connectors.wb";
 
 component Inverter {
-    pub port dc_pos "DC+";
-    pub port dc_neg "DC-";
-
     connector hv: Hv2p {
-        pin 1: dc_pos;
-        pin 2: dc_neg;
+        pub port dc_pos "DC+" pin 1;
+        pub port dc_neg "DC-" pin 2;
     }
 }
 

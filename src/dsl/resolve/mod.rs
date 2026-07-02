@@ -210,7 +210,7 @@ pub fn resolve(project: &Project) -> Resolved<'_> {
         .collect();
     r.resolve_instances(&envs);
     r.resolve_connector_instances(&connector_type_scope);
-    r.apply_connector_bindings();
+    r.apply_connector_types();
     r.resolve_endpoints();
     let views = r.resolve_views(&roots_by_file);
 
@@ -304,6 +304,11 @@ impl<'a> Resolver<'a> {
                     for port in &conn.ports {
                         self.add_port(&mut ports, port, Some(cref), file);
                     }
+                    self.check_duplicate_pins(
+                        name.unwrap_or(conn.part.node.as_str()),
+                        &conn.ports,
+                        file,
+                    );
                 }
                 Member::ConnectorInstance(conn) => {
                     let name = ConnectorName::from(conn.name.node.as_str());
@@ -324,8 +329,20 @@ impl<'a> Resolver<'a> {
                                 index: connector_index,
                             },
                         );
-                        connector_index += 1;
                     }
+                    // Same flat port declarations as an inline connector; the
+                    // part string comes from the connector type, resolved
+                    // later — `apply_connector_types` fills it in.
+                    let cref = ConnectorRef {
+                        name: Some(conn.name.node.as_str()),
+                        part: "",
+                        index: connector_index,
+                    };
+                    connector_index += 1;
+                    for port in &conn.ports {
+                        self.add_port(&mut ports, port, Some(cref), file);
+                    }
+                    self.check_duplicate_pins(conn.name.node.as_str(), &conn.ports, file);
                 }
                 Member::Instance(inst) => {
                     let name = InstanceName::from(inst.name.node.as_str());
@@ -387,6 +404,27 @@ impl<'a> Resolver<'a> {
             ast: connector_type,
         });
         id
+    }
+
+    /// One cavity, one port: flag a pin number claimed twice within a single
+    /// connector (inline or typed), including twice in one `pins [..]` list.
+    fn check_duplicate_pins(&mut self, connector: &str, ports: &[ast::Port], file: FileId) {
+        let mut pins: HashMap<u32, Span> = HashMap::new();
+        for port in ports {
+            for pin in &port.pins {
+                if let Some(&first) = pins.get(&pin.node) {
+                    self.problems.push(Problem::DuplicateConnectorPin {
+                        pin: pin.node,
+                        connector: connector.to_string(),
+                        src: self.project.source(file),
+                        at: pin.span.into(),
+                        first: first.into(),
+                    });
+                } else {
+                    pins.insert(pin.node, pin.span);
+                }
+            }
+        }
     }
 
     fn add_port(
@@ -781,70 +819,42 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    fn apply_connector_bindings(&mut self) {
-        let mut problems = Vec::new();
+    /// Fill each typed connector's port `ConnectorRef.part` from its
+    /// resolved connector type. Pass 1 registered the ports with an empty
+    /// part — the type wasn't resolved yet.
+    fn apply_connector_types(&mut self) {
         for d in 0..self.defs.len() {
-            let file = self.defs[d].file;
-            let connectors: Vec<(
-                ConnectorName,
-                Option<ConnectorTypeId>,
-                usize,
-                &'a ast::ConnectorInstance,
-            )> = self.defs[d]
+            let typed: Vec<(&'a str, &'a str, Vec<PortName>)> = self.defs[d]
                 .connectors
-                .iter()
-                .map(|(name, facts)| (name.clone(), facts.type_id, facts.index, facts.ast))
+                .values()
+                .filter_map(|facts| {
+                    let type_id = facts.type_id?;
+                    Some((
+                        facts.ast.name.node.as_str(),
+                        self.connector_types[type_id].ast.description.node.as_str(),
+                        facts
+                            .ast
+                            .ports
+                            .iter()
+                            .map(|p| PortName::from(p.name.node.as_str()))
+                            .collect(),
+                    ))
+                })
                 .collect();
-            for (name, type_id, index, ast) in connectors {
-                let Some(type_id) = type_id else { continue };
-                let part = self.connector_types[type_id].ast.description.node.as_str();
-                let connector_name = ast.name.node.as_str();
-                let mut pins: HashMap<u32, Span> = HashMap::new();
-                for binding in &ast.pins {
-                    if let Some(&first) = pins.get(&binding.pin.node) {
-                        problems.push(Problem::DuplicateConnectorPin {
-                            pin: binding.pin.node,
-                            connector: name.to_string(),
-                            src: self.project.source(file),
-                            at: binding.pin.span.into(),
-                            first: first.into(),
-                        });
-                    } else {
-                        pins.insert(binding.pin.node, binding.pin.span);
+            for (connector_name, part, port_names) in typed {
+                for name in port_names {
+                    // A duplicate-named port kept the *first* declaration in
+                    // the registry; the name guard skips it if that one
+                    // belongs to a different connector.
+                    if let Some(port) = self.defs[d].ports.get_mut(&name)
+                        && let Some(cref) = &mut port.connector
+                        && cref.name == Some(connector_name)
+                    {
+                        cref.part = part;
                     }
-
-                    let port_name = PortName::from(binding.port.node.as_str());
-                    let Some(port) = self.defs[d].ports.get_mut(&port_name) else {
-                        problems.push(Problem::UnknownPort {
-                            port: binding.port.node.as_str().to_string(),
-                            on: String::new(),
-                            src: self.project.source(file),
-                            at: binding.port.span.into(),
-                        });
-                        continue;
-                    };
-                    match &port.connector {
-                        Some(existing) if existing.name != Some(connector_name) => {
-                            problems.push(Problem::PortConnectorConflict {
-                                port: binding.port.node.as_str().to_string(),
-                                src: self.project.source(file),
-                                at: binding.port.span.into(),
-                            });
-                        }
-                        Some(_) => {}
-                        None => {
-                            port.connector = Some(ConnectorRef {
-                                name: Some(connector_name),
-                                part,
-                                index,
-                            });
-                        }
-                    }
-                    port.pins.push(Pin(binding.pin.node));
                 }
             }
         }
-        self.problems.extend(problems);
     }
 
     fn resolve_endpoints(&mut self) {
@@ -1269,7 +1279,7 @@ mod tests {
     fn connector_instance_resolves_local_connector_type() {
         let p = problems(&[(
             "main.wb",
-            "connector_type ampseal \"AMPSEAL\" { part: \"TE\"; }\ncomponent m { pub port can_h \"CAN H\"; connector x1: ampseal { pin 1: can_h; } }\n",
+            "connector_type ampseal \"AMPSEAL\" { part: \"TE\"; }\ncomponent m { connector x1: ampseal { pub port can_h \"CAN H\" pin 1; } }\n",
         )]);
         assert!(p.is_empty(), "unexpected problems: {:?}", codes(&p));
     }
@@ -1279,7 +1289,7 @@ mod tests {
         let p = problems(&[
             (
                 "main.wb",
-                "use ampseal from \"connectors.wb\";\ncomponent m { pub port can_h \"CAN H\"; connector x1: ampseal { pin 1: can_h; } }\n",
+                "use ampseal from \"connectors.wb\";\ncomponent m { connector x1: ampseal { pub port can_h \"CAN H\" pin 1; } }\n",
             ),
             (
                 "connectors.wb",
@@ -1293,7 +1303,7 @@ mod tests {
     fn unknown_connector_type_errors() {
         let p = problems(&[(
             "main.wb",
-            "component m { pub port can_h \"CAN H\"; connector x1: ghost { pin 1: can_h; } }\n",
+            "component m { connector x1: ghost { pub port can_h \"CAN H\" pin 1; } }\n",
         )]);
         assert!(
             has(&p, "wirebug::undefined_connector_type"),
@@ -1303,19 +1313,28 @@ mod tests {
     }
 
     #[test]
-    fn unknown_connector_bound_port_errors() {
+    fn typed_connector_ports_are_component_ports() {
+        // A port declared inside a typed connector is an ordinary flat
+        // component port: wires reach it, and its name collides with a
+        // bare port of the same name.
         let p = problems(&[(
             "main.wb",
-            "connector_type ampseal \"AMPSEAL\" { }\ncomponent m { connector x1: ampseal { pin 1: nope; } }\n",
+            "connector_type ampseal \"AMPSEAL\" { }\ncomponent m { pub port a \"A\"; connector x1: ampseal { pub port b \"B\" pin 1; } wire red 1 [a, b]; }\n",
         )]);
-        assert!(has(&p, "wirebug::unknown_port"), "{:?}", codes(&p));
+        assert!(p.is_empty(), "unexpected problems: {:?}", codes(&p));
+
+        let p = problems(&[(
+            "main.wb",
+            "connector_type ampseal \"AMPSEAL\" { }\ncomponent m { pub port a \"A\"; connector x1: ampseal { pub port a \"A\" pin 1; } }\n",
+        )]);
+        assert!(has(&p, "wirebug::duplicate_port"), "{:?}", codes(&p));
     }
 
     #[test]
     fn duplicate_connector_pin_errors() {
         let p = problems(&[(
             "main.wb",
-            "connector_type ampseal \"AMPSEAL\" { }\ncomponent m { pub port can_h \"CAN H\"; pub port can_l \"CAN L\"; connector x1: ampseal { pin 1: can_h; pin 1: can_l; } }\n",
+            "connector_type ampseal \"AMPSEAL\" { }\ncomponent m { connector x1: ampseal { pub port can_h \"CAN H\" pin 1; pub port can_l \"CAN L\" pin 1; } }\n",
         )]);
         assert!(
             has(&p, "wirebug::duplicate_connector_pin"),
@@ -1325,10 +1344,23 @@ mod tests {
     }
 
     #[test]
-    fn one_port_can_bind_to_multiple_pins_on_one_connector() {
+    fn duplicate_pin_errors_on_inline_connectors_too() {
         let p = problems(&[(
             "main.wb",
-            "connector_type ampseal \"AMPSEAL\" { }\ncomponent m { pub port gnd \"GND\"; connector x1: ampseal { pin 1: gnd; pin 2: gnd; } }\n",
+            "component m { connector x1 \"X 2p\" { pub port a \"A\" pin 1; pub port b \"B\" pin 1; } }\n",
+        )]);
+        assert!(
+            has(&p, "wirebug::duplicate_connector_pin"),
+            "{:?}",
+            codes(&p)
+        );
+    }
+
+    #[test]
+    fn one_port_can_occupy_multiple_pins_on_one_connector() {
+        let p = problems(&[(
+            "main.wb",
+            "connector_type ampseal \"AMPSEAL\" { }\ncomponent m { connector x1: ampseal { pub port gnd \"GND\" pins [1, 2]; } }\n",
         )]);
         assert!(p.is_empty(), "unexpected problems: {:?}", codes(&p));
     }
@@ -1376,7 +1408,7 @@ mod tests {
             ),
             (
                 "leaf.wb",
-                "connector_type hv_2p \"HV 2p\" { }\ncomponent leaf { pub port hv_pos \"HV+\"; connector hv: hv_2p { pin 1: hv_pos; } }\n",
+                "connector_type hv_2p \"HV 2p\" { }\ncomponent leaf { connector hv: hv_2p { pub port hv_pos \"HV+\" pin 1; } }\n",
             ),
         ]);
         assert!(p.is_empty(), "unexpected problems: {:?}", codes(&p));
@@ -1421,8 +1453,7 @@ mod tests {
             "main.wb",
             "connector_type ampseal \"AMPSEAL\" { }
             component m {
-                pub port can_h \"CAN H\";
-                connector x1: ampseal { pin 1: can_h; }
+                connector x1: ampseal { pub port can_h \"CAN H\" pin 1; }
             }
             view pinout \"X1\" { include x1 at (0, 0); }\n",
         )]);
@@ -1456,8 +1487,7 @@ mod tests {
             "main.wb",
             "connector_type ampseal \"AMPSEAL\" { }
             component m {
-                pub port can_h \"CAN H\";
-                connector x1: ampseal { pin 1: can_h; }
+                connector x1: ampseal { pub port can_h \"CAN H\" pin 1; }
             }
             view pinout \"X1\" { include child.x1 at (0, 0); }\n",
         )]);
@@ -1470,8 +1500,7 @@ mod tests {
             "main.wb",
             "connector_type ampseal \"AMPSEAL\" { }
             component m {
-                pub port can_h \"CAN H\";
-                connector x1: ampseal { pin 1: can_h; }
+                connector x1: ampseal { pub port can_h \"CAN H\" pin 1; }
             }
             view pinout \"X1\" { include x1 at (0, 0) ports { west: can_h; } }\n",
         )]);

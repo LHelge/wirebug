@@ -388,11 +388,13 @@ fn typed_connector(
             .collect(),
         layout: connector_type_layout(connector_type),
         pins: conn
-            .pins
+            .ports
             .iter()
-            .map(|binding| ConnectorPin {
-                pin: crate::dsl::ir::Pin(binding.pin.node),
-                port: PortName::from(binding.port.node.as_str()),
+            .flat_map(|port| {
+                port.pins.iter().map(|pin| ConnectorPin {
+                    pin: crate::dsl::ir::Pin(pin.node),
+                    port: PortName::from(port.name.node.as_str()),
+                })
             })
             .collect(),
     }
@@ -604,11 +606,9 @@ mod tests {
                 }
             }
             component m {
-                pub port can_h \"CAN H\";
-                pub port can_l \"CAN L\";
                 connector x1: ampseal {
-                    pin 1: can_h;
-                    pin 2: can_l;
+                    pub port can_h \"CAN H\" pin 1;
+                    pub port can_l \"CAN L\" pin 2;
                 }
             }\n",
         )]);

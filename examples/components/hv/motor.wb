@@ -9,24 +9,15 @@ component Motor {
         pub port phase_w "W" pin 3;
     }
 
-    pub port temp_neg "TEMP-";
-    pub port temp_pos "TEMP+";
-    pub port res_ex_pos "EX+";
-    pub port res_ex_neg "EX-";
-    pub port res_sin_pos "SIN+";
-    pub port res_sin_neg "SIN-";
-    pub port res_cos_pos "COS+";
-    pub port res_cos_neg "COS-";
-
     connector inverter: YazakiRH_8p {
-        pin 1: temp_neg;
-        pin 2: temp_pos;
-        pin 3: res_ex_pos;
-        pin 4: res_ex_neg;
-        pin 5: res_sin_pos;
-        pin 6: res_sin_neg;
-        pin 7: res_cos_neg;
-        pin 8: res_cos_pos;
+        pub port temp_neg "TEMP-" pin 1;
+        pub port temp_pos "TEMP+" pin 2;
+        pub port res_ex_pos "EX+" pin 3;
+        pub port res_ex_neg "EX-" pin 4;
+        pub port res_sin_pos "SIN+" pin 5;
+        pub port res_sin_neg "SIN-" pin 6;
+        pub port res_cos_neg "COS-" pin 7;
+        pub port res_cos_pos "COS+" pin 8;
     }
 }
 

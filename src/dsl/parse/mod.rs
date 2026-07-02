@@ -299,31 +299,20 @@ where
         })
         .boxed();
 
-    let pin_binding = just(Token::Pin)
-        .ignore_then(pin)
-        .then_ignore(just(Token::Colon))
-        .then(ident)
-        .then_ignore(just(Token::Semicolon))
-        .map_with(|(pin, port), e| PinBinding {
-            pin,
-            port,
-            span: e.span(),
-        });
-
     let connector_instance = just(Token::Connector)
         .ignore_then(ident)
         .then_ignore(just(Token::Colon))
         .then(ident)
         .then(
-            pin_binding
+            port.clone()
                 .repeated()
                 .collect::<Vec<_>>()
                 .delimited_by(just(Token::LBrace), just(Token::RBrace)),
         )
-        .map_with(|((name, type_name), pins), e| ConnectorInstance {
+        .map_with(|((name, type_name), ports), e| ConnectorInstance {
             name,
             type_name,
-            pins,
+            ports,
             span: e.span(),
         })
         .boxed();
@@ -928,25 +917,32 @@ inverter_control = face 47@(1, 0) large 21@(5, 0) 13@(16, 3)
     }
 
     #[test]
-    fn connector_instance_binds_pins_to_existing_ports() {
+    fn connector_instance_declares_ports_with_pins() {
         let file = parse_ok(
             r#"component c {
-                pub port can_h "CAN H";
-                pub port can_l "CAN L";
                 connector x1: ampseal_35p {
-                    pin 1: can_h;
-                    pin 2: can_l;
+                    pub port can_h "CAN H" pin 1;
+                    pub port b_pos "B+" pins [2, 3];
                 }
             }"#,
         );
-        let Member::ConnectorInstance(conn) = &members(&file)[2] else {
+        let Member::ConnectorInstance(conn) = &members(&file)[0] else {
             panic!("expected a connector instance");
         };
         assert_eq!(conn.name.node.as_str(), "x1");
         assert_eq!(conn.type_name.node.as_str(), "ampseal_35p");
-        assert_eq!(conn.pins.len(), 2);
-        assert_eq!(conn.pins[0].pin.node, 1);
-        assert_eq!(conn.pins[0].port.node.as_str(), "can_h");
+        assert_eq!(conn.ports.len(), 2);
+        assert_eq!(conn.ports[0].name.node.as_str(), "can_h");
+        assert_eq!(conn.ports[0].pins[0].node, 1);
+        // Ganged cavities ride one declaration, same as inline connectors.
+        assert_eq!(
+            conn.ports[1]
+                .pins
+                .iter()
+                .map(|p| p.node)
+                .collect::<Vec<_>>(),
+            [2, 3]
+        );
     }
 
     #[test]

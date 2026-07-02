@@ -341,7 +341,7 @@ pub enum Problem {
         first: SourceSpan,
     },
 
-    /// A component connector binds the same physical pin more than once.
+    /// A connector (inline or typed) claims the same physical pin twice.
     #[error("duplicate pin `{pin}` in connector `{connector}`")]
     #[diagnostic(code(wirebug::duplicate_connector_pin))]
     DuplicateConnectorPin {
@@ -353,20 +353,6 @@ pub enum Problem {
         at: SourceSpan,
         #[label("first bound here")]
         first: SourceSpan,
-    },
-
-    /// A port was assigned to two different component connectors.
-    #[error("port `{port}` is already assigned to another connector")]
-    #[diagnostic(
-        code(wirebug::port_connector_conflict),
-        help("a component port can belong to only one physical connector")
-    )]
-    PortConnectorConflict {
-        port: String,
-        #[source_code]
-        src: NamedSource<String>,
-        #[label("assigned again here")]
-        at: SourceSpan,
     },
 
     /// Two cables in one component share a designator.

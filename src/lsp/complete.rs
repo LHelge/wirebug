@@ -387,11 +387,8 @@ impl CompletionIndex {
                 Vec::new()
             }
             Some(Block::Connector) => match cursor.tail() {
-                [.., Token::Pin, Token::Number(_), Token::Colon] => component
-                    .map(|key| self.ports(key, false))
-                    .unwrap_or_default(),
                 [.., Token::Pub] => keywords(&["port"]),
-                _ if cursor.at_statement_start() => keywords(&["pub", "port", "pin"]),
+                _ if cursor.at_statement_start() => keywords(&["pub", "port"]),
                 _ => Vec::new(),
             },
             Some(Block::View { kind }) => match cursor.tail() {
@@ -797,7 +794,7 @@ mod tests {
             ("types.wb", "connector_type Can4p \"CAN 4p\" {\n}\n"),
             (
                 "main.wb",
-                "use Can4p from \"types.wb\";\ncomponent Root {\n    pub port a \"A\";\n    connector can: Can4p {\n        pin 1: a;\n    }\n}\n",
+                "use Can4p from \"types.wb\";\ncomponent Root {\n    connector can: Can4p {\n        pub port a \"A\" pin 1;\n    }\n}\n",
             ),
         ];
         let labels = complete_in(
@@ -809,22 +806,23 @@ mod tests {
     }
 
     #[test]
-    fn pin_map_offers_component_ports() {
+    fn typed_connector_body_offers_port_declarations() {
         let files = [
             ("types.wb", "connector_type Can4p \"CAN 4p\" {\n}\n"),
             (
                 "main.wb",
-                "use Can4p from \"types.wb\";\ncomponent Root {\n    pub port a \"A\";\n    port b \"B\";\n    connector can: Can4p {\n        pin 1: a;\n    }\n}\n",
+                "use Can4p from \"types.wb\";\ncomponent Root {\n    connector can: Can4p {\n        pub port a \"A\" pin 1;\n    }\n}\n",
             ),
         ];
         let labels = complete_in(
             &files,
-            "use Can4p from \"types.wb\";\ncomponent Root {\n    pub port a \"A\";\n    port b \"B\";\n    connector can: Can4p {\n        pin 1: ‸\n    }\n}\n",
+            "use Can4p from \"types.wb\";\ncomponent Root {\n    connector can: Can4p {\n        ‸\n    }\n}\n",
         );
-        assert!(labels.contains(&"a".to_string()), "{labels:?}");
+        assert!(labels.contains(&"pub".to_string()), "{labels:?}");
+        assert!(labels.contains(&"port".to_string()), "{labels:?}");
         assert!(
-            labels.contains(&"b".to_string()),
-            "own private ok: {labels:?}"
+            !labels.contains(&"pin".to_string()),
+            "the binding form is gone: {labels:?}"
         );
     }
 

@@ -664,11 +664,9 @@ connector_type ampseal "AMPSEAL" {
     }
 }
 component m {
-    pub port can_h "CAN H";
-    pub port can_l "CAN L";
     connector x1: ampseal {
-        pin 1: can_h;
-        pin 2: can_l;
+        pub port can_h "CAN H" pin 1;
+        pub port can_l "CAN L" pin 2;
     }
 }
 "#,
@@ -719,11 +717,9 @@ connector_type control "Control" {
     }
 }
 component m {
-    pub port hv_aux "HV AUX";
-    pub port wake "WAKE";
     connector x1: control {
-        pin 47: hv_aux;
-        pin 1: wake;
+        pub port hv_aux "HV AUX" pin 47;
+        pub port wake "WAKE" pin 1;
     }
 }
 "#,
