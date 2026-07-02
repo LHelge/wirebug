@@ -112,9 +112,12 @@ with the version and description below it.
   A `cable` is flat too: its metadata lands in `Instance.cables`
   (`CableMeta`, keyed by designator) and each conductor stays a `Wire` in
   `Instance.wires` tagged with `Wire.cable = Some(name)`; loose wires are
-  `None`. So the schematic renderer ignores cables for free, and only the
-  harness renderer reads the tag. Cable conductors are 2-endpoint by
-  rule; shared rails stay loose multi-endpoint wires.
+  `None`. A conductor inside a `twisted { }` group also carries
+  `Wire.twisted_group = Some(i)` (numbered per cable in source order), so
+  grouping survives flattening. So the schematic renderer ignores cables
+  for free, and only the harness renderer reads the tags. Cable
+  conductors are 2-endpoint by rule; shared rails stay loose
+  multi-endpoint wires.
 
 ## Render mental model (IR → SVG)
 
@@ -199,15 +202,18 @@ silently (like an unlisted port in a schematic).
 Kept conductors split by `Wire.cable`. A **declared cable** draws as a
 **cable box** (`CableBox`/`render_cable_box`) on the spine: a titled table
 (label + `type · length · ×count`), one coloured strand per row. A
-`twisted: true;` cable with exactly two conductors draws its box run as a
-**symbolic braid** (`draw::braid_d` — chained flex cubics swapping rows,
-an even half-twist count so each strand exits on its own row) confined
-between the two annotation zones: the first strand's label anchors left,
-the second's right (`cable-label-start`/`-end` modifier classes — a bare
-`text-anchor` attribute would lose to the `.cable-label` stylesheet
-rule), each over the straight run where its wire is unambiguously on its
-own row. The box is sized label + braid + label (`LABEL_CHAR_WIDTH` for
-the 9px font). Any other conductor count falls back to straight rows. Rows are
+two-conductor `twisted { }` group draws its box run as a **symbolic
+braid** (`draw::braid_d` — chained flex cubics swapping the pair's two
+rows, an even half-twist count so each strand exits on its own row)
+confined between the pair's annotation zones: the first row's label
+anchors left, the second's right (`cable-label-start`/`-end` modifier
+classes — a bare `text-anchor` attribute would lose to the
+`.cable-label` stylesheet rule), each over the straight run where its
+wire is unambiguously on its own row. Rows sort by endpoint-y with
+groups kept adjacent (`layout::braid_partners` finds each strand's
+partner); the box is sized per-row, a pair needing label + braid +
+label (`LABEL_CHAR_WIDTH` for the 9px font). Groups of any other size
+draw straight rows. Rows are
 ordered by each conductor's endpoint-y midpoint (the 1D occupancy step), the
 box's vertical centre is its strands' centroid, and multiple boxes are pushed
 apart along the spine (`build_cable_boxes`, gap `CABLE_GAP`). **Loose wires**
@@ -271,7 +277,8 @@ so one run reports many. Errors fail the run; warnings fail only under
   arity (a cable conductor that isn't exactly two endpoints,
   `cable_wire_arity`); cable property checks (`unknown_cable_property`,
   `duplicate_cable_property`, `cable_property_type` — `type` wants a string,
-  `length` a number, `twisted` a boolean); unused import, bare-port pin, and non-IEC 60757
+  `length` a number); a `twisted { }` group wrapping fewer than two
+  conductors (`twisted_group_arity`, warning); unused import, bare-port pin, and non-IEC 60757
   wire color (`unknown_wire_color` — the `ir::ColorName::Other` escape
   hatch still renders verbatim) as warnings. Cable
   property/arity checks live here (not elaborate) so a type instantiated

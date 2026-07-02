@@ -15,7 +15,7 @@
 
 use std::collections::HashMap;
 
-use crate::dsl::ast::{CablePropertyValue, Member, Port, Wire};
+use crate::dsl::ast::{CableMember, CablePropertyValue, Member, Port, Wire};
 use crate::dsl::diagnostics::Problem;
 use crate::dsl::ir::ColorName;
 use crate::dsl::resolve::Resolved;
@@ -65,7 +65,7 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
                 }
                 Member::Cable(cable) => {
                     // A conductor is point-to-point: shared rails stay loose.
-                    for wire in &cable.wires {
+                    for wire in cable.wires() {
                         if wire.endpoints.len() != 2 {
                             problems.push(Problem::CableWireArity {
                                 count: wire.endpoints.len(),
@@ -74,6 +74,19 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
                             });
                         }
                         validate_wire_colors(wire, def.file, resolved, &mut problems);
+                    }
+                    // Twisting one conductor (or none) is a no-op; the
+                    // author probably meant to wrap more of them.
+                    for member in &cable.members {
+                        if let CableMember::Twisted(t) = member
+                            && t.wires.len() < 2
+                        {
+                            problems.push(Problem::TwistedGroupArity {
+                                count: t.wires.len(),
+                                src: src(),
+                                at: t.span.into(),
+                            });
+                        }
                     }
                     let mut seen: HashMap<&str, Span> = HashMap::new();
                     for p in &cable.properties {
@@ -94,11 +107,6 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
                             src: src(),
                             at: p.value.span().into(),
                         };
-                        let is_bool = matches!(
-                            &p.value,
-                            CablePropertyValue::Ident(i)
-                                if matches!(i.node.as_str(), "true" | "false")
-                        );
                         match key {
                             "type" if !matches!(p.value, CablePropertyValue::Str(_)) => {
                                 problems.push(wrong("a string"));
@@ -106,10 +114,7 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
                             "length" if !matches!(p.value, CablePropertyValue::Number(_)) => {
                                 problems.push(wrong("a number"));
                             }
-                            "twisted" if !is_bool => {
-                                problems.push(wrong("a boolean (`true` or `false`)"));
-                            }
-                            "type" | "length" | "twisted" => {}
+                            "type" | "length" => {}
                             _ => problems.push(Problem::UnknownCableProperty {
                                 key: key.to_string(),
                                 src: src(),
@@ -289,26 +294,45 @@ mod tests {
     }
 
     #[test]
-    fn twisted_accepts_a_boolean() {
-        let codes = cable("twisted: true; wire red 1 [a, b];");
-        assert!(codes.is_empty(), "{codes:?}");
-        let codes = cable("twisted: false; wire red 1 [a, b];");
+    fn twisted_group_of_two_is_clean() {
+        let codes = cable("twisted { wire red 1 [a, b]; wire blue 1 [a, c]; }");
         assert!(codes.is_empty(), "{codes:?}");
     }
 
     #[test]
-    fn twisted_rejects_non_boolean_values() {
-        for body in [
-            "twisted: 1; wire red 1 [a, b];",
-            "twisted: \"yes\"; wire red 1 [a, b];",
-            "twisted: yes; wire red 1 [a, b];",
-        ] {
-            let codes = cable(body);
-            assert!(
-                codes.iter().any(|c| c == "wirebug::cable_property_type"),
-                "{body}: {codes:?}"
-            );
-        }
+    fn twisted_group_of_one_warns() {
+        let codes = cable("twisted { wire red 1 [a, b]; }");
+        assert!(
+            codes.iter().any(|c| c == "wirebug::twisted_group_arity"),
+            "{codes:?}"
+        );
+    }
+
+    #[test]
+    fn twisted_group_wires_keep_cable_checks() {
+        // Arity and color checks reach conductors inside a group too.
+        let codes = cable("twisted { wire red 1 [a, b, c]; wire greeen 1 [a, b]; }");
+        assert!(
+            codes.iter().any(|c| c == "wirebug::cable_wire_arity"),
+            "{codes:?}"
+        );
+        assert!(
+            codes.iter().any(|c| c == "wirebug::unknown_wire_color"),
+            "{codes:?}"
+        );
+    }
+
+    #[test]
+    fn twisted_as_property_key_is_unknown() {
+        // The old `twisted: true;` property form no longer exists; the
+        // block form replaced it.
+        let codes = cable("type: \"x\"; wire red 1 [a, b];");
+        assert!(codes.is_empty(), "{codes:?}");
+        let codes = cable("lay: 5; wire red 1 [a, b];");
+        assert!(
+            codes.iter().any(|c| c == "wirebug::unknown_cable_property"),
+            "{codes:?}"
+        );
     }
 
     #[test]

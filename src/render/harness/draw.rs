@@ -4,7 +4,7 @@
 use svg::node::element::{Circle, Group, Line, Path, Rectangle, Text};
 
 use super::bezier::{FLEX, flex};
-use super::layout::{CableBox, ConnectorNode, LooseWire};
+use super::layout::{CableBox, ConnectorNode, LooseWire, braid_partners};
 use super::{
     HEADER_HEIGHT, LABEL_CHAR_WIDTH, NODE_PAD, PIN_COL_WIDTH, PIN_DOT_RADIUS, ROW_HEIGHT,
     TWIST_PITCH,
@@ -211,24 +211,25 @@ pub(super) fn render_cable_box(cb: &CableBox) -> Group {
         );
     }
 
-    // The braid drawing needs a partner row to swap with, so it applies
-    // to exactly two strands; a twisted cable with another conductor
-    // count still draws straight rows.
-    let braided = cb.twisted && cb.strands.len() == 2;
+    // Each two-strand `twisted { }` group braids between its members'
+    // (adjacent) rows; everything else runs straight.
+    let partner = braid_partners(cb.strands.iter().map(|s| s.group));
     let annotations: Vec<String> = cb
         .strands
         .iter()
         .map(|s| wire_annotation(s.label.as_deref(), s.gauge, &s.color))
         .collect();
 
-    // The braid spans the gap between the two label zones (first strand's
-    // label left, second's right — layout sized the box for all three).
-    // A hand-built box too narrow for that still gets a centred minimum
-    // braid; the labels then overlap it, but the pair stays visibly twisted.
-    let braid_span = braided.then(|| {
-        let text = |i: usize| annotations[i].chars().count() as f64 * LABEL_CHAR_WIDTH;
-        let xa = ox + 2.0 * NODE_PAD + text(0);
-        let xb = ox + cb.width - 2.0 * NODE_PAD - text(1);
+    // A pair's braid spans the gap between its two label zones (the
+    // first-row strand's label left, the second's right — layout sized the
+    // box for all three). A hand-built box too narrow for that still gets
+    // a centred minimum braid; the labels then overlap it, but the pair
+    // stays visibly twisted.
+    let braid_span = |i: usize, j: usize| {
+        let text = |k: usize| annotations[k].chars().count() as f64 * LABEL_CHAR_WIDTH;
+        let (first, second) = (i.min(j), i.max(j));
+        let xa = ox + 2.0 * NODE_PAD + text(first);
+        let xb = ox + cb.width - 2.0 * NODE_PAD - text(second);
         if xb - xa >= 2.0 * TWIST_PITCH {
             (xa, xb)
         } else {
@@ -236,7 +237,7 @@ pub(super) fn render_cable_box(cb: &CableBox) -> Group {
             let half = TWIST_PITCH.min(cb.width / 2.0);
             (mid - half, mid + half)
         }
-    });
+    };
 
     let left_edge = Point::new(ox, 0.0);
     let right_edge = Point::new(ox + cb.width, 0.0);
@@ -245,8 +246,11 @@ pub(super) fn render_cable_box(cb: &CableBox) -> Group {
         let exit = Point::new(right_edge.x, strand.row_y);
 
         let lead_in = flex(strand.left_attach, entry, FLEX).path_d();
-        let run = match braid_span {
-            Some((xa, xb)) => braid_d(entry, exit.x, cb.strands[1 - i].row_y, xa, xb),
+        let run = match partner[i] {
+            Some(j) => {
+                let (xa, xb) = braid_span(i, j);
+                braid_d(entry, exit.x, cb.strands[j].row_y, xa, xb)
+            }
             None => format!("M{},{} L{},{}", entry.x, entry.y, exit.x, exit.y),
         };
         let lead_out = flex(exit, strand.right_attach, FLEX).path_d();
@@ -265,29 +269,25 @@ pub(super) fn render_cable_box(cb: &CableBox) -> Group {
         }
 
         // A braided run only sits on its own row over the straight ends, so
-        // the label anchors there — first strand left, second right — where
-        // the wire under it is unambiguously the one it names. Straight
-        // runs keep the centred label. The anchor rides as a modifier
-        // class (the `.cable-label` stylesheet rule would override a bare
-        // presentation attribute) plus the attribute itself for embed
-        // mode, where the built-in stylesheet is absent.
+        // the label anchors there — the pair's first row left, second
+        // right — where the wire under it is unambiguously the one it
+        // names. Straight runs keep the centred label. The anchor rides as
+        // a modifier class (the `.cable-label` stylesheet rule would
+        // override a bare presentation attribute) plus the attribute
+        // itself for embed mode, where the built-in stylesheet is absent.
         let mut annotation = Text::new(annotations[i].clone()).set("y", strand.row_y - 4.0);
-        annotation = if braided {
-            if i == 0 {
-                annotation
-                    .set("class", "cable-label cable-label-start")
-                    .set("text-anchor", "start")
-                    .set("x", ox + NODE_PAD)
-            } else {
-                annotation
-                    .set("class", "cable-label cable-label-end")
-                    .set("text-anchor", "end")
-                    .set("x", ox + cb.width - NODE_PAD)
-            }
-        } else {
-            annotation
+        annotation = match partner[i] {
+            Some(j) if i < j => annotation
+                .set("class", "cable-label cable-label-start")
+                .set("text-anchor", "start")
+                .set("x", ox + NODE_PAD),
+            Some(_) => annotation
+                .set("class", "cable-label cable-label-end")
+                .set("text-anchor", "end")
+                .set("x", ox + cb.width - NODE_PAD),
+            None => annotation
                 .set("class", "cable-label")
-                .set("x", ox + cb.width / 2.0)
+                .set("x", ox + cb.width / 2.0),
         };
         group = group.add(annotation);
     }

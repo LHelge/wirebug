@@ -852,9 +852,9 @@ impl<'a> Resolver<'a> {
         for d in 0..self.defs.len() {
             let ast = self.defs[d].ast;
             for member in &ast.members {
-                let wires: &[ast::Wire] = match member {
-                    Member::Wire(wire) => std::slice::from_ref(wire),
-                    Member::Cable(cable) => &cable.wires,
+                let wires: Vec<&ast::Wire> = match member {
+                    Member::Wire(wire) => vec![wire],
+                    Member::Cable(cable) => cable.wires().collect(),
                     _ => continue,
                 };
                 for wire in wires {

@@ -126,12 +126,27 @@ impl Elaborator<'_> {
             let info = &self.resolved.defs[frag];
             for m in &info.ast.members {
                 match m {
-                    Member::Wire(w) => wires.push(rewrite_wire(w, None)),
+                    Member::Wire(w) => wires.push(rewrite_wire(w, None, None)),
                     Member::Cable(c) => {
                         let name = CableName::from(c.name.node.as_str());
                         cables.insert(name.clone(), cable_meta(c));
-                        for w in &c.wires {
-                            wires.push(rewrite_wire(w, Some(name.clone())));
+                        let mut group = 0u32;
+                        for m in &c.members {
+                            match m {
+                                ast::CableMember::Wire(w) => {
+                                    wires.push(rewrite_wire(w, Some(name.clone()), None));
+                                }
+                                ast::CableMember::Twisted(t) => {
+                                    for w in &t.wires {
+                                        wires.push(rewrite_wire(
+                                            w,
+                                            Some(name.clone()),
+                                            Some(group),
+                                        ));
+                                    }
+                                    group += 1;
+                                }
+                            }
                         }
                     }
                     Member::Connector(conn) => {
@@ -283,7 +298,7 @@ fn elaborate_enclosure_port(ep: &ast::EnclosurePort) -> Option<EnclosurePort> {
     })
 }
 
-fn rewrite_wire(w: &ast::Wire, cable: Option<CableName>) -> Wire {
+fn rewrite_wire(w: &ast::Wire, cable: Option<CableName>, twisted_group: Option<u32>) -> Wire {
     Wire {
         color: WireColor::new(
             w.color.node.as_str(),
@@ -303,6 +318,7 @@ fn rewrite_wire(w: &ast::Wire, cable: Option<CableName>) -> Wire {
             })
             .collect(),
         cable,
+        twisted_group,
     }
 }
 
@@ -313,13 +329,11 @@ fn cable_meta(c: &ast::Cable) -> CableMeta {
         label: c.label.as_ref().map(|l| l.node.clone()),
         r#type: None,
         length: None,
-        twisted: false,
     };
     for p in &c.properties {
         match (p.key.node.as_str(), &p.value) {
             ("type", CablePropertyValue::Str(s)) => meta.r#type = Some(s.node.clone()),
             ("length", CablePropertyValue::Number(n)) => meta.length = Some(n.node),
-            ("twisted", CablePropertyValue::Ident(i)) => meta.twisted = i.node.as_str() == "true",
             _ => {}
         }
     }
@@ -520,7 +534,6 @@ mod tests {
                 cable feed \"Power feed\" {
                     type: \"2-core\";
                     length: 0.8;
-                    twisted: true;
                     wire red 1 [x, y];
                 }
             }\n",
@@ -547,22 +560,34 @@ mod tests {
         assert_eq!(meta.label.as_deref(), Some("Power feed"));
         assert_eq!(meta.r#type.as_deref(), Some("2-core"));
         assert_eq!(meta.length, Some(0.8));
-        assert!(meta.twisted);
     }
 
     #[test]
-    fn cable_without_twisted_property_defaults_untwisted() {
+    fn twisted_groups_number_their_wires_per_cable() {
         let (design, problems) = elaborate_files(&[(
             "main.wb",
             "component m {
-                pub port x \"X\"; pub port y \"Y\";
-                cable feed { wire red 1 [x, y]; }
+                pub port a \"A\"; pub port b \"B\";
+                pub port c \"C\"; pub port d \"D\";
+                pub port e \"E\"; pub port f \"F\";
+                cable loom {
+                    wire red 1 [a, b];
+                    twisted {
+                        wire white/blue 0.5 [c, d];
+                        wire white/red 0.5 [e, f];
+                    }
+                }
             }\n",
         )]);
         assert!(problems.is_empty(), "{problems:?}");
         let m = design.unwrap();
         let root = m.get(&m.root).unwrap();
-        assert!(!root.cables.get(&CableName::from("feed")).unwrap().twisted);
+
+        // The plain conductor has no group; the pair shares group 0.
+        let groups: Vec<Option<u32>> = root.wires.iter().map(|w| w.twisted_group).collect();
+        assert_eq!(groups, [None, Some(0), Some(0)]);
+        // Loose wires (outside any cable) are never grouped.
+        assert!(root.wires.iter().all(|w| w.cable.is_some()));
     }
 
     #[test]

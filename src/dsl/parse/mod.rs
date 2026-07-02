@@ -69,11 +69,12 @@ enum ViewItem {
     Text(TextBox),
 }
 
-/// One member of a cable body, parsed in any order and folded into a
-/// [`Cable`]: a property (`type`/`length`) or a conductor wire.
+/// One entry of a cable body, parsed in any order and folded into a
+/// [`Cable`]: a property (`type`/`length`), or a conductor entry (a plain
+/// wire or a `twisted { }` group).
 enum CableItem {
     Property(CableProperty),
-    Wire(Wire),
+    Member(CableMember),
 }
 
 /// One top-level file entry, parsed in source order and folded into
@@ -394,11 +395,26 @@ where
             span: e.span(),
         });
 
-    // Properties and conductor wires may interleave in any order; the fold
-    // partitions them, each keeping its source order.
+    // `twisted { <wire>* }` — conductors twisted together as one group.
+    let twisted_group = just(Token::Twisted)
+        .ignore_then(
+            wire.clone()
+                .repeated()
+                .collect::<Vec<_>>()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+        )
+        .map_with(|wires, e| TwistedGroup {
+            wires,
+            span: e.span(),
+        });
+
+    // Properties and conductor entries may interleave in any order; the
+    // fold partitions them, each keeping its source order.
     let cable_item = choice((
         cable_property.map(CableItem::Property),
-        wire.clone().map(CableItem::Wire),
+        twisted_group.map(|t| CableItem::Member(CableMember::Twisted(t))),
+        wire.clone()
+            .map(|w| CableItem::Member(CableMember::Wire(w))),
     ));
 
     let cable = just(Token::Cable)
@@ -412,18 +428,18 @@ where
         )
         .map_with(|((name, label), items), e| {
             let mut properties = Vec::new();
-            let mut wires = Vec::new();
+            let mut members = Vec::new();
             for item in items {
                 match item {
                     CableItem::Property(p) => properties.push(p),
-                    CableItem::Wire(w) => wires.push(w),
+                    CableItem::Member(m) => members.push(m),
                 }
             }
             Cable {
                 name,
                 label,
                 properties,
-                wires,
+                members,
                 span: e.span(),
             }
         });
@@ -957,7 +973,7 @@ inverter_control = face 47@(1, 0) large 21@(5, 0) 13@(16, 3)
             cable.properties[1].value,
             CablePropertyValue::Number(_)
         ));
-        assert_eq!(cable.wires.len(), 2);
+        assert_eq!(cable.wires().count(), 2);
     }
 
     #[test]
@@ -979,9 +995,37 @@ inverter_control = face 47@(1, 0) large 21@(5, 0) 13@(16, 3)
         };
         assert_eq!(cable.properties.len(), 2);
         assert_eq!(cable.properties[0].key.node.as_str(), "type");
-        assert_eq!(cable.wires.len(), 2);
-        assert_eq!(cable.wires[0].color.node.as_str(), "yellow");
-        assert_eq!(cable.wires[1].color.node.as_str(), "green");
+        let colors: Vec<&str> = cable.wires().map(|w| w.color.node.as_str()).collect();
+        assert_eq!(colors, ["yellow", "green"]);
+    }
+
+    #[test]
+    fn twisted_group_wraps_its_wires() {
+        let file = parse_ok(
+            r#"component c {
+                cable loom {
+                    wire red 1.5 "12V" [a.pwr, b.pwr];
+                    twisted {
+                        wire white/blue 0.5 [a.h, b.h];
+                        wire white/red 0.5 [a.l, b.l];
+                    }
+                    wire black 1.5 [a.gnd, b.gnd];
+                }
+            }"#,
+        );
+        let Member::Cable(cable) = &members(&file)[0] else {
+            panic!("expected a cable");
+        };
+        assert_eq!(cable.members.len(), 3);
+        assert!(matches!(cable.members[0], CableMember::Wire(_)));
+        let CableMember::Twisted(t) = &cable.members[1] else {
+            panic!("expected a twisted group");
+        };
+        assert_eq!(t.wires.len(), 2);
+        assert_eq!(t.wires[0].color.node.as_str(), "white");
+        assert!(matches!(cable.members[2], CableMember::Wire(_)));
+        // The flattening helper sees all four conductors in source order.
+        assert_eq!(cable.wires().count(), 4);
     }
 
     #[test]
@@ -992,7 +1036,7 @@ inverter_control = face 47@(1, 0) large 21@(5, 0) 13@(16, 3)
         };
         assert!(cable.label.is_none());
         assert!(cable.properties.is_empty());
-        assert_eq!(cable.wires.len(), 1);
+        assert_eq!(cable.wires().count(), 1);
     }
 
     #[test]
