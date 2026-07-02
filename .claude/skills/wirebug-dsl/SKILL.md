@@ -332,7 +332,7 @@ The instance name (`pack`, `inv`) is what wires reference. The label (`"HV Batte
 wire <color>[/<tracer>] <gauge_mm2> ["<label>"] [<endpoint>, <endpoint>, ...];
 ```
 
-- `color` — bare identifier (e.g., `orange`, `black`, `red`, `yellow`). Use CSS colour names; the harness renderer draws each strand in this colour. A two-tone (tracer/striped) wire writes base and tracer separated by a slash — `green/yellow` — and draws as the base colour with a dashed tracer overlay; colour-code annotations concatenate the IEC 60757 codes (`GNYE`).
+- `color` — bare identifier (e.g., `orange`, `black`, `red`, `yellow`). Use CSS colour names; the harness renderer draws each strand in this colour. A two-tone (tracer/striped) wire writes base and tracer separated by a slash — `green/yellow` — and draws as the base colour with a dashed tracer overlay; colour-code annotations join the IEC 60757 codes with a slash (`GN/YE`).
 - `gauge_mm2` — number in mm² (e.g., `50`, `4`, `0.5`, `0.25`).
 - `"<label>"` — optional signal name (e.g., `"HV+"`, `"CAN H"`), shown on the wire in a harness drawing. Omit it when the net name adds nothing.
 - The bracketed list contains two or more endpoints. Each endpoint is `instance.port` or just `port` if referencing the enclosing component's own port (a `pub` port being wired to internals).

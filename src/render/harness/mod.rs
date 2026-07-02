@@ -265,7 +265,7 @@ component sys {
         // data-color keeps the authored two-tone form for host CSS.
         assert!(svg.contains("data-color=\"green/yellow\""));
         // The annotation writes the combined IEC code.
-        assert!(svg.contains("PE · 2.5mm² · GNYE"));
+        assert!(svg.contains("PE · 2.5mm² · GN/YE"));
     }
 
     #[test]

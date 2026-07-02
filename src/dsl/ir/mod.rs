@@ -86,13 +86,14 @@ impl WireColor {
     }
 
     /// The IEC 60757 code for this color (`white` → `WH`), a two-tone
-    /// color concatenated as the standard writes it (`green/yellow` →
-    /// `GNYE`). Matched case-insensitively; a color outside the standard
-    /// set passes through verbatim, so exotic names stay readable rather
-    /// than vanishing.
+    /// color as slash-joined codes (`green/yellow` → `GN/YE` — kept
+    /// separated rather than the standard's concatenated `GNYE`, which is
+    /// harder to scan on a dense drawing). Matched case-insensitively; a
+    /// color outside the standard set passes through verbatim, so exotic
+    /// names stay readable rather than vanishing.
     pub fn code(&self) -> String {
         match &self.tracer {
-            Some(tracer) => format!("{}{}", iec_code(&self.base), iec_code(tracer)),
+            Some(tracer) => format!("{}/{}", iec_code(&self.base), iec_code(tracer)),
             None => iec_code(&self.base).to_string(),
         }
     }
@@ -553,9 +554,9 @@ mod tests {
     }
 
     #[test]
-    fn two_tone_color_concatenates_codes_iec_style() {
-        assert_eq!(WireColor::from("green/yellow").code(), "GNYE");
-        assert_eq!(WireColor::from("white/blue").code(), "WHBU");
+    fn two_tone_color_joins_codes_with_a_slash() {
+        assert_eq!(WireColor::from("green/yellow").code(), "GN/YE");
+        assert_eq!(WireColor::from("white/blue").code(), "WH/BU");
     }
 
     #[test]
