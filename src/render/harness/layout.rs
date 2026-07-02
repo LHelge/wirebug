@@ -18,8 +18,8 @@ use indexmap::IndexMap;
 
 use super::draw::wire_annotation;
 use super::{
-    BRAID_SECTION, CABLE_GAP, CHAR_WIDTH, HEADER_HEIGHT, LABEL_CHAR_WIDTH, MIN_NODE_WIDTH,
-    NODE_PAD, PIN_COL_WIDTH, ROW_HEIGHT, SVG_MARGIN,
+    BRAID_SECTION, CABLE_GAP, CABLE_LABEL_PAD, CHAR_WIDTH, HEADER_HEIGHT, LABEL_CHAR_WIDTH,
+    MIN_NODE_WIDTH, NODE_PAD, PIN_COL_WIDTH, ROW_HEIGHT, SVG_MARGIN,
 };
 use crate::dsl::ir::{
     CableMeta, CableName, ConnectorName, Design, Instance, InstanceName, Pin, PortName, WireColor,
@@ -121,7 +121,8 @@ impl CableBox {
     /// Set each strand's `row_y` from the current `origin.y`.
     fn place_rows(&mut self) {
         for (k, strand) in self.strands.iter_mut().enumerate() {
-            strand.row_y = self.origin.y + HEADER_HEIGHT + (k as f64 + 0.5) * ROW_HEIGHT;
+            strand.row_y =
+                self.origin.y + HEADER_HEIGHT + CABLE_LABEL_PAD + (k as f64 + 0.5) * ROW_HEIGHT;
         }
     }
 }
@@ -532,7 +533,7 @@ fn build_cable_box(
         annotation_widths.iter().copied().fold(0.0, f64::max)
     };
     let width = (content.max(header) + 2.0 * NODE_PAD).max(MIN_NODE_WIDTH);
-    let height = HEADER_HEIGHT + strands.len() as f64 * ROW_HEIGHT;
+    let height = HEADER_HEIGHT + CABLE_LABEL_PAD + strands.len() as f64 * ROW_HEIGHT;
     let origin = Point::new(spine_x - width / 2.0, cy - height / 2.0);
 
     let strands = strands
