@@ -1,0 +1,24 @@
+// Aphid EV — tunnel loom.
+//
+// The physical bundle running the length of the central tunnel between
+// the two battery packs. It carries signals owned by several systems —
+// safe power (lv), the CAN2 front → rear hop (can), the interlock link
+// (safety), and the chassis-ground equalisation (lv) — which is why the
+// cable lives here, with the loom, rather than in any one system file.
+// The safe-power and ground rails end at the front pack and reach the
+// rear through this cable.
+
+extend Vehicle {
+    cable front_rear "Front–rear loom" {
+        type:   "5-core";
+        length: 1.8;
+
+        wire red 2.5 "SAFE PWR" [front.safe_pwr, rear.safe_pwr];
+        twisted {
+            wire white/blue 0.5 "CAN2 H" [front.can_h, rear.can_h];
+            wire white/red 0.5 "CAN2 L" [front.can_l, rear.can_l];
+        }
+        wire green 0.5 "INTLK" [front.interlock_out, rear.interlock_in];
+        wire black 6.0 "GND" [front.gnd, rear.gnd];
+    }
+}

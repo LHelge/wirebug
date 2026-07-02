@@ -1,0 +1,51 @@
+// Aphid EV — engine-bay harness drawings.
+//
+// The harness views for the bundles built around the rear of the car:
+// the HV distribution runs and the CAN daisy chain. This fragment adds
+// no instances or wires of its own — it exists to bind the views to the
+// merged Vehicle namespace.
+
+extend Vehicle {
+}
+
+// --- View: Main HV harness ---
+// The HV bus as a wiring harness: each box's HV connector as a pin table,
+// the shared positive/negative rails as cable bundles between them.
+
+view harness "Main HV harness" {
+    grid: 20;
+
+    // Pack-string bundle: the series-linked batteries and the MSD on the
+    // left fan into the junction box's pack connector on the right —
+    // mirroring the schematic's source → junction flow.
+    include front.hv  at (12, 5);
+    include rear.hv   at (24, 5);
+    include msd.hv    at (0, 7);
+    include hvjb.pack at (40, 8);
+
+    // Distribution bundle: the junction box on the left feeds the inverter
+    // and the OBC/DC-DC on the right (junction → load, same direction).
+    include hvjb.inverter at (10, 17);
+    include hvjb.obc      at (10, 30);
+    include inv.hv        at (30, 17);
+    include charger.hv    at (30, 30);
+}
+
+// --- View: CAN harness ---
+// The CAN bus as a harness: each ECU's CAN connector as a pin table and
+// each daisy-chain hop as its twisted-pair cable box. The connectors
+// serpentine down the page, alternating sides, so every hop crosses the
+// central spine and its cable box lands between its two connectors.
+
+view harness "CAN harness" {
+    grid: 20;
+
+    include front.bms_signals at (0, 4);
+    include rear.bms_signals  at (42, 4);
+
+    include charger.can at (0, 14);
+    include vcm.can2    at (42, 14);
+
+    include vcm.can1 at (0, 20);
+    include inv.can  at (42, 20);
+}

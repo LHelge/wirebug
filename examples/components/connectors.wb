@@ -1,0 +1,13 @@
+// Shared connector type library.
+//
+// Physical connector layouts reused across components. Layouts are
+// authored from the harness side — mirror device-side datasheet
+// drawings before entering them here.
+
+connector_type Can4p "CAN 4p" {
+    layout grid {
+        rows: 2;
+        cols: 2;
+        numbering: row_major;
+    }
+}

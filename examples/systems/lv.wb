@@ -1,0 +1,33 @@
+// Aphid EV — 12V system: distribution, chassis ground, and safe power.
+//
+// A `Vehicle` fragment owning the fuse box and every 12V feed and ground
+// wire. The DC-DC source (`charger`) and the consumers live in other
+// fragments; this file owns the *signals* — 12V, ground, safe power.
+
+use FuseBox from "../components/lv/fuse_box.wb";
+
+extend Vehicle {
+    fuses: FuseBox "Fuse Box";
+
+    // --- Safe power ---
+    // VCM enables safe power when interlock OK + safety checks pass.
+    // Feeds contactor high-side in both battery packs; the front pack
+    // is fed through the tunnel loom (looms/tunnel.wb).
+
+    wire red 2.5 [vcm.safe_pwr, rear.safe_pwr];
+
+    // --- 12V distribution ---
+    // OBC/DC-DC output feeds fuse box; fuse box distributes to subsystems
+
+    wire red 6.0 [charger.out_pos, fuses.batt_in];
+
+    wire red 2.5 [fuses.vcm, vcm.b_pos];
+    wire red 2.5 [fuses.inv, inv.b_pos];
+    wire red 2.5 [fuses.bms_front, front.b_pos];
+    wire red 2.5 [fuses.bms_rear, rear.b_pos];
+
+    // --- Chassis ground bus ---
+    // (the rear pack grounds through the tunnel loom)
+
+    wire black 6.0 [charger.out_neg, vcm.gnd, inv.gnd, front.gnd];
+}

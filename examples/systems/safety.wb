@@ -1,0 +1,26 @@
+// Aphid EV — safety system: the HV interlock loop.
+//
+// A `Vehicle` fragment owning the safety devices (MSD, e-stop) and the
+// interlock chain that threads every HV enclosure. The fuse box sources
+// the loop and the VCM terminates it; both are declared in other
+// fragments and reached through the merged flat namespace.
+
+use Msd   from "../components/hv/msd.wb";
+use EStop from "../components/lv/e_stop.wb";
+
+extend Vehicle {
+    msd:    Msd   "MSD";
+    e_stop: EStop "E-Stop";
+
+    // --- HV interlock chain ---
+    // Fuse box sources 12V → e-stop → MSD → front → rear → hvjb → inverter → OBC → VCM
+    // (the front → rear link runs in the tunnel loom, looms/tunnel.wb)
+
+    wire green 0.5 [fuses.interlock, e_stop.interlock_in];
+    wire green 0.5 [e_stop.interlock_out, msd.interlock_in];
+    wire green 0.5 [msd.interlock_out, front.interlock_in];
+    wire green 0.5 [rear.interlock_out, hvjb.interlock_in];
+    wire green 0.5 [hvjb.interlock_out, inv.interlock_in];
+    wire green 0.5 [inv.interlock_out, charger.interlock_in];
+    wire green 0.5 [charger.interlock_out, vcm.interlock];
+}

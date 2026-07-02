@@ -1,131 +1,24 @@
 // Aphid EV conversion — top-level vehicle wiring
 //
-// The high-voltage subsystem (batteries, HV junction box, inverter, OBC/DC-DC,
-// and the HV bus) lives in `hv.wb` as an `extend vehicle` fragment, merged in
-// here with `use vehicle`. Everything below — the motor phases, CAN bus,
-// interlock chain, 12V distribution, ground, and every view — freely reaches
-// those HV instances through the merged flat namespace.
+// The Vehicle component is authored as fragments, one file per system:
+// each `systems/*.wb` extends Vehicle with the instances and wires of
+// one logical system (traction, safety, 12V, CAN), and each `looms/*.wb`
+// carries a physical harness bundle and its harness views. Every
+// fragment merges into the flat namespace rooted here, so wires and
+// views freely reference instances declared in other fragments. This
+// file keeps only the root component and the whole-vehicle overview.
 
-use Vehicle from "hv.wb";
-use Msd     from "components/msd.wb";
-use Motor   from "components/motor.wb";
-use Vcm     from "components/vcm.wb";
-use FuseBox from "components/fuse_box.wb";
-use EStop   from "components/e_stop.wb";
+use Vehicle from "systems/traction.wb";
+use Vehicle from "systems/safety.wb";
+use Vehicle from "systems/lv.wb";
+use Vehicle from "systems/can.wb";
+use Vehicle from "looms/tunnel.wb";
+use Vehicle from "looms/engine_bay.wb";
+use Vcm     from "components/lv/vcm.wb";
 
 component Vehicle {
-    // --- Instances (the non-HV remainder; HV instances live in hv.wb) ---
-
-    msd:    Msd     "MSD";
-    mot:    Motor   "Motor";
-    vcm:    Vcm     "VCM";
-    fuses:  FuseBox "Fuse Box";
-    e_stop: EStop   "E-Stop";
-
-    // --- Motor phases ---
-    // A real point-to-point cable: three conductors, inverter to motor.
-
-    cable motor_phases "Motor phases" {
-        type:   "Shielded 3-core";
-        length: 1.2;
-
-        wire orange 35 "U" [inv.phase_u, mot.phase_u];
-        wire orange 35 "V" [inv.phase_v, mot.phase_v];
-        wire orange 35 "W" [inv.phase_w, mot.phase_w];
-    }
-
-    // --- Front–rear battery loom ---
-    // Everything running between the two packs travels as one bundle:
-    // safe power, the CAN2 twisted pair, the interlock link, and the
-    // chassis-ground equalisation. The safe-power and ground rails end
-    // at the front pack and reach the rear through this cable.
-
-    cable front_rear "Front–rear loom" {
-        type:   "5-core";
-        length: 1.8;
-
-        wire red 2.5 "SAFE PWR" [front.safe_pwr, rear.safe_pwr];
-        twisted {
-            wire white/blue 0.5 "CAN2 H" [front.can_h, rear.can_h];
-            wire white/red 0.5 "CAN2 L" [front.can_l, rear.can_l];
-        }
-        wire green 0.5 "INTLK" [front.interlock_out, rear.interlock_in];
-        wire black 6.0 "GND" [front.gnd, rear.gnd];
-    }
-
-    // --- CAN bus ---
-    // VCM is the gateway. CAN1 is the powertrain link, straight to the
-    // inverter. CAN2 is the vehicle bus, daisy-chained front → rear →
-    // charger → VCM and terminated at its two ends — the front BMS and
-    // the VCM. The front → rear hop rides in the front–rear loom above;
-    // the remaining hops are their own twisted-pair cables. Two-tone
-    // with a shared base: CAN H white with a blue tracer, CAN L white
-    // with red — distinct tracer colors, so the pair can't be mixed up
-    // the way mirrored white/blue and blue/white could.
-
-    cable can2_rear_charger "CAN2 · rear–charger" {
-        type:   "Twisted pair";
-        length: 1.2;
-
-        twisted {
-            wire white/blue 0.5 "CAN2 H" [rear.can_h, charger.can_h];
-            wire white/red 0.5 "CAN2 L" [rear.can_l, charger.can_l];
-        }
-    }
-
-    cable can2_charger_vcm "CAN2 · charger–VCM" {
-        type:   "Twisted pair";
-        length: 0.8;
-
-        twisted {
-            wire white/blue 0.5 "CAN2 H" [charger.can_h, vcm.can2_h];
-            wire white/red 0.5 "CAN2 L" [charger.can_l, vcm.can2_l];
-        }
-    }
-
-    cable can1_vcm_inv "CAN1 · VCM–inverter" {
-        type:   "Twisted pair";
-        length: 0.6;
-
-        twisted {
-            wire white/blue 0.5 "CAN1 H" [vcm.can1_h, inv.can_h];
-            wire white/red 0.5 "CAN1 L" [vcm.can1_l, inv.can_l];
-        }
-    }
-
-    // --- HV interlock chain ---
-    // Fuse box sources 12V → e-stop → MSD → front → rear → hvjb -> inverter → OBC → VCM
-    // (the front → rear link runs in the front–rear loom above)
-
-    wire green 0.5 [fuses.interlock, e_stop.interlock_in];
-    wire green 0.5 [e_stop.interlock_out, msd.interlock_in];
-    wire green 0.5 [msd.interlock_out, front.interlock_in];
-    wire green 0.5 [rear.interlock_out, hvjb.interlock_in];
-    wire green 0.5 [hvjb.interlock_out, inv.interlock_in];
-    wire green 0.5 [inv.interlock_out, charger.interlock_in];
-    wire green 0.5 [charger.interlock_out, vcm.interlock];
-
-    // --- Safe power ---
-    // VCM enables safe power when interlock OK + safety checks pass.
-    // Feeds contactor high-side in both battery packs; the front pack
-    // is fed through the front–rear loom.
-
-    wire red 2.5 [vcm.safe_pwr, rear.safe_pwr];
-
-    // --- 12V system ---
-    // OBC/DC-DC output feeds fuse box; fuse box distributes to subsystems
-
-    wire red 6.0 [charger.out_pos, fuses.batt_in];
-
-    wire red 2.5 [fuses.vcm, vcm.b_pos];
-    wire red 2.5 [fuses.inv, inv.b_pos];
-    wire red 2.5 [fuses.bms_front, front.b_pos];
-    wire red 2.5 [fuses.bms_rear, rear.b_pos];
-
-    // --- Chassis ground bus ---
-    // (the rear pack grounds through the front–rear loom)
-
-    wire black 6.0 [charger.out_neg, vcm.gnd, inv.gnd, front.gnd];
+    // The VCM is the one device every system touches; it lives at the root.
+    vcm: Vcm "VCM";
 }
 
 // --- View: HV System Overview ---
@@ -186,91 +79,4 @@ view schematic "HV System Overview" {
         west:  safe_pwr;
         east: interlock;
     }
-}
-
-// --- View: CAN bus ---
-// The vehicle CAN topology laid out front-to-back. Every ECU taps the bus
-// on its south edge so the two conductors run as a pair beneath the row.
-// VCM is the gateway: CAN2 runs left to the charger and BMS pair, CAN1
-// right to the inverter. CAN2 is terminated at its two ends — the front
-// BMS and the VCM (the two 120 Ω notes).
-
-view schematic "CAN bus" {
-    grid: 20;
-
-    text front_term at (8, 4)  "120 Ω termination";
-    text vcm_term   at (56, 4) "120 Ω termination";
-
-    include front at (8, 12) ports {
-        south: can_h, can_l;
-    }
-
-    include rear at (24, 12) ports {
-        south: can_h, can_l;
-    }
-
-    include charger at (40, 12) ports {
-        south: can_h, can_l;
-    }
-
-    include vcm at (56, 12) ports {
-        south: can2_h, can2_l, can1_h, can1_l;
-    }
-
-    include inv at (72, 12) ports {
-        south: can_h, can_l;
-    }
-}
-
-// --- View: Main HV harness ---
-// The HV bus as a wiring harness: each box's HV connector as a pin table,
-// the shared positive/negative rails as cable bundles between them.
-
-view harness "Main HV harness" {
-    grid: 20;
-
-    // Pack-string bundle: the series-linked batteries and the MSD on the
-    // left fan into the junction box's pack connector on the right —
-    // mirroring the schematic's source → junction flow.
-    include front.hv  at (12, 5);
-    include rear.hv   at (24, 5);
-    include msd.hv    at (0, 7);
-    include hvjb.pack at (40, 8);
-
-    // Distribution bundle: the junction box on the left feeds the inverter
-    // and the OBC/DC-DC on the right (junction → load, same direction).
-    include hvjb.inverter at (10, 17);
-    include hvjb.obc      at (10, 30);
-    include inv.hv        at (30, 17);
-    include charger.hv    at (30, 30);
-}
-
-// --- View: Motor phase harness ---
-// The `motor_phases` cable drawn WireViz-style: the inverter and motor
-// phase connectors as pin tables, the cable as a labelled box between them.
-
-view harness "Motor phase harness" {
-    grid: 20;
-
-    include inv.phases at (4, 10);
-    include mot.power  at (32, 10);
-}
-
-// --- View: CAN harness ---
-// The CAN bus as a harness: each ECU's CAN connector as a pin table and
-// each daisy-chain hop as its twisted-pair cable box. The connectors
-// serpentine down the page, alternating sides, so every hop crosses the
-// central spine and its cable box lands between its two connectors.
-
-view harness "CAN harness" {
-    grid: 20;
-
-    include front.bms_signals at (0, 4);
-    include rear.bms_signals  at (42, 4);
-
-    include charger.can at (0, 14);
-    include vcm.can2    at (42, 14);
-
-    include vcm.can1 at (0, 20);
-    include inv.can  at (42, 20);
 }

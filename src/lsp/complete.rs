@@ -1021,12 +1021,9 @@ mod tests {
         let disk =
             std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/main.wb"))
                 .unwrap();
-        let live = disk.replace(
-            "    msd:    Msd     \"MSD\";",
-            "    x: ‸\n    msd:    Msd     \"MSD\";",
-        );
+        let live = disk.replace("    vcm: Vcm \"VCM\";", "    x: ‸\n    vcm: Vcm \"VCM\";");
         let labels = examples_complete("examples/main.wb", &live);
-        assert!(labels.iter().any(|l| l == "Msd"), "{labels:?}");
+        assert!(labels.iter().any(|l| l == "Vcm"), "{labels:?}");
     }
 
     #[test]
@@ -1035,36 +1032,36 @@ mod tests {
             std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/main.wb"))
                 .unwrap();
         let live = disk.replace(
-            "        wire white/blue 0.5 \"CAN2 H\" [front.can_h, rear.can_h];",
-            "        wire white/blue 0.5 \"CAN2 H\" [front.‸];",
+            "    vcm: Vcm \"VCM\";",
+            "    vcm: Vcm \"VCM\";\n    wire red 1 [vcm.‸];",
         );
         assert_ne!(
             live, disk,
             "replacement target must exist in examples/main.wb"
         );
         let labels = examples_complete("examples/main.wb", &live);
-        assert!(labels.iter().any(|l| l == "can_h"), "{labels:?}");
+        assert!(labels.iter().any(|l| l == "safe_pwr"), "{labels:?}");
     }
 
     #[test]
     fn mid_edit_component_file_keeps_numbering_completion() {
         let disk = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/components/inverter.wb"),
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/components/hv/inverter.wb"),
         )
         .unwrap();
         let live = disk.replace("        numbering: row_major;", "        numbering: ‸");
-        let labels = examples_complete("examples/components/inverter.wb", &live);
+        let labels = examples_complete("examples/components/hv/inverter.wb", &live);
         assert!(labels.iter().any(|l| l == "row_major"), "{labels:?}");
     }
 
     #[test]
     fn mid_edit_component_file_keeps_view_kind_completion() {
         let disk = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/components/motor.wb"),
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/components/hv/motor.wb"),
         )
         .unwrap();
         let live = format!("{disk}\nview ‸\n");
-        let labels = examples_complete("examples/components/motor.wb", &live);
+        let labels = examples_complete("examples/components/hv/motor.wb", &live);
         assert!(labels.iter().any(|l| l == "schematic"), "{labels:?}");
     }
 

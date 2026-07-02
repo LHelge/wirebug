@@ -20,14 +20,22 @@ A conventional layout, which is **convention, not requirement**:
 ```
 my-ev/
 ├── wirebug.toml         # project metadata and root marker
-├── main.wb              # top-level vehicle component + system view
-└── components/          # imported components, one type per file
-    ├── battery_pack.wb
-    ├── cell_module.wb
-    ├── contactor.wb
-    ├── inverter.wb
-    └── ...
+├── main.wb              # near-empty root component + whole-vehicle overview view
+├── systems/             # one `extend`-fragment per LOGICAL system: its
+│   ├── traction.wb      #   instances, the wires of the signals it owns,
+│   ├── safety.wb        #   and its schematic view(s)
+│   └── ...
+├── looms/               # one fragment per PHYSICAL harness bundle: the
+│   ├── tunnel.wb        #   multi-system cables that travel together and
+│   └── ...              #   the harness views (the build documents)
+└── components/          # imported components, one type per file,
+    ├── connectors.wb    #   subfoldered by domain; shared connector_type
+    ├── battery/         #   library in connectors.wb
+    ├── hv/
+    └── lv/
 ```
+
+Conventions the `examples/` project follows: every instance is declared in exactly one fragment (the system the device belongs to); cross-system wires live in the fragment owning the *signal* (interlock wires in `safety.wb`, 12V and grounds in `lv.wb`); a single-system point-to-point cable stays in its system file, a multi-system bundle lives in its loom file; views sit in the file whose subject they document (component detail views beside the component, system views in the system fragment, harness views in the loom).
 
 Filesystem layout is for human navigation only. **A component's logical position in the hierarchy is determined entirely by `use` statements and nesting in the DSL**, not by what directory the file lives in. Moving a `.wb` file to a different folder must never change the model — the only thing that matters is which paths the `use` statements resolve to.
 
@@ -329,10 +337,10 @@ The instance name (`pack`, `inv`) is what wires reference. The label (`"HV Batte
 ## Wires
 
 ```
-wire <color> <gauge_mm2> ["<label>"] [<endpoint>, <endpoint>, ...];
+wire <color>[/<tracer>] <gauge_mm2> ["<label>"] [<endpoint>, <endpoint>, ...];
 ```
 
-- `color` — bare identifier (e.g., `orange`, `black`, `red`, `yellow`). Use CSS colour names; the harness renderer draws each strand in this colour.
+- `color` — bare identifier from the IEC 60757 vocabulary: `black`, `brown`, `red`, `orange`, `yellow`, `green`, `blue`, `violet`, `grey`, `white`, `pink`, `turquoise`, `gold`, `silver` (synonyms `purple` and `gray` normalise to `violet`/`grey`). Any other name still renders verbatim but raises a `check` warning (fatal under `--strict`). A two-tone (tracer/striped) wire writes base and tracer separated by a slash — `green/yellow` — and draws as the base colour with a dashed tracer overlay; colour-code annotations join the IEC 60757 codes with a slash (`GN/YE`).
 - `gauge_mm2` — number in mm² (e.g., `50`, `4`, `0.5`, `0.25`).
 - `"<label>"` — optional signal name (e.g., `"HV+"`, `"CAN H"`), shown on the wire in a harness drawing. Omit it when the net name adds nothing.
 - The bracketed list contains two or more endpoints. Each endpoint is `instance.port` or just `port` if referencing the enclosing component's own port (a `pub` port being wired to internals).
@@ -375,6 +383,22 @@ Format:
   - `type: "<string>";` — a free-text construction note (e.g. `"Twisted pair"`).
   - `length: <number>;` — length in **metres** (a bare number, e.g. `2.5`; no unit suffix).
 - Each `wire` uses the exact same syntax as a loose wire, **but must have exactly two endpoints** — a cable conductor is one physical run from one pin to another. (A shared rail that fans out to three+ pins is not a single conductor; keep it a loose multi-endpoint `wire`, outside any cable.)
+- A `twisted { <wire> <wire> }` group wraps exactly two conductors that are twisted together as a pair. Groups and plain wires may interleave freely, so one cable can carry straight power conductors alongside a twisted signal pair:
+
+```
+cable sensor_loom "Sensor loom" {
+    length: 2.0;
+
+    wire red 1.5 "12V" [ecu.pwr, sensor.pwr];
+    twisted {
+        wire white/blue 0.5 "SIG H" [ecu.h, sensor.h];
+        wire white/red 0.5 "SIG L" [ecu.l, sensor.l];
+    }
+    wire black 1.5 "GND" [ecu.gnd, sensor.gnd];
+}
+```
+
+A `twisted { }` group holds **exactly two** conductors — a twisted pair — and that count is grammar-enforced: any other number of wires inside the braces is a parse error. In a harness drawing the pair braids inside the cable box.
 
 A cable's wires are still ordinary connections: they show in schematic views like any other wire. The cable grouping adds the harness box and the BOM metadata.
 

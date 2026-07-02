@@ -4,18 +4,25 @@
 // Interlock terminates here — VCM uses it internally to gate
 // the high-side switch that sources safe power.
 
+use Can4p from "../connectors.wb";
+
 component Vcm {
+    pub port can1_h "CAN1 H";
+    pub port can1_l "CAN1 L";
+    pub port can2_h "CAN2 H";
+    pub port can2_l "CAN2 L";
+
     // CAN1 — powertrain link, straight to the inverter.
-    connector can1 "CAN 4p" {
-        pub port can1_h "CAN1 H" pin 1;
-        pub port can1_l "CAN1 L" pin 2;
+    connector can1: Can4p {
+        pin 1: can1_h;
+        pin 2: can1_l;
     }
 
     // CAN2 — vehicle bus to the BMS pair and the charger. VCM terminates
     // this end of the bus (120 Ω).
-    connector can2 "CAN 4p" {
-        pub port can2_h "CAN2 H" pin 1;
-        pub port can2_l "CAN2 L" pin 2;
+    connector can2: Can4p {
+        pin 1: can2_h;
+        pin 2: can2_l;
     }
 
     connector "12V 2p" {

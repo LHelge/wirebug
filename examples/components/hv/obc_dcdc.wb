@@ -2,6 +2,8 @@
 // Self-powered from HV bus. Charges from 1-phase AC inlet.
 // Provides 12V output to the vehicle electrical system.
 
+use Can4p from "../connectors.wb";
+
 component ObcDcdc {
     connector hv "HV DC 2p" {
         pub port dc_pos "DC+" pin 1;
@@ -19,9 +21,12 @@ component ObcDcdc {
         pub port out_neg "12V OUT-" pins [3, 4];
     }
 
-    connector can "CAN 4p" {
-        pub port can_h "CAN H" pin 1;
-        pub port can_l "CAN L" pin 2;
+    pub port can_h "CAN H";
+    pub port can_l "CAN L";
+
+    connector can: Can4p {
+        pin 1: can_h;
+        pin 2: can_l;
     }
 
     connector intlk "Interlock 2p" {

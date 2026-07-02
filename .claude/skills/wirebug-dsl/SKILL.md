@@ -20,14 +20,22 @@ A conventional layout, which is **convention, not requirement**:
 ```
 my-ev/
 ├── wirebug.toml         # project metadata and root marker
-├── main.wb              # top-level vehicle component + system view
-└── components/          # imported components, one type per file
-    ├── battery_pack.wb
-    ├── cell_module.wb
-    ├── contactor.wb
-    ├── inverter.wb
-    └── ...
+├── main.wb              # near-empty root component + whole-vehicle overview view
+├── systems/             # one `extend`-fragment per LOGICAL system: its
+│   ├── traction.wb      #   instances, the wires of the signals it owns,
+│   ├── safety.wb        #   and its schematic view(s)
+│   └── ...
+├── looms/               # one fragment per PHYSICAL harness bundle: the
+│   ├── tunnel.wb        #   multi-system cables that travel together and
+│   └── ...              #   the harness views (the build documents)
+└── components/          # imported components, one type per file,
+    ├── connectors.wb    #   subfoldered by domain; shared connector_type
+    ├── battery/         #   library in connectors.wb
+    ├── hv/
+    └── lv/
 ```
+
+Conventions the `examples/` project follows: every instance is declared in exactly one fragment (the system the device belongs to); cross-system wires live in the fragment owning the *signal* (interlock wires in `safety.wb`, 12V and grounds in `lv.wb`); a single-system point-to-point cable stays in its system file, a multi-system bundle lives in its loom file; views sit in the file whose subject they document (component detail views beside the component, system views in the system fragment, harness views in the loom).
 
 Filesystem layout is for human navigation only. **A component's logical position in the hierarchy is determined entirely by `use` statements and nesting in the DSL**, not by what directory the file lives in. Moving a `.wb` file to a different folder must never change the model — the only thing that matters is which paths the `use` statements resolve to.
 

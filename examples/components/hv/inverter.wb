@@ -1,13 +1,7 @@
 // Motor inverter / motor controller
 // Converts DC from HV bus to 3-phase AC for the drive motor
 
-connector_type Can4p "CAN 4p" {
-    layout grid {
-        rows: 2;
-        cols: 2;
-        numbering: row_major;
-    }
-}
+use Can4p from "../connectors.wb";
 
 connector_type GridRowMajor8p "Grid row-major 2x4" {
     layout grid {

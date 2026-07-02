@@ -1,0 +1,77 @@
+// Aphid EV — CAN buses.
+//
+// A `Vehicle` fragment owning the CAN topology. VCM is the gateway:
+// CAN1 is the powertrain link, straight to the inverter. CAN2 is the
+// vehicle bus, daisy-chained front → rear → charger → VCM and terminated
+// at its two ends — the front BMS and the VCM. The front → rear hop
+// rides in the tunnel loom (looms/tunnel.wb); the remaining hops are
+// their own twisted-pair cables. Two-tone with a shared base: CAN H
+// white with a blue tracer, CAN L white with red — distinct tracer
+// colors, so the pair can't be mixed up the way mirrored white/blue and
+// blue/white could.
+
+extend Vehicle {
+    cable can2_rear_charger "CAN2 · rear–charger" {
+        type:   "Twisted pair";
+        length: 1.2;
+
+        twisted {
+            wire white/blue 0.5 "CAN2 H" [rear.can_h, charger.can_h];
+            wire white/red 0.5 "CAN2 L" [rear.can_l, charger.can_l];
+        }
+    }
+
+    cable can2_charger_vcm "CAN2 · charger–VCM" {
+        type:   "Twisted pair";
+        length: 0.8;
+
+        twisted {
+            wire white/blue 0.5 "CAN2 H" [charger.can_h, vcm.can2_h];
+            wire white/red 0.5 "CAN2 L" [charger.can_l, vcm.can2_l];
+        }
+    }
+
+    cable can1_vcm_inv "CAN1 · VCM–inverter" {
+        type:   "Twisted pair";
+        length: 0.6;
+
+        twisted {
+            wire white/blue 0.5 "CAN1 H" [vcm.can1_h, inv.can_h];
+            wire white/red 0.5 "CAN1 L" [vcm.can1_l, inv.can_l];
+        }
+    }
+}
+
+// --- View: CAN bus ---
+// The vehicle CAN topology laid out front-to-back. Every ECU taps the bus
+// on its south edge so the two conductors run as a pair beneath the row.
+// VCM is the gateway: CAN2 runs left to the charger and BMS pair, CAN1
+// right to the inverter. CAN2 is terminated at its two ends — the front
+// BMS and the VCM (the two 120 Ω notes).
+
+view schematic "CAN bus" {
+    grid: 20;
+
+    text front_term at (8, 4)  "120 Ω termination";
+    text vcm_term   at (56, 4) "120 Ω termination";
+
+    include front at (8, 12) ports {
+        south: can_h, can_l;
+    }
+
+    include rear at (24, 12) ports {
+        south: can_h, can_l;
+    }
+
+    include charger at (40, 12) ports {
+        south: can_h, can_l;
+    }
+
+    include vcm at (56, 12) ports {
+        south: can2_h, can2_l, can1_h, can1_l;
+    }
+
+    include inv at (72, 12) ports {
+        south: can_h, can_l;
+    }
+}

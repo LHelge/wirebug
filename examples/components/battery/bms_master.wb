@@ -3,15 +3,20 @@
 // controls up to 3 contactors (low-side drivers),
 // reports on CAN bus.
 
+use Can4p from "../connectors.wb";
+
 component BmsMaster {
     connector "ISO-SPI 2p" {
         pub port iso_spi_h "ISO SPI+" pin 1;
         pub port iso_spi_l "ISO SPI-" pin 2;
     }
 
-    connector "CAN 4p" {
-        pub port can_h "CAN H" pin 1;
-        pub port can_l "CAN L" pin 2;
+    pub port can_h "CAN H";
+    pub port can_l "CAN L";
+
+    connector can: Can4p {
+        pin 1: can_h;
+        pin 2: can_l;
     }
 
     connector "Power 4p" {
