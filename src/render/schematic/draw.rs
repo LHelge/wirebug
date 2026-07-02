@@ -238,26 +238,286 @@ pub(super) fn render_wire(path: &[Point], color: &WireColor) -> Polyline {
         .set("points", points)
 }
 
-/// The wire's color code (IEC 60757 where known, the authored name
-/// otherwise), centred on the longest segment of the routed polyline. The
-/// text is haloed (`paint-order: stroke`), so sitting directly on the line
-/// breaks it legibly, like a road label on a map. Vertical segments rotate
-/// the code to read along the wire. `None` for a degenerate path.
-pub(super) fn render_wire_code(path: &[Point], color: &WireColor) -> Option<Text> {
-    let length = |seg: &(Point, Point)| (seg.1.x - seg.0.x).abs() + (seg.1.y - seg.0.y).abs();
-    let (a, b) = path
-        .windows(2)
-        .map(|w| (w[0], w[1]))
-        .max_by(|p, q| length(p).total_cmp(&length(q)))?;
-    let mid = Point::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0);
+/// Along-track clearance a code keeps from a crossing wire, so its halo
+/// never visually cuts the crossed wire: half the code's rendered width
+/// plus the halo.
+const CROSSING_CLEARANCE: f64 = 14.0;
+/// Along-track clearance between two codes (centre to centre), so codes on
+/// parallel wires in a shared channel don't stack into a blur.
+const CODE_CLEARANCE: f64 = 26.0;
+/// How far off a segment's line an obstacle can sit and still block it —
+/// just over half the haloed text height.
+const OFF_LINE_TOLERANCE: f64 = 10.0;
+/// The shortest free run worth placing a code in. Below this, the longest
+/// segment's midpoint wins regardless of obstacles: a slightly broken
+/// crossing beats a missing code.
+const MIN_CODE_RUN: f64 = 24.0;
 
+/// A point a wire's color code must keep clear of.
+pub(super) struct CodeObstacle {
+    at: Point,
+    clearance: f64,
+}
+
+impl CodeObstacle {
+    /// A perpendicular crossing with another wire (it sits on the wire
+    /// itself, so it always blocks its surroundings).
+    pub(super) fn crossing(at: Point) -> Self {
+        Self {
+            at,
+            clearance: CROSSING_CLEARANCE,
+        }
+    }
+
+    /// A code already placed on another wire (blocks only when that wire
+    /// runs close enough to this one for the texts to collide).
+    pub(super) fn code(at: Point) -> Self {
+        Self {
+            at,
+            clearance: CODE_CLEARANCE,
+        }
+    }
+
+    /// The span of `s ∈ [0, len]` along the axis-aligned segment `a→b`
+    /// this obstacle blocks, or `None` when it sits too far off the
+    /// segment's line to matter.
+    fn blocked_span(&self, a: Point, b: Point, len: f64, vertical: bool) -> Option<(f64, f64)> {
+        let (along, off) = if vertical {
+            (
+                (self.at.y - a.y) * (b.y - a.y).signum(),
+                (self.at.x - a.x).abs(),
+            )
+        } else {
+            (
+                (self.at.x - a.x) * (b.x - a.x).signum(),
+                (self.at.y - a.y).abs(),
+            )
+        };
+        if off >= OFF_LINE_TOLERANCE {
+            return None;
+        }
+        let (s0, s1) = (along - self.clearance, along + self.clearance);
+        (s1 > 0.0 && s0 < len).then_some((s0.max(0.0), s1.min(len)))
+    }
+}
+
+/// Where a wire's color code sits, and whether it reads along a vertical
+/// run (rotated 90°).
+pub(super) struct CodeAnchor {
+    pub(super) at: Point,
+    vertical: bool,
+}
+
+/// The anchor for a wire's color code: the midpoint of the longest
+/// obstacle-free run along the routed polyline. When every free run is
+/// shorter than [`MIN_CODE_RUN`], falls back to the longest segment's
+/// midpoint. `None` only for a degenerate path.
+pub(super) fn wire_code_anchor(path: &[Point], obstacles: &[CodeObstacle]) -> Option<CodeAnchor> {
+    let mut best: Option<(f64, CodeAnchor)> = None;
+    let mut fallback: Option<(f64, CodeAnchor)> = None;
+
+    for w in path.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        let len = (b.x - a.x).abs() + (b.y - a.y).abs();
+        if len <= 0.0 {
+            continue;
+        }
+        let vertical = (b.x - a.x).abs() < (b.y - a.y).abs();
+        let at = |s: f64| {
+            let t = s / len;
+            Point::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
+        };
+
+        if fallback.as_ref().is_none_or(|(l, _)| len > *l) {
+            fallback = Some((
+                len,
+                CodeAnchor {
+                    at: at(len / 2.0),
+                    vertical,
+                },
+            ));
+        }
+
+        let mut blocked: Vec<(f64, f64)> = obstacles
+            .iter()
+            .filter_map(|o| o.blocked_span(a, b, len, vertical))
+            .collect();
+        blocked.sort_by(|x, y| x.0.total_cmp(&y.0));
+
+        let mut gaps: Vec<(f64, f64)> = Vec::new();
+        let mut cursor = 0.0;
+        for (s0, s1) in blocked {
+            if s0 > cursor {
+                gaps.push((cursor, s0));
+            }
+            cursor = cursor.max(s1);
+        }
+        if cursor < len {
+            gaps.push((cursor, len));
+        }
+
+        for (g0, g1) in gaps {
+            let run = g1 - g0;
+            if run >= MIN_CODE_RUN && best.as_ref().is_none_or(|(r, _)| run > *r) {
+                best = Some((
+                    run,
+                    CodeAnchor {
+                        at: at((g0 + g1) / 2.0),
+                        vertical,
+                    },
+                ));
+            }
+        }
+    }
+
+    best.or(fallback).map(|(_, anchor)| anchor)
+}
+
+/// Every point where two routed wires cross perpendicularly: `result[i]`
+/// holds the points at which other wires cross `wires[i]`. Both interiors
+/// must be strict — segments merely touching at an endpoint (a chain's
+/// shared port) don't count.
+pub(super) fn wire_crossings(wires: &[Vec<Point>]) -> Vec<Vec<Point>> {
+    let mut crossings = vec![Vec::new(); wires.len()];
+    for i in 0..wires.len() {
+        for j in i + 1..wires.len() {
+            for si in wires[i].windows(2) {
+                for sj in wires[j].windows(2) {
+                    if let Some(p) = perpendicular_crossing((si[0], si[1]), (sj[0], sj[1])) {
+                        crossings[i].push(p);
+                        crossings[j].push(p);
+                    }
+                }
+            }
+        }
+    }
+    crossings
+}
+
+/// The interior crossing point of one horizontal and one vertical segment,
+/// if the pair is perpendicular and actually crosses.
+fn perpendicular_crossing(sa: (Point, Point), sb: (Point, Point)) -> Option<Point> {
+    let horizontal = |s: &(Point, Point)| (s.1.y - s.0.y).abs() < (s.1.x - s.0.x).abs();
+    let (h, v) = match (horizontal(&sa), horizontal(&sb)) {
+        (true, false) => (sa, sb),
+        (false, true) => (sb, sa),
+        _ => return None,
+    };
+    let (hx0, hx1) = (h.0.x.min(h.1.x), h.0.x.max(h.1.x));
+    let (vy0, vy1) = (v.0.y.min(v.1.y), v.0.y.max(v.1.y));
+    let (x, y) = (v.0.x, h.0.y);
+    (x > hx0 && x < hx1 && y > vy0 && y < vy1).then(|| Point::new(x, y))
+}
+
+/// The wire's color code (IEC 60757 where known, the authored name
+/// otherwise), drawn at its computed anchor. The text is haloed
+/// (`paint-order: stroke`), so sitting directly on the line breaks it
+/// legibly, like a road label on a map; on a vertical run it rotates to
+/// read along the wire.
+pub(super) fn render_wire_code(anchor: &CodeAnchor, color: &WireColor) -> Text {
     let mut text = Text::new(color.code())
         .set("class", "wire-code")
-        .set("x", mid.x)
-        .set("y", mid.y)
+        .set("x", anchor.at.x)
+        .set("y", anchor.at.y)
         .set("dominant-baseline", "central");
-    if (b.x - a.x).abs() < (b.y - a.y).abs() {
-        text = text.set("transform", format!("rotate(-90 {} {})", mid.x, mid.y));
+    if anchor.vertical {
+        text = text.set(
+            "transform",
+            format!("rotate(-90 {} {})", anchor.at.x, anchor.at.y),
+        );
     }
-    Some(text)
+    text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn p(x: f64, y: f64) -> Point {
+        Point::new(x, y)
+    }
+
+    #[test]
+    fn unobstructed_code_sits_at_longest_segment_midpoint() {
+        // 100-long horizontal run, then a 40-long vertical drop.
+        let path = [p(0.0, 0.0), p(100.0, 0.0), p(100.0, 40.0)];
+        let anchor = wire_code_anchor(&path, &[]).expect("anchor");
+        assert_eq!((anchor.at.x, anchor.at.y), (50.0, 0.0));
+        assert!(!anchor.vertical);
+    }
+
+    #[test]
+    fn code_dodges_a_crossing_at_the_midpoint() {
+        let path = [p(0.0, 0.0), p(100.0, 0.0)];
+        // A crossing just left of centre blocks [26, 54]; the biggest free
+        // run is [54, 100], so the code shifts right of the crossing.
+        let obstacles = [CodeObstacle::crossing(p(40.0, 0.0))];
+        let anchor = wire_code_anchor(&path, &obstacles).expect("anchor");
+        assert_eq!((anchor.at.x, anchor.at.y), (77.0, 0.0));
+    }
+
+    #[test]
+    fn fully_blocked_wire_falls_back_to_longest_segment_midpoint() {
+        let path = [p(0.0, 0.0), p(30.0, 0.0)];
+        // One crossing blankets the short wire; no free run clears
+        // MIN_CODE_RUN, so the midpoint wins anyway.
+        let obstacles = [CodeObstacle::crossing(p(15.0, 0.0))];
+        let anchor = wire_code_anchor(&path, &obstacles).expect("anchor");
+        assert_eq!((anchor.at.x, anchor.at.y), (15.0, 0.0));
+    }
+
+    #[test]
+    fn far_off_line_obstacle_does_not_block() {
+        let path = [p(0.0, 0.0), p(100.0, 0.0)];
+        // A code on a distant parallel wire is no obstacle.
+        let obstacles = [CodeObstacle::code(p(50.0, 40.0))];
+        let anchor = wire_code_anchor(&path, &obstacles).expect("anchor");
+        assert_eq!((anchor.at.x, anchor.at.y), (50.0, 0.0));
+    }
+
+    #[test]
+    fn nearby_placed_code_repels_along_the_run() {
+        let path = [p(0.0, 0.0), p(100.0, 0.0)];
+        // A code on a wire hugging this one (same channel) pushes this
+        // wire's code out of its clearance.
+        let obstacles = [CodeObstacle::code(p(50.0, 4.0))];
+        let anchor = wire_code_anchor(&path, &obstacles).expect("anchor");
+        assert!((anchor.at.x - 50.0).abs() >= CODE_CLEARANCE / 2.0);
+    }
+
+    #[test]
+    fn vertical_run_rotates_the_code() {
+        let path = [p(0.0, 0.0), p(0.0, 80.0)];
+        let anchor = wire_code_anchor(&path, &[]).expect("anchor");
+        assert!(anchor.vertical);
+        assert_eq!((anchor.at.x, anchor.at.y), (0.0, 40.0));
+    }
+
+    #[test]
+    fn crossings_are_detected_per_wire() {
+        let a = vec![p(0.0, 0.0), p(100.0, 0.0)];
+        let b = vec![p(50.0, -50.0), p(50.0, 50.0)];
+        let crossings = wire_crossings(&[a, b]);
+        assert_eq!(crossings[0], vec![p(50.0, 0.0)]);
+        assert_eq!(crossings[1], vec![p(50.0, 0.0)]);
+    }
+
+    #[test]
+    fn touching_endpoints_are_not_crossings() {
+        // `b` tees into `a`'s interior from below and stops on it; a
+        // shared port, not a crossing.
+        let a = vec![p(0.0, 0.0), p(100.0, 0.0)];
+        let b = vec![p(50.0, 50.0), p(50.0, 0.0)];
+        let crossings = wire_crossings(&[a, b]);
+        assert!(crossings[0].is_empty());
+        assert!(crossings[1].is_empty());
+    }
+
+    #[test]
+    fn parallel_segments_never_cross() {
+        let a = vec![p(0.0, 0.0), p(100.0, 0.0)];
+        let b = vec![p(0.0, 10.0), p(100.0, 10.0)];
+        let crossings = wire_crossings(&[a, b]);
+        assert!(crossings[0].is_empty());
+    }
 }

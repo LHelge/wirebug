@@ -17,6 +17,7 @@ use svg::node::element::{Group, Style, Text};
 
 use crate::dsl::ir::{Design, Instance, View};
 use crate::error::{Error, Result};
+use crate::render::geometry::Point;
 use crate::render::stamp::{STAMP_HEIGHT, STAMP_INSET, stamp_element};
 
 use layout::{Grid, Placement};
@@ -156,11 +157,22 @@ impl SchematicRenderer {
         }
         doc = doc.add(components_group);
 
+        // Codes dodge wire crossings (the halo would visually cut the
+        // crossed wire) and each other (parallel wires in a channel would
+        // stack their codes); placed anchors become obstacles for the rest.
         let mut wires_group = Group::new().set("class", "wires");
-        for (polyline, connection) in wires.iter().zip(&connections) {
+        let crossings = draw::wire_crossings(&wires);
+        let mut placed: Vec<Point> = Vec::new();
+        for ((polyline, connection), crossings) in wires.iter().zip(&connections).zip(&crossings) {
             wires_group = wires_group.add(draw::render_wire(polyline, connection.color));
-            if let Some(code) = draw::render_wire_code(polyline, connection.color) {
-                wires_group = wires_group.add(code);
+            let obstacles: Vec<_> = crossings
+                .iter()
+                .map(|&p| draw::CodeObstacle::crossing(p))
+                .chain(placed.iter().map(|&p| draw::CodeObstacle::code(p)))
+                .collect();
+            if let Some(anchor) = draw::wire_code_anchor(polyline, &obstacles) {
+                wires_group = wires_group.add(draw::render_wire_code(&anchor, connection.color));
+                placed.push(anchor.at);
             }
         }
         doc = doc.add(wires_group);
