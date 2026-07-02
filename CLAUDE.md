@@ -419,6 +419,13 @@ DSL pipeline notes:
 - `chumsky` parses a `(Token, Span)` slice; our `Span` implements
   `chumsky::span::Span` (context = `FileId`), so `e.span()` yields
   file-tagged spans directly. `Rich` errors become owned `ParseError`s.
+- Every major production (`port`, `wire`, `cable`, `view`, …) is
+  **`.boxed()`** where it's defined. Chumsky combinators nest their
+  sub-parsers' full generic types, so an unboxed embedding of a large
+  sub-parser multiplies rustc's typeck cost geometrically — a bare
+  `wire.then(wire)` once took builds from seconds to OOM. Boxing erases
+  the type at each production for one dynamic dispatch per node. Keep
+  new productions boxed, and never embed an unboxed heavyweight twice.
 - Files are loaded once each (by canonical path), so a `use` cycle or a
   diamond import is harmless and never double-reports. Directory layout
   never affects logical hierarchy — only `use` paths and DSL nesting do.

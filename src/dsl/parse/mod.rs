@@ -245,7 +245,8 @@ where
                 layout,
                 span: e.span(),
             }
-        });
+        })
+        .boxed();
 
     // --- Ports & connectors ---
 
@@ -278,7 +279,8 @@ where
             label,
             pins,
             span: e.span(),
-        });
+        })
+        .boxed();
 
     let connector = just(Token::Connector)
         .ignore_then(ident.or_not())
@@ -294,7 +296,8 @@ where
             part,
             ports,
             span: e.span(),
-        });
+        })
+        .boxed();
 
     let pin_binding = just(Token::Pin)
         .ignore_then(pin)
@@ -322,7 +325,8 @@ where
             type_name,
             pins,
             span: e.span(),
-        });
+        })
+        .boxed();
 
     // --- Instances ---
 
@@ -336,7 +340,8 @@ where
             name,
             label,
             span: e.span(),
-        });
+        })
+        .boxed();
 
     // --- Wires ---
 
@@ -377,7 +382,8 @@ where
             label,
             endpoints,
             span: e.span(),
-        });
+        })
+        .boxed();
 
     // --- Cables ---
 
@@ -452,7 +458,8 @@ where
                 members,
                 span: e.span(),
             }
-        });
+        })
+        .boxed();
 
     // --- Views ---
 
@@ -617,7 +624,8 @@ where
                 duplicate_items,
                 span: e.span(),
             }
-        });
+        })
+        .boxed();
 
     // --- Definitions (recursive: components nest) ---
 
