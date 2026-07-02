@@ -49,6 +49,9 @@ pub enum Token {
     Semicolon,
     Dot,
     Colon,
+    /// A single `/` — the base/tracer separator in a two-tone wire color
+    /// (`green/yellow`). `//` is still a comment.
+    Slash,
 
     // Leaves. Raw text is preserved so a future `fmt` can round-trip and
     // so the parser can interpret a [`Number`](Token::Number) as either a
@@ -135,6 +138,7 @@ impl fmt::Display for Token {
             Token::Semicolon => ";",
             Token::Dot => ".",
             Token::Colon => ":",
+            Token::Slash => "/",
             Token::Ident(name) => name,
             Token::Str(s) => return write!(f, "{s:?}"),
             Token::Number(n) => n,

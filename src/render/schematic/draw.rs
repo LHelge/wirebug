@@ -234,7 +234,7 @@ pub(super) fn render_wire(path: &[Point], color: &WireColor) -> Polyline {
         .join(" ");
     Polyline::new()
         .set("class", "wire")
-        .set("data-color", color.as_str())
+        .set("data-color", color.to_string())
         .set("points", points)
 }
 

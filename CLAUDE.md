@@ -212,6 +212,9 @@ within the endpoints' x-span, so the curve never overshoots its bounding box
 `stroke`) over a wider black casing path (WireViz's trick, so light
 colors read on any background) and annotated
 `<label> · <gauge>mm² · <color code>` (IEC 60757 via `ir::WireColor::code`).
+A two-tone color (`green/yellow`) adds a dashed tracer overlay on the
+core and concatenates its codes (`GNYE`); `WireColor` carries
+`base` + optional `tracer`, split at the `/` by the parser.
 
 Two deliberate departures from the schematic's no-inference rule: pin
 **facing** is derived per pin from where its conductor goes (above), and wire

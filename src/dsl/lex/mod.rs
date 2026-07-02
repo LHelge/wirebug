@@ -141,6 +141,8 @@ pub fn lex(src: &str, file: FileId) -> Result<Vec<SpannedLexeme>, LexError> {
                     b';' => Some(Token::Semicolon),
                     b'.' => Some(Token::Dot),
                     b':' => Some(Token::Colon),
+                    // A lone `/`; `//` was already taken as a comment above.
+                    b'/' => Some(Token::Slash),
                     _ => None,
                 };
                 match token {
@@ -216,6 +218,19 @@ mod tests {
                 Token::Dot,
                 Token::Ident("hv_pos".into()),
                 Token::Number("0.25".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn lone_slash_is_a_token_double_slash_a_comment() {
+        // `green/yellow` is three tokens; `// yellow` is trivia.
+        assert_eq!(
+            tokens("green/yellow // yellow"),
+            vec![
+                Token::Ident("green".into()),
+                Token::Slash,
+                Token::Ident("yellow".into()),
             ]
         );
     }

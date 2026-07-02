@@ -1,5 +1,6 @@
 ---
 source: src/dsl/parse/mod.rs
+assertion_line: 1232
 expression: file
 ---
 File {
@@ -124,6 +125,7 @@ File {
                     Wire(
                         Wire {
                             color: orange @ 260..266,
+                            tracer: None,
                             gauge: 50.0 @ 267..269,
                             label: None,
                             endpoints: [
@@ -164,6 +166,7 @@ File {
                     Wire(
                         Wire {
                             color: orange @ 302..308,
+                            tracer: None,
                             gauge: 50.0 @ 309..311,
                             label: None,
                             endpoints: [

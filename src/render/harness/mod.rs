@@ -60,6 +60,7 @@ const STYLE: &str = "\
 .pin-dot { fill: black; }
 .cable-wire-casing { fill: none; stroke: black; stroke-width: 4; stroke-linecap: butt; }
 .cable-wire { fill: none; stroke-width: 2; }
+.cable-wire-tracer { fill: none; stroke-width: 2; stroke-dasharray: 4 4; }
 .cable-label { font: 9px sans-serif; text-anchor: middle; fill: #333; paint-order: stroke; stroke: white; stroke-width: 3px; stroke-linejoin: round; }
 .title { font: bold 14px sans-serif; }
 .stamp { font: 10px sans-serif; fill: #666; text-anchor: end; }\
@@ -231,6 +232,49 @@ component sys {
         assert!(svg.contains("stroke=\"orange\""));
         assert!(svg.contains("class=\"cable-wire-casing\""));
         assert!(svg.contains("Source"));
+    }
+
+    #[test]
+    fn two_tone_wire_draws_a_tracer_overlay() {
+        let design = design_from(
+            r#"
+component sys {
+    a: src;
+    b: snk;
+    wire green/yellow 2.5 "PE" [a.pe, b.pe];
+    component src {
+        connector c "PE 1p" {
+            pub port pe "PE" pin 1;
+        }
+    }
+    component snk {
+        connector c "PE 1p" {
+            pub port pe "PE" pin 1;
+        }
+    }
+}
+"#,
+        );
+        let view = harness_view("sys", &[("a", "c", 0.0, 0.0), ("b", "c", 12.0, 0.0)]);
+        let svg = render(&design, &view);
+
+        // Base color strokes the core; the tracer overlays it dashed.
+        assert!(svg.contains("stroke=\"green\""));
+        assert!(svg.contains("class=\"cable-wire-tracer\""));
+        assert!(svg.contains("stroke=\"yellow\""));
+        // data-color keeps the authored two-tone form for host CSS.
+        assert!(svg.contains("data-color=\"green/yellow\""));
+        // The annotation writes the combined IEC code.
+        assert!(svg.contains("PE · 2.5mm² · GNYE"));
+    }
+
+    #[test]
+    fn single_color_wire_has_no_tracer_overlay() {
+        let design = two_connector_design();
+        let view = harness_view("sys", &[("a", "hv", 0.0, 0.0), ("b", "hv", 12.0, 0.0)]);
+        let svg = render(&design, &view);
+        // The selector exists in the style block; no element carries it.
+        assert!(!svg.contains("class=\"cable-wire-tracer\""));
     }
 
     #[test]
@@ -432,8 +476,8 @@ component sys {
         let cb = &layout.cable_boxes[0];
         // `green` lands on pin 1 (top, smaller y) so it takes the first row,
         // even though `red` (pin 2) was declared first.
-        assert_eq!(cb.strands[0].color.as_str(), "green");
-        assert_eq!(cb.strands[1].color.as_str(), "red");
+        assert_eq!(cb.strands[0].color.css(), "green");
+        assert_eq!(cb.strands[1].color.css(), "red");
         assert!(cb.strands[0].row_y < cb.strands[1].row_y);
     }
 
