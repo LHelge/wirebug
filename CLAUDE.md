@@ -50,12 +50,21 @@ Four CLI commands share it:
   (per-file scopes + merged components) consulted by a token-stack scan
   of the live buffer — lex-only, so completion survives parse breakage,
   and a file that fails to load keeps its last-good scope
-  (`CompletionIndex::update_with`). An open `.wb` file its project never
-  loads (not reachable from `main.wb` via `use`) gets one info-severity
-  `unlinked_file` notice instead of silence — rust-analyzer's
-  unlinked-file move; its contents stay unchecked (lex/parse-only
-  checking of orphans is a possible later step). Hover/goto-def/rename/
-  semantic tokens/formatting are deliberately later.
+  (`CompletionIndex::update_with`). Completion covers auto-import —
+  `use ‸` offers every component/connector_type defined elsewhere,
+  inserting the full `<Name> from "<relative path>";` remainder — plus
+  `extend` targets and the `connector_type`/`layout` bodies. An open
+  `.wb` file its project never loads (not reachable from `main.wb` via
+  `use`) gets one info-severity `unlinked_file` notice instead of
+  silence — rust-analyzer's unlinked-file move; its contents stay
+  unchecked, but its top-level names are parsed into the index so
+  auto-import can wire the fresh fragment in. Go-to-definition
+  (`lsp/definition.rs`) re-runs load/resolve per request (never stale;
+  projects are small) and span-walks the registry: use names/paths,
+  instance type refs, connector type refs, wire endpoints, view
+  includes/ports/enclosures, and `extend` → its root `component`, all
+  merge-group aware. Hover/rename/semantic tokens/formatting are
+  deliberately later.
 
 The `index.html` is an [`askama`] compile-time template (`templates/`),
 rendered by `render::index_html(views, live_reload)` — shared by `render`
@@ -414,8 +423,9 @@ src/
 │   ├── line_index.rs # byte offset ↔ LSP line / UTF-16 column
 │   ├── uri.rs        # file path ↔ file:// URI (lsp-types 0.97 has no helpers)
 │   ├── diagnostics.rs# check cycle → Problem → LSP diagnostics, publish/clear
-│   └── complete.rs   # CompletionIndex (owned Resolved snapshot, per-file
-│                     #   last-good) + token-stack cursor contexts
+│   ├── complete.rs   # CompletionIndex (owned Resolved snapshot, per-file
+│   │                 #   last-good) + token-stack cursor contexts + auto-import
+│   └── definition.rs # go-to-definition: fresh resolve per request, span walk
 └── error.rs         # thiserror types (render path; incl. askama Template)
 ```
 

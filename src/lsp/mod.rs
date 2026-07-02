@@ -4,9 +4,9 @@
 //! loop needs no async runtime. Stdout carries the protocol, so logs must
 //! go to stderr (`main.rs` configures tracing accordingly).
 //!
-//! v1 scope: live diagnostics (the full `check` pipeline re-run per change,
-//! with open buffers shadowing the disk via [`Overlay`]) and completion.
-//! Hover, goto-definition, rename, semantic tokens, and formatting are
+//! Scope: live diagnostics (the full `check` pipeline re-run per change,
+//! with open buffers shadowing the disk via [`Overlay`]), completion, and
+//! go-to-definition. Hover, rename, semantic tokens, and formatting are
 //! deliberately later.
 
 // `lsp_types::Uri` caches parse offsets in a `Cell`, tripping
@@ -15,6 +15,7 @@
 #![allow(clippy::mutable_key_type)]
 
 mod complete;
+mod definition;
 mod diagnostics;
 mod line_index;
 mod state;
@@ -25,11 +26,12 @@ use lsp_types::notification::{
     DidChangeTextDocument, DidChangeWatchedFiles, DidCloseTextDocument, DidOpenTextDocument,
     Notification as _, PublishDiagnostics,
 };
-use lsp_types::request::{Completion, Request as _};
+use lsp_types::request::{Completion, GotoDefinition, Request as _};
 use lsp_types::{
     CompletionItem, CompletionOptions, CompletionParams, CompletionResponse,
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    PublishDiagnosticsParams, ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
+    GotoDefinitionParams, GotoDefinitionResponse, Location, OneOf, PublishDiagnosticsParams,
+    ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
 };
 use thiserror::Error;
 
@@ -75,6 +77,7 @@ fn server_capabilities() -> ServerCapabilities {
             trigger_characters: Some(vec![".".to_string(), ":".to_string()]),
             ..CompletionOptions::default()
         }),
+        definition_provider: Some(OneOf::Left(true)),
         ..ServerCapabilities::default()
     }
 }
@@ -126,6 +129,12 @@ fn handle_request(
                 .unwrap_or_default();
             Response::new_ok(request.id, CompletionResponse::Array(items))
         }
+        GotoDefinition::METHOD => {
+            let location = serde_json::from_value::<GotoDefinitionParams>(request.params)
+                .ok()
+                .and_then(|params| definition_location(state, &params));
+            Response::new_ok(request.id, location.map(GotoDefinitionResponse::Scalar))
+        }
         _ => Response::new_err(
             request.id,
             lsp_server::ErrorCode::MethodNotFound as i32,
@@ -149,6 +158,15 @@ fn completion_items(state: &ServerState, params: &CompletionParams) -> Vec<Compl
     let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
     let offset = line_index::LineIndex::new(text).offset(text, position.position);
     state.index.complete(&canonical, text, offset)
+}
+
+/// Answer one go-to-definition request against a fresh load/resolve of
+/// the document's project, with the overlay shadowing the disk.
+fn definition_location(state: &ServerState, params: &GotoDefinitionParams) -> Option<Location> {
+    let position = &params.text_document_position_params;
+    let path = state.open.get(&position.text_document.uri)?;
+    let text = state.overlay.get(path)?;
+    definition::goto_definition(&state.overlay, path, text, position.position)
 }
 
 /// Apply one notification to the server state; `true` means the document

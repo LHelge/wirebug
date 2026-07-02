@@ -12,7 +12,10 @@ use lsp_types::{
 use miette::Diagnostic as _;
 
 use crate::dsl::diagnostics::Problem;
+use crate::dsl::lex::{lex, significant};
+use crate::dsl::parse::parse_file;
 use crate::dsl::project::{self, Overlay};
+use crate::dsl::span::FileId;
 use crate::dsl::{elaborate, resolve, validate};
 
 use super::complete::{self, CompletionIndex};
@@ -66,6 +69,19 @@ pub(crate) fn check_open_documents<'a>(
         }
         if let Some(uri) = uri::to_uri(doc) {
             by_uri.entry(uri).or_default().push(unlinked(entry));
+        }
+        // Parse the orphan standalone so its top-level names show up in
+        // auto-import and `extend` completion — the window in which the
+        // author is wiring the new file into the project.
+        let text = match overlay.get(&canonical) {
+            Some(text) => text.to_string(),
+            None => std::fs::read_to_string(&canonical).unwrap_or_default(),
+        };
+        if let Ok(lexemes) = lex(&text, FileId(0)) {
+            let tokens = significant(&lexemes);
+            if let Some(file) = parse_file(tokens, FileId(0), text.len()).file {
+                index.add_unlinked(canonical, &file);
+            }
         }
     }
     (by_uri, index)
@@ -356,6 +372,33 @@ mod tests {
             notice.message.contains("main.wb"),
             "names the entry: {}",
             notice.message
+        );
+    }
+
+    /// An unlinked file's top-level names still reach the completion
+    /// index, so `use ‸` in a project file can auto-import the fragment
+    /// being wired in.
+    #[test]
+    fn unlinked_file_definitions_are_auto_import_candidates() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        manifest(dir.path());
+        let main = write(dir.path(), "main.wb", "component Root { }\n");
+        let orphan = write(
+            dir.path(),
+            "charging.wb",
+            "extend Root { }\nconnector_type Ccs2 \"CCS2 inlet\" {\n}\n",
+        );
+
+        let (_, index) = check_open_documents([main.clone(), orphan].iter(), &Overlay::default());
+        let main = main.canonicalize().expect("canonical main");
+        let items = index.complete(&main, "use \n", "use ".len());
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert!(labels.contains(&"Root"), "{labels:?}"); // the orphan's extend
+        assert!(labels.contains(&"Ccs2"), "{labels:?}");
+        let root = items.iter().find(|i| i.label == "Root").unwrap();
+        assert_eq!(
+            root.insert_text.as_deref(),
+            Some("Root from \"charging.wb\";")
         );
     }
 

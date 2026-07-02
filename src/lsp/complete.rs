@@ -45,6 +45,9 @@ struct FileScope {
     connector_types: Vec<String>,
     /// The file's top-level components by name (canonical across `extend`).
     top_level: HashMap<String, ComponentKey>,
+    /// Connector types *defined* in this file (no imports) — what another
+    /// file could `use` from it.
+    own_connector_types: Vec<String>,
     /// The file's lone top-level component — the subject of its views.
     subject: Option<ComponentKey>,
 }
@@ -131,6 +134,7 @@ pub(crate) fn build_index(project: &Project, resolved: &Resolved) -> CompletionI
         for ct in &resolved.connector_types {
             if ct.file == FileId(fi) {
                 scope.connector_types.push(ct.name.to_string());
+                scope.own_connector_types.push(ct.name.to_string());
             }
         }
         // An import is a component or a connector type; sort each name into
@@ -178,6 +182,37 @@ impl CompletionIndex {
         self.next_key += other.next_key;
     }
 
+    /// Register an open file no project loads (rust-analyzer's "unlinked
+    /// file"): its top-level definitions become auto-import and `extend`
+    /// candidates before the first `use` reaches the file — exactly the
+    /// window in which the author is wiring a fresh fragment into the
+    /// project. Only names are indexed; the file's contents stay unchecked.
+    pub(crate) fn add_unlinked(&mut self, path: PathBuf, ast: &crate::dsl::ast::File) {
+        let mut scope = FileScope::default();
+        for item in &ast.items {
+            match item {
+                crate::dsl::ast::Item::Definition(def) => {
+                    let name = def.name.node.as_str().to_string();
+                    scope.component_types.push(name.clone());
+                    scope.top_level.insert(name, self.next_key);
+                    self.next_key += 1;
+                }
+                crate::dsl::ast::Item::ConnectorType(ct) => {
+                    let name = ct.name.node.as_str().to_string();
+                    scope.connector_types.push(name.clone());
+                    scope.own_connector_types.push(name);
+                }
+                _ => {}
+            }
+        }
+        for import in &ast.uses {
+            scope
+                .component_types
+                .push(import.name.node.as_str().to_string());
+        }
+        self.files.insert(path, scope);
+    }
+
     /// Replace this index with `new`, except that files `new` *lost* keep
     /// their previous scope and the component data it references. A buffer
     /// mid-edit routinely fails to parse, which drops its file from the
@@ -221,7 +256,7 @@ impl CompletionIndex {
             return Vec::new();
         };
         let cursor = scan(text, offset);
-        self.items(scope, &cursor)
+        self.items(path, scope, &cursor)
     }
 
     fn component(&self, key: ComponentKey) -> Option<&ComponentEntry> {
@@ -317,7 +352,7 @@ impl CompletionIndex {
             .unwrap_or_default()
     }
 
-    fn items(&self, scope: &FileScope, cursor: &Cursor) -> Vec<CompletionItem> {
+    fn items(&self, doc: &Path, scope: &FileScope, cursor: &Cursor) -> Vec<CompletionItem> {
         // `numbering: ` takes its closed mode set wherever it appears.
         if cursor.after(&[Token::Numbering, Token::Colon]) {
             return constants(&NUMBERING_MODES);
@@ -353,6 +388,12 @@ impl CompletionIndex {
                 if let [.., Token::Use, Token::Ident(_)] = cursor.tail() {
                     return keywords(&["from"]);
                 }
+                if let [.., Token::Use] = cursor.tail() {
+                    return self.auto_imports(doc);
+                }
+                if let [.., Token::Extend] = cursor.tail() {
+                    return self.extend_targets();
+                }
                 if cursor.at_statement_start() {
                     return keywords(&["use", "component", "extend", "connector_type", "view"]);
                 }
@@ -374,8 +415,8 @@ impl CompletionIndex {
             Some(Block::Cable) => {
                 if cursor.at_statement_start() {
                     let mut items = keywords(&["wire", "twisted"]);
-                    items.push(property("type"));
-                    items.push(property("length"));
+                    items.push(property("type", "cable property"));
+                    items.push(property("length", "cable property"));
                     return items;
                 }
                 Vec::new()
@@ -440,8 +481,82 @@ impl CompletionIndex {
                 }
                 Vec::new()
             }
-            Some(Block::ConnectorType | Block::Other) => Vec::new(),
+            Some(Block::ConnectorType) => match cursor.tail() {
+                [.., Token::Layout] => keywords(&["grid", "face"]),
+                _ if cursor.at_statement_start() => {
+                    let mut items = keywords(&["layout"]);
+                    items.push(property("part", "connector property"));
+                    items
+                }
+                _ => Vec::new(),
+            },
+            Some(Block::LayoutGrid) => {
+                if cursor.at_statement_start() {
+                    return ["rows", "cols", "numbering"]
+                        .iter()
+                        .map(|key| property(key, "grid layout"))
+                        .collect();
+                }
+                Vec::new()
+            }
+            Some(Block::LayoutFace) => match cursor.tail() {
+                [.., Token::Size] => constants(&["large"]),
+                [.., Token::RParen] => keywords(&["size"]),
+                _ if cursor.at_statement_start() => keywords(&["cavity"]),
+                _ => Vec::new(),
+            },
+            Some(Block::Other) => Vec::new(),
         }
+    }
+
+    /// Every top-level component name in the project — what an `extend`
+    /// may name. Deduplicated (a merged component is declared in several
+    /// files) and sorted for a stable order.
+    fn extend_targets(&self) -> Vec<CompletionItem> {
+        let names: std::collections::BTreeSet<&str> = self
+            .files
+            .values()
+            .flat_map(|scope| scope.top_level.keys().map(String::as_str))
+            .collect();
+        names
+            .into_iter()
+            .map(|name| item(name, CompletionItemKind::CLASS, "component"))
+            .collect()
+    }
+
+    /// Auto-import items for `use ‸`: every component and connector type
+    /// defined in *another* file, inserting the full
+    /// `<Name> from "<relative path>";` remainder of the statement.
+    fn auto_imports(&self, doc: &Path) -> Vec<CompletionItem> {
+        let Some(doc_dir) = doc.parent() else {
+            return Vec::new();
+        };
+        let mut items = Vec::new();
+        for (path, scope) in &self.files {
+            if path == doc {
+                continue;
+            }
+            let rel = relative_path(doc_dir, path);
+            let import = |name: &str, kind, detail: &str| CompletionItem {
+                insert_text: Some(format!("{name} from \"{rel}\";")),
+                ..CompletionItem {
+                    detail: Some(format!("{detail} · {rel}")),
+                    ..item(name, kind, detail)
+                }
+            };
+            for name in scope.top_level.keys() {
+                items.push(import(name, CompletionItemKind::CLASS, "component"));
+            }
+            for name in &scope.own_connector_types {
+                items.push(import(
+                    name,
+                    CompletionItemKind::INTERFACE,
+                    "connector type",
+                ));
+            }
+        }
+        items.sort_by(|a, b| a.label.cmp(&b.label));
+        items
     }
 
     /// The connector designators of a named instance's type — what a
@@ -486,23 +601,49 @@ fn colors() -> Vec<CompletionItem> {
         .collect()
 }
 
-fn property(key: &str) -> CompletionItem {
+fn property(key: &str, detail: &str) -> CompletionItem {
     CompletionItem {
         insert_text: Some(format!("{key}: ")),
-        ..item(key, CompletionItemKind::PROPERTY, "cable property")
+        ..item(key, CompletionItemKind::PROPERTY, detail)
     }
+}
+
+/// `to` relative to `from_dir`, with forward slashes — the form a `use`
+/// path is written in. Both paths must be absolute (they come from the
+/// loader's canonicalization).
+fn relative_path(from_dir: &Path, to: &Path) -> String {
+    let from: Vec<_> = from_dir.components().collect();
+    let to: Vec<_> = to.components().collect();
+    let common = from.iter().zip(&to).take_while(|(a, b)| a == b).count();
+    let mut parts: Vec<String> = vec!["..".to_string(); from.len() - common];
+    parts.extend(
+        to[common..]
+            .iter()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned()),
+    );
+    parts.join("/")
 }
 
 /// One nesting level at the cursor, tagged by its governing keyword.
 enum Block {
-    Component { name: String },
+    Component {
+        name: String,
+    },
     ConnectorType,
     Connector,
     Cable,
     Twisted,
-    View { kind: Option<String> },
-    Ports { instance: Option<String> },
+    View {
+        kind: Option<String>,
+    },
+    Ports {
+        instance: Option<String>,
+    },
     Enclosure,
+    /// `layout grid { }` inside a connector_type.
+    LayoutGrid,
+    /// `layout face { }` inside a connector_type.
+    LayoutFace,
     Other,
 }
 
@@ -628,6 +769,14 @@ fn classify(before: &[Token]) -> Block {
             Token::Twisted => return Block::Twisted,
             Token::Connector => return Block::Connector,
             Token::ConnectorType => return Block::ConnectorType,
+            // `grid`/`face` open a layout body only right after `layout`;
+            // a view's `grid: 20;` never directly precedes a `{`.
+            Token::Grid if matches!(before.get(i.wrapping_sub(1)), Some(Token::Layout)) => {
+                return Block::LayoutGrid;
+            }
+            Token::Face if matches!(before.get(i.wrapping_sub(1)), Some(Token::Layout)) => {
+                return Block::LayoutFace;
+            }
             // Header tokens between the keyword and its `{`.
             Token::Ident(_)
             | Token::Str(_)
@@ -687,8 +836,8 @@ mod tests {
 
     /// Build an index from `files` (written to a temp project) and run
     /// completion on `live`, a version of `main.wb` with the cursor marked
-    /// by `‸`. Returns the item labels.
-    fn complete_in(files: &[(&str, &str)], live: &str) -> Vec<String> {
+    /// by `‸`. Returns the full items.
+    fn complete_items_in(files: &[(&str, &str)], live: &str) -> Vec<CompletionItem> {
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(
             dir.path().join("wirebug.toml"),
@@ -696,7 +845,11 @@ mod tests {
         )
         .expect("write manifest");
         for (name, body) in files {
-            std::fs::write(dir.path().join(name), body).expect("write file");
+            let path = dir.path().join(name);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("create dirs");
+            }
+            std::fs::write(path, body).expect("write file");
         }
         let entry = dir.path().join("main.wb");
         let (project, problems) = project::load(&entry);
@@ -707,8 +860,12 @@ mod tests {
         let offset = live.find('‸').expect("cursor marker");
         let text = live.replace('‸', "");
         let path = entry.canonicalize().expect("canonical entry");
-        index
-            .complete(&path, &text, offset)
+        index.complete(&path, &text, offset)
+    }
+
+    /// [`complete_items_in`], labels only.
+    fn complete_in(files: &[(&str, &str)], live: &str) -> Vec<String> {
+        complete_items_in(files, live)
             .into_iter()
             .map(|i| i.label)
             .collect()
@@ -723,6 +880,91 @@ mod tests {
         "main.wb",
         "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n    pub port feed \"F\";\n    port internal \"I\";\n    wire red 1 [feed, l.anode];\n}\nview schematic \"S\" {\n    grid: 20;\n    include l at (4, 4) ports {\n        west: anode;\n    }\n}\n",
     );
+
+    #[test]
+    fn use_offers_auto_imports_with_relative_paths() {
+        let battery = (
+            "components/battery.wb",
+            "component Battery { pub port hv_pos \"HV+\"; }\n",
+        );
+        let types = ("types.wb", "connector_type Can4p \"CAN 4p\" {\n}\n");
+        let main = (
+            "main.wb",
+            "use Battery from \"components/battery.wb\";\nuse Can4p from \"types.wb\";\ncomponent Root { b: Battery; connector c: Can4p { } }\n",
+        );
+        let items = complete_items_in(&[battery, types, main], "use ‸\n");
+
+        let battery = items
+            .iter()
+            .find(|i| i.label == "Battery")
+            .expect("Battery offered");
+        assert_eq!(
+            battery.insert_text.as_deref(),
+            Some("Battery from \"components/battery.wb\";")
+        );
+        let can = items
+            .iter()
+            .find(|i| i.label == "Can4p")
+            .expect("connector type offered");
+        assert_eq!(can.insert_text.as_deref(), Some("Can4p from \"types.wb\";"));
+        // The doc's own definitions are not import candidates.
+        assert!(!items.iter().any(|i| i.label == "Root"), "{items:?}");
+    }
+
+    #[test]
+    fn extend_offers_top_level_components() {
+        let labels = complete_in(&[LAMP, MAIN], "extend ‸\n");
+        assert!(labels.contains(&"Root".to_string()), "{labels:?}");
+        assert!(labels.contains(&"Lamp".to_string()), "{labels:?}");
+    }
+
+    #[test]
+    fn connector_type_body_offers_layout_and_part() {
+        let labels = complete_in(&[MAIN], "connector_type X \"X\" {\n    ‸\n}\n");
+        assert!(labels.contains(&"layout".to_string()), "{labels:?}");
+        assert!(labels.contains(&"part".to_string()), "{labels:?}");
+
+        let labels = complete_in(&[MAIN], "connector_type X \"X\" {\n    layout ‸\n}\n");
+        assert_eq!(labels, ["grid", "face"]);
+    }
+
+    #[test]
+    fn layout_grid_body_offers_its_properties() {
+        let labels = complete_in(
+            &[MAIN],
+            "connector_type X \"X\" {\n    layout grid {\n        ‸\n    }\n}\n",
+        );
+        assert_eq!(labels, ["rows", "cols", "numbering"]);
+    }
+
+    #[test]
+    fn layout_face_body_offers_cavity_size_and_large() {
+        let src = "connector_type X \"X\" {\n    layout face {\n        ‸\n    }\n}\n";
+        assert_eq!(complete_in(&[MAIN], src), ["cavity"]);
+
+        let src =
+            "connector_type X \"X\" {\n    layout face {\n        cavity 1 at (0, 0) ‸\n    }\n}\n";
+        assert_eq!(complete_in(&[MAIN], src), ["size"]);
+
+        let src = "connector_type X \"X\" {\n    layout face {\n        cavity 1 at (0, 0) size ‸\n    }\n}\n";
+        assert_eq!(complete_in(&[MAIN], src), ["large"]);
+    }
+
+    #[test]
+    fn relative_paths_walk_up_and_down() {
+        use std::path::Path;
+        assert_eq!(
+            relative_path(
+                Path::new("/p/systems"),
+                Path::new("/p/components/hv/inv.wb")
+            ),
+            "../components/hv/inv.wb"
+        );
+        assert_eq!(
+            relative_path(Path::new("/p"), Path::new("/p/hv.wb")),
+            "hv.wb"
+        );
+    }
 
     #[test]
     fn component_statement_start_offers_member_keywords() {
