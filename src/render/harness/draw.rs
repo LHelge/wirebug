@@ -6,17 +6,17 @@ use svg::node::element::{Circle, Group, Line, Path, Rectangle, Text};
 use super::bezier::{FLEX, flex};
 use super::layout::{CableBox, ConnectorNode, LooseWire};
 use super::{HEADER_HEIGHT, NODE_PAD, PIN_COL_WIDTH, PIN_DOT_RADIUS, ROW_HEIGHT};
-use crate::render::color::iec_code;
+use crate::dsl::ir::WireColor;
 use crate::render::geometry::{Point, Side};
 
 /// A `cable-wire` path with the given SVG path data, stroked in `color`.
 /// The color also rides along as `data-color`, so a host stylesheet can
 /// theme strands by color in embed mode (where the stroke default is gone).
-fn wire_path(d: String, color: &str) -> Path {
+fn wire_path(d: String, color: &WireColor) -> Path {
     Path::new()
         .set("class", "cable-wire")
-        .set("stroke", color)
-        .set("data-color", color)
+        .set("stroke", color.as_str())
+        .set("data-color", color.as_str())
         .set("d", d)
 }
 
@@ -217,8 +217,8 @@ pub(super) fn render_loose(wire: &LooseWire) -> Group {
 /// identifiable in grayscale print where the stroke color doesn't help.
 /// `f64`'s shortest-round-trip formatting already drops a trailing `.0`
 /// (`50.0` → `50`, `0.25` stays `0.25`).
-pub(super) fn wire_annotation(label: Option<&str>, gauge: f64, color: &str) -> String {
-    let tail = format!("{gauge}mm² · {}", iec_code(color));
+pub(super) fn wire_annotation(label: Option<&str>, gauge: f64, color: &WireColor) -> String {
+    let tail = format!("{gauge}mm² · {}", color.code());
     match label {
         Some(l) => format!("{l} · {tail}"),
         None => tail,
@@ -232,12 +232,12 @@ mod tests {
     #[test]
     fn annotation_combines_label_gauge_and_color_code() {
         assert_eq!(
-            wire_annotation(Some("HV+"), 50.0, "orange"),
+            wire_annotation(Some("HV+"), 50.0, &"orange".into()),
             "HV+ · 50mm² · OG"
         );
-        assert_eq!(wire_annotation(None, 0.25, "white"), "0.25mm² · WH");
+        assert_eq!(wire_annotation(None, 0.25, &"white".into()), "0.25mm² · WH");
         assert_eq!(
-            wire_annotation(None, 1.0, "chartreuse"),
+            wire_annotation(None, 1.0, &"chartreuse".into()),
             "1mm² · chartreuse"
         );
     }

@@ -16,7 +16,7 @@ use super::{
     CHAR_WIDTH, LABEL_INSET, MIN_HEIGHT, MIN_WIDTH, SVG_MARGIN, TEXT_BOX_HEIGHT,
     TEXT_BOX_MIN_WIDTH, TEXT_BOX_PAD_X,
 };
-use crate::dsl::ir::{Design, Instance, InstanceName, Pin, Port, PortName};
+use crate::dsl::ir::{Design, Instance, InstanceName, Pin, Port, PortName, WireColor};
 use crate::error::Result;
 use crate::render::geometry::{Point, Side};
 
@@ -133,7 +133,7 @@ pub(super) struct Placement {
 struct Segment {
     a: PortKey,
     b: PortKey,
-    color: String,
+    color: WireColor,
 }
 
 /// A segment resolved for routing and drawing: both placed ports plus the
@@ -141,7 +141,7 @@ struct Segment {
 pub(super) struct Connection<'a> {
     pub(super) a: &'a PlacedPort,
     pub(super) b: &'a PlacedPort,
-    pub(super) color: &'a str,
+    pub(super) color: &'a WireColor,
 }
 
 pub(super) struct ViewBox {

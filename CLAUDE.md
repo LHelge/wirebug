@@ -145,7 +145,7 @@ adds no inference (`src/render/schematic/layout.rs`):
   unlisted ports, and own ports without an enclosure placement drop silently —
   a listed port whose wire lands on such an end shows as a bare stub.
   Each drawn segment carries a `wire-code` annotation — the wire's color
-  as an IEC 60757 code (`render/color.rs`; unknown names pass through
+  as an IEC 60757 code (`ir::WireColor::code`; unknown names pass through
   verbatim), haloed and centred on the segment's longest run.
 - **Enclosure** — an optional `enclosure { }` block draws the subject itself
   as a dashed box *wrapping* the schematic, with the subject's own ports on its
@@ -208,7 +208,7 @@ within the endpoints' x-span, so the curve never overshoots its bounding box
 (no viewbox padding needed). Each strand is stroked with `wire.color` (the SVG
 `stroke`) over a wider black casing path (WireViz's trick, so light
 colors read on any background) and annotated
-`<label> · <gauge>mm² · <color code>` (IEC 60757 via `render/color.rs`).
+`<label> · <gauge>mm² · <color code>` (IEC 60757 via `ir::WireColor::code`).
 
 Two deliberate departures from the schematic's no-inference rule: pin
 **facing** is derived per pin from where its conductor goes (above), and wire

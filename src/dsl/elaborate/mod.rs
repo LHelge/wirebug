@@ -285,7 +285,7 @@ fn elaborate_enclosure_port(ep: &ast::EnclosurePort) -> Option<EnclosurePort> {
 
 fn rewrite_wire(w: &ast::Wire, cable: Option<CableName>) -> Wire {
     Wire {
-        color: w.color.node.as_str().to_string(),
+        color: w.color.node.as_str().into(),
         gauge: w.gauge.node,
         label: w.label.as_ref().map(|l| l.node.clone()),
         endpoints: w
@@ -524,9 +524,17 @@ mod tests {
         let root = m.get(&m.root).unwrap();
 
         // The loose wire is untagged; the cable's conductor carries its name.
-        let loose = root.wires.iter().find(|w| w.color == "black").unwrap();
+        let loose = root
+            .wires
+            .iter()
+            .find(|w| w.color.as_str() == "black")
+            .unwrap();
         assert!(loose.cable.is_none());
-        let conductor = root.wires.iter().find(|w| w.color == "red").unwrap();
+        let conductor = root
+            .wires
+            .iter()
+            .find(|w| w.color.as_str() == "red")
+            .unwrap();
         assert_eq!(conductor.cable.as_ref().map(|c| c.as_str()), Some("feed"));
 
         // The metadata is recorded once, typed, keyed by designator.

@@ -57,6 +57,33 @@ name_newtype!(
     CableName,
     "A cable's designator, grouping its conductor wires."
 );
+name_newtype!(
+    WireColor,
+    "A wire's authored color: a CSS color name, kept verbatim (it doubles as the SVG stroke and `data-color` value)."
+);
+
+impl WireColor {
+    /// The IEC 60757 code for this color (`"white"` → `"WH"`), matched
+    /// case-insensitively. A color outside the standard set passes through
+    /// verbatim, so exotic names stay readable rather than vanishing.
+    pub fn code(&self) -> &str {
+        match self.0.to_ascii_lowercase().as_str() {
+            "black" => "BK",
+            "brown" => "BN",
+            "red" => "RD",
+            "orange" => "OG",
+            "yellow" => "YE",
+            "green" => "GN",
+            "blue" => "BU",
+            "violet" | "purple" => "VT",
+            "gray" | "grey" => "GY",
+            "white" => "WH",
+            "pink" => "PK",
+            "turquoise" => "TQ",
+            _ => &self.0,
+        }
+    }
+}
 
 /// A supported view renderer, or an as-yet unknown kind preserved from the
 /// DSL so render can report it precisely.
@@ -276,7 +303,7 @@ pub struct ConnectorRef {
 /// A wire at one hierarchy level, with resolved endpoints.
 #[derive(Debug)]
 pub struct Wire {
-    pub color: String,
+    pub color: WireColor,
     pub gauge: f64,
     /// Optional signal name, shown on each wire in a harness drawing.
     pub label: Option<String>,
@@ -444,6 +471,26 @@ mod tests {
             Pin::display_list(&[Pin(1), Pin(2), Pin(10)]),
             Some("1,2,10".to_string())
         );
+    }
+
+    #[test]
+    fn wire_color_codes_follow_iec_60757() {
+        assert_eq!(WireColor::from("white").code(), "WH");
+        assert_eq!(WireColor::from("green").code(), "GN");
+        assert_eq!(WireColor::from("gray").code(), "GY");
+        assert_eq!(WireColor::from("grey").code(), "GY");
+        assert_eq!(WireColor::from("purple").code(), "VT");
+    }
+
+    #[test]
+    fn wire_color_code_matching_ignores_case() {
+        assert_eq!(WireColor::from("White").code(), "WH");
+        assert_eq!(WireColor::from("RED").code(), "RD");
+    }
+
+    #[test]
+    fn unknown_wire_color_code_passes_through() {
+        assert_eq!(WireColor::from("chartreuse").code(), "chartreuse");
     }
 
     #[test]

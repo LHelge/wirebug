@@ -432,8 +432,8 @@ component sys {
         let cb = &layout.cable_boxes[0];
         // `green` lands on pin 1 (top, smaller y) so it takes the first row,
         // even though `red` (pin 2) was declared first.
-        assert_eq!(cb.strands[0].color, "green");
-        assert_eq!(cb.strands[1].color, "red");
+        assert_eq!(cb.strands[0].color.as_str(), "green");
+        assert_eq!(cb.strands[1].color.as_str(), "red");
         assert!(cb.strands[0].row_y < cb.strands[1].row_y);
     }
 
