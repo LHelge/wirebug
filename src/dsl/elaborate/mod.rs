@@ -106,8 +106,8 @@ impl Elaborator<'_> {
                         ast::Visibility::Private => Visibility::Private,
                     },
                     connector: facts.connector.as_ref().map(|c| ConnectorRef {
-                        name: c.name.map(ConnectorName::from),
-                        part: c.part.to_string(),
+                        name: ConnectorName::from(c.name),
+                        description: c.description.map(str::to_string),
                         index: c.index,
                     }),
                     pins: facts.pins.clone(),
@@ -150,10 +150,8 @@ impl Elaborator<'_> {
                         }
                     }
                     Member::Connector(conn) => {
-                        if let Some(name) = &conn.name {
-                            let name = ConnectorName::from(name.node.as_str());
-                            connectors.insert(name.clone(), inline_connector(name, conn));
-                        }
+                        let name = ConnectorName::from(conn.name.node.as_str());
+                        connectors.insert(name.clone(), inline_connector(name, conn));
                     }
                     Member::ConnectorInstance(conn) => {
                         let name = ConnectorName::from(conn.name.node.as_str());
@@ -344,7 +342,7 @@ fn inline_connector(name: ConnectorName, conn: &ast::Connector) -> Connector {
     Connector {
         name,
         type_name: None,
-        description: conn.part.node.clone(),
+        description: conn.description.as_ref().map(|d| d.node.clone()),
         properties: IndexMap::new(),
         layout: None,
         pins: conn
@@ -368,7 +366,7 @@ fn typed_connector(
     Connector {
         name,
         type_name: Some(ConnectorTypeName::from(connector_type.name.node.as_str())),
-        description: connector_type.description.node.clone(),
+        description: Some(connector_type.description.node.clone()),
         properties: connector_type
             .properties
             .iter()
@@ -624,7 +622,7 @@ mod tests {
             connector.type_name.as_ref().map(|n| n.as_str()),
             Some("ampseal")
         );
-        assert_eq!(connector.description, "AMPSEAL");
+        assert_eq!(connector.description.as_deref(), Some("AMPSEAL"));
         assert_eq!(
             connector.properties.get("part"),
             Some(&crate::dsl::ir::ConnectorPropertyValue::Str(
@@ -674,7 +672,7 @@ mod tests {
             .expect("connector");
 
         assert!(connector.type_name.is_none());
-        assert_eq!(connector.description, "Legacy 2p");
+        assert_eq!(connector.description.as_deref(), Some("Legacy 2p"));
         assert_eq!(connector.pins.len(), 2);
     }
 

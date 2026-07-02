@@ -383,8 +383,8 @@ pub struct Connector {
     /// `None` for legacy inline connector blocks; reusable connector
     /// instances carry the top-level connector type name.
     pub type_name: Option<ConnectorTypeName>,
-    /// Human-facing connector description or part label.
-    pub description: String,
+    /// Human-facing description of the physical part, when authored.
+    pub description: Option<String>,
     /// Free-form connector metadata inherited from the connector type.
     pub properties: IndexMap<String, ConnectorPropertyValue>,
     /// Optional harness-side pinout layout inherited from the connector type.
@@ -459,8 +459,10 @@ pub enum Visibility {
 /// and its order index among the component's connectors.
 #[derive(Debug, Clone)]
 pub struct ConnectorRef {
-    pub name: Option<ConnectorName>,
-    pub part: String,
+    pub name: ConnectorName,
+    /// Human description of the physical part, when authored (inline
+    /// connectors may omit it; typed connectors inherit the type's).
+    pub description: Option<String>,
     pub index: usize,
 }
 

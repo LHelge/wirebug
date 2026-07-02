@@ -198,7 +198,8 @@ Because the pitch is two steps, the grid must be at least
 The dual of the schematic, WireViz-style — a **trunk-and-bezier** layout. An
 include names a **connector** (`include <inst>.<connector> at (x,y)`), placed
 at its authored centre; that connector becomes a **pin table** (header =
-instance label + `<designator> · <part>`, one row per pin = number + label,
+instance label + `<designator> · <description>` (bare designator when the
+description is unset), one row per pin = number + label,
 ordered by pin), **auto-scoped to the pins that carry a conductor in this
 view** — a 60-cavity control connector shrinks to what the harness uses,
 and an include with no conductors draws as a header-only box (visible, so

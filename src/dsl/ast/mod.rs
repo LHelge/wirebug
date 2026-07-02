@@ -180,13 +180,14 @@ pub struct Port {
     pub span: Span,
 }
 
-/// `connector [<name>] "<part>" { <ports> }` — physical grouping metadata.
-/// The optional name is a reference designator addressing the connector in
-/// a harness view (`include <inst>.<name>`); ports stay flat regardless.
+/// `connector <name> ["<description>"] { <ports> }` — physical grouping
+/// metadata. The name is the reference designator addressing the connector
+/// in harness/pinout views (`include <inst>.<name>`); the optional string
+/// describes the physical part for humans. Ports stay flat regardless.
 #[derive(Debug, Clone)]
 pub struct Connector {
-    pub name: Option<Spanned<Ident>>,
-    pub part: Spanned<String>,
+    pub name: Spanned<Ident>,
+    pub description: Option<Spanned<String>>,
     pub ports: Vec<Port>,
     pub span: Span,
 }

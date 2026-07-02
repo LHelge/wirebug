@@ -4,7 +4,7 @@
 // reports on CAN bus.
 
 component BmsMaster {
-    connector "ISO-SPI 2p" {
+    connector iso_spi "ISO-SPI 2p" {
         pub port iso_spi_h "ISO SPI+" pin 1;
         pub port iso_spi_l "ISO SPI-" pin 2;
     }
@@ -14,7 +14,7 @@ component BmsMaster {
         pub port can_l "CAN L" pin 2;
     }
 
-    connector "Power 4p" {
+    connector power "Power 4p" {
         pub port b_pos "B+" pin 1;
         pub port gnd   "GND" pins [2, 3, 4];
     }

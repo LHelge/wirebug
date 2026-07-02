@@ -283,17 +283,17 @@ where
         .boxed();
 
     let connector = just(Token::Connector)
-        .ignore_then(ident.or_not())
-        .then(string)
+        .ignore_then(ident)
+        .then(string.or_not())
         .then(
             port.clone()
                 .repeated()
                 .collect::<Vec<_>>()
                 .delimited_by(just(Token::LBrace), just(Token::RBrace)),
         )
-        .map_with(|((name, part), ports), e| Connector {
+        .map_with(|((name, description), ports), e| Connector {
             name,
-            part,
+            description,
             ports,
             span: e.span(),
         })
@@ -756,25 +756,27 @@ mod tests {
     #[test]
     fn connector_groups_ports() {
         let file = parse_ok(
-            r#"component c { connector "CAN 4p" { pub port can_h "CAN H" pin 1; pub port can_l "CAN L" pin 2; } }"#,
+            r#"component c { connector can "CAN 4p" { pub port can_h "CAN H" pin 1; pub port can_l "CAN L" pin 2; } }"#,
         );
         let Member::Connector(conn) = &members(&file)[0] else {
             panic!("expected a connector");
         };
-        assert_eq!(conn.part.node, "CAN 4p");
+        assert_eq!(conn.name.node.as_str(), "can");
+        assert_eq!(
+            conn.description.as_ref().map(|d| d.node.as_str()),
+            Some("CAN 4p")
+        );
         assert_eq!(conn.ports.len(), 2);
-        assert!(conn.name.is_none(), "connector designator is optional");
     }
 
     #[test]
-    fn connector_carries_designator() {
-        let file =
-            parse_ok(r#"component c { connector hv "HV DC 2p" { pub port p "DC+" pin 1; } }"#);
+    fn connector_description_is_optional() {
+        let file = parse_ok(r#"component c { connector hv { pub port p "DC+" pin 1; } }"#);
         let Member::Connector(conn) = &members(&file)[0] else {
             panic!("expected a connector");
         };
-        assert_eq!(conn.name.as_ref().map(|n| n.node.as_str()), Some("hv"));
-        assert_eq!(conn.part.node, "HV DC 2p");
+        assert_eq!(conn.name.node.as_str(), "hv");
+        assert!(conn.description.is_none(), "description string is optional");
     }
 
     #[test]

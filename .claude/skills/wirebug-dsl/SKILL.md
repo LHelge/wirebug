@@ -193,7 +193,7 @@ This is more verbose than implicit propagation but does useful work: documents t
 
 ## Connector blocks
 
-A `connector` block groups ports that physically belong to a single connector part (a JST XH 15p, a Deutsch DT06-12S, etc.). The block carries an **optional designator** (a snake_case reference name) and the part description as a string, and contains port declarations with optional pin assignments.
+A `connector` block groups ports that physically belong to a single connector part (a JST XH 15p, a Deutsch DT06-12S, etc.). The block carries a **required designator** (a snake_case reference name), an **optional description** string for the physical part, and contains port declarations with optional pin assignments. (Manufacturer part numbers belong on a `connector_type`'s `part:` property, not in the description string.)
 
 ```
 component CellMonitor {
@@ -212,7 +212,7 @@ component CellMonitor {
 }
 ```
 
-The designator is **optional** but required to address the connector in a harness view (`include <inst>.<designator>`, see Views). Designators must be unique within a component.
+The designator addresses the connector in harness and pinout views (`include <inst>.<designator>`, see Views). Designators must be unique within a component. Like every display string in the language, the description is optional and identifiers are required — same shape as `cable <name> ["<label>"] { }`.
 
 Connectors are **structural metadata, not a namespace**. A port `c0` inside a connector is still referenced as `cell_monitor_instance.c0`, not `cell_monitor_instance.cells.c0` — the designator names the *connector*, not a port scope. The `connector` block carries physical-grouping info (including pin assignments) for the harness renderer and BOM. `pub` is independent — a connector can mix `pub` and non-`pub` ports freely.
 

@@ -235,7 +235,7 @@ impl<'a> Resolver<'a> {
         let exists = self.defs[tid]
             .ports
             .values()
-            .any(|p| p.connector.and_then(|c| c.name) == Some(wanted));
+            .any(|p| p.connector.map(|c| c.name) == Some(wanted));
         if !exists {
             problems.push(Problem::UnknownConnector {
                 name: wanted.to_string(),
@@ -294,7 +294,7 @@ impl<'a> Resolver<'a> {
                 || self.defs[f]
                     .ports
                     .values()
-                    .any(|p| p.connector.and_then(|c| c.name) == Some(wanted))
+                    .any(|p| p.connector.map(|c| c.name) == Some(wanted))
         })
     }
 

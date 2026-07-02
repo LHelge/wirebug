@@ -40,12 +40,13 @@ pub struct PortFacts<'a> {
     pub span: Span,
 }
 
-/// A port's connector grouping: the optional designator, part description,
-/// and its order index among the component's connectors.
+/// A port's connector grouping: the designator, the optional human
+/// description of the physical part, and its order index among the
+/// component's connectors.
 #[derive(Clone, Copy)]
 pub struct ConnectorRef<'a> {
-    pub name: Option<&'a str>,
-    pub part: &'a str,
+    pub name: &'a str,
+    pub description: Option<&'a str>,
     pub index: usize,
 }
 
@@ -282,33 +283,27 @@ impl<'a> Resolver<'a> {
             match member {
                 Member::Port(port) => self.add_port(&mut ports, port, None, file),
                 Member::Connector(conn) => {
-                    let name = conn.name.as_ref().map(|n| n.node.as_str());
-                    if let (Some(n), Some(named)) = (name, conn.name.as_ref()) {
-                        if let Some(&first) = connector_names.get(n) {
-                            self.problems.push(Problem::DuplicateConnectorName {
-                                name: n.to_string(),
-                                src: self.project.source(file),
-                                at: named.span.into(),
-                                first: first.into(),
-                            });
-                        } else {
-                            connector_names.insert(n, named.span);
-                        }
+                    let name = conn.name.node.as_str();
+                    if let Some(&first) = connector_names.get(name) {
+                        self.problems.push(Problem::DuplicateConnectorName {
+                            name: name.to_string(),
+                            src: self.project.source(file),
+                            at: conn.name.span.into(),
+                            first: first.into(),
+                        });
+                    } else {
+                        connector_names.insert(name, conn.name.span);
                     }
                     let cref = ConnectorRef {
                         name,
-                        part: conn.part.node.as_str(),
+                        description: conn.description.as_ref().map(|d| d.node.as_str()),
                         index: connector_index,
                     };
                     connector_index += 1;
                     for port in &conn.ports {
                         self.add_port(&mut ports, port, Some(cref), file);
                     }
-                    self.check_duplicate_pins(
-                        name.unwrap_or(conn.part.node.as_str()),
-                        &conn.ports,
-                        file,
-                    );
+                    self.check_duplicate_pins(name, &conn.ports, file);
                 }
                 Member::ConnectorInstance(conn) => {
                     let name = ConnectorName::from(conn.name.node.as_str());
@@ -331,11 +326,11 @@ impl<'a> Resolver<'a> {
                         );
                     }
                     // Same flat port declarations as an inline connector; the
-                    // part string comes from the connector type, resolved
+                    // description comes from the connector type, resolved
                     // later — `apply_connector_types` fills it in.
                     let cref = ConnectorRef {
-                        name: Some(conn.name.node.as_str()),
-                        part: "",
+                        name: conn.name.node.as_str(),
+                        description: None,
                         index: connector_index,
                     };
                     connector_index += 1;
@@ -819,9 +814,9 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    /// Fill each typed connector's port `ConnectorRef.part` from its
-    /// resolved connector type. Pass 1 registered the ports with an empty
-    /// part — the type wasn't resolved yet.
+    /// Fill each typed connector's port `ConnectorRef.description` from its
+    /// resolved connector type. Pass 1 registered the ports without one —
+    /// the type wasn't resolved yet.
     fn apply_connector_types(&mut self) {
         for d in 0..self.defs.len() {
             let typed: Vec<(&'a str, &'a str, Vec<PortName>)> = self.defs[d]
@@ -841,16 +836,16 @@ impl<'a> Resolver<'a> {
                     ))
                 })
                 .collect();
-            for (connector_name, part, port_names) in typed {
+            for (connector_name, description, port_names) in typed {
                 for name in port_names {
                     // A duplicate-named port kept the *first* declaration in
                     // the registry; the name guard skips it if that one
                     // belongs to a different connector.
                     if let Some(port) = self.defs[d].ports.get_mut(&name)
                         && let Some(cref) = &mut port.connector
-                        && cref.name == Some(connector_name)
+                        && cref.name == connector_name
                     {
-                        cref.part = part;
+                        cref.description = Some(description);
                     }
                 }
             }
@@ -1003,7 +998,7 @@ mod tests {
     fn duplicate_port_across_connectors_is_reported() {
         let p = problems(&[(
             "main.wb",
-            "component m { pub port a \"A\"; connector \"C\" { pub port a \"A2\" pin 1; } }\n",
+            "component m { pub port a \"A\"; connector c \"C\" { pub port a \"A2\" pin 1; } }\n",
         )]);
         assert!(has(&p, "wirebug::duplicate_port"), "{:?}", codes(&p));
     }

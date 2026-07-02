@@ -436,11 +436,15 @@ struct ViewBox {
 }
 
 fn connector_subtitle(connector: &Connector) -> String {
-    match connector.properties.get("part") {
-        Some(crate::dsl::ir::ConnectorPropertyValue::Str(part)) => {
-            format!("{} · {}", connector.description, part)
-        }
-        _ => connector.description.clone(),
+    let part = match connector.properties.get("part") {
+        Some(crate::dsl::ir::ConnectorPropertyValue::Str(part)) => Some(part.as_str()),
+        _ => None,
+    };
+    match (connector.description.as_deref(), part) {
+        (Some(d), Some(p)) => format!("{d} · {p}"),
+        (Some(d), None) => d.to_string(),
+        (None, Some(p)) => p.to_string(),
+        (None, None) => String::new(),
     }
 }
 

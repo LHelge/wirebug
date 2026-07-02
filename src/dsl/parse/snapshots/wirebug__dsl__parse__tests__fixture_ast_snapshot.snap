@@ -1,6 +1,6 @@
 ---
 source: src/dsl/parse/mod.rs
-assertion_line: 1232
+assertion_line: 1327
 expression: file
 ---
 File {
@@ -77,10 +77,10 @@ File {
                     ),
                     Connector(
                         Connector {
-                            name: Some(
-                                hv @ 157..159,
+                            name: hv @ 157..159,
+                            description: Some(
+                                "HV 2p" @ 160..167,
                             ),
-                            part: "HV 2p" @ 160..167,
                             ports: [
                                 Port {
                                     visibility: Public,

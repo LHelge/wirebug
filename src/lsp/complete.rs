@@ -86,7 +86,7 @@ pub(crate) fn build_index(project: &Project, resolved: &Resolved) -> CompletionI
                 label: facts.label.to_string(),
                 public: facts.visibility == crate::dsl::ast::Visibility::Public,
             });
-            if let Some(designator) = facts.connector.as_ref().and_then(|c| c.name)
+            if let Some(designator) = facts.connector.as_ref().map(|c| c.name)
                 && !entry.connectors.iter().any(|c| c == designator)
             {
                 entry.connectors.push(designator.to_string());

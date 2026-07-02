@@ -93,7 +93,7 @@ Problems are reported with source snippets and carets (via miette); a clean run 
 
 **Port** — a named connection point with a human-readable label. `pub` exposes it to instantiators; visibility does not propagate automatically — a parent re-exports by declaring its own `pub` port and wiring it through.
 
-**Connector** — physical grouping metadata (a part description and pin assignments). It is *not* a namespace: a port `c0` inside a connector is still referenced as `instance.c0`, and port names are unique across the whole component. Reusable `connector_type` definitions can carry shared metadata and pinout layout, then components instantiate them with the same port-declaration body as an inline connector: `connector x1: TypeName { pub port a "A" pin 1; }`.
+**Connector** — physical grouping metadata (a required designator, an optional part description, and pin assignments). It is *not* a namespace: a port `c0` inside a connector is still referenced as `instance.c0`, and port names are unique across the whole component. Reusable `connector_type` definitions can carry shared metadata and pinout layout, then components instantiate them with the same port-declaration body as an inline connector: `connector x1: TypeName { pub port a "A" pin 1; }`.
 
 **Instance** — a placement of a component type, with a name (used in wires) and an optional label (shown in diagrams).
 

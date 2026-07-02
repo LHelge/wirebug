@@ -9,7 +9,7 @@ component CellModule {
         pub port hv_pos "HV+";
         pub port hv_neg "HV-";
 
-        connector "Measurement 13p" {
+        connector meas "Measurement 13p" {
             pub port c0  "C0" pin 1;
             pub port c1  "C1" pin 2;
             pub port c2  "C2" pin 3;
@@ -27,7 +27,7 @@ component CellModule {
     }
 
     component BmsSlave {
-        connector "Cell taps 9p" {
+        connector cells "Cell taps 9p" {
             pub port c0  "C0" pin 1;
             pub port c1  "C1" pin 2;
             pub port c2  "C2" pin 3;
@@ -39,19 +39,19 @@ component CellModule {
             pub port c8  "C8" pin 9;
         }
 
-        connector "Temperature 4p" {
+        connector temp "Temperature 4p" {
             pub port ntc1_p "NTC1+" pin 1;
             pub port ntc1_n "NTC1-" pin 2;
             pub port ntc2_p "NTC2+" pin 3;
             pub port ntc2_n "NTC2-" pin 4;
         }
 
-        connector "ISO-SPI up 2p" {
+        connector iso_up "ISO-SPI up 2p" {
             pub port iso_spi_up_h "ISO UP+" pin 1;
             pub port iso_spi_up_l "ISO UP-" pin 2;
         }
 
-        connector "ISO-SPI down 2p" {
+        connector iso_down "ISO-SPI down 2p" {
             pub port iso_spi_down_h "ISO DN+" pin 1;
             pub port iso_spi_down_l "ISO DN-" pin 2;
         }

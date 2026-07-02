@@ -181,7 +181,7 @@ impl HarnessLayout {
                 return None;
             };
             let child = subject.children.get(instance).and_then(|p| design.get(p))?;
-            let conn = child.ports.get(port)?.connector.as_ref()?.name.clone()?;
+            let conn = child.ports.get(port)?.connector.as_ref()?.name.clone();
             let key = (instance.clone(), conn);
             included.contains(&key).then_some((key, port.clone()))
         };
@@ -227,7 +227,7 @@ impl HarnessLayout {
                 return None;
             };
             let child = subject.children.get(instance).and_then(|p| design.get(p))?;
-            let conn = child.ports.get(port)?.connector.as_ref()?.name.clone()?;
+            let conn = child.ports.get(port)?.connector.as_ref()?.name.clone();
             let &ni = index.get(&(instance.clone(), conn))?;
             let ri = nodes[ni].pins.iter().position(|r| &r.port == port)?;
             Some((ni, ri))
@@ -440,19 +440,20 @@ fn build_node(
     cx: f64,
     cy: f64,
 ) -> Option<ConnectorNode> {
-    let mut part = None;
+    // `found` (the connector exists on this child, with its optional
+    // description) comes from any port of the connector, so a fully
+    // unwired include still draws (as a header-only box); the rows are
+    // auto-scoped to the view's wired pins.
+    let mut found: Option<Option<String>> = None;
     let mut rows: Vec<(PortName, Option<String>, String, Option<u32>)> = Vec::new();
     for (name, port) in &child.ports {
         let Some(cref) = &port.connector else {
             continue;
         };
-        if cref.name.as_ref() != Some(conn) {
+        if &cref.name != conn {
             continue;
         }
-        // The part comes from any port of the connector, so a fully
-        // unwired include still draws (as a header-only box); the rows
-        // are auto-scoped to the view's wired pins.
-        part.get_or_insert_with(|| cref.part.clone());
+        found.get_or_insert_with(|| cref.description.clone());
         if !visible.contains(name) {
             continue;
         }
@@ -463,7 +464,7 @@ fn build_node(
             port.pins.first().map(|p| p.0),
         ));
     }
-    let part = part?;
+    let description = found?;
 
     // Order by first pin number; ports without a pin keep their relative
     // (source) order, after the numbered ones.
@@ -478,7 +479,10 @@ fn build_node(
         .label
         .clone()
         .unwrap_or_else(|| child.type_name.to_string());
-    let subtitle = format!("{conn} · {part}");
+    let subtitle = match &description {
+        Some(d) => format!("{conn} · {d}"),
+        None => conn.to_string(),
+    };
 
     let widest_label = rows.iter().map(|r| r.2.chars().count()).max().unwrap_or(0);
     let body_width = PIN_COL_WIDTH + widest_label as f64 * CHAR_WIDTH + 2.0 * NODE_PAD;
@@ -852,8 +856,8 @@ component Root {
                     label: "P".into(),
                     visibility: Visibility::Public,
                     connector: Some(ConnectorRef {
-                        name: Some(connector.clone()),
-                        part: "J1".into(),
+                        name: connector.clone(),
+                        description: Some("J1".into()),
                         index: 0,
                     }),
                     pins: vec![Pin(1)],
@@ -886,8 +890,8 @@ component Root {
                     label: name.to_uppercase(),
                     visibility: Visibility::Public,
                     connector: Some(ConnectorRef {
-                        name: Some(connector.clone()),
-                        part: "J1".into(),
+                        name: connector.clone(),
+                        description: Some("J1".into()),
                         index: 0,
                     }),
                     pins: vec![Pin(pin)],

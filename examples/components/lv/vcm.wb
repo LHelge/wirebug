@@ -19,19 +19,19 @@ component Vcm {
         pub port can2_l "CAN2 L" pin 2;
     }
 
-    connector "12V 2p" {
+    connector lv "12V 2p" {
         pub port b_pos "B+" pin 1;
         pub port gnd   "GND" pin 2;
     }
 
-    connector "Accelerator 4p" {
+    connector accel "Accelerator 4p" {
         pub port accel_1   "ACCEL 1" pin 1;
         pub port accel_2   "ACCEL 2" pin 2;
         pub port accel_gnd "ACCEL GND" pin 3;
         pub port accel_5v  "ACCEL 5V" pin 4;
     }
 
-    connector "Brake 2p" {
+    connector brake "Brake 2p" {
         pub port brake_1 "BRAKE 1" pin 1;
         pub port brake_2 "BRAKE 2" pin 2;
     }
