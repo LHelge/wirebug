@@ -81,7 +81,7 @@ component FrontBattery {
     // Same twisted-pair colors as the vehicle bus it joins.
 
     wire white/blue 0.5 [can_h, bms.can_h];
-    wire blue/white 0.5 [can_l, bms.can_l];
+    wire white/red 0.5 [can_l, bms.can_l];
 
     // --- 12V power ---
 
