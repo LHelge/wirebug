@@ -45,6 +45,10 @@ pub(super) const CHAR_WIDTH: f64 = 7.0;
 /// Nominal glyph advance of the 9px `cable-label` font, for sizing a
 /// braided box's label zones (narrower than the table fonts' CHAR_WIDTH).
 pub(super) const LABEL_CHAR_WIDTH: f64 = 5.5;
+/// Space between a cable box's header band and its first strand row, so
+/// the row's annotation (drawn above the wire, halo included) clears the
+/// header instead of overlapping its bottom edge.
+pub(super) const CABLE_LABEL_PAD: f64 = 12.0;
 /// Radius of the dot marking a pin's cable attach point.
 pub(super) const PIN_DOT_RADIUS: f64 = 3.0;
 /// Minimum vertical gap between two cable boxes stacked on the spine.
