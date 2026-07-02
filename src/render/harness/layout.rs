@@ -18,8 +18,8 @@ use indexmap::IndexMap;
 
 use super::draw::wire_annotation;
 use super::{
-    CABLE_GAP, CHAR_WIDTH, HEADER_HEIGHT, MIN_NODE_WIDTH, NODE_PAD, PIN_COL_WIDTH, ROW_HEIGHT,
-    SVG_MARGIN,
+    BRAID_SECTION, CABLE_GAP, CHAR_WIDTH, HEADER_HEIGHT, LABEL_CHAR_WIDTH, MIN_NODE_WIDTH,
+    NODE_PAD, PIN_COL_WIDTH, ROW_HEIGHT, SVG_MARGIN,
 };
 use crate::dsl::ir::{
     CableMeta, CableName, ConnectorName, Design, Instance, InstanceName, Pin, PortName, WireColor,
@@ -512,18 +512,26 @@ fn build_cable_box(
         .sum::<f64>()
         / n;
 
-    let widest = strands
+    let annotation_widths: Vec<f64> = strands
         .iter()
         .map(|s| {
             wire_annotation(s.label.as_deref(), s.gauge, &s.color)
                 .chars()
-                .count()
+                .count() as f64
+                * LABEL_CHAR_WIDTH
         })
-        .max()
-        .unwrap_or(0)
-        .max(title.chars().count())
-        .max(subtitle.chars().count());
-    let width = (widest as f64 * CHAR_WIDTH + 2.0 * NODE_PAD).max(MIN_NODE_WIDTH);
+        .collect();
+    let twisted = meta.is_some_and(|m| m.twisted);
+    let header = title.chars().count().max(subtitle.chars().count()) as f64 * CHAR_WIDTH;
+    // A braided (two-strand twisted) box lays out label zone · braid ·
+    // label zone side by side, so it must be wide enough for all three;
+    // a straight box only needs its widest single annotation.
+    let content = if twisted && annotation_widths.len() == 2 {
+        annotation_widths[0] + annotation_widths[1] + BRAID_SECTION + 2.0 * NODE_PAD
+    } else {
+        annotation_widths.iter().copied().fold(0.0, f64::max)
+    };
+    let width = (content.max(header) + 2.0 * NODE_PAD).max(MIN_NODE_WIDTH);
     let height = HEADER_HEIGHT + strands.len() as f64 * ROW_HEIGHT;
     let origin = Point::new(spine_x - width / 2.0, cy - height / 2.0);
 
@@ -545,7 +553,7 @@ fn build_cable_box(
         origin,
         width,
         height,
-        twisted: meta.is_some_and(|m| m.twisted),
+        twisted,
         strands,
     };
     cable_box.place_rows();

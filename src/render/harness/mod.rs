@@ -42,10 +42,21 @@ pub(super) const NODE_PAD: f64 = 10.0;
 pub(super) const MIN_NODE_WIDTH: f64 = 120.0;
 /// Nominal glyph advance for sizing label/title columns.
 pub(super) const CHAR_WIDTH: f64 = 7.0;
+/// Nominal glyph advance of the 9px `cable-label` font, for sizing a
+/// braided box's label zones (narrower than the table fonts' CHAR_WIDTH).
+pub(super) const LABEL_CHAR_WIDTH: f64 = 5.5;
 /// Radius of the dot marking a pin's cable attach point.
 pub(super) const PIN_DOT_RADIUS: f64 = 3.0;
 /// Minimum vertical gap between two cable boxes stacked on the spine.
 pub(super) const CABLE_GAP: f64 = 24.0;
+/// Nominal width of one half-twist in a braided (twisted-pair) box run.
+pub(super) const TWIST_PITCH: f64 = 28.0;
+/// Half-twists in the symbolic braid section — the drafting idiom is a few
+/// visible twists, not a full-length weave. Even, so each strand exits the
+/// section on the row it entered.
+pub(super) const BRAID_HALF_TWISTS: usize = 4;
+/// Width of the symbolic braid section between the two label zones.
+pub(super) const BRAID_SECTION: f64 = BRAID_HALF_TWISTS as f64 * TWIST_PITCH;
 pub(super) const SVG_MARGIN: f64 = 48.0;
 pub(super) const TITLE_GAP: f64 = 12.0;
 
@@ -62,6 +73,8 @@ const STYLE: &str = "\
 .cable-wire { fill: none; stroke-width: 2; }
 .cable-wire-tracer { fill: none; stroke-width: 2; stroke-dasharray: 4 4; }
 .cable-label { font: 9px sans-serif; text-anchor: middle; fill: #333; paint-order: stroke; stroke: white; stroke-width: 3px; stroke-linejoin: round; }
+.cable-label-start { text-anchor: start; }
+.cable-label-end { text-anchor: end; }
 .title { font: bold 14px sans-serif; }
 .stamp { font: 10px sans-serif; fill: #666; text-anchor: end; }\
 ";
@@ -340,6 +353,14 @@ component sys {{
             cable_wire_curve_segments(&straight)
         );
         assert!(straight.contains(" L"), "straight run kept its line");
+
+        // Braided labels leave the noisy centre: they anchor over the
+        // straight ends, first strand left, second right. Straight boxes
+        // keep the centred label (no anchor modifier).
+        assert!(twisted.contains("class=\"cable-label cable-label-start\""));
+        assert!(twisted.contains("class=\"cable-label cable-label-end\""));
+        // (Class-attribute form: the selector always exists in the style block.)
+        assert!(!straight.contains("class=\"cable-label cable-label-start\""));
     }
 
     #[test]
