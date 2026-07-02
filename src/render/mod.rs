@@ -119,6 +119,32 @@ pub const INDEX_FILENAME: &str = "index.html";
 /// rendering in embed mode.
 pub const EMBED_MANIFEST_FILENAME: &str = "manifest.json";
 
+/// File name for the companion stylesheet written alongside the embed
+/// manifest.
+pub const EMBED_STYLESHEET_FILENAME: &str = "wirebug.css";
+
+/// The embed-mode companion stylesheet: every renderer's built-in rules,
+/// re-scoped under the class its embed root carries (`.wirebug-schematic`
+/// etc.), so linking it reproduces the standalone look. It is a starting
+/// point for theming — a host copies it into its own assets and edits the
+/// copy; the embed output directory is generated and disposable.
+#[must_use]
+pub fn embed_stylesheet() -> String {
+    let sections = [
+        ("schematic", schematic::STYLE),
+        ("harness", harness::STYLE),
+        ("pinout", pinout::STYLE),
+    ];
+    let mut css = String::new();
+    for (kind, style) in sections {
+        // Each built-in STYLE is one `selector { body }` rule per line.
+        for rule in style.lines() {
+            css.push_str(&format!(".wirebug-{kind} {rule}\n"));
+        }
+    }
+    css
+}
+
 /// Serialized shape of [`EMBED_MANIFEST_FILENAME`]: the project's identity
 /// (or `null` for a synthetic design) plus the list of rendered views in
 /// declaration order. Borrows from the data so a host needs only to call
@@ -126,6 +152,9 @@ pub const EMBED_MANIFEST_FILENAME: &str = "manifest.json";
 #[derive(Debug, Serialize)]
 pub struct EmbedManifest<'a> {
     pub project: Option<&'a Manifest>,
+    /// File name of the companion stylesheet (a sibling of the manifest),
+    /// so a host discovers it the same way it discovers views.
+    pub stylesheet: &'static str,
     pub views: Vec<EmbedManifestView<'a>>,
 }
 
@@ -145,6 +174,7 @@ pub fn embed_manifest<'a>(
 ) -> EmbedManifest<'a> {
     EmbedManifest {
         project,
+        stylesheet: EMBED_STYLESHEET_FILENAME,
         views: views
             .iter()
             .map(|v| EmbedManifestView {
@@ -394,6 +424,23 @@ mod tests {
     }
 
     #[test]
+    fn embed_stylesheet_scopes_every_rule_under_its_kind() {
+        let css = embed_stylesheet();
+        // One section per renderer, each rule prefixed with its embed
+        // root's class.
+        assert!(css.contains(".wirebug-schematic .component rect {"));
+        assert!(css.contains(".wirebug-harness .cable-wire {"));
+        assert!(css.contains(".wirebug-pinout .cavity {"));
+        // No rule escapes its scope.
+        for line in css.lines().filter(|l| !l.is_empty()) {
+            assert!(
+                line.starts_with(".wirebug-"),
+                "unscoped stylesheet rule: {line}"
+            );
+        }
+    }
+
+    #[test]
     fn manifest_lists_each_view_with_title_filename_kind() {
         let views = vec![
             view("HV Overview", "hv_overview.svg", "schematic"),
@@ -405,6 +452,7 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("re-parses");
 
         assert!(parsed["project"].is_null());
+        assert_eq!(parsed["stylesheet"], EMBED_STYLESHEET_FILENAME);
         let entries = parsed["views"].as_array().expect("views array");
         assert_eq!(entries.len(), 3);
         // Order matches the input (view declaration order from the design).

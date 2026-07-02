@@ -28,7 +28,7 @@ const CHAR_WIDTH: f64 = 7.0;
 const SVG_MARGIN: f64 = 48.0;
 const TITLE_GAP: f64 = 12.0;
 
-const STYLE: &str = "\
+pub(super) const STYLE: &str = "\
 .pinout rect { fill: white; stroke: black; stroke-width: 1.5; }
 .pinout .header { fill: #f0f0f0; }
 .pinout-title { font: bold 13px sans-serif; text-anchor: middle; }

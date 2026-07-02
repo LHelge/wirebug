@@ -25,7 +25,10 @@ Four CLI commands share it:
   Helvetica-Bold title header, plus a Courier footer with the identity
   stamp and a `n / total` page number — so every page reads the same
   regardless of view scale); `--embed` emits host-styled "naked" SVGs
-  plus a `manifest.json` sidecar in place of the HTML index (see below).
+  plus a `manifest.json` sidecar in place of the HTML index (see below)
+  and a `wirebug.css` starter stylesheet (`render::embed_stylesheet` —
+  the built-in styles re-scoped under `.wirebug-{kind}`, referenced from
+  the manifest's `stylesheet` field; hosts copy and theme it).
   The legacy YAML model/view loader has been removed; `ir::Design` is the
   only thing the renderer consumes.
 - **`serve` (`src/serve/`)** — a live-reloading dev server. Renders the

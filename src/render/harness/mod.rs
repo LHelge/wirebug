@@ -65,7 +65,7 @@ pub(super) const BRAID_SECTION: f64 = BRAID_HALF_TWISTS as f64 * TWIST_PITCH;
 pub(super) const SVG_MARGIN: f64 = 48.0;
 pub(super) const TITLE_GAP: f64 = 12.0;
 
-const STYLE: &str = "\
+pub(super) const STYLE: &str = "\
 .connector rect { fill: white; stroke: black; stroke-width: 1.5; }
 .connector .header { fill: #f0f0f0; }
 .connector-title { font: bold 13px sans-serif; text-anchor: middle; }

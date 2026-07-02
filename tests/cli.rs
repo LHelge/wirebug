@@ -175,6 +175,13 @@ fn render_embed_writes_manifest_and_no_index() {
     let manifest: serde_json::Value =
         serde_json::from_str(&manifest_src).expect("manifest is valid JSON");
     assert_eq!(manifest["project"]["name"], "aphid-evpack");
+
+    // A companion stylesheet reproduces the standalone look, scoped under
+    // the classes the embed roots carry, and the manifest points at it.
+    assert_eq!(manifest["stylesheet"], "wirebug.css");
+    let css = std::fs::read_to_string(out.join("wirebug.css")).expect("stylesheet written");
+    assert!(css.contains(".wirebug-schematic .component rect {"));
+    assert!(css.contains(".wirebug-harness .connector rect {"));
     let views = manifest["views"].as_array().expect("views array");
     let first = &views[0];
     assert_eq!(first["title"], "HV System Overview");

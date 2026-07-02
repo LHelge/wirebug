@@ -247,6 +247,11 @@ fn render_command(
             wirebug::render::EMBED_MANIFEST_FILENAME,
             json.as_bytes(),
         )?;
+        write_file(
+            out_dir,
+            wirebug::render::EMBED_STYLESHEET_FILENAME,
+            wirebug::render::embed_stylesheet().as_bytes(),
+        )?;
         path
     } else {
         let index = wirebug::index_html(&index_views, design.manifest.as_ref(), false)

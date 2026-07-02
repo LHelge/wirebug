@@ -46,7 +46,7 @@ pub(super) const TEXT_BOX_MIN_WIDTH: f64 = 80.0;
 pub(super) const TEXT_BOX_HEIGHT: f64 = 34.0;
 pub(super) const TEXT_BOX_PAD_X: f64 = 12.0;
 
-const STYLE: &str = "\
+pub(super) const STYLE: &str = "\
 .component rect { fill: white; stroke: black; stroke-width: 1.5; }
 .component-label { font: bold 13px sans-serif; text-anchor: middle; }
 .port circle { fill: black; }
