@@ -620,6 +620,26 @@ pub enum Problem {
         #[label("pin here has no connector")]
         at: SourceSpan,
     },
+
+    /// A wire color outside the IEC 60757 vocabulary. It still renders
+    /// (stroke and code pass through verbatim), but it has no standard
+    /// code and won't match real wire stock.
+    #[error("unknown wire color `{name}`")]
+    #[diagnostic(
+        severity(Warning),
+        code(wirebug::unknown_wire_color),
+        help(
+            "use an IEC 60757 color: black, brown, red, orange, yellow, green, \
+             blue, violet, grey, white, pink, turquoise, gold, silver"
+        )
+    )]
+    UnknownWireColor {
+        name: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("not an IEC 60757 color name")]
+        at: SourceSpan,
+    },
 }
 
 impl Problem {
