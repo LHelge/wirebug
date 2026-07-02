@@ -947,8 +947,12 @@ mod tests {
             std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/main.wb"))
                 .unwrap();
         let live = disk.replace(
-            "    wire blue 0.5 [front.can_h, rear.can_h, charger.can_h, vcm.can2_h];",
-            "    wire blue 0.5 [front.‸];",
+            "        wire white/blue 0.5 \"CAN2 H\" [front.can_h, rear.can_h];",
+            "        wire white/blue 0.5 \"CAN2 H\" [front.‸];",
+        );
+        assert_ne!(
+            live, disk,
+            "replacement target must exist in examples/main.wb"
         );
         let labels = examples_complete("examples/main.wb", &live);
         assert!(labels.iter().any(|l| l == "can_h"), "{labels:?}");
