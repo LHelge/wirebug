@@ -4,7 +4,13 @@
   "description": "Language support for the wirebug electrical schematic and wiring harness DSL (.wb)",
   "version": "0.1.0",
   "publisher": "wirebug",
+  "license": "(MIT OR Apache-2.0)",
   "icon": "icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/LHelge/wirebug.git",
+    "directory": "editors/vscode"
+  },
   "engines": {
     "vscode": "^1.90.0"
   },
