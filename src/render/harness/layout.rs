@@ -2,17 +2,20 @@
 //! nodes (pin tables) plus a central spine of cable boxes, ready for the
 //! bezier wire router in `draw`.
 //!
-//! A harness include names `instance.connector`; the node is that whole
-//! connector, drawn as a table of pin rows at its authored `(x, y)`. The
-//! renderer derives a vertical **spine** midway between the connectors; each
-//! node faces the spine, declared cables stack along it as boxes, and wires
-//! run pin → cable → pin (or pin → pin for loose wires). Each subject wire is
-//! chain-decomposed into consecutive pairs (`[a, b, c]` → `a–b, b–c`); a pair
-//! is kept only when both ends land on *included* connectors. Connectorless
-//! ports, `Own` ends, and ends on excluded connectors drop silently.
+//! A harness include names `instance.connector`; the node is drawn as a
+//! table of pin rows at its authored `(x, y)`, **auto-scoped to the pins
+//! that carry a conductor in this view** — a large control connector
+//! shrinks to what the harness actually uses, and an include with no
+//! conductors draws as a header-only box. The renderer derives a vertical
+//! **spine** midway between the connectors; each node faces the spine,
+//! declared cables stack along it as boxes, and wires run pin → cable → pin
+//! (or pin → pin for loose wires). Each subject wire is chain-decomposed
+//! into consecutive pairs (`[a, b, c]` → `a–b, b–c`); a pair is kept only
+//! when both ends land on *included* connectors. Connectorless ports, `Own`
+//! ends, and ends on excluded connectors drop silently.
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use indexmap::IndexMap;
 
@@ -165,6 +168,39 @@ impl HarnessLayout {
         let mut nodes = Vec::new();
         let mut index: HashMap<NodeKey, usize> = HashMap::new();
 
+        // Auto-scope pre-pass: which ports of each included connector carry
+        // a conductor in this view. Mirrors `locate` below, but keyed by
+        // names — the nodes it scopes don't exist yet.
+        let included: HashSet<NodeKey> = view
+            .includes
+            .iter()
+            .filter_map(|inc| Some((inc.instance.clone(), inc.connector.clone()?)))
+            .collect();
+        let end_key = |end: &WireEnd| -> Option<(NodeKey, PortName)> {
+            let WireEnd::Child { instance, port } = end else {
+                return None;
+            };
+            let child = subject.children.get(instance).and_then(|p| design.get(p))?;
+            let conn = child.ports.get(port)?.connector.as_ref()?.name.clone()?;
+            let key = (instance.clone(), conn);
+            included.contains(&key).then_some((key, port.clone()))
+        };
+        let mut wired: HashMap<NodeKey, HashSet<PortName>> = HashMap::new();
+        for wire in &subject.wires {
+            for pair in wire.endpoints.windows(2) {
+                let (Some((ka, pa)), Some((kb, pb))) = (end_key(&pair[0]), end_key(&pair[1]))
+                else {
+                    continue;
+                };
+                if ka == kb {
+                    continue; // a wire within one connector isn't a cable
+                }
+                wired.entry(ka).or_default().insert(pa);
+                wired.entry(kb).or_default().insert(pb);
+            }
+        }
+
+        let no_pins = HashSet::new();
         for inc in &view.includes {
             let Some(conn) = &inc.connector else { continue };
             let Some(child) = subject
@@ -174,7 +210,10 @@ impl HarnessLayout {
             else {
                 continue;
             };
-            let Some(node) = build_node(child, conn, inc.x * step, inc.y * step) else {
+            let visible = wired
+                .get(&(inc.instance.clone(), conn.clone()))
+                .unwrap_or(&no_pins);
+            let Some(node) = build_node(child, conn, visible, inc.x * step, inc.y * step) else {
                 continue;
             };
             index.insert((inc.instance.clone(), conn.clone()), nodes.len());
@@ -394,7 +433,13 @@ pub(super) struct ViewBox {
 /// Build one connector node from `child`'s ports that belong to connector
 /// `conn`, centred at world (`cx`, `cy`). Returns `None` if the connector
 /// has no ports on this instance (already reported by resolve as unknown).
-fn build_node(child: &Instance, conn: &ConnectorName, cx: f64, cy: f64) -> Option<ConnectorNode> {
+fn build_node(
+    child: &Instance,
+    conn: &ConnectorName,
+    visible: &HashSet<PortName>,
+    cx: f64,
+    cy: f64,
+) -> Option<ConnectorNode> {
     let mut part = None;
     let mut rows: Vec<(PortName, Option<String>, String, Option<u32>)> = Vec::new();
     for (name, port) in &child.ports {
@@ -404,7 +449,13 @@ fn build_node(child: &Instance, conn: &ConnectorName, cx: f64, cy: f64) -> Optio
         if cref.name.as_ref() != Some(conn) {
             continue;
         }
+        // The part comes from any port of the connector, so a fully
+        // unwired include still draws (as a header-only box); the rows
+        // are auto-scoped to the view's wired pins.
         part.get_or_insert_with(|| cref.part.clone());
+        if !visible.contains(name) {
+            continue;
+        }
         rows.push((
             name.clone(),
             Pin::display_list(&port.pins),
@@ -816,8 +867,55 @@ component Root {
             connectors: IndexMap::new(),
         };
 
-        let node = build_node(&instance, &connector, 0.0, 0.0).expect("node");
+        let visible: HashSet<PortName> = [PortName::from("p")].into_iter().collect();
+        let node = build_node(&instance, &connector, &visible, 0.0, 0.0).expect("node");
         let expected = title.chars().count() as f64 * CHAR_WIDTH + 2.0 * NODE_PAD;
         assert!(node.width >= expected);
+    }
+
+    /// Auto-scope: a pin outside the view's wired set is dropped from the
+    /// table; an empty set keeps the node as a header-only box.
+    #[test]
+    fn node_rows_scope_to_the_visible_set() {
+        let connector = ConnectorName::from("j1");
+        let port = |name: &str, pin: u32| {
+            (
+                PortName::from(name),
+                Port {
+                    name: PortName::from(name),
+                    label: name.to_uppercase(),
+                    visibility: Visibility::Public,
+                    connector: Some(ConnectorRef {
+                        name: Some(connector.clone()),
+                        part: "J1".into(),
+                        index: 0,
+                    }),
+                    pins: vec![Pin(pin)],
+                },
+            )
+        };
+        let instance = Instance {
+            path: InstancePath::root(InstanceName::from("leaf")),
+            type_name: TypeName::from("leaf"),
+            label: None,
+            ports: [port("a", 1), port("b", 2), port("c", 3)]
+                .into_iter()
+                .collect(),
+            children: IndexMap::new(),
+            wires: Vec::new(),
+            cables: IndexMap::new(),
+            connectors: IndexMap::new(),
+        };
+
+        let visible: HashSet<PortName> = [PortName::from("a"), PortName::from("c")]
+            .into_iter()
+            .collect();
+        let node = build_node(&instance, &connector, &visible, 0.0, 0.0).expect("node");
+        let rows: Vec<&str> = node.pins.iter().map(|r| r.port.as_str()).collect();
+        assert_eq!(rows, ["a", "c"], "only wired pins, still in pin order");
+
+        let node = build_node(&instance, &connector, &HashSet::new(), 0.0, 0.0).expect("node");
+        assert!(node.pins.is_empty(), "unwired include is a header-only box");
+        assert_eq!(node.height, HEADER_HEIGHT);
     }
 }

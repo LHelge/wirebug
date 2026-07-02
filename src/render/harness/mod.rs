@@ -253,6 +253,39 @@ component sys {
         assert!(svg.contains("Source"));
     }
 
+    /// A pin table auto-scopes to the pins wired in this view: the unwired
+    /// aux pin gets no row, so its label stays out of the SVG entirely.
+    #[test]
+    fn pin_tables_scope_to_wired_pins() {
+        let design = design_from(
+            r#"
+component sys {
+    a: src;
+    b: snk;
+    wire orange 50 [a.pos, b.pos];
+    component src {
+        connector hv "HV 3p" {
+            pub port pos "V+" pin 1;
+            pub port aux "AUX" pin 2;
+        }
+    }
+    component snk {
+        connector hv "HV 2p" {
+            pub port pos "V+" pin 1;
+        }
+    }
+}
+"#,
+        );
+        let view = harness_view("sys", &[("a", "hv", 0.0, 0.0), ("b", "hv", 12.0, 0.0)]);
+        let svg = render(&design, &view);
+        assert!(svg.contains("V+"));
+        assert!(
+            !svg.contains("AUX"),
+            "unwired pin is scoped out of the table"
+        );
+    }
+
     #[test]
     fn two_tone_wire_draws_a_tracer_overlay() {
         let design = design_from(

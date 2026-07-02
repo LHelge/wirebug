@@ -458,7 +458,7 @@ view harness "Main HV harness" {
 }
 ```
 
-- `include <instance>.<connector> at (x, y);` — the target is `instance.connector` (the connector's designator on that instance's type). The whole connector is drawn: every pin, in pin order. **No `ports { }` block** (it's a whole-connector view), and **no side/facing** — pin facing is auto-oriented from where the cables go.
+- `include <instance>.<connector> at (x, y);` — the target is `instance.connector` (the connector's designator on that instance's type). The pin table is **auto-scoped**: it draws only the pins that carry a conductor in this view, in pin order (an include none of whose pins are wired draws as a header-only box). **No `ports { }` block** — scope is derived from the view's cables, not listed — and **no side/facing** — pin facing is auto-oriented from where the cables go.
 - A connector must have a designator to be included (see Connector blocks). Including the same instance's other connectors is just more `include` lines.
 
 **Cables are derived, like schematic wires.** A wire renders as a cable strand only when *both* of its endpoints land on *included* connectors; ends on connectorless ports, excluded connectors, or the parent's own ports drop silently. So connectorize the external `pub port`s you want to see in a harness (wrap them in a named `connector` block).

@@ -192,9 +192,12 @@ Because the pitch is two steps, the grid must be at least
 
 The dual of the schematic, WireViz-style — a **trunk-and-bezier** layout. An
 include names a **connector** (`include <inst>.<connector> at (x,y)`), placed
-at its authored centre; that whole connector becomes a **pin table** (header =
+at its authored centre; that connector becomes a **pin table** (header =
 instance label + `<designator> · <part>`, one row per pin = number + label,
-ordered by pin). The renderer derives a vertical **spine** at the x-midpoint of
+ordered by pin), **auto-scoped to the pins that carry a conductor in this
+view** — a 60-cavity control connector shrinks to what the harness uses,
+and an include with no conductors draws as a header-only box (visible, so
+the author notices). The renderer derives a vertical **spine** at the x-midpoint of
 the connectors (`layout.rs::spine_x`); each **pin** faces the connector its
 conductor reaches (`face_pins` — East when that connector is to the right, West
 when to the left, voting across the pin's conductors; an unwired pin or a tie
@@ -220,10 +223,12 @@ within the endpoints' x-span, so the curve never overshoots its bounding box
 (no viewbox padding needed). Each strand is stroked with `wire.color` (the SVG
 `stroke`) and annotated `<label> · <gauge>mm²`.
 
-Two deliberate departures from the schematic's no-inference rule: pin
-**facing** is derived per pin from where its conductor goes (above), and wire
-routing is the bezier flex above — no object avoidance, unlike the schematic's
-orthogonal router.
+Three deliberate departures from the schematic's no-inference rule: pin
+**facing** is derived per pin from where its conductor goes (above),
+**pin-table scope** is derived from the view's conductors (above — an
+explicit `ports { }` listing was considered and rejected for harnesses),
+and wire routing is the bezier flex above — no object avoidance, unlike the
+schematic's orthogonal router.
 **Shields/drain wires are not drawn** (the IR carries no shield flag); reusing
 the orthogonal router and adding shields are noted future refinements.
 
