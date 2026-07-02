@@ -977,16 +977,20 @@ mod tests {
         assert!(labels.contains(&"h".to_string()), "{labels:?}");
     }
 
-    // ── the live-edit flow against the real examples/ project ──
+    // ── the live-edit flow against an on-disk fixture project ──
     //
     // These mirror the server exactly: index from the pristine project,
     // then a rebuild with the mid-edit buffer shadowing the disk folded in
     // via `update_with` — the file being typed in usually fails to parse
-    // and must keep its last-good scope.
+    // and must keep its last-good scope. They run on the stable
+    // `basic_project` fixture, never on `examples/` (the real vehicle
+    // project, which changes freely).
 
-    fn examples_complete(doc: &str, live: &str) -> Vec<String> {
+    const FIXTURE_ENTRY: &str = "tests/fixtures/basic_project/main.wb";
+
+    fn fixture_complete(doc: &str, live: &str) -> Vec<String> {
         let entry = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("examples/main.wb")
+            .join(FIXTURE_ENTRY)
             .canonicalize()
             .unwrap();
         let doc_path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -998,7 +1002,7 @@ mod tests {
         let text = live.replace('‸', "");
 
         let (pristine, _) = project::load(&entry);
-        let pristine = pristine.expect("examples load");
+        let pristine = pristine.expect("fixture load");
         let mut index = build_index(&pristine, &resolve::resolve(&pristine));
 
         let mut overlay = crate::dsl::project::Overlay::default();
@@ -1019,49 +1023,49 @@ mod tests {
     #[test]
     fn mid_edit_entry_file_keeps_type_completion() {
         let disk =
-            std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/main.wb"))
+            std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(FIXTURE_ENTRY))
                 .unwrap();
-        let live = disk.replace("    vcm: Vcm \"VCM\";", "    x: ‸\n    vcm: Vcm \"VCM\";");
-        let labels = examples_complete("examples/main.wb", &live);
-        assert!(labels.iter().any(|l| l == "Vcm"), "{labels:?}");
+        let live = disk.replace(
+            "    pack: Battery  \"Battery\";",
+            "    x: ‸\n    pack: Battery  \"Battery\";",
+        );
+        assert_ne!(live, disk, "replacement target must exist in the fixture");
+        let labels = fixture_complete(FIXTURE_ENTRY, &live);
+        assert!(labels.iter().any(|l| l == "Battery"), "{labels:?}");
     }
 
     #[test]
     fn mid_edit_entry_file_keeps_instance_port_completion() {
         let disk =
-            std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/main.wb"))
+            std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(FIXTURE_ENTRY))
                 .unwrap();
         let live = disk.replace(
-            "    vcm: Vcm \"VCM\";",
-            "    vcm: Vcm \"VCM\";\n    wire red 1 [vcm.‸];",
+            "    wire orange 50 \"HV+\" [pack.hv_pos, inv.dc_pos];",
+            "    wire orange 50 \"HV+\" [pack.‸];",
         );
-        assert_ne!(
-            live, disk,
-            "replacement target must exist in examples/main.wb"
-        );
-        let labels = examples_complete("examples/main.wb", &live);
-        assert!(labels.iter().any(|l| l == "safe_pwr"), "{labels:?}");
+        assert_ne!(live, disk, "replacement target must exist in the fixture");
+        let labels = fixture_complete(FIXTURE_ENTRY, &live);
+        assert!(labels.iter().any(|l| l == "hv_pos"), "{labels:?}");
     }
 
     #[test]
     fn mid_edit_component_file_keeps_numbering_completion() {
-        let disk = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/components/hv/inverter.wb"),
-        )
-        .unwrap();
+        let doc = "tests/fixtures/basic_project/components/connectors.wb";
+        let disk =
+            std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(doc)).unwrap();
         let live = disk.replace("        numbering: row_major;", "        numbering: ‸");
-        let labels = examples_complete("examples/components/hv/inverter.wb", &live);
+        assert_ne!(live, disk, "replacement target must exist in the fixture");
+        let labels = fixture_complete(doc, &live);
         assert!(labels.iter().any(|l| l == "row_major"), "{labels:?}");
     }
 
     #[test]
     fn mid_edit_component_file_keeps_view_kind_completion() {
-        let disk = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/components/hv/motor.wb"),
-        )
-        .unwrap();
+        let doc = "tests/fixtures/basic_project/components/inverter.wb";
+        let disk =
+            std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(doc)).unwrap();
         let live = format!("{disk}\nview ‸\n");
-        let labels = examples_complete("examples/components/hv/motor.wb", &live);
+        let labels = fixture_complete(doc, &live);
         assert!(labels.iter().any(|l| l == "schematic"), "{labels:?}");
     }
 

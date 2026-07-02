@@ -1,7 +1,9 @@
-//! End-to-end check of a stable fixture project through the public pipeline.
+//! End-to-end check of the `basic_project` fixture through the public
+//! pipeline.
 //!
-//! The user-facing examples change often, so structural assertions live on
-//! this deliberately small test project instead.
+//! Tests never target `examples/` — that is the real, freely-changing
+//! vehicle project. Anything worth locking in end-to-end gets added to a
+//! fixture under `tests/fixtures/` instead.
 
 use std::path::Path;
 
@@ -41,10 +43,15 @@ fn fixture_project_checks_clean_and_elaborates() {
         "Inverter"
     );
 
-    assert_eq!(design.views.len(), 3);
+    assert_eq!(design.views.len(), 4);
     assert_eq!(
         design.views.iter().filter(|v| v.kind.is_harness()).count(),
         1,
         "the harness view is present"
+    );
+    assert_eq!(
+        design.views.iter().filter(|v| v.kind.is_pinout()).count(),
+        1,
+        "the pinout view is present"
     );
 }

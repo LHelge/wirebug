@@ -1,0 +1,9 @@
+// Shared connector types for the fixture components.
+
+connector_type Hv2p "HV 2p" {
+    layout grid {
+        rows: 1;
+        cols: 2;
+        numbering: row_major;
+    }
+}

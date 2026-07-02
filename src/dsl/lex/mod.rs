@@ -386,7 +386,7 @@ mod tests {
             lex(&src, F).unwrap_or_else(|e| panic!("lex {}: {e:?}", entry.display()));
             count += 1;
         }
-        assert_eq!(count, 3, "expected the full fixture corpus");
+        assert_eq!(count, 4, "expected the full fixture corpus");
     }
 
     fn walk_wb(dir: &std::path::Path) -> Vec<std::path::PathBuf> {

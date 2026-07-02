@@ -41,6 +41,9 @@ fn render_writes_an_svg_per_view() {
     assert!(harness.contains("class=\"cable-wire\""));
     assert!(harness.contains("HV+ · 50mm²"));
 
+    // The pinout view draws the typed connector's cavity face.
+    assert!(out.join("inverter_pinout.svg").is_file());
+
     // The index groups the two view kinds into tabs.
     let index = std::fs::read_to_string(out.join("index.html")).expect("index rendered");
     assert!(index.contains("id=\"tab-schematic\""));
@@ -71,6 +74,7 @@ fn render_png_writes_a_png_per_view_and_index_references_png() {
     assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
     assert!(out.join("battery_detail.png").is_file());
     assert!(out.join("main_harness.png").is_file());
+    assert!(out.join("inverter_pinout.png").is_file());
 
     // The matching SVGs are not written in PNG mode.
     assert!(!out.join("system_overview.svg").exists());
@@ -102,15 +106,15 @@ fn render_pdf_writes_a_single_pdf_and_no_svgs_or_index() {
         .stderr(predicate::str::contains("rendered").and(predicate::str::contains("pdf")));
 
     // One PDF named after the project slug, with the magic header and one
-    // page per view (the fixture has three).
+    // page per view (the fixture has four).
     let pdf = std::fs::read(out.join("basic_project.pdf")).expect("pdf written");
     assert_eq!(&pdf[..5], b"%PDF-");
     assert!(
-        pdf.windows(8).any(|w| w == b"/Count 3"),
-        "expected a three-page tree"
+        pdf.windows(8).any(|w| w == b"/Count 4"),
+        "expected a four-page tree"
     );
     assert!(
-        pdf.windows(7).any(|w| w == b"(1 / 3)"),
+        pdf.windows(7).any(|w| w == b"(1 / 4)"),
         "expected a page-number footer"
     );
 
@@ -144,7 +148,7 @@ fn render_embed_writes_manifest_and_no_index() {
         .expect("binary present")
         .args([
             "render",
-            "examples",
+            FIXTURE_ROOT,
             "--out",
             out.to_str().unwrap(),
             "--embed",
@@ -153,20 +157,23 @@ fn render_embed_writes_manifest_and_no_index() {
         .success();
 
     // SVGs still land on disk under their slugged file names.
-    let svg =
-        std::fs::read_to_string(out.join("hv_system_overview.svg")).expect("hv view rendered");
+    let svg = std::fs::read_to_string(out.join("system_overview.svg")).expect("view rendered");
 
     // Embed-mode SVGs drop the built-in <style>, suppress the corner
     // stamp, and class-tag the root so a host stylesheet can scope
     // rules under `.wirebug`.
     assert!(!svg.contains("<style>"));
     assert!(!svg.contains("class=\"stamp\""));
-    assert!(!svg.contains("aphid-evpack v0.1.0"));
+    assert!(!svg.contains("basic-project v0.1.0"));
     assert!(svg.contains("class=\"wirebug wirebug-schematic\""));
 
     let harness =
-        std::fs::read_to_string(out.join("main_hv_harness.svg")).expect("harness view rendered");
+        std::fs::read_to_string(out.join("main_harness.svg")).expect("harness view rendered");
     assert!(harness.contains("class=\"wirebug wirebug-harness\""));
+
+    let pinout =
+        std::fs::read_to_string(out.join("inverter_pinout.svg")).expect("pinout view rendered");
+    assert!(pinout.contains("class=\"wirebug wirebug-pinout\""));
 
     // The HTML index is replaced by a JSON sidecar listing the views.
     assert!(!out.join("index.html").exists());
@@ -174,7 +181,7 @@ fn render_embed_writes_manifest_and_no_index() {
         std::fs::read_to_string(out.join("manifest.json")).expect("embed manifest written");
     let manifest: serde_json::Value =
         serde_json::from_str(&manifest_src).expect("manifest is valid JSON");
-    assert_eq!(manifest["project"]["name"], "aphid-evpack");
+    assert_eq!(manifest["project"]["name"], "basic-project");
 
     // A companion stylesheet reproduces the standalone look, scoped under
     // the classes the embed roots carry, and the manifest points at it.
@@ -184,13 +191,13 @@ fn render_embed_writes_manifest_and_no_index() {
     assert!(css.contains(".wirebug-harness .connector rect {"));
     let views = manifest["views"].as_array().expect("views array");
     let first = &views[0];
-    assert_eq!(first["title"], "HV System Overview");
-    assert_eq!(first["filename"], "hv_system_overview.svg");
+    assert_eq!(first["title"], "System Overview");
+    assert_eq!(first["filename"], "system_overview.svg");
     assert_eq!(first["kind"], "schematic");
     assert!(
         views
             .iter()
-            .any(|v| v["kind"] == "harness" && v["filename"] == "main_hv_harness.svg"),
+            .any(|v| v["kind"] == "harness" && v["filename"] == "main_harness.svg"),
         "harness view listed in manifest"
     );
 }

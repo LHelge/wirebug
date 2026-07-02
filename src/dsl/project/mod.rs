@@ -316,8 +316,9 @@ mod tests {
         let (project, problems) = load(&fixture_main());
         assert!(problems.is_empty(), "unexpected problems: {problems:?}");
         let project = project.expect("project loaded");
-        // main.wb plus two imported component files, all reachable via `use`.
-        assert_eq!(project.files.len(), 3, "reachable file count");
+        // main.wb, two imported component files, and the connector-type
+        // library inverter.wb pulls in — all reachable via `use`.
+        assert_eq!(project.files.len(), 4, "reachable file count");
     }
 
     #[test]

@@ -448,8 +448,11 @@ DSL pipeline notes:
 ### Testing — lock in behavior
 
 - Every public feature has unit tests alongside the code
-  (`#[cfg(test)] mod tests`); the worked example renders end-to-end in
-  `tests/`.
+  (`#[cfg(test)] mod tests`); end-to-end pipeline and CLI tests run
+  against the small fixture projects in `tests/fixtures/`.
+- **Never test against `examples/`** — it is the real, freely-changing
+  vehicle project. When a feature needs end-to-end coverage, extend a
+  fixture (or add one) instead.
 - Test names describe behavior, not implementation:
   `connection_to_missing_port_errors`, not `test_validate_returns_err`.
 - Snapshot tests with [`insta`] for stable text output: AST `Debug`,
@@ -651,5 +654,5 @@ code --install-extension wirebug-*.vsix
 - Opening an SVG shows something recognisable as a schematic: labelled
   rectangles with named ports on derived sides, pin numbers shown,
   Manhattan wires between connected ports.
-- `cargo test` passes; the integration test renders the example project
-  and asserts on SVG fragments (not a full snapshot).
+- `cargo test` passes; the integration tests render the fixture projects
+  and assert on SVG fragments (not a full snapshot).
