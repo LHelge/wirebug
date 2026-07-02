@@ -48,16 +48,20 @@ component RearBattery {
         pub port hv_neg "HV-" pin 2;
     }
 
-    pub port b_pos "B+";
-    pub port gnd   "GND";
+    // Signal connector, mirroring the front battery's — the CAN pins must
+    // be connectorized to appear in the vehicle's CAN harness view.
+    connector bms_signals "Molex MX-150" {
+        pub port b_pos "B+" pin 1;
+        pub port gnd   "GND" pin 2;
 
-    pub port safe_pwr "SAFE PWR";
+        pub port safe_pwr "SAFE PWR" pin 3;
 
-    pub port can_h "CAN H";
-    pub port can_l "CAN L";
+        pub port can_h "CAN H" pin 4;
+        pub port can_l "CAN L" pin 5;
 
-    pub port interlock_in  "INTLK IN";
-    pub port interlock_out "INTLK OUT";
+        pub port interlock_in  "INTLK IN" pin 6;
+        pub port interlock_out "INTLK OUT" pin 7;
+    }
 
     // --- HV series chain with precharge ---
     // Positive side: hv_pos splits to c_pos (main) and the precharge branch
@@ -100,9 +104,10 @@ component RearBattery {
     wire black 1.0 [bms.cont_3_n, precharge.coil_n];
 
     // --- CAN bus ---
+    // Same twisted-pair colors as the vehicle bus it joins.
 
-    wire blue 0.5 [can_h, bms.can_h];
-    wire blue 0.5 [can_l, bms.can_l];
+    wire white/blue 0.5 [can_h, bms.can_h];
+    wire blue/white 0.5 [can_l, bms.can_l];
 
     // --- 12V power ---
 

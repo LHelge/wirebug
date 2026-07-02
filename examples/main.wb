@@ -36,14 +36,42 @@ component Vehicle {
 
     // --- CAN bus ---
     // VCM is the gateway. CAN1 is the powertrain link, straight to the
-    // inverter. CAN2 is the vehicle bus, daisy-chained front-to-back
-    // through the BMS pair and the charger; it is terminated at its two
-    // ends — the front BMS and the VCM.
+    // inverter. CAN2 is the vehicle bus, daisy-chained front → rear →
+    // charger → VCM and terminated at its two ends — the front BMS and
+    // the VCM. Each hop is a physical twisted-pair cable, in mirrored
+    // two-tone: CAN H white with a blue tracer, CAN L blue with white.
 
-    wire blue 0.5 [front.can_h, rear.can_h, charger.can_h, vcm.can2_h];
-    wire blue 0.5 [front.can_l, rear.can_l, charger.can_l, vcm.can2_l];
-    wire blue 0.5 [vcm.can1_h, inv.can_h];
-    wire blue 0.5 [vcm.can1_l, inv.can_l];
+    cable can2_front_rear "CAN2 · front–rear" {
+        type:   "Twisted pair";
+        length: 1.8;
+
+        wire white/blue 0.5 "CAN2 H" [front.can_h, rear.can_h];
+        wire blue/white 0.5 "CAN2 L" [front.can_l, rear.can_l];
+    }
+
+    cable can2_rear_charger "CAN2 · rear–charger" {
+        type:   "Twisted pair";
+        length: 1.2;
+
+        wire white/blue 0.5 "CAN2 H" [rear.can_h, charger.can_h];
+        wire blue/white 0.5 "CAN2 L" [rear.can_l, charger.can_l];
+    }
+
+    cable can2_charger_vcm "CAN2 · charger–VCM" {
+        type:   "Twisted pair";
+        length: 0.8;
+
+        wire white/blue 0.5 "CAN2 H" [charger.can_h, vcm.can2_h];
+        wire blue/white 0.5 "CAN2 L" [charger.can_l, vcm.can2_l];
+    }
+
+    cable can1_vcm_inv "CAN1 · VCM–inverter" {
+        type:   "Twisted pair";
+        length: 0.6;
+
+        wire white/blue 0.5 "CAN1 H" [vcm.can1_h, inv.can_h];
+        wire blue/white 0.5 "CAN1 L" [vcm.can1_l, inv.can_l];
+    }
 
     // --- HV interlock chain ---
     // Fuse box sources 12V → e-stop → MSD → front → rear → hvjb -> inverter → OBC → VCM
@@ -204,4 +232,23 @@ view harness "Motor phase harness" {
 
     include inv.phases at (4, 10);
     include mot.power  at (32, 10);
+}
+
+// --- View: CAN harness ---
+// The CAN bus as a harness: each ECU's CAN connector as a pin table and
+// each daisy-chain hop as its twisted-pair cable box. The connectors
+// serpentine down the page, alternating sides, so every hop crosses the
+// central spine and its cable box lands between its two connectors.
+
+view harness "CAN harness" {
+    grid: 20;
+
+    include front.bms_signals at (0, 4);
+    include rear.bms_signals  at (28, 4);
+
+    include charger.can at (0, 14);
+    include vcm.can2    at (28, 14);
+
+    include vcm.can1 at (0, 20);
+    include inv.can  at (28, 20);
 }
