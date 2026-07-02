@@ -395,7 +395,12 @@ where
             span: e.span(),
         });
 
-    // `twisted { <wire>* }` — conductors twisted together as one group.
+    // `twisted { <wire> <wire> }` — a twisted pair. Exactly two
+    // conductors, converted from the repeated parse by `try_map` so a
+    // wrong count is a parse error with a purpose-built message.
+    // (Deliberately NOT `wire.then(wire)`: that embeds the huge wire
+    // combinator type twice and blows rustc's trait solving up —
+    // compile times went from seconds to unbounded.)
     let twisted_group = just(Token::Twisted)
         .ignore_then(
             wire.clone()
@@ -403,9 +408,14 @@ where
                 .collect::<Vec<_>>()
                 .delimited_by(just(Token::LBrace), just(Token::RBrace)),
         )
-        .map_with(|wires, e| TwistedGroup {
-            wires,
-            span: e.span(),
+        .try_map_with(|wires, e| {
+            let pair: [Wire; 2] = wires.try_into().map_err(|_| {
+                Rich::custom(e.span(), "a twisted pair needs exactly two conductors")
+            })?;
+            Ok(TwistedGroup {
+                wires: Box::new(pair),
+                span: e.span(),
+            })
         });
 
     // Properties and conductor entries may interleave in any order; the
@@ -1021,11 +1031,23 @@ inverter_control = face 47@(1, 0) large 21@(5, 0) 13@(16, 3)
         let CableMember::Twisted(t) = &cable.members[1] else {
             panic!("expected a twisted group");
         };
-        assert_eq!(t.wires.len(), 2);
         assert_eq!(t.wires[0].color.node.as_str(), "white");
         assert!(matches!(cable.members[2], CableMember::Wire(_)));
         // The flattening helper sees all four conductors in source order.
         assert_eq!(cable.wires().count(), 4);
+    }
+
+    #[test]
+    fn twisted_group_must_hold_exactly_two_wires() {
+        // The pair count is grammar-enforced, not a later diagnostic.
+        for body in [
+            "twisted { }",
+            "twisted { wire red 1 [a.p, b.p]; }",
+            "twisted { wire red 1 [a.p, b.p]; wire blue 1 [a.q, b.q]; wire green 1 [a.r, b.r]; }",
+        ] {
+            let parsed = parse_str(&format!("component c {{ cable cab {{ {body} }} }}"));
+            assert!(!parsed.errors.is_empty(), "{body} should not parse");
+        }
     }
 
     #[test]

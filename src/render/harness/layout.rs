@@ -592,9 +592,9 @@ fn build_cable_box(
 }
 
 /// For each strand (by index), the index of its braid partner: the other
-/// member of its two-strand `twisted { }` group. A group of any other size
-/// doesn't braid (there is no single partner row to swap with), so its
-/// members get `None` and draw straight.
+/// member of its `twisted { }` pair. The grammar guarantees two members
+/// per group, but a hand-built design can violate that, so any other
+/// size defensively gets `None` and draws straight.
 pub(super) fn braid_partners(groups: impl Iterator<Item = Option<u32>>) -> Vec<Option<usize>> {
     let groups: Vec<Option<u32>> = groups.collect();
     let mut members: HashMap<u32, Vec<usize>> = HashMap::new();

@@ -290,11 +290,14 @@ pub enum CableMember {
     Twisted(TwistedGroup),
 }
 
-/// `twisted { <wire>* }` inside a cable — the wrapped conductors are
-/// twisted together. Group arity is checked in validation, not here.
+/// `twisted { <wire> <wire> }` inside a cable — a twisted pair. Exactly
+/// two conductors, enforced by the grammar itself: a group of any other
+/// size is a parse error, not a representable state. (Widen to a `Vec`
+/// if twisted triples/quads ever land.) Boxed so the pair doesn't
+/// dominate [`CableMember`]'s size.
 #[derive(Debug, Clone)]
 pub struct TwistedGroup {
-    pub wires: Vec<Wire>,
+    pub wires: Box<[Wire; 2]>,
     pub span: Span,
 }
 
