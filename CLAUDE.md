@@ -146,7 +146,10 @@ adds no inference (`src/render/schematic/layout.rs`):
   a listed port whose wire lands on such an end shows as a bare stub.
   Each drawn segment carries a `wire-code` annotation — the wire's color
   as an IEC 60757 code (`ir::WireColor::code`; unknown names pass through
-  verbatim), haloed and centred on the segment's longest run.
+  verbatim), haloed and centred on the longest run clear of wire
+  crossings and of codes already placed (the halo would visually cut a
+  crossed wire; longest-segment midpoint is the fallback when nothing
+  clears).
 - **Enclosure** — an optional `enclosure { }` block draws the subject itself
   as a dashed box *wrapping* the schematic, with the subject's own ports on its
   boundary as **inverted** ports (facing inward, so an `Own` end's wire routes
