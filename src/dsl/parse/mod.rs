@@ -385,6 +385,7 @@ where
         .then(choice((
             string.map(CablePropertyValue::Str),
             number.map(CablePropertyValue::Number),
+            ident.map(CablePropertyValue::Ident),
         )))
         .then_ignore(just(Token::Semicolon))
         .map_with(|(key, value), e| CableProperty {

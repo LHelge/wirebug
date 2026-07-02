@@ -105,6 +105,9 @@ pub(super) struct CableBox {
     pub(super) origin: Point,
     pub(super) width: f64,
     pub(super) height: f64,
+    /// The cable's `twisted: true;` — a two-strand twisted box draws its
+    /// run as a braid.
+    pub(super) twisted: bool,
     pub(super) strands: Vec<CableStrand>,
 }
 
@@ -542,6 +545,7 @@ fn build_cable_box(
         origin,
         width,
         height,
+        twisted: meta.is_some_and(|m| m.twisted),
         strands,
     };
     cable_box.place_rows();
@@ -584,6 +588,7 @@ mod tests {
             label: None,
             r#type: Some("2-core".into()),
             length: Some(0.8),
+            twisted: false,
         };
         assert_eq!(cable_subtitle(Some(&full), 3), "2-core · 0.8 m · ×3");
 
@@ -591,6 +596,7 @@ mod tests {
             label: None,
             r#type: None,
             length: None,
+            twisted: false,
         };
         assert_eq!(cable_subtitle(Some(&bare), 2), "×2");
         assert_eq!(cable_subtitle(None, 1), "×1");
@@ -604,6 +610,7 @@ mod tests {
             origin: Point::new(0.0, 0.0),
             width: 100.0,
             height: HEADER_HEIGHT + 2.0 * ROW_HEIGHT,
+            twisted: false,
             strands: vec![strand(0.0), strand(0.0)],
         };
         cb.place_rows();

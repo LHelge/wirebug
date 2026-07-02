@@ -278,11 +278,14 @@ pub struct CableProperty {
     pub span: Span,
 }
 
-/// The right-hand side of a cable property — a quoted string or a number.
+/// The right-hand side of a cable property — a quoted string, a number,
+/// or a bare identifier (`twisted: true;` — booleans and future keyword
+/// values parse faithfully; validation types them per key).
 #[derive(Debug, Clone)]
 pub enum CablePropertyValue {
     Str(Spanned<String>),
     Number(Spanned<f64>),
+    Ident(Spanned<Ident>),
 }
 
 impl CablePropertyValue {
@@ -290,6 +293,7 @@ impl CablePropertyValue {
         match self {
             CablePropertyValue::Str(s) => s.span,
             CablePropertyValue::Number(n) => n.span,
+            CablePropertyValue::Ident(i) => i.span,
         }
     }
 }

@@ -94,6 +94,11 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
                             src: src(),
                             at: p.value.span().into(),
                         };
+                        let is_bool = matches!(
+                            &p.value,
+                            CablePropertyValue::Ident(i)
+                                if matches!(i.node.as_str(), "true" | "false")
+                        );
                         match key {
                             "type" if !matches!(p.value, CablePropertyValue::Str(_)) => {
                                 problems.push(wrong("a string"));
@@ -101,7 +106,10 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
                             "length" if !matches!(p.value, CablePropertyValue::Number(_)) => {
                                 problems.push(wrong("a number"));
                             }
-                            "type" | "length" => {}
+                            "twisted" if !is_bool => {
+                                problems.push(wrong("a boolean (`true` or `false`)"));
+                            }
+                            "type" | "length" | "twisted" => {}
                             _ => problems.push(Problem::UnknownCableProperty {
                                 key: key.to_string(),
                                 src: src(),
@@ -278,6 +286,29 @@ mod tests {
             codes.iter().any(|c| c == "wirebug::cable_property_type"),
             "{codes:?}"
         );
+    }
+
+    #[test]
+    fn twisted_accepts_a_boolean() {
+        let codes = cable("twisted: true; wire red 1 [a, b];");
+        assert!(codes.is_empty(), "{codes:?}");
+        let codes = cable("twisted: false; wire red 1 [a, b];");
+        assert!(codes.is_empty(), "{codes:?}");
+    }
+
+    #[test]
+    fn twisted_rejects_non_boolean_values() {
+        for body in [
+            "twisted: 1; wire red 1 [a, b];",
+            "twisted: \"yes\"; wire red 1 [a, b];",
+            "twisted: yes; wire red 1 [a, b];",
+        ] {
+            let codes = cable(body);
+            assert!(
+                codes.iter().any(|c| c == "wirebug::cable_property_type"),
+                "{body}: {codes:?}"
+            );
+        }
     }
 
     #[test]

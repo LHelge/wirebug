@@ -355,6 +355,9 @@ pub struct CableMeta {
     pub r#type: Option<String>,
     /// Length in metres.
     pub length: Option<f64>,
+    /// Whether the conductors are twisted together (`twisted: true;`).
+    /// The harness renderer braids a two-conductor twisted cable.
+    pub twisted: bool,
 }
 
 /// A materialized physical connector on an instance.

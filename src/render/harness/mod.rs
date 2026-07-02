@@ -277,6 +277,71 @@ component sys {
         assert!(!svg.contains("class=\"cable-wire-tracer\""));
     }
 
+    /// Two 2-pin connectors joined by a 2-conductor cable with the given
+    /// properties.
+    fn cabled_pair_design(properties: &str) -> Design {
+        design_from(&format!(
+            r#"
+component sys {{
+    a: src;
+    b: snk;
+    cable pair "Pair" {{
+        {properties}
+        wire white/blue 0.5 "H" [a.h, b.h];
+        wire white/red 0.5 "L" [a.l, b.l];
+    }}
+    component src {{
+        connector c "CAN 2p" {{
+            pub port h "H" pin 1;
+            pub port l "L" pin 2;
+        }}
+    }}
+    component snk {{
+        connector c "CAN 2p" {{
+            pub port h "H" pin 1;
+            pub port l "L" pin 2;
+        }}
+    }}
+}}
+"#
+        ))
+    }
+
+    /// Total cubic segments across all `cable-wire` core paths. Straight
+    /// runs contribute none (they are `L` lines); lead-in/lead-out flexes
+    /// contribute one each; a braid contributes its half-twist chain.
+    fn cable_wire_curve_segments(svg: &str) -> usize {
+        svg.match_indices("class=\"cable-wire\"")
+            .map(|(at, _)| {
+                let end = svg[at..].find("/>").map_or(svg.len(), |e| at + e);
+                svg[at..end].matches(" C").count()
+            })
+            .sum()
+    }
+
+    #[test]
+    fn twisted_pair_braids_the_box_run() {
+        let twisted = render(
+            &cabled_pair_design("twisted: true;"),
+            &harness_view("sys", &[("a", "c", 0.0, 0.0), ("b", "c", 16.0, 0.0)]),
+        );
+        let straight = render(
+            &cabled_pair_design(""),
+            &harness_view("sys", &[("a", "c", 0.0, 0.0), ("b", "c", 16.0, 0.0)]),
+        );
+
+        // A straight box run is a single `L` line per strand; a braided run
+        // is a chain of cubics, so the twisted render carries strictly more
+        // curve segments and no straight run.
+        assert!(
+            cable_wire_curve_segments(&twisted) > cable_wire_curve_segments(&straight),
+            "twisted: {} vs straight: {}",
+            cable_wire_curve_segments(&twisted),
+            cable_wire_curve_segments(&straight)
+        );
+        assert!(straight.contains(" L"), "straight run kept its line");
+    }
+
     #[test]
     fn wires_carry_data_color_for_host_styling() {
         let design = two_connector_design();
