@@ -13,6 +13,7 @@ use crate::dsl::ir::{Design, Instance, View, ViewKind};
 use crate::dsl::manifest::Manifest;
 use crate::error::{Error, Result};
 
+pub(crate) mod color;
 pub mod geometry;
 pub mod harness;
 pub mod pinout;

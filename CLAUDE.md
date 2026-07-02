@@ -144,6 +144,9 @@ adds no inference (`src/render/schematic/layout.rs`):
   a `WireEnd::Own` port *listed in the enclosure* (below). Excluded instances,
   unlisted ports, and own ports without an enclosure placement drop silently —
   a listed port whose wire lands on such an end shows as a bare stub.
+  Each drawn segment carries a `wire-code` annotation — the wire's color
+  as an IEC 60757 code (`render/color.rs`; unknown names pass through
+  verbatim), haloed and centred on the segment's longest run.
 - **Enclosure** — an optional `enclosure { }` block draws the subject itself
   as a dashed box *wrapping* the schematic, with the subject's own ports on its
   boundary as **inverted** ports (facing inward, so an `Own` end's wire routes

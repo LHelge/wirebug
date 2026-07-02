@@ -281,8 +281,8 @@ component sys {
         let placement =
             Placement::compute(&design, subject, &view, Grid::new(step)).expect("places");
         let router = Router::build(&placement, step);
-        let pairs = placement.connection_pairs();
-        let (a, c) = pairs[0];
+        let connections = placement.connections();
+        let (a, c) = (connections[0].a, connections[0].b);
 
         // `b`'s drawn box (un-inflated) — taken from the placement, since
         // its world position depends on the centre-based layout.

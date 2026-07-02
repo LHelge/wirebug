@@ -125,7 +125,23 @@ pub(super) struct Placement {
     enclosure: Option<PlacedComponent>,
     /// Chain-decomposed wire segments, both ends resolving to a placed
     /// port (see [`Placement::compute`]).
-    connections: Vec<(PortKey, PortKey)>,
+    connections: Vec<Segment>,
+}
+
+/// One chain-decomposed wire segment, keyed by its placed-port endpoints
+/// and carrying the authored color of the wire it came from.
+struct Segment {
+    a: PortKey,
+    b: PortKey,
+    color: String,
+}
+
+/// A segment resolved for routing and drawing: both placed ports plus the
+/// wire's authored color (shown as a code annotation on the drawn wire).
+pub(super) struct Connection<'a> {
+    pub(super) a: &'a PlacedPort,
+    pub(super) b: &'a PlacedPort,
+    pub(super) color: &'a str,
 }
 
 pub(super) struct ViewBox {
@@ -221,12 +237,16 @@ impl Placement {
         // subject-own port listed in the enclosure. Ends on excluded
         // instances, unlisted ports, and own ports without an enclosure
         // placement drop silently.
-        let mut connections: Vec<(PortKey, PortKey)> = Vec::new();
+        let mut connections: Vec<Segment> = Vec::new();
         for wire in &subject.wires {
             for pair in wire.endpoints.windows(2) {
                 let (a, b) = (endpoint_key(&pair[0]), endpoint_key(&pair[1]));
                 if side_of.contains_key(&a) && side_of.contains_key(&b) {
-                    connections.push((a, b));
+                    connections.push(Segment {
+                        a,
+                        b,
+                        color: wire.color.clone(),
+                    });
                 }
             }
         }
@@ -403,11 +423,18 @@ impl Placement {
         Some(&comp.ports[*idx])
     }
 
-    /// The wire segments to route, each resolved to its two placed ports.
-    pub(super) fn connection_pairs(&self) -> Vec<(&PlacedPort, &PlacedPort)> {
+    /// The wire segments to route, each resolved to its two placed ports
+    /// with the wire's color carried along for annotation.
+    pub(super) fn connections(&self) -> Vec<Connection<'_>> {
         self.connections
             .iter()
-            .filter_map(|(a, b)| Some((self.endpoint(a)?, self.endpoint(b)?)))
+            .filter_map(|s| {
+                Some(Connection {
+                    a: self.endpoint(&s.a)?,
+                    b: self.endpoint(&s.b)?,
+                    color: &s.color,
+                })
+            })
             .collect()
     }
 
@@ -693,7 +720,7 @@ component sys {
         );
         let subject = design.get(&design.root).unwrap();
         let placement = Placement::compute(&design, subject, &view, Grid::new(20.0)).unwrap();
-        assert_eq!(placement.connection_pairs().len(), 2);
+        assert_eq!(placement.connections().len(), 2);
     }
 
     #[test]
@@ -761,7 +788,7 @@ component sys {
         assert_eq!(b.ports.len(), 2);
         assert!(b.ports.iter().any(|p| p.port == PortName::from("spare")));
         // The unconnected port draws no wire.
-        assert_eq!(placement.connection_pairs().len(), 1);
+        assert_eq!(placement.connections().len(), 1);
     }
 
     #[test]
@@ -793,7 +820,7 @@ view schematic "T" {
         let placement = Placement::compute(&design, subject, view, Grid::new(10.0)).unwrap();
 
         // The own end now resolves to a drawn connection.
-        assert_eq!(placement.connection_pairs().len(), 1);
+        assert_eq!(placement.connections().len(), 1);
 
         // The enclosure wraps the child and sits `out` on its (inverted) east edge.
         let enc = placement.enclosure().expect("enclosure placed");
@@ -889,7 +916,7 @@ view schematic "T" {
         assert_eq!(enc.ports.len(), 2);
         assert!(enc.width > 0.0);
         assert!(enc.height > 0.0);
-        assert_eq!(placement.connection_pairs().len(), 1);
+        assert_eq!(placement.connections().len(), 1);
 
         let vb = placement.viewbox(false, &[]);
         assert!(vb.width > MIN_WIDTH);
