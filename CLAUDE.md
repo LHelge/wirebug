@@ -198,7 +198,11 @@ silently (like an unlisted port in a schematic).
 
 Kept conductors split by `Wire.cable`. A **declared cable** draws as a
 **cable box** (`CableBox`/`render_cable_box`) on the spine: a titled table
-(label + `type · length · ×count`), one coloured strand per row. Rows are
+(label + `type · length · ×count`), one coloured strand per row. A
+`twisted: true;` cable with exactly two conductors draws its box run as a
+**braid** (`draw::braid_d` — chained flex cubics swapping rows, an even
+half-twist count so each strand exits on its own row); any other
+conductor count falls back to straight rows. Rows are
 ordered by each conductor's endpoint-y midpoint (the 1D occupancy step), the
 box's vertical centre is its strands' centroid, and multiple boxes are pushed
 apart along the spine (`build_cable_boxes`, gap `CABLE_GAP`). **Loose wires**
@@ -262,7 +266,7 @@ so one run reports many. Errors fail the run; warnings fail only under
   arity (a cable conductor that isn't exactly two endpoints,
   `cable_wire_arity`); cable property checks (`unknown_cable_property`,
   `duplicate_cable_property`, `cable_property_type` — `type` wants a string,
-  `length` a number); unused import, bare-port pin, and non-IEC 60757
+  `length` a number, `twisted` a boolean); unused import, bare-port pin, and non-IEC 60757
   wire color (`unknown_wire_color` — the `ir::ColorName::Other` escape
   hatch still renders verbatim) as warnings. Cable
   property/arity checks live here (not elaborate) so a type instantiated

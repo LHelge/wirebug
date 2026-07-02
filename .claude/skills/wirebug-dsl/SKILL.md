@@ -371,9 +371,10 @@ cable motor_phases "Motor phases" {
 Format:
 
 - `cable <name> ["<label>"] { <properties> <wires> }` — `name` is a snake_case designator (unique within the component, like a connector's); the optional quoted label is shown on the cable box (the designator is used when omitted).
-- Properties are `key: value;` lines, before the wires. Two keys are supported:
+- Properties are `key: value;` lines, before the wires. Three keys are supported:
   - `type: "<string>";` — a free-text construction note (e.g. `"Twisted pair"`).
   - `length: <number>;` — length in **metres** (a bare number, e.g. `2.5`; no unit suffix).
+  - `twisted: true;` — the conductors are twisted together (a bare `true`/`false`, default `false`). A two-conductor twisted cable draws its harness box run as a braid; other conductor counts render straight rows regardless.
 - Each `wire` uses the exact same syntax as a loose wire, **but must have exactly two endpoints** — a cable conductor is one physical run from one pin to another. (A shared rail that fans out to three+ pins is not a single conductor; keep it a loose multi-endpoint `wire`, outside any cable.)
 
 A cable's wires are still ordinary connections: they show in schematic views like any other wire. The cable grouping adds the harness box and the BOM metadata.

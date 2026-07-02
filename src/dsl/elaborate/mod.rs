@@ -313,11 +313,13 @@ fn cable_meta(c: &ast::Cable) -> CableMeta {
         label: c.label.as_ref().map(|l| l.node.clone()),
         r#type: None,
         length: None,
+        twisted: false,
     };
     for p in &c.properties {
         match (p.key.node.as_str(), &p.value) {
             ("type", CablePropertyValue::Str(s)) => meta.r#type = Some(s.node.clone()),
             ("length", CablePropertyValue::Number(n)) => meta.length = Some(n.node),
+            ("twisted", CablePropertyValue::Ident(i)) => meta.twisted = i.node.as_str() == "true",
             _ => {}
         }
     }
@@ -518,6 +520,7 @@ mod tests {
                 cable feed \"Power feed\" {
                     type: \"2-core\";
                     length: 0.8;
+                    twisted: true;
                     wire red 1 [x, y];
                 }
             }\n",
@@ -544,6 +547,22 @@ mod tests {
         assert_eq!(meta.label.as_deref(), Some("Power feed"));
         assert_eq!(meta.r#type.as_deref(), Some("2-core"));
         assert_eq!(meta.length, Some(0.8));
+        assert!(meta.twisted);
+    }
+
+    #[test]
+    fn cable_without_twisted_property_defaults_untwisted() {
+        let (design, problems) = elaborate_files(&[(
+            "main.wb",
+            "component m {
+                pub port x \"X\"; pub port y \"Y\";
+                cable feed { wire red 1 [x, y]; }
+            }\n",
+        )]);
+        assert!(problems.is_empty(), "{problems:?}");
+        let m = design.unwrap();
+        let root = m.get(&m.root).unwrap();
+        assert!(!root.cables.get(&CableName::from("feed")).unwrap().twisted);
     }
 
     #[test]

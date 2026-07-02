@@ -132,8 +132,42 @@ pub(super) fn render_node(node: &ConnectorNode) -> Group {
     group
 }
 
+/// Nominal width of one half-twist in a braided (twisted-pair) box run.
+/// The actual pitch stretches to divide the run into a whole, even count.
+const TWIST_PITCH: f64 = 28.0;
+
+/// The path data for one strand of a two-strand braid: chained
+/// horizontally-flexed cubics (the same shape as [`flex`]) alternating
+/// between the strand's own row and its partner's. The half-twist count is
+/// even, so the strand exits the box on the row it entered and the
+/// lead-out bezier stays untangled.
+fn braid_d(from: Point, to_x: f64, other_y: f64) -> String {
+    let width = to_x - from.x;
+    let n = ((width / TWIST_PITCH) as usize).max(2) / 2 * 2;
+    let step = width / n as f64;
+
+    let mut d = format!("M{},{}", from.x, from.y);
+    let (mut y, mut other) = (from.y, other_y);
+    for i in 0..n {
+        let x0 = from.x + i as f64 * step;
+        let x1 = if i == n - 1 { to_x } else { x0 + step };
+        d.push_str(&format!(
+            " C{},{} {},{} {},{}",
+            x0 + FLEX * step,
+            y,
+            x1 - FLEX * step,
+            other,
+            x1,
+            other
+        ));
+        std::mem::swap(&mut y, &mut other);
+    }
+    d
+}
+
 /// A declared cable as a titled box with one coloured strand per row: each
-/// strand flexes in from its left connector, runs straight across the box, and
+/// strand flexes in from its left connector, runs across the box — straight,
+/// or braided with its partner when the cable is a twisted pair — and
 /// flexes out to its right connector.
 pub(super) fn render_cable_box(cb: &CableBox) -> Group {
     let (ox, oy) = (cb.origin.x, cb.origin.y);
@@ -170,14 +204,23 @@ pub(super) fn render_cable_box(cb: &CableBox) -> Group {
         );
     }
 
+    // The braid drawing needs a partner row to swap with, so it applies
+    // to exactly two strands; a twisted cable with another conductor
+    // count still draws straight rows.
+    let braided = cb.twisted && cb.strands.len() == 2;
+
     let left_edge = Point::new(ox, 0.0);
     let right_edge = Point::new(ox + cb.width, 0.0);
-    for strand in &cb.strands {
+    for (i, strand) in cb.strands.iter().enumerate() {
         let entry = Point::new(left_edge.x, strand.row_y);
         let exit = Point::new(right_edge.x, strand.row_y);
 
         let lead_in = flex(strand.left_attach, entry, FLEX).path_d();
-        let run = format!("M{},{} L{},{}", entry.x, entry.y, exit.x, exit.y);
+        let run = if braided {
+            braid_d(entry, exit.x, cb.strands[1 - i].row_y)
+        } else {
+            format!("M{},{} L{},{}", entry.x, entry.y, exit.x, exit.y)
+        };
         let lead_out = flex(exit, strand.right_attach, FLEX).path_d();
         group = group
             .add(casing_path(lead_in.clone()))
@@ -249,6 +292,34 @@ pub(super) fn wire_annotation(label: Option<&str>, gauge: f64, color: &WireColor
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn braid_has_an_even_half_twist_count_and_exits_on_its_own_row() {
+        let d = braid_d(Point::new(0.0, 10.0), 100.0, 30.0);
+        assert!(d.starts_with("M0,10"));
+        // 100 / 28 → 3, rounded down to 2 half-twists.
+        assert_eq!(d.matches(" C").count(), 2);
+        // Even count: the last segment lands back on the strand's own row
+        // at the box's right edge.
+        assert!(d.ends_with("100,10"), "{d}");
+    }
+
+    #[test]
+    fn braid_alternates_between_the_two_rows() {
+        let d = braid_d(Point::new(0.0, 10.0), 200.0, 30.0);
+        // 200 / 28 → 7, rounded down to 6 half-twists, ~33.3 wide each:
+        // the strand touches the partner row at every odd crossover.
+        assert_eq!(d.matches(" C").count(), 6);
+        assert!(d.contains(",30 "), "{d}");
+        assert!(d.ends_with(",10"), "{d}");
+    }
+
+    #[test]
+    fn short_braid_still_gets_two_half_twists() {
+        let d = braid_d(Point::new(0.0, 10.0), 30.0, 30.0);
+        assert_eq!(d.matches(" C").count(), 2);
+        assert!(d.ends_with("30,10"), "{d}");
+    }
 
     #[test]
     fn annotation_combines_label_gauge_and_color_code() {
