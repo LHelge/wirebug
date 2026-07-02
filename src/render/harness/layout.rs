@@ -22,7 +22,8 @@ use super::{
     SVG_MARGIN,
 };
 use crate::dsl::ir::{
-    CableMeta, CableName, ConnectorName, Design, Instance, InstanceName, Pin, PortName, WireEnd,
+    CableMeta, CableName, ConnectorName, Design, Instance, InstanceName, Pin, PortName, WireColor,
+    WireEnd,
 };
 use crate::render::geometry::{Point, Side};
 
@@ -74,7 +75,7 @@ impl ConnectorNode {
 pub(super) struct LooseWire {
     pub(super) from: Point,
     pub(super) to: Point,
-    pub(super) color: String,
+    pub(super) color: WireColor,
     pub(super) gauge: f64,
     pub(super) label: Option<String>,
 }
@@ -89,7 +90,7 @@ pub(super) struct CableStrand {
     pub(super) right_attach: Point,
     /// World y of this strand's row inside the box.
     pub(super) row_y: f64,
-    pub(super) color: String,
+    pub(super) color: WireColor,
     pub(super) gauge: f64,
     pub(super) label: Option<String>,
 }
@@ -138,7 +139,7 @@ struct RawWire {
     ra: usize,
     b: usize,
     rb: usize,
-    color: String,
+    color: WireColor,
     gauge: f64,
     label: Option<String>,
     /// The declared cable this conductor belongs to, if any.
@@ -473,7 +474,7 @@ fn build_cable_box(
     struct Strand {
         left: Point,
         right: Point,
-        color: String,
+        color: WireColor,
         gauge: f64,
         label: Option<String>,
     }

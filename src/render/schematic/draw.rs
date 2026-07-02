@@ -5,8 +5,7 @@ use svg::node::element::{Circle, Group, Polyline, Rectangle, Text};
 
 use super::layout::{PlacedComponent, PlacedPort, PlacedText};
 use super::{COMPONENT_TITLE_GAP, LABEL_INSET, PIN_INSET, PORT_RADIUS};
-use crate::dsl::ir::InstanceName;
-use crate::render::color::iec_code;
+use crate::dsl::ir::{InstanceName, WireColor};
 use crate::render::geometry::{Point, Side};
 
 pub(super) fn render_component(cid: &InstanceName, pc: &PlacedComponent) -> Group {
@@ -227,7 +226,7 @@ fn outside_pin_placement(side: Side, pos: Point) -> LabelPlacement {
 /// of points produced by [`super::route::Router::route`]. The wire's
 /// authored color rides along as `data-color`, so a host stylesheet can
 /// theme wires by color (`.wire[data-color="white"] { … }`) in embed mode.
-pub(super) fn render_wire(path: &[Point], color: &str) -> Polyline {
+pub(super) fn render_wire(path: &[Point], color: &WireColor) -> Polyline {
     let points = path
         .iter()
         .map(|p| format!("{},{}", p.x, p.y))
@@ -235,7 +234,7 @@ pub(super) fn render_wire(path: &[Point], color: &str) -> Polyline {
         .join(" ");
     Polyline::new()
         .set("class", "wire")
-        .set("data-color", color)
+        .set("data-color", color.as_str())
         .set("points", points)
 }
 
@@ -244,7 +243,7 @@ pub(super) fn render_wire(path: &[Point], color: &str) -> Polyline {
 /// text is haloed (`paint-order: stroke`), so sitting directly on the line
 /// breaks it legibly, like a road label on a map. Vertical segments rotate
 /// the code to read along the wire. `None` for a degenerate path.
-pub(super) fn render_wire_code(path: &[Point], color: &str) -> Option<Text> {
+pub(super) fn render_wire_code(path: &[Point], color: &WireColor) -> Option<Text> {
     let length = |seg: &(Point, Point)| (seg.1.x - seg.0.x).abs() + (seg.1.y - seg.0.y).abs();
     let (a, b) = path
         .windows(2)
@@ -252,7 +251,7 @@ pub(super) fn render_wire_code(path: &[Point], color: &str) -> Option<Text> {
         .max_by(|p, q| length(p).total_cmp(&length(q)))?;
     let mid = Point::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0);
 
-    let mut text = Text::new(iec_code(color))
+    let mut text = Text::new(color.code())
         .set("class", "wire-code")
         .set("x", mid.x)
         .set("y", mid.y)
