@@ -51,6 +51,7 @@ const STYLE: &str = "\
 .port-label { font: 11px sans-serif; paint-order: stroke; stroke: white; stroke-width: 3px; stroke-linejoin: round; }
 .port-pin { font: italic 10px sans-serif; fill: #555; }
 .wire { fill: none; stroke: black; stroke-width: 1.25; }
+.wire-code { font: italic 9px sans-serif; fill: #555; text-anchor: middle; paint-order: stroke; stroke: white; stroke-width: 3px; stroke-linejoin: round; }
 .enclosure rect { fill: none; stroke: #888; stroke-width: 1.5; stroke-dasharray: 6 4; }
 .enclosure-label { font: bold 13px sans-serif; text-anchor: middle; fill: #555; }
 .text-box rect { fill: #fff9d6; stroke: #8a7a2f; stroke-width: 1.25; }
@@ -98,7 +99,8 @@ impl SchematicRenderer {
         // Route before sizing the canvas: wires can detour outside the
         // component bounds, so the viewBox has to enclose them too.
         let router = Router::build(&placement, step);
-        let pairs = placement.connection_pairs();
+        let connections = placement.connections();
+        let pairs: Vec<_> = connections.iter().map(|c| (c.a, c.b)).collect();
         // Spread parallel wires in a shared channel by the port pitch (two
         // steps), so a nudged bundle matches the spacing of the ports it
         // fans out from rather than packing twice as tight.
@@ -155,8 +157,11 @@ impl SchematicRenderer {
         doc = doc.add(components_group);
 
         let mut wires_group = Group::new().set("class", "wires");
-        for polyline in &wires {
+        for (polyline, connection) in wires.iter().zip(&connections) {
             wires_group = wires_group.add(draw::render_wire(polyline));
+            if let Some(code) = draw::render_wire_code(polyline, connection.color) {
+                wires_group = wires_group.add(code);
+            }
         }
         doc = doc.add(wires_group);
 
@@ -264,6 +269,51 @@ component sys {
         assert!(svg.contains("class=\"wire\""));
         assert!(svg.contains("class=\"component\""));
         assert!(svg.contains("class=\"port\""));
+    }
+
+    #[test]
+    fn wire_carries_its_color_code() {
+        let design = two_box_design();
+        let view = view_of(
+            "sys",
+            &[
+                ("a", 0.0, 0.0, &[("p", Side::East)]),
+                ("b", 16.0, 0.0, &[("p", Side::West)]),
+            ],
+        );
+        let svg = render(&design, &view).expect("renders");
+
+        // The `wire red 1` net annotates as its IEC 60757 code.
+        assert!(svg.contains("class=\"wire-code\""));
+        assert!(svg.contains(">\nRD\n</text>"));
+    }
+
+    #[test]
+    fn unknown_wire_color_annotates_verbatim() {
+        let design = design_from(
+            r#"
+component sys {
+    a: alpha;
+    b: beta;
+    wire chartreuse 1 [a.p, b.p];
+    component alpha {
+        pub port p "Out" pin 1;
+    }
+    component beta {
+        pub port p "In" pin 1;
+    }
+}
+"#,
+        );
+        let view = view_of(
+            "sys",
+            &[
+                ("a", 0.0, 0.0, &[("p", Side::East)]),
+                ("b", 16.0, 0.0, &[("p", Side::West)]),
+            ],
+        );
+        let svg = render(&design, &view).expect("renders");
+        assert!(svg.contains(">\nchartreuse\n</text>"));
     }
 
     #[test]

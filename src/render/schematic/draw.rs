@@ -6,6 +6,7 @@ use svg::node::element::{Circle, Group, Polyline, Rectangle, Text};
 use super::layout::{PlacedComponent, PlacedPort, PlacedText};
 use super::{COMPONENT_TITLE_GAP, LABEL_INSET, PIN_INSET, PORT_RADIUS};
 use crate::dsl::ir::InstanceName;
+use crate::render::color::iec_code;
 use crate::render::geometry::{Point, Side};
 
 pub(super) fn render_component(cid: &InstanceName, pc: &PlacedComponent) -> Group {
@@ -231,4 +232,28 @@ pub(super) fn render_wire(path: &[Point]) -> Polyline {
         .collect::<Vec<_>>()
         .join(" ");
     Polyline::new().set("class", "wire").set("points", points)
+}
+
+/// The wire's color code (IEC 60757 where known, the authored name
+/// otherwise), centred on the longest segment of the routed polyline. The
+/// text is haloed (`paint-order: stroke`), so sitting directly on the line
+/// breaks it legibly, like a road label on a map. Vertical segments rotate
+/// the code to read along the wire. `None` for a degenerate path.
+pub(super) fn render_wire_code(path: &[Point], color: &str) -> Option<Text> {
+    let length = |seg: &(Point, Point)| (seg.1.x - seg.0.x).abs() + (seg.1.y - seg.0.y).abs();
+    let (a, b) = path
+        .windows(2)
+        .map(|w| (w[0], w[1]))
+        .max_by(|p, q| length(p).total_cmp(&length(q)))?;
+    let mid = Point::new((a.x + b.x) / 2.0, (a.y + b.y) / 2.0);
+
+    let mut text = Text::new(iec_code(color))
+        .set("class", "wire-code")
+        .set("x", mid.x)
+        .set("y", mid.y)
+        .set("dominant-baseline", "central");
+    if (b.x - a.x).abs() < (b.y - a.y).abs() {
+        text = text.set("transform", format!("rotate(-90 {} {})", mid.x, mid.y));
+    }
+    Some(text)
 }
