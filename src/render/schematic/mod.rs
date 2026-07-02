@@ -303,6 +303,35 @@ component sys {
     }
 
     #[test]
+    fn two_tone_wire_annotates_with_combined_code() {
+        let design = design_from(
+            r#"
+component sys {
+    a: alpha;
+    b: beta;
+    wire green/yellow 2.5 [a.p, b.p];
+    component alpha {
+        pub port p "Out" pin 1;
+    }
+    component beta {
+        pub port p "In" pin 1;
+    }
+}
+"#,
+        );
+        let view = view_of(
+            "sys",
+            &[
+                ("a", 0.0, 0.0, &[("p", Side::East)]),
+                ("b", 16.0, 0.0, &[("p", Side::West)]),
+            ],
+        );
+        let svg = render(&design, &view).expect("renders");
+        assert!(svg.contains(">\nGNYE\n</text>"));
+        assert!(svg.contains("data-color=\"green/yellow\""));
+    }
+
+    #[test]
     fn unknown_wire_color_annotates_verbatim() {
         let design = design_from(
             r#"

@@ -354,8 +354,10 @@ where
             },
         });
 
+    // A color is `base` or two-tone `base/tracer` (`green/yellow`).
     let wire = just(Token::Wire)
         .ignore_then(ident)
+        .then(just(Token::Slash).ignore_then(ident).or_not())
         .then(number)
         .then(string.or_not())
         .then(
@@ -367,8 +369,9 @@ where
                 .delimited_by(just(Token::LBracket), just(Token::RBracket)),
         )
         .then_ignore(just(Token::Semicolon))
-        .map_with(|(((color, gauge), label), endpoints), e| Wire {
+        .map_with(|((((color, tracer), gauge), label), endpoints), e| Wire {
             color,
+            tracer,
             gauge,
             label,
             endpoints,
@@ -1041,6 +1044,31 @@ inverter_control = face 47@(1, 0) large 21@(5, 0) 13@(16, 3)
             "pack"
         );
         assert_eq!(w.endpoints[1].port.node.as_str(), "hv_pos");
+    }
+
+    #[test]
+    fn two_tone_wire_color_parses_base_and_tracer() {
+        let file = parse_ok(r#"component c { wire green/yellow 2.5 "PE" [a.pe, b.pe]; }"#);
+        let Member::Wire(w) = &members(&file)[0] else {
+            panic!("expected wire");
+        };
+        assert_eq!(w.color.node.as_str(), "green");
+        assert_eq!(w.tracer.as_ref().map(|t| t.node.as_str()), Some("yellow"));
+    }
+
+    #[test]
+    fn single_color_wire_has_no_tracer() {
+        let file = parse_ok(r#"component c { wire orange 50 [a.p, b.p]; }"#);
+        let Member::Wire(w) = &members(&file)[0] else {
+            panic!("expected wire");
+        };
+        assert!(w.tracer.is_none());
+    }
+
+    #[test]
+    fn dangling_color_slash_is_a_parse_error() {
+        let parsed = parse_str(r#"component c { wire green/ 2.5 [a.p, b.p]; }"#);
+        assert!(!parsed.errors.is_empty());
     }
 
     #[test]

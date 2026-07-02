@@ -13,7 +13,7 @@ use crate::dsl::ir::{
     CableMeta, CableName, Connector, ConnectorCavity, ConnectorFaceLayout, ConnectorGridLayout,
     ConnectorLayout, ConnectorName, ConnectorPin, ConnectorRef, ConnectorTypeName, Design,
     EnclosurePort, Include, Instance, InstanceName, InstancePath, Port, PortName, Side, TypeName,
-    View, Visibility, Wire, WireEnd,
+    View, Visibility, Wire, WireColor, WireEnd,
 };
 use crate::dsl::resolve::{DefId, Resolved};
 
@@ -285,7 +285,10 @@ fn elaborate_enclosure_port(ep: &ast::EnclosurePort) -> Option<EnclosurePort> {
 
 fn rewrite_wire(w: &ast::Wire, cable: Option<CableName>) -> Wire {
     Wire {
-        color: w.color.node.as_str().into(),
+        color: WireColor::new(
+            w.color.node.as_str(),
+            w.tracer.as_ref().map(|t| t.node.as_str()),
+        ),
         gauge: w.gauge.node,
         label: w.label.as_ref().map(|l| l.node.clone()),
         endpoints: w
@@ -527,14 +530,10 @@ mod tests {
         let loose = root
             .wires
             .iter()
-            .find(|w| w.color.as_str() == "black")
+            .find(|w| w.color.css() == "black")
             .unwrap();
         assert!(loose.cable.is_none());
-        let conductor = root
-            .wires
-            .iter()
-            .find(|w| w.color.as_str() == "red")
-            .unwrap();
+        let conductor = root.wires.iter().find(|w| w.color.css() == "red").unwrap();
         assert_eq!(conductor.cable.as_ref().map(|c| c.as_str()), Some("feed"));
 
         // The metadata is recorded once, typed, keyed by designator.

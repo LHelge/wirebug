@@ -234,10 +234,13 @@ pub struct Instance {
     pub span: Span,
 }
 
-/// `wire <colour> <gauge> ["<label>"] [ <endpoint>, … ] ;`
+/// `wire <colour>[/<tracer>] <gauge> ["<label>"] [ <endpoint>, … ] ;`
 #[derive(Debug, Clone)]
 pub struct Wire {
     pub color: Spanned<Ident>,
+    /// The tracer (stripe) color of a two-tone wire: the part after the
+    /// `/` in `green/yellow`.
+    pub tracer: Option<Spanned<Ident>>,
     pub gauge: Spanned<f64>,
     /// Optional signal name, shown on each wire in a harness drawing.
     pub label: Option<Spanned<String>>,

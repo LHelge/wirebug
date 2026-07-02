@@ -57,30 +57,89 @@ name_newtype!(
     CableName,
     "A cable's designator, grouping its conductor wires."
 );
-name_newtype!(
-    WireColor,
-    "A wire's authored color: a CSS color name, kept verbatim (it doubles as the SVG stroke and `data-color` value)."
-);
+/// A wire's authored color: a CSS base color name plus an optional tracer
+/// (stripe) color for two-tone wires (`green/yellow`), both kept verbatim.
+/// `Display` round-trips the authored form — the `data-color` value.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct WireColor {
+    base: String,
+    tracer: Option<String>,
+}
 
 impl WireColor {
-    /// The IEC 60757 code for this color (`"white"` → `"WH"`), matched
-    /// case-insensitively. A color outside the standard set passes through
-    /// verbatim, so exotic names stay readable rather than vanishing.
-    pub fn code(&self) -> &str {
-        match self.0.to_ascii_lowercase().as_str() {
-            "black" => "BK",
-            "brown" => "BN",
-            "red" => "RD",
-            "orange" => "OG",
-            "yellow" => "YE",
-            "green" => "GN",
-            "blue" => "BU",
-            "violet" | "purple" => "VT",
-            "gray" | "grey" => "GY",
-            "white" => "WH",
-            "pink" => "PK",
-            "turquoise" => "TQ",
-            _ => &self.0,
+    pub fn new(base: &str, tracer: Option<&str>) -> Self {
+        Self {
+            base: base.to_string(),
+            tracer: tracer.map(str::to_string),
+        }
+    }
+
+    /// The CSS color a renderer strokes the wire body with — the base;
+    /// a tracer is drawn as an overlay, never as the stroke.
+    pub fn css(&self) -> &str {
+        &self.base
+    }
+
+    /// The tracer (stripe) CSS color of a two-tone wire.
+    pub fn tracer(&self) -> Option<&str> {
+        self.tracer.as_deref()
+    }
+
+    /// The IEC 60757 code for this color (`white` → `WH`), a two-tone
+    /// color concatenated as the standard writes it (`green/yellow` →
+    /// `GNYE`). Matched case-insensitively; a color outside the standard
+    /// set passes through verbatim, so exotic names stay readable rather
+    /// than vanishing.
+    pub fn code(&self) -> String {
+        match &self.tracer {
+            Some(tracer) => format!("{}{}", iec_code(&self.base), iec_code(tracer)),
+            None => iec_code(&self.base).to_string(),
+        }
+    }
+}
+
+/// The IEC 60757 code for one CSS color name, or the name itself when it
+/// has no code.
+fn iec_code(color: &str) -> &str {
+    match color.to_ascii_lowercase().as_str() {
+        "black" => "BK",
+        "brown" => "BN",
+        "red" => "RD",
+        "orange" => "OG",
+        "yellow" => "YE",
+        "green" => "GN",
+        "blue" => "BU",
+        "violet" | "purple" => "VT",
+        "gray" | "grey" => "GY",
+        "white" => "WH",
+        "pink" => "PK",
+        "turquoise" => "TQ",
+        _ => color,
+    }
+}
+
+/// Splits on `/`, so the authored surface form round-trips
+/// (`"green/yellow"`).
+impl From<&str> for WireColor {
+    fn from(s: &str) -> Self {
+        match s.split_once('/') {
+            Some((base, tracer)) => Self::new(base, Some(tracer)),
+            None => Self::new(s, None),
+        }
+    }
+}
+
+impl From<String> for WireColor {
+    fn from(s: String) -> Self {
+        s.as_str().into()
+    }
+}
+
+impl fmt::Display for WireColor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.tracer {
+            Some(tracer) => write!(f, "{}/{}", self.base, tracer),
+            None => f.write_str(&self.base),
         }
     }
 }
@@ -491,6 +550,26 @@ mod tests {
     #[test]
     fn unknown_wire_color_code_passes_through() {
         assert_eq!(WireColor::from("chartreuse").code(), "chartreuse");
+    }
+
+    #[test]
+    fn two_tone_color_concatenates_codes_iec_style() {
+        assert_eq!(WireColor::from("green/yellow").code(), "GNYE");
+        assert_eq!(WireColor::from("white/blue").code(), "WHBU");
+    }
+
+    #[test]
+    fn two_tone_color_splits_base_and_tracer() {
+        let color = WireColor::from("green/yellow");
+        assert_eq!(color.css(), "green");
+        assert_eq!(color.tracer(), Some("yellow"));
+        assert_eq!(WireColor::from("green").tracer(), None);
+    }
+
+    #[test]
+    fn wire_color_display_round_trips_the_authored_form() {
+        assert_eq!(WireColor::from("green/yellow").to_string(), "green/yellow");
+        assert_eq!(WireColor::from("orange").to_string(), "orange");
     }
 
     #[test]

@@ -9,14 +9,26 @@ use super::{HEADER_HEIGHT, NODE_PAD, PIN_COL_WIDTH, PIN_DOT_RADIUS, ROW_HEIGHT};
 use crate::dsl::ir::WireColor;
 use crate::render::geometry::{Point, Side};
 
-/// A `cable-wire` path with the given SVG path data, stroked in `color`.
-/// The color also rides along as `data-color`, so a host stylesheet can
-/// theme strands by color in embed mode (where the stroke default is gone).
+/// A `cable-wire` path with the given SVG path data, stroked in the
+/// color's base. The full authored color rides along as `data-color`, so a
+/// host stylesheet can theme strands by color in embed mode (where the
+/// stroke default is gone).
 fn wire_path(d: String, color: &WireColor) -> Path {
     Path::new()
         .set("class", "cable-wire")
-        .set("stroke", color.as_str())
-        .set("data-color", color.as_str())
+        .set("stroke", color.css())
+        .set("data-color", color.to_string())
+        .set("d", d)
+}
+
+/// The tracer stripe of a two-tone wire: the same path as the core,
+/// stroked in the tracer color with a dash pattern (set in the style
+/// block), so the strand reads as base-with-stripe, WireViz-style.
+fn tracer_path(d: String, color: &WireColor, tracer: &str) -> Path {
+    Path::new()
+        .set("class", "cable-wire-tracer")
+        .set("stroke", tracer)
+        .set("data-color", color.to_string())
         .set("d", d)
 }
 
@@ -171,9 +183,15 @@ pub(super) fn render_cable_box(cb: &CableBox) -> Group {
             .add(casing_path(lead_in.clone()))
             .add(casing_path(run.clone()))
             .add(casing_path(lead_out.clone()))
-            .add(wire_path(lead_in, &strand.color))
-            .add(wire_path(run, &strand.color))
-            .add(wire_path(lead_out, &strand.color));
+            .add(wire_path(lead_in.clone(), &strand.color))
+            .add(wire_path(run.clone(), &strand.color))
+            .add(wire_path(lead_out.clone(), &strand.color));
+        if let Some(tracer) = strand.color.tracer() {
+            group = group
+                .add(tracer_path(lead_in, &strand.color, tracer))
+                .add(tracer_path(run, &strand.color, tracer))
+                .add(tracer_path(lead_out, &strand.color, tracer));
+        }
 
         group = group.add(
             Text::new(wire_annotation(
@@ -195,20 +213,23 @@ pub(super) fn render_cable_box(cb: &CableBox) -> Group {
 pub(super) fn render_loose(wire: &LooseWire) -> Group {
     let curve = flex(wire.from, wire.to, FLEX);
     let mid = curve.point_at(0.5);
-    Group::new()
+    let mut group = Group::new()
         .set("class", "cable")
         .add(casing_path(curve.path_d()))
-        .add(wire_path(curve.path_d(), &wire.color))
-        .add(
-            Text::new(wire_annotation(
-                wire.label.as_deref(),
-                wire.gauge,
-                &wire.color,
-            ))
-            .set("class", "cable-label")
-            .set("x", mid.x)
-            .set("y", mid.y - 2.0),
-        )
+        .add(wire_path(curve.path_d(), &wire.color));
+    if let Some(tracer) = wire.color.tracer() {
+        group = group.add(tracer_path(curve.path_d(), &wire.color, tracer));
+    }
+    group.add(
+        Text::new(wire_annotation(
+            wire.label.as_deref(),
+            wire.gauge,
+            &wire.color,
+        ))
+        .set("class", "cable-label")
+        .set("x", mid.x)
+        .set("y", mid.y - 2.0),
+    )
 }
 
 /// The text shown along a wire: `<label> · <gauge>mm² · <color code>`,
