@@ -141,6 +141,7 @@ pub enum Member {
     Port(Port),
     Connector(Connector),
     ConnectorInstance(ConnectorInstance),
+    Inline(Inline),
     Instance(Instance),
     Wire(Wire),
     Cable(Cable),
@@ -154,6 +155,7 @@ impl Member {
             Member::Port(p) => p.span,
             Member::Connector(c) => c.span,
             Member::ConnectorInstance(c) => c.span,
+            Member::Inline(i) => i.span,
             Member::Instance(i) => i.span,
             Member::Wire(w) => w.span,
             Member::Cable(c) => c.span,
@@ -201,6 +203,33 @@ pub struct ConnectorInstance {
     pub name: Spanned<Ident>,
     pub type_name: Spanned<Ident>,
     pub ports: Vec<Port>,
+    pub span: Span,
+}
+
+/// `inline <name> ["<label>"] { <half>* <port>* }` — an inline (mid-harness)
+/// connector member: a mated plug/receptacle pair with one shared port set.
+/// Distinct from the "inline connector block" form of [`Connector`] — this is
+/// a first-class member addressed like an instance in wire endpoints
+/// (`ic_pedal.apps1`) and included by half in harness views
+/// (`include ic_pedal.female`).
+#[derive(Debug, Clone)]
+pub struct Inline {
+    pub name: Spanned<Ident>,
+    pub label: Option<Spanned<String>>,
+    /// `male: <Type>;` / `female: <Type>;` lines, kept faithful — keys are
+    /// validated in resolve, not the grammar.
+    pub halves: Vec<InlineHalfDecl>,
+    pub ports: Vec<Port>,
+    pub span: Span,
+}
+
+/// One `<key>: <Type>;` housing-half line inside an `inline` body.
+#[derive(Debug, Clone)]
+pub struct InlineHalfDecl {
+    /// `male` or `female` — checked in resolve so other keys can diagnose.
+    pub key: Spanned<Ident>,
+    /// A `connector_type` reference, resolved through the file's `use` scope.
+    pub type_name: Spanned<Ident>,
     pub span: Span,
 }
 
