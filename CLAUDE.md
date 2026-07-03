@@ -385,7 +385,14 @@ src/
 │   ├── parse/mod.rs     # chumsky parser over &[(Token, Span)] → ast::File
 │   ├── manifest/        # wirebug.toml loader + git-revision auto-fill
 │   ├── project/mod.rs   # walk-up discovery + transitive `use` loading → Project
-│   ├── resolve/mod.rs   # DefId registry, scopes, flattened ports, reference checks
+│   ├── resolve/         # DefId registry + reference checks, one pass per file
+│   │   ├── mod.rs       # data model (Resolved, *Facts) + the resolve() driver
+│   │   ├── register.rs  # pass 1: AST walk → DefInfo facts, local duplicates
+│   │   ├── scopes.rs    # per-file type scopes (own defs + `use` imports)
+│   │   ├── merge.rs     # MergeGroups: `extend` canonicals, orphans, dup guards
+│   │   ├── refs.rs      # flat-namespace lookups + instance/connector/inline/
+│   │   │                #   endpoint reference binding
+│   │   └── views.rs     # view subject binding + include/enclosure checks
 │   ├── elaborate/mod.rs # AST/registry → ir::Design; containment-cycle guard
 │   ├── ir/mod.rs        # id newtypes + elaborated Design/Instance/Port/Wire/View
 │   ├── validate/mod.rs  # wire arity (error) + --strict warnings
