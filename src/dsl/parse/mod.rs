@@ -90,6 +90,13 @@ enum ConnectorTypeItem {
     Layout(ConnectorLayout),
 }
 
+/// One entry of an `inline` body, parsed in any order and folded into an
+/// [`Inline`]: a housing-half line (`male:`/`female:`) or a port.
+enum InlineItem {
+    Half(InlineHalfDecl),
+    Port(Port),
+}
+
 /// Parse the significant token stream of one file into an [`ast::File`].
 pub fn parse_file(tokens: Vec<(Token, Span)>, file: FileId, src_len: usize) -> Parsed {
     let eoi = Span {
@@ -314,6 +321,56 @@ where
             type_name,
             ports,
             span: e.span(),
+        })
+        .boxed();
+
+    // --- Inline (mid-harness) connectors ---
+
+    // A `<key>: <Type>;` housing-half line. The key is any identifier here
+    // (`male`/`female` are validated in resolve, not the grammar) so a typo
+    // gets a targeted diagnostic instead of a generic parse error.
+    let inline_half = ident
+        .then_ignore(just(Token::Colon))
+        .then(ident)
+        .then_ignore(just(Token::Semicolon))
+        .map_with(|(key, type_name), e| InlineHalfDecl {
+            key,
+            type_name,
+            span: e.span(),
+        });
+
+    // Half lines and ports may interleave; the fold partitions them, each
+    // keeping its source order.
+    let inline_item = choice((
+        inline_half.map(InlineItem::Half),
+        port.clone().map(InlineItem::Port),
+    ));
+
+    let inline = just(Token::Inline)
+        .ignore_then(ident)
+        .then(string.or_not())
+        .then(
+            inline_item
+                .repeated()
+                .collect::<Vec<InlineItem>>()
+                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+        )
+        .map_with(|((name, label), items), e| {
+            let mut halves = Vec::new();
+            let mut ports = Vec::new();
+            for item in items {
+                match item {
+                    InlineItem::Half(h) => halves.push(h),
+                    InlineItem::Port(p) => ports.push(p),
+                }
+            }
+            Inline {
+                name,
+                label,
+                halves,
+                ports,
+                span: e.span(),
+            }
         })
         .boxed();
 
@@ -623,6 +680,7 @@ where
             port.map(Member::Port),
             connector_instance.map(Member::ConnectorInstance),
             connector.map(Member::Connector),
+            inline.map(Member::Inline),
             wire.map(Member::Wire),
             cable.map(Member::Cable),
             definition.map(Member::Definition),
@@ -777,6 +835,85 @@ mod tests {
         };
         assert_eq!(conn.name.node.as_str(), "hv");
         assert!(conn.description.is_none(), "description string is optional");
+    }
+
+    #[test]
+    fn inline_carries_halves_and_ports() {
+        let file = parse_ok(
+            r#"component c {
+                inline ic_pedal "Pedal branch" {
+                    male:   Dt04_6p;
+                    female: Dt06_6s;
+                    port apps1 "APPS1" pin 1;
+                    port apps2 "APPS2" pin 2;
+                    port gnd   "GND"   pin 3;
+                }
+            }"#,
+        );
+        let Member::Inline(inline) = &members(&file)[0] else {
+            panic!("expected an inline");
+        };
+        assert_eq!(inline.name.node.as_str(), "ic_pedal");
+        assert_eq!(
+            inline.label.as_ref().map(|l| l.node.as_str()),
+            Some("Pedal branch")
+        );
+        let halves: Vec<(&str, &str)> = inline
+            .halves
+            .iter()
+            .map(|h| (h.key.node.as_str(), h.type_name.node.as_str()))
+            .collect();
+        assert_eq!(halves, vec![("male", "Dt04_6p"), ("female", "Dt06_6s")]);
+        assert_eq!(inline.ports.len(), 3);
+        assert_eq!(inline.ports[0].name.node.as_str(), "apps1");
+        assert_eq!(
+            inline.ports[2]
+                .pins
+                .iter()
+                .map(|s| s.node)
+                .collect::<Vec<_>>(),
+            vec![3]
+        );
+    }
+
+    #[test]
+    fn inline_label_and_halves_are_optional() {
+        let file = parse_ok(r#"component c { inline ic { port sig "SIG" pin 1; } }"#);
+        let Member::Inline(inline) = &members(&file)[0] else {
+            panic!("expected an inline");
+        };
+        assert!(inline.label.is_none());
+        assert!(inline.halves.is_empty());
+        assert_eq!(inline.ports.len(), 1);
+    }
+
+    #[test]
+    fn inline_half_lines_and_ports_interleave() {
+        let file = parse_ok(
+            r#"component c { inline ic { port a "A" pin 1; female: F2p; port b "B" pin 2; } }"#,
+        );
+        let Member::Inline(inline) = &members(&file)[0] else {
+            panic!("expected an inline");
+        };
+        assert_eq!(inline.halves.len(), 1);
+        assert_eq!(inline.ports.len(), 2);
+        assert_eq!(inline.ports[1].name.node.as_str(), "b");
+    }
+
+    #[test]
+    fn inline_accepts_pub_ports() {
+        // `pub` parses (shared port grammar); resolve warns it has no effect.
+        let file = parse_ok(r#"component c { inline ic { pub port sig "SIG" pin 1; } }"#);
+        let Member::Inline(inline) = &members(&file)[0] else {
+            panic!("expected an inline");
+        };
+        assert_eq!(inline.ports[0].visibility, Visibility::Public);
+    }
+
+    #[test]
+    fn inline_without_designator_is_a_parse_error() {
+        let parsed = parse_str(r#"component c { inline { port sig "SIG" pin 1; } }"#);
+        assert!(!parsed.errors.is_empty(), "expected a parse error");
     }
 
     #[test]

@@ -358,7 +358,8 @@ impl<'a> Resolver<'a> {
                         );
                     }
                 }
-                Member::Wire(_) => {} // endpoints resolved in pass 2
+                Member::Inline(_) => {} // registered in the inline pass below
+                Member::Wire(_) => {}   // endpoints resolved in pass 2
                 Member::Cable(cable) => {
                     // endpoints resolved in pass 2; here, guard the designator.
                     let n = cable.name.node.as_str();
