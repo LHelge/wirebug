@@ -59,6 +59,9 @@ struct ComponentEntry {
     /// Connector designators: named inline `connector` groups and typed
     /// connector instances (what harness/pinout includes refer to).
     connectors: Vec<String>,
+    /// Inline (mid-harness) connectors: addressable like instances in wire
+    /// endpoints, included by housing half in harness views.
+    inlines: Vec<InlineEntry>,
     /// Nested component types, visible only inside this component.
     nested: HashMap<String, ComponentKey>,
 }
@@ -67,6 +70,13 @@ struct InstanceEntry {
     name: String,
     type_name: String,
     type_key: Option<ComponentKey>,
+}
+
+struct InlineEntry {
+    name: String,
+    ports: Vec<PortEntry>,
+    /// The declared housing halves (`male`/`female`), in source order.
+    halves: Vec<String>,
 }
 
 struct PortEntry {
@@ -104,6 +114,25 @@ pub(crate) fn build_index(project: &Project, resolved: &Resolved) -> CompletionI
         }
         for name in def.connectors.keys() {
             entry.connectors.push(name.to_string());
+        }
+        for (name, facts) in &def.inlines {
+            entry.inlines.push(InlineEntry {
+                name: name.to_string(),
+                ports: facts
+                    .ports
+                    .iter()
+                    .map(|(pname, pf)| PortEntry {
+                        name: pname.to_string(),
+                        label: pf.label.to_string(),
+                        public: true, // inline ports are always addressable
+                    })
+                    .collect(),
+                halves: ["male", "female"]
+                    .iter()
+                    .filter(|h| facts.declares(h))
+                    .map(|h| h.to_string())
+                    .collect(),
+            });
         }
         for &nested in &def.nested {
             entry.nested.insert(
@@ -331,6 +360,18 @@ impl CompletionIndex {
             .unwrap_or_default()
     }
 
+    fn inlines(&self, key: ComponentKey) -> Vec<CompletionItem> {
+        self.component(key)
+            .map(|entry| {
+                entry
+                    .inlines
+                    .iter()
+                    .map(|i| item(&i.name, CompletionItemKind::STRUCT, "inline connector"))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     fn connectors(&self, key: ComponentKey) -> Vec<CompletionItem> {
         self.component(key)
             .map(|entry| {
@@ -343,10 +384,24 @@ impl CompletionIndex {
             .unwrap_or_default()
     }
 
-    /// The pub ports of a named instance's type within `component`.
+    /// The pub ports of a named instance's type within `component` — or,
+    /// when the name is an inline connector's, its (always addressable)
+    /// port set.
     fn instance_ports(&self, component: ComponentKey, instance: &str) -> Vec<CompletionItem> {
-        self.component(component)
-            .and_then(|entry| entry.instances.iter().find(|i| i.name == instance))
+        let Some(entry) = self.component(component) else {
+            return Vec::new();
+        };
+        if let Some(inline) = entry.inlines.iter().find(|i| i.name == instance) {
+            return inline
+                .ports
+                .iter()
+                .map(|p| item(&p.name, CompletionItemKind::FIELD, &p.label))
+                .collect();
+        }
+        entry
+            .instances
+            .iter()
+            .find(|i| i.name == instance)
             .and_then(|i| i.type_key)
             .map(|key| self.ports(key, true))
             .unwrap_or_default()
@@ -379,6 +434,7 @@ impl CompletionIndex {
                 return self.instance_ports(component, instance);
             }
             let mut items = self.instances(component);
+            items.extend(self.inlines(component));
             items.extend(self.ports(component, false));
             return items;
         }
@@ -407,9 +463,15 @@ impl CompletionIndex {
                     .collect(),
                 [.., Token::Ident(_), Token::Colon] => self.visible_types(scope, cursor),
                 [.., Token::Pub] => keywords(&["port"]),
-                _ if cursor.at_statement_start() => {
-                    keywords(&["pub", "port", "wire", "cable", "connector", "component"])
-                }
+                _ if cursor.at_statement_start() => keywords(&[
+                    "pub",
+                    "port",
+                    "wire",
+                    "cable",
+                    "connector",
+                    "inline",
+                    "component",
+                ]),
                 _ => Vec::new(),
             },
             Some(Block::Cable) => {
@@ -443,6 +505,11 @@ impl CompletionIndex {
                     };
                     match kind.as_deref() {
                         Some("pinout") => self.connectors(subject),
+                        Some("harness") => {
+                            let mut items = self.instances(subject);
+                            items.extend(self.inlines(subject));
+                            items
+                        }
                         _ => self.instances(subject),
                     }
                 }
@@ -560,10 +627,23 @@ impl CompletionIndex {
     }
 
     /// The connector designators of a named instance's type — what a
-    /// harness `include inst.<connector>` refers to.
+    /// harness `include inst.<connector>` refers to. For an inline
+    /// connector the dot selects a housing half instead.
     fn instance_connectors(&self, subject: ComponentKey, instance: &str) -> Vec<CompletionItem> {
-        self.component(subject)
-            .and_then(|entry| entry.instances.iter().find(|i| i.name == instance))
+        let Some(entry) = self.component(subject) else {
+            return Vec::new();
+        };
+        if let Some(inline) = entry.inlines.iter().find(|i| i.name == instance) {
+            return inline
+                .halves
+                .iter()
+                .map(|h| item(h, CompletionItemKind::CONSTANT, "housing half"))
+                .collect();
+        }
+        entry
+            .instances
+            .iter()
+            .find(|i| i.name == instance)
             .and_then(|i| i.type_key)
             .map(|key| self.connectors(key))
             .unwrap_or_default()
@@ -1195,6 +1275,44 @@ mod tests {
             "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n    cable c \"C\" {\n        twisted {\n            wire white 0.5 [l.‸]\n        }\n    }\n}\n",
         );
         assert!(labels.contains(&"anode".to_string()), "{labels:?}");
+    }
+
+    const INLINE_MAIN: (&str, &str) = (
+        "main.wb",
+        "connector_type M2 \"M 2p\" { }\ncomponent Root {\n    inline ic {\n        male: M2;\n        port sig \"SIG\" pin 1;\n    }\n    pub port feed \"F\";\n    wire red 1 [feed, ic.sig];\n}\nview harness \"H\" {\n    include ic.male at (0, 0);\n}\n",
+    );
+
+    #[test]
+    fn endpoint_list_offers_inline_names_and_their_ports() {
+        let labels = complete_in(
+            &[INLINE_MAIN],
+            "connector_type M2 \"M 2p\" { }\ncomponent Root {\n    inline ic {\n        male: M2;\n        port sig \"SIG\" pin 1;\n    }\n    pub port feed \"F\";\n    wire red 1 [‸];\n}\n",
+        );
+        assert!(labels.contains(&"ic".to_string()), "inline: {labels:?}");
+
+        let labels = complete_in(
+            &[INLINE_MAIN],
+            "connector_type M2 \"M 2p\" { }\ncomponent Root {\n    inline ic {\n        male: M2;\n        port sig \"SIG\" pin 1;\n    }\n    pub port feed \"F\";\n    wire red 1 [ic.‸];\n}\n",
+        );
+        assert_eq!(labels, ["sig"], "inline ports after the dot");
+    }
+
+    #[test]
+    fn harness_include_dot_offers_declared_halves_of_an_inline() {
+        let labels = complete_in(
+            &[INLINE_MAIN],
+            "connector_type M2 \"M 2p\" { }\ncomponent Root {\n    inline ic {\n        male: M2;\n        port sig \"SIG\" pin 1;\n    }\n}\nview harness \"H\" {\n    include ic.‸\n}\n",
+        );
+        assert_eq!(labels, ["male"], "only the declared half: {labels:?}");
+    }
+
+    #[test]
+    fn harness_include_offers_inline_names() {
+        let labels = complete_in(
+            &[INLINE_MAIN],
+            "connector_type M2 \"M 2p\" { }\ncomponent Root {\n    inline ic {\n        male: M2;\n        port sig \"SIG\" pin 1;\n    }\n}\nview harness \"H\" {\n    include ‸\n}\n",
+        );
+        assert!(labels.contains(&"ic".to_string()), "{labels:?}");
     }
 
     #[test]

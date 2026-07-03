@@ -121,6 +121,19 @@ fn find(resolved: &Resolved, file: FileId, offset: usize) -> Option<Span> {
                     .map(|t| resolved.connector_types[t].ast.name.span);
             }
         }
+        // An inline's `male:`/`female:` type refs point at the connector type.
+        for facts in def.inlines.values() {
+            for half in &facts.ast.halves {
+                if hit(half.type_name.span) {
+                    let type_id = match half.key.node.as_str() {
+                        "male" => facts.male,
+                        "female" => facts.female,
+                        _ => None,
+                    };
+                    return type_id.map(|t| resolved.connector_types[t].ast.name.span);
+                }
+            }
+        }
 
         for member in &def.ast.members {
             let wires: Vec<&ast::Wire> = match member {
@@ -132,10 +145,17 @@ fn find(resolved: &Resolved, file: FileId, offset: usize) -> Option<Span> {
                 for ep in &wire.endpoints {
                     if let Some(inst) = &ep.instance {
                         if hit(inst.span) {
+                            if let Some(inline) = find_inline(resolved, d, inst.node.as_str()) {
+                                return Some(inline.ast.name.span);
+                            }
                             return find_instance(resolved, d, inst.node.as_str())
                                 .map(|f| f.ast.name.span);
                         }
                         if hit(ep.port.span) {
+                            if let Some(inline) = find_inline(resolved, d, inst.node.as_str()) {
+                                let port = PortName::from(ep.port.node.as_str());
+                                return inline.ports.get(&port).map(|p| p.span);
+                            }
                             let t = find_instance(resolved, d, inst.node.as_str())?.type_id?;
                             return find_port(resolved, t, ep.port.node.as_str());
                         }
@@ -163,6 +183,9 @@ fn find(resolved: &Resolved, file: FileId, offset: usize) -> Option<Span> {
                 if view.kind.node.as_str() == "pinout" {
                     return find_connector(resolved, subject, inc.instance.node.as_str());
                 }
+                if let Some(inline) = find_inline(resolved, subject, inc.instance.node.as_str()) {
+                    return Some(inline.ast.name.span);
+                }
                 return find_instance(resolved, subject, inc.instance.node.as_str())
                     .map(|f| f.ast.name.span);
             }
@@ -173,6 +196,18 @@ fn find(resolved: &Resolved, file: FileId, offset: usize) -> Option<Span> {
             if let Some(conn) = &inc.connector
                 && hit(conn.span)
             {
+                // An inline include's dot segment is a housing half: jump to
+                // the matching `male:`/`female:` line (the inline's name
+                // when that half isn't declared).
+                if let Some(inline) = find_inline(resolved, subject?, inc.instance.node.as_str()) {
+                    return inline
+                        .ast
+                        .halves
+                        .iter()
+                        .find(|h| h.key.node.as_str() == conn.node.as_str())
+                        .map(|h| h.key.span)
+                        .or(Some(inline.ast.name.span));
+                }
                 return find_connector(resolved, inst_type()?, conn.node.as_str());
             }
             for placement in &inc.ports {
@@ -197,6 +232,19 @@ fn find_instance<'a>(
         .fragments(d)
         .into_iter()
         .find_map(|frag| resolved.defs[frag].instances.get(&name))
+}
+
+/// The inline connector declaration for `name` in `d`'s merged component.
+fn find_inline<'a>(
+    resolved: &'a Resolved,
+    d: DefId,
+    name: &str,
+) -> Option<&'a resolve::InlineFacts<'a>> {
+    let name = InstanceName::from(name);
+    resolved
+        .fragments(d)
+        .into_iter()
+        .find_map(|frag| resolved.defs[frag].inlines.get(&name))
 }
 
 /// The port declaration span for `name` in `d`'s merged component.
@@ -420,6 +468,43 @@ mod tests {
         assert_eq!(
             target_of(&[main], "main.wb"),
             Some(("main.wb".into(), "j".into()))
+        );
+    }
+
+    const INLINE_MAIN_SRC: &str = "connector_type M2 \"M 2p\" { }\ncomponent Root {\n    pub port feed \"F\";\n    inline ic {\n        male: M2;\n        port sig \"SIG\" pin 1;\n    }\n    wire red 1 [feed, ic.sig];\n}\nview harness \"H\" {\n    include ic.male at (0, 0);\n}\n";
+
+    #[test]
+    fn inline_references_jump_to_their_declarations() {
+        let with_cursor = |needle: &str, marked: &str| {
+            let src = INLINE_MAIN_SRC.replacen(needle, marked, 1);
+            assert_ne!(src, INLINE_MAIN_SRC, "cursor target `{needle}` exists");
+            target_of(&[("main.wb", &src)], "main.wb")
+        };
+
+        // The half's type ref jumps to the connector_type.
+        assert_eq!(
+            with_cursor("male: M2;", "male: M‸2;"),
+            Some(("main.wb".into(), "M2".into()))
+        );
+        // An endpoint's instance segment jumps to the inline declaration.
+        assert_eq!(
+            with_cursor("wire red 1 [feed, ic.sig];", "wire red 1 [feed, i‸c.sig];"),
+            Some(("main.wb".into(), "ic".into()))
+        );
+        // Its port segment jumps to the inline's port.
+        assert_eq!(
+            with_cursor("wire red 1 [feed, ic.sig];", "wire red 1 [feed, ic.s‸ig];"),
+            Some(("main.wb".into(), "sig".into()))
+        );
+        // The include's base jumps to the inline; the half segment to the
+        // matching `male:` line.
+        assert_eq!(
+            with_cursor("include ic.male", "include i‸c.male"),
+            Some(("main.wb".into(), "ic".into()))
+        );
+        assert_eq!(
+            with_cursor("include ic.male", "include ic.ma‸le"),
+            Some(("main.wb".into(), "male".into()))
         );
     }
 
