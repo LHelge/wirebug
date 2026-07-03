@@ -6,8 +6,8 @@ use svg::node::element::{Circle, Group, Line, Path, Rectangle, Text};
 use super::bezier::{FLEX, flex};
 use super::layout::{CableBox, ConnectorNode, LooseWire, braid_partners};
 use super::{
-    HEADER_HEIGHT, LABEL_CHAR_WIDTH, NODE_PAD, PIN_COL_WIDTH, PIN_DOT_RADIUS, ROW_HEIGHT,
-    TWIST_PITCH,
+    BADGE_INSET, BADGE_SIZE, HEADER_HEIGHT, LABEL_CHAR_WIDTH, NODE_PAD, PIN_COL_WIDTH,
+    PIN_DOT_RADIUS, ROW_HEIGHT, TWIST_PITCH,
 };
 use crate::dsl::ir::WireColor;
 use crate::render::geometry::{Point, Side};
@@ -76,6 +76,30 @@ pub(super) fn render_node(node: &ConnectorNode) -> Group {
         .add(header_bg)
         .add(title)
         .add(subtitle);
+
+    // The housing-half chip of an inline connector: a small dark square in
+    // the header's top-right corner carrying "M" or "F".
+    if let Some(badge) = node.badge {
+        let bx = ox + node.width - BADGE_INSET - BADGE_SIZE;
+        let by = oy + BADGE_INSET;
+        group = group
+            .add(
+                Rectangle::new()
+                    .set("class", "inline-badge")
+                    .set("x", bx)
+                    .set("y", by)
+                    .set("width", BADGE_SIZE)
+                    .set("height", BADGE_SIZE)
+                    .set("rx", 3),
+            )
+            .add(
+                Text::new(badge)
+                    .set("class", "inline-badge-text")
+                    .set("x", bx + BADGE_SIZE / 2.0)
+                    .set("y", by + BADGE_SIZE / 2.0)
+                    .set("dominant-baseline", "central"),
+            );
+    }
 
     for (i, row) in node.pins.iter().enumerate() {
         let row_top = oy + HEADER_HEIGHT + i as f64 * ROW_HEIGHT;

@@ -21,12 +21,12 @@ use indexmap::IndexMap;
 
 use super::draw::wire_annotation;
 use super::{
-    BRAID_SECTION, CABLE_GAP, CABLE_LABEL_PAD, CHAR_WIDTH, HEADER_HEIGHT, LABEL_CHAR_WIDTH,
-    MIN_NODE_WIDTH, NODE_PAD, PIN_COL_WIDTH, ROW_HEIGHT, SVG_MARGIN,
+    BADGE_INSET, BADGE_SIZE, BRAID_SECTION, CABLE_GAP, CABLE_LABEL_PAD, CHAR_WIDTH, HEADER_HEIGHT,
+    LABEL_CHAR_WIDTH, MIN_NODE_WIDTH, NODE_PAD, PIN_COL_WIDTH, ROW_HEIGHT, SVG_MARGIN,
 };
 use crate::dsl::ir::{
-    CableMeta, CableName, ConnectorName, Design, Instance, InstanceName, Pin, PortName, WireColor,
-    WireEnd,
+    CableMeta, CableName, ConnectorName, ConnectorPropertyValue, Design, Half, Instance,
+    InstanceName, Pin, PortName, WireColor, WireEnd,
 };
 use crate::render::geometry::{Point, Side};
 
@@ -62,6 +62,9 @@ pub(super) struct ConnectorNode {
     /// [`PinRow::side`]s, used where a single facing is wanted.
     pub(super) facing: Side,
     pub(super) pins: Vec<PinRow>,
+    /// The housing-half chip (`"M"`/`"F"`) of an inline-connector include;
+    /// `None` for ordinary connectors.
+    pub(super) badge: Option<&'static str>,
 }
 
 impl ConnectorNode {
@@ -213,7 +216,8 @@ impl HarnessLayout {
             let visible = wired
                 .get(&(inc.instance.clone(), conn.clone()))
                 .unwrap_or(&no_pins);
-            let Some(node) = build_node(child, conn, visible, inc.x * step, inc.y * step) else {
+            let Some(node) = build_node(child, conn, visible, inc.x * step, inc.y * step, inc.half)
+            else {
                 continue;
             };
             index.insert((inc.instance.clone(), conn.clone()), nodes.len());
@@ -433,12 +437,17 @@ pub(super) struct ViewBox {
 /// Build one connector node from `child`'s ports that belong to connector
 /// `conn`, centred at world (`cx`, `cy`). Returns `None` if the connector
 /// has no ports on this instance (already reported by resolve as unknown).
+///
+/// `half` is the housing half an inline-connector include selected: the
+/// node's subtitle carries that half's part identity (each loom's drawing
+/// shows the half crimped onto it) and its header gets an M/F chip.
 fn build_node(
     child: &Instance,
     conn: &ConnectorName,
     visible: &HashSet<PortName>,
     cx: f64,
     cy: f64,
+    half: Option<Half>,
 ) -> Option<ConnectorNode> {
     // `found` (the connector exists on this child, with its optional
     // description) comes from any port of the connector, so a fully
@@ -479,15 +488,39 @@ fn build_node(
         .label
         .clone()
         .unwrap_or_else(|| child.type_name.to_string());
-    let subtitle = match &description {
-        Some(d) => format!("{conn} · {d}"),
-        None => conn.to_string(),
+
+    // An inline include's subtitle shows the selected half's part identity
+    // instead of the (absent) connector description: `<designator> ·
+    // <description> · <part>`, the part omitted when it just repeats the
+    // description.
+    let half_meta = half.and_then(|h| child.inline.as_ref()?.half(h));
+    let badge = half_meta.and(half).map(Half::badge);
+    let subtitle = match (half_meta, &description) {
+        (Some(hm), _) => {
+            let part = match hm.properties.get("part") {
+                Some(ConnectorPropertyValue::Str(p)) if p != &hm.description => {
+                    format!(" · {p}")
+                }
+                _ => String::new(),
+            };
+            format!("{conn} · {}{part}", hm.description)
+        }
+        (None, Some(d)) => format!("{conn} · {d}"),
+        (None, None) => conn.to_string(),
     };
 
     let widest_label = rows.iter().map(|r| r.2.chars().count()).max().unwrap_or(0);
     let body_width = PIN_COL_WIDTH + widest_label as f64 * CHAR_WIDTH + 2.0 * NODE_PAD;
-    let header_width =
-        title.chars().count().max(subtitle.chars().count()) as f64 * CHAR_WIDTH + 2.0 * NODE_PAD;
+    // The badge chip sits in the header's top-right corner; give the header
+    // room for it on both sides so the centred title stays clear of it.
+    let badge_allowance = if badge.is_some() {
+        2.0 * (BADGE_SIZE + BADGE_INSET)
+    } else {
+        0.0
+    };
+    let header_width = title.chars().count().max(subtitle.chars().count()) as f64 * CHAR_WIDTH
+        + 2.0 * NODE_PAD
+        + badge_allowance;
     let width = body_width.max(header_width).max(MIN_NODE_WIDTH);
     let height = HEADER_HEIGHT + rows.len() as f64 * ROW_HEIGHT;
 
@@ -513,6 +546,7 @@ fn build_node(
         height,
         facing: Side::East,
         pins,
+        badge,
     })
 }
 
@@ -875,7 +909,7 @@ component Root {
         };
 
         let visible: HashSet<PortName> = [PortName::from("p")].into_iter().collect();
-        let node = build_node(&instance, &connector, &visible, 0.0, 0.0).expect("node");
+        let node = build_node(&instance, &connector, &visible, 0.0, 0.0, None).expect("node");
         let expected = title.chars().count() as f64 * CHAR_WIDTH + 2.0 * NODE_PAD;
         assert!(node.width >= expected);
     }
@@ -918,11 +952,12 @@ component Root {
         let visible: HashSet<PortName> = [PortName::from("a"), PortName::from("c")]
             .into_iter()
             .collect();
-        let node = build_node(&instance, &connector, &visible, 0.0, 0.0).expect("node");
+        let node = build_node(&instance, &connector, &visible, 0.0, 0.0, None).expect("node");
         let rows: Vec<&str> = node.pins.iter().map(|r| r.port.as_str()).collect();
         assert_eq!(rows, ["a", "c"], "only wired pins, still in pin order");
 
-        let node = build_node(&instance, &connector, &HashSet::new(), 0.0, 0.0).expect("node");
+        let node =
+            build_node(&instance, &connector, &HashSet::new(), 0.0, 0.0, None).expect("node");
         assert!(node.pins.is_empty(), "unwired include is a header-only box");
         assert_eq!(node.height, HEADER_HEIGHT);
     }

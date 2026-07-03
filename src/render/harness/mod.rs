@@ -52,6 +52,11 @@ pub(super) const LABEL_CHAR_WIDTH: f64 = 5.5;
 pub(super) const CABLE_LABEL_PAD: f64 = 12.0;
 /// Radius of the dot marking a pin's cable attach point.
 pub(super) const PIN_DOT_RADIUS: f64 = 3.0;
+/// Side length of the square M/F housing-half chip on an inline node's
+/// header.
+pub(super) const BADGE_SIZE: f64 = 16.0;
+/// Gap between the badge chip and the header's corner.
+pub(super) const BADGE_INSET: f64 = 4.0;
 /// Minimum vertical gap between two cable boxes stacked on the spine.
 pub(super) const CABLE_GAP: f64 = 24.0;
 /// Nominal width of one half-twist in a braided (twisted-pair) box run.
@@ -74,6 +79,8 @@ pub(super) const STYLE: &str = "\
 .pin-num { font: italic 10px sans-serif; fill: #555; text-anchor: middle; }
 .pin-label { font: 11px sans-serif; }
 .pin-dot { fill: black; }
+.connector .inline-badge { fill: #333; stroke: none; }
+.inline-badge-text { font: bold 10px sans-serif; fill: white; text-anchor: middle; }
 .cable-wire-casing { fill: none; stroke: black; stroke-width: 4; stroke-linecap: butt; }
 .cable-wire { fill: none; stroke-width: 2; }
 .cable-wire-tracer { fill: none; stroke-width: 2; stroke-dasharray: 4 4; }
@@ -285,6 +292,70 @@ component sys {
             !svg.contains("AUX"),
             "unwired pin is scoped out of the table"
         );
+    }
+
+    /// One loom view per housing half: each drawing titles the inline node
+    /// with its own half's part identity and M/F chip, and auto-scoping
+    /// keeps the other loom's conductors out.
+    #[test]
+    fn inline_include_shows_the_selected_half() {
+        let design = design_from(
+            r#"
+connector_type dt04_4p "Deutsch DT04-4P" { part: "DT04-4P"; }
+connector_type dt06_4s "Deutsch DT06-4S" { part: "DT06-4S"; }
+component sys {
+    ecu: dev "ECU";
+    pedal: dev "Pedal";
+    inline ic "Pedal branch" {
+        male: dt04_4p;
+        female: dt06_4s;
+        port sig "SIG" pin 1;
+    }
+    cable engine_side { wire red 1 "SIG-A" [ecu.x, ic.sig]; }
+    cable pedal_side { wire blue 1 "SIG-B" [ic.sig, pedal.x]; }
+    component dev {
+        connector j "J 1p" {
+            pub port x "X" pin 1;
+        }
+    }
+}
+view harness "Engine bay" {
+    include ecu.j at (0, 0);
+    include ic.female at (12, 0);
+}
+view harness "Pedal stub" {
+    include ic.male at (0, 0);
+    include pedal.j at (12, 0);
+}
+"#,
+        );
+
+        let engine = design
+            .views
+            .iter()
+            .find(|v| v.title == "Engine bay")
+            .unwrap();
+        let svg = render(&design, engine);
+        assert!(svg.contains("ic · Deutsch DT06-4S · DT06-4S"), "{svg}");
+        assert!(svg.contains("class=\"inline-badge\""));
+        assert!(svg.contains(">\nF\n</text>"));
+        assert!(!svg.contains("DT04-4P"), "the male half stays out");
+        assert!(svg.contains("SIG-A"), "engine-side conductor draws");
+        assert!(!svg.contains("SIG-B"), "pedal-side conductor is scoped out");
+
+        let pedal = design
+            .views
+            .iter()
+            .find(|v| v.title == "Pedal stub")
+            .unwrap();
+        let svg = render(&design, pedal);
+        assert!(svg.contains("ic · Deutsch DT04-4P · DT04-4P"), "{svg}");
+        assert!(svg.contains(">\nM\n</text>"));
+        assert!(!svg.contains("DT06-4S"), "the female half stays out");
+        assert!(svg.contains("SIG-B"));
+        assert!(!svg.contains("SIG-A"));
+        // The inline's label titles the node in both drawings.
+        assert!(svg.contains("Pedal branch"));
     }
 
     #[test]
