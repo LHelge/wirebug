@@ -363,3 +363,37 @@ view schematic "M" { include l at (0, 0); }
         .assert()
         .success();
 }
+
+#[test]
+fn check_rejects_an_undeclared_inline_half() {
+    let tmp = tempdir().expect("tempdir");
+    let main = tmp.path().join("main.wb");
+    std::fs::write(
+        tmp.path().join("wirebug.toml"),
+        "[project]\nname = \"t\"\nversion = \"0.0.0\"\n",
+    )
+    .expect("write wirebug.toml");
+    std::fs::write(
+        &main,
+        r#"
+connector_type M2 "M 2p" { }
+component m {
+    pub port a "A";
+    inline ic {
+        male: M2;
+        port sig "SIG" pin 1;
+    }
+    wire red 1 [a, ic.sig];
+}
+view harness "H" { include ic.female at (0, 0); }
+"#,
+    )
+    .expect("write main.wb");
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", main.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("undeclared_inline_half"));
+}

@@ -1,0 +1,69 @@
+// A minimal loom split by an inline connector: the ECU's harness ends at
+// the female half, the pedal stub starts at the male half.
+
+connector_type Dt04_3p "Deutsch DT04-3P" {
+    part: "DT04-3P";
+    layout grid {
+        rows: 1;
+        cols: 3;
+        numbering: row_major;
+    }
+}
+
+connector_type Dt06_3s "Deutsch DT06-3S" {
+    part: "DT06-3S";
+    layout grid {
+        rows: 1;
+        cols: 3;
+        numbering: row_major;
+    }
+}
+
+component Vehicle {
+    ecu: Device "ECU";
+    pedal: Device "Pedal";
+
+    inline ic_pedal "Pedal branch" {
+        male:   Dt04_3p;
+        female: Dt06_3s;
+        port apps1 "APPS1" pin 1;
+        port apps2 "APPS2" pin 2;
+        port gnd   "GND"   pin 3;
+    }
+
+    cable engine_side "Engine bay loom" {
+        type: "3-core";
+        length: 1.6;
+        wire green 0.5 "APPS1-A" [ecu.a, ic_pedal.apps1];
+        wire yellow 0.5 "APPS2-A" [ecu.b, ic_pedal.apps2];
+        wire black 0.5 "GND-A" [ecu.gnd, ic_pedal.gnd];
+    }
+
+    cable pedal_side "Pedal stub" {
+        type: "3-core";
+        length: 0.4;
+        wire green 0.5 "APPS1-B" [ic_pedal.apps1, pedal.a];
+        wire yellow 0.5 "APPS2-B" [ic_pedal.apps2, pedal.b];
+        wire black 0.5 "GND-B" [ic_pedal.gnd, pedal.gnd];
+    }
+
+    component Device {
+        connector x1 "JST XH 3p" {
+            pub port a   "A"   pin 1;
+            pub port b   "B"   pin 2;
+            pub port gnd "GND" pin 3;
+        }
+    }
+}
+
+view harness "Engine bay loom" {
+    grid: 20;
+    include ecu.x1 at (0, 0);
+    include ic_pedal.female at (14, 0);
+}
+
+view harness "Pedal stub" {
+    grid: 20;
+    include ic_pedal.male at (0, 0);
+    include pedal.x1 at (14, 0);
+}

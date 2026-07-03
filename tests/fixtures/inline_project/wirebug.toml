@@ -1,0 +1,5 @@
+[project]
+name = "inline-project"
+version = "0.1.0"
+description = "Inline-connector fixture: a loom split by a mated pair"
+revision = "fixture"
