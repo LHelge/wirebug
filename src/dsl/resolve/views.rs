@@ -11,7 +11,7 @@ use crate::dsl::diagnostics::Problem;
 use crate::dsl::ir::{ConnectorName, InstanceName, PortName, Side, ViewKind};
 use crate::dsl::span::{FileId, Span, Spanned};
 
-use super::{DefId, Resolver, ViewBinding};
+use super::{DefId, InlineFacts, Resolver, ViewBinding};
 
 impl<'a> Resolver<'a> {
     /// Validate one include's `ports { }` placements against the included
@@ -246,6 +246,54 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    /// A harness include of an inline connector selects a housing half:
+    /// `include <inline>.male` or `include <inline>.female`. The half must
+    /// be one of those two words and must be declared on the inline; a
+    /// `ports { }` block is as wrong here as on any harness include.
+    fn check_inline_include(
+        &self,
+        inc: &ast::Include,
+        facts: &InlineFacts<'a>,
+        file: FileId,
+        problems: &mut Vec<Problem>,
+    ) {
+        let inline = inc.instance.node.as_str();
+        let Some(half) = &inc.connector else {
+            problems.push(Problem::WrongIncludeForm {
+                message: "an inline connector include must select a housing half".to_string(),
+                help: format!("write `include {inline}.male` or `include {inline}.female`"),
+                src: self.project.source(file),
+                at: inc.instance.span.into(),
+            });
+            return;
+        };
+        if let Some(first) = inc.ports.first() {
+            problems.push(Problem::WrongIncludeForm {
+                message: "a harness include draws a whole connector, not selected ports"
+                    .to_string(),
+                help: "remove the `ports { }` block from this harness include".to_string(),
+                src: self.project.source(file),
+                at: first.span.into(),
+            });
+        }
+        let wanted = half.node.as_str();
+        if wanted != "male" && wanted != "female" {
+            problems.push(Problem::UnknownInlineHalf {
+                found: wanted.to_string(),
+                inline: inline.to_string(),
+                src: self.project.source(file),
+                at: half.span.into(),
+            });
+        } else if !facts.declares(wanted) {
+            problems.push(Problem::UndeclaredInlineHalf {
+                half: wanted.to_string(),
+                inline: inline.to_string(),
+                src: self.project.source(file),
+                at: half.span.into(),
+            });
+        }
+    }
+
     /// A pinout include names a connector on the view subject itself:
     /// `include <connector> at (x, y);`. It carries neither an instance
     /// connector segment nor a schematic `ports { }` block.
@@ -300,10 +348,13 @@ impl<'a> Resolver<'a> {
 
     /// Validate that a view doesn't include the same rendered target twice.
     /// Schematic views render whole instances, while harness views render
-    /// instance connectors, so their duplicate keys differ.
+    /// instance connectors, so their duplicate keys differ. An inline
+    /// connector keys on its name alone — including both halves of one
+    /// inline would claim every conductor twice, so it's a duplicate too.
     fn check_duplicate_includes(
         &self,
         view: &ast::View,
+        subject: DefId,
         file: FileId,
         problems: &mut Vec<Problem>,
     ) {
@@ -311,7 +362,16 @@ impl<'a> Resolver<'a> {
         let view_kind = ViewKind::from(view.kind.node.as_str());
         let is_harness = view_kind.is_harness();
         for inc in &view.includes {
-            let Some(target) = include_target(inc, is_harness) else {
+            let name = inc.instance.node.as_str();
+            let is_inline = self
+                .lookup_inline(subject, &InstanceName::from(name))
+                .is_some();
+            let target = if is_inline {
+                Some(name.to_string())
+            } else {
+                include_target(inc, is_harness)
+            };
+            let Some(target) = target else {
                 continue;
             };
             if let Some(&first) = seen.get(&target) {
@@ -382,7 +442,7 @@ impl<'a> Resolver<'a> {
                 };
                 if let Some(s) = subject {
                     self.check_enclosure(view, s, FileId(fi), &mut problems);
-                    self.check_duplicate_includes(view, FileId(fi), &mut problems);
+                    self.check_duplicate_includes(view, s, FileId(fi), &mut problems);
                     let is_harness = view_kind.is_harness();
                     for inc in &view.includes {
                         if view_kind.is_pinout() {
@@ -391,6 +451,24 @@ impl<'a> Resolver<'a> {
                         }
                         let name = inc.instance.node.as_str();
                         match self.lookup_instance(s, &InstanceName::from(name)) {
+                            None if is_harness
+                                && let Some(facts) =
+                                    self.lookup_inline(s, &InstanceName::from(name)) =>
+                            {
+                                self.check_inline_include(inc, facts, FileId(fi), &mut problems);
+                            }
+                            None if self.lookup_inline(s, &InstanceName::from(name)).is_some() => {
+                                problems.push(Problem::WrongIncludeForm {
+                                    message:
+                                        "an inline connector renders in harness views, not here"
+                                            .to_string(),
+                                    help: "include the devices it connects instead, or move \
+                                           this include to a harness view"
+                                        .to_string(),
+                                    src: self.project.source(FileId(fi)),
+                                    at: inc.instance.span.into(),
+                                });
+                            }
                             None => problems.push(Problem::UnknownInclude {
                                 name: name.to_string(),
                                 src: self.project.source(FileId(fi)),

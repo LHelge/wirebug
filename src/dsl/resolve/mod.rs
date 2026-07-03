@@ -71,6 +71,25 @@ pub struct ConnectorInstFacts<'a> {
     pub index: usize,
 }
 
+/// An inline (mid-harness) connector member: its own port set (not
+/// flattened into the component's ports — wire endpoints address it like
+/// an instance) and the resolved connector type of each declared half.
+pub struct InlineFacts<'a> {
+    pub ast: &'a ast::Inline,
+    pub ports: IndexMap<PortName, PortFacts<'a>>,
+    pub male: Option<ConnectorTypeId>,
+    pub female: Option<ConnectorTypeId>,
+}
+
+impl InlineFacts<'_> {
+    /// Whether a half was *declared* (even if its type failed to resolve —
+    /// an unresolved type already reported and shouldn't double-report as
+    /// an undeclared half).
+    pub fn declares(&self, half: &str) -> bool {
+        self.ast.halves.iter().any(|h| h.key.node.as_str() == half)
+    }
+}
+
 /// A resolved component definition.
 pub struct DefInfo<'a> {
     pub name: &'a str,
@@ -81,6 +100,8 @@ pub struct DefInfo<'a> {
     pub ports: IndexMap<PortName, PortFacts<'a>>,
     pub connectors: IndexMap<ConnectorName, ConnectorInstFacts<'a>>,
     pub instances: IndexMap<InstanceName, InstFacts<'a>>,
+    /// Inline (mid-harness) connectors, sharing the instance namespace.
+    pub inlines: IndexMap<InstanceName, InlineFacts<'a>>,
     pub nested: Vec<DefId>,
 }
 
@@ -211,6 +232,7 @@ pub fn resolve(project: &Project) -> Resolved<'_> {
         .collect();
     r.resolve_instances(&envs);
     r.resolve_connector_instances(&connector_type_scope);
+    r.resolve_inline_halves(&connector_type_scope);
     r.apply_connector_types();
     r.resolve_endpoints();
     let views = r.resolve_views(&roots_by_file);
@@ -268,12 +290,14 @@ impl<'a> Resolver<'a> {
             ports: IndexMap::new(),
             connectors: IndexMap::new(),
             instances: IndexMap::new(),
+            inlines: IndexMap::new(),
             nested: Vec::new(),
         });
 
         let mut ports: IndexMap<PortName, PortFacts<'a>> = IndexMap::new();
         let mut connectors: IndexMap<ConnectorName, ConnectorInstFacts<'a>> = IndexMap::new();
         let mut instances: IndexMap<InstanceName, InstFacts<'a>> = IndexMap::new();
+        let mut inlines: IndexMap<InstanceName, InlineFacts<'a>> = IndexMap::new();
         let mut nested = Vec::new();
         let mut connector_index = 0;
         let mut connector_names: HashMap<&str, Span> = HashMap::new();
@@ -341,12 +365,18 @@ impl<'a> Resolver<'a> {
                 }
                 Member::Instance(inst) => {
                     let name = InstanceName::from(inst.name.node.as_str());
-                    if let Some(first) = instances.get(&name) {
+                    // Inlines share the instance namespace (wire endpoints
+                    // address both the same way).
+                    let first = instances
+                        .get(&name)
+                        .map(|f| f.ast.name.span)
+                        .or_else(|| inlines.get(&name).map(|f| f.ast.name.span));
+                    if let Some(first) = first {
                         self.problems.push(Problem::DuplicateInstance {
                             name: name.to_string(),
                             src: self.project.source(file),
                             at: inst.name.span.into(),
-                            first: first.ast.name.span.into(),
+                            first: first.into(),
                         });
                     } else {
                         instances.insert(
@@ -358,8 +388,47 @@ impl<'a> Resolver<'a> {
                         );
                     }
                 }
-                Member::Inline(_) => {} // registered in the inline pass below
-                Member::Wire(_) => {}   // endpoints resolved in pass 2
+                Member::Inline(inline) => {
+                    let name = InstanceName::from(inline.name.node.as_str());
+                    let first = instances
+                        .get(&name)
+                        .map(|f| f.ast.name.span)
+                        .or_else(|| inlines.get(&name).map(|f| f.ast.name.span));
+                    if let Some(first) = first {
+                        self.problems.push(Problem::DuplicateInstance {
+                            name: name.to_string(),
+                            src: self.project.source(file),
+                            at: inline.name.span.into(),
+                            first: first.into(),
+                        });
+                        continue;
+                    }
+                    // The inline's own port set — a fresh map, so its port
+                    // names only collide within the inline. `pub` is
+                    // meaningless here: the ports are only addressable
+                    // within the defining component.
+                    let mut inline_ports: IndexMap<PortName, PortFacts<'a>> = IndexMap::new();
+                    for port in &inline.ports {
+                        if port.visibility == ast::Visibility::Public {
+                            self.problems.push(Problem::InlinePubPort {
+                                src: self.project.source(file),
+                                at: port.name.span.into(),
+                            });
+                        }
+                        self.add_port(&mut inline_ports, port, None, file);
+                    }
+                    self.check_duplicate_pins(inline.name.node.as_str(), &inline.ports, file);
+                    inlines.insert(
+                        name,
+                        InlineFacts {
+                            ast: inline,
+                            ports: inline_ports,
+                            male: None,
+                            female: None,
+                        },
+                    );
+                }
+                Member::Wire(_) => {} // endpoints resolved in pass 2
                 Member::Cable(cable) => {
                     // endpoints resolved in pass 2; here, guard the designator.
                     let n = cable.name.node.as_str();
@@ -384,6 +453,7 @@ impl<'a> Resolver<'a> {
         self.defs[id].ports = ports;
         self.defs[id].connectors = connectors;
         self.defs[id].instances = instances;
+        self.defs[id].inlines = inlines;
         self.defs[id].nested = nested;
         id
     }
@@ -670,16 +740,27 @@ impl<'a> Resolver<'a> {
             let mut ports: HashMap<String, Span> = HashMap::new();
             for &f in group {
                 let file = self.defs[f].file;
-                for (name, facts) in &self.defs[f].instances {
+                // Instances and inlines share one namespace across fragments.
+                let named = self.defs[f]
+                    .instances
+                    .iter()
+                    .map(|(name, facts)| (name, facts.ast.name.span))
+                    .chain(
+                        self.defs[f]
+                            .inlines
+                            .iter()
+                            .map(|(name, facts)| (name, facts.ast.name.span)),
+                    );
+                for (name, span) in named {
                     if let Some(first) = instances.get(name.as_str()).copied() {
                         problems.push(Problem::DuplicateInstance {
                             name: name.to_string(),
                             src: self.project.source(file),
-                            at: facts.ast.name.span.into(),
+                            at: span.into(),
                             first: first.into(),
                         });
                     } else {
-                        instances.insert(name.to_string(), facts.ast.name.span);
+                        instances.insert(name.to_string(), span);
                     }
                 }
                 for (name, facts) in &self.defs[f].ports {
@@ -717,6 +798,15 @@ impl<'a> Resolver<'a> {
             .fragments(d)
             .into_iter()
             .find_map(|f| self.defs[f].instances.get(name))
+    }
+
+    /// Find an inline connector by name across every fragment of `d`'s
+    /// merged component (inlines share the instance namespace).
+    fn lookup_inline(&self, d: DefId, name: &InstanceName) -> Option<&InlineFacts<'a>> {
+        self.groups
+            .fragments(d)
+            .into_iter()
+            .find_map(|f| self.defs[f].inlines.get(name))
     }
 
     /// Find a port by name across every fragment of `d`'s merged component.
@@ -815,6 +905,58 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    /// Resolve each inline's `male:`/`female:` housing-half lines: validate
+    /// the keys and bind each half's connector type through the defining
+    /// file's connector-type scope.
+    fn resolve_inline_halves(
+        &mut self,
+        connector_type_scope: &HashMap<FileId, HashMap<String, ConnectorTypeId>>,
+    ) {
+        for d in 0..self.defs.len() {
+            let file = self.defs[d].file;
+            let env = &connector_type_scope[&file];
+            let inline_names: Vec<InstanceName> = self.defs[d].inlines.keys().cloned().collect();
+            for name in inline_names {
+                let inline_ast = self.defs[d].inlines[&name].ast;
+                let mut seen: HashMap<&str, Span> = HashMap::new();
+                for half in &inline_ast.halves {
+                    let key = half.key.node.as_str();
+                    if key != "male" && key != "female" {
+                        self.problems.push(Problem::UnknownInlineProperty {
+                            key: key.to_string(),
+                            src: self.project.source(file),
+                            at: half.key.span.into(),
+                        });
+                        continue;
+                    }
+                    if let Some(&first) = seen.get(key) {
+                        self.problems.push(Problem::DuplicateInlineHalf {
+                            half: key.to_string(),
+                            src: self.project.source(file),
+                            at: half.key.span.into(),
+                            first: first.into(),
+                        });
+                        continue;
+                    }
+                    seen.insert(key, half.key.span);
+                    let type_id = env.get(half.type_name.node.as_str()).copied();
+                    if type_id.is_none() {
+                        self.problems.push(Problem::UndefinedConnectorType {
+                            name: half.type_name.node.as_str().to_string(),
+                            src: self.project.source(file),
+                            at: half.type_name.span.into(),
+                        });
+                    }
+                    let facts = &mut self.defs[d].inlines[&name];
+                    match key {
+                        "male" => facts.male = type_id,
+                        _ => facts.female = type_id,
+                    }
+                }
+            }
+        }
+    }
+
     /// Fill each typed connector's port `ConnectorRef.description` from its
     /// resolved connector type. Pass 1 registered the ports without one —
     /// the type wasn't resolved yet.
@@ -897,6 +1039,20 @@ impl<'a> Resolver<'a> {
             Some(inst) => {
                 let iname = inst.node.as_str();
                 let Some(facts) = self.lookup_instance(d, &InstanceName::from(iname)) else {
+                    // Not an instance — an inline connector, perhaps. Its
+                    // ports are addressable regardless of `pub`.
+                    if let Some(inline) = self.lookup_inline(d, &InstanceName::from(iname)) {
+                        return if inline.ports.contains_key(&PortName::from(port)) {
+                            None
+                        } else {
+                            Some(Problem::UnknownPort {
+                                port: port.to_string(),
+                                on: format!(" on inline `{iname}`"),
+                                src: self.project.source(file),
+                                at: ep.port.span.into(),
+                            })
+                        };
+                    }
                     return Some(Problem::UnknownInstance {
                         name: iname.to_string(),
                         src: self.project.source(file),
@@ -1056,6 +1212,159 @@ mod tests {
             "component m { } view schematic \"V\" { include ghost at (0, 0); }\n",
         )]);
         assert!(has(&p, "wirebug::unknown_include"), "{:?}", codes(&p));
+    }
+
+    /// A one-component project with an inline connector: `m` holds a `leaf`
+    /// instance `l`, the given inline body as `inline ic { ... }`, and the
+    /// given extra members/views appended after it.
+    fn inline_project(inline_body: &str, rest: &str) -> Vec<Problem> {
+        problems(&[
+            (
+                "main.wb",
+                &format!(
+                    "use leaf from \"leaf.wb\";\nconnector_type M2 \"M 2p\" {{ }}\nconnector_type F2 \"F 2p\" {{ }}\ncomponent m {{ l: leaf; inline ic {{ {inline_body} }} {rest} }}\n"
+                ),
+            ),
+            ("leaf.wb", "component leaf { pub port a \"A\"; }\n"),
+        ])
+    }
+
+    #[test]
+    fn inline_wire_endpoint_resolves() {
+        let p = inline_project(
+            "male: M2; female: F2; port a \"A\" pin 1;",
+            "wire red 1 [l.a, ic.a];",
+        );
+        assert!(p.is_empty(), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn inline_shares_the_instance_namespace() {
+        let p = inline_project("port a \"A\" pin 1;", "ic: leaf;");
+        assert!(has(&p, "wirebug::duplicate_instance"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn inline_duplicate_port_is_reported() {
+        let p = inline_project("port a \"A\" pin 1; port a \"A2\" pin 2;", "");
+        assert!(has(&p, "wirebug::duplicate_port"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn inline_duplicate_pin_is_reported() {
+        let p = inline_project("port a \"A\" pin 1; port b \"B\" pin 1;", "");
+        assert!(
+            has(&p, "wirebug::duplicate_connector_pin"),
+            "{:?}",
+            codes(&p)
+        );
+    }
+
+    #[test]
+    fn inline_pub_port_warns() {
+        let p = inline_project("pub port a \"A\" pin 1;", "");
+        assert!(has(&p, "wirebug::inline_pub_port"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn unknown_inline_property_is_reported() {
+        let p = inline_project("plug: M2; port a \"A\" pin 1;", "");
+        assert!(
+            has(&p, "wirebug::unknown_inline_property"),
+            "{:?}",
+            codes(&p)
+        );
+    }
+
+    #[test]
+    fn duplicate_inline_half_is_reported() {
+        let p = inline_project("male: M2; male: F2; port a \"A\" pin 1;", "");
+        assert!(has(&p, "wirebug::duplicate_inline_half"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn undefined_inline_half_type_is_reported() {
+        let p = inline_project("male: Ghost2p; port a \"A\" pin 1;", "");
+        assert!(
+            has(&p, "wirebug::undefined_connector_type"),
+            "{:?}",
+            codes(&p)
+        );
+    }
+
+    #[test]
+    fn unknown_port_on_inline_is_reported() {
+        let p = inline_project("port a \"A\" pin 1;", "wire red 1 [l.a, ic.nope];");
+        assert!(has(&p, "wirebug::unknown_port"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn bare_inline_harness_include_is_wrong_form() {
+        let p = inline_project(
+            "male: M2; port a \"A\" pin 1;",
+            "} view harness \"V\" { include ic at (0, 0); ",
+        );
+        assert!(has(&p, "wirebug::wrong_include_form"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn unknown_inline_half_in_include_is_reported() {
+        let p = inline_project(
+            "male: M2; port a \"A\" pin 1;",
+            "} view harness \"V\" { include ic.plug at (0, 0); ",
+        );
+        assert!(has(&p, "wirebug::unknown_inline_half"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn undeclared_inline_half_in_include_is_reported() {
+        let p = inline_project(
+            "male: M2; port a \"A\" pin 1;",
+            "} view harness \"V\" { include ic.female at (0, 0); ",
+        );
+        assert!(
+            has(&p, "wirebug::undeclared_inline_half"),
+            "{:?}",
+            codes(&p)
+        );
+    }
+
+    #[test]
+    fn both_halves_in_one_view_is_a_duplicate_include() {
+        let p = inline_project(
+            "male: M2; female: F2; port a \"A\" pin 1;",
+            "} view harness \"V\" { include ic.male at (0, 0); include ic.female at (10, 0); ",
+        );
+        assert!(
+            has(&p, "wirebug::duplicate_view_include"),
+            "{:?}",
+            codes(&p)
+        );
+    }
+
+    #[test]
+    fn schematic_include_of_inline_is_wrong_form() {
+        let p = inline_project(
+            "male: M2; port a \"A\" pin 1;",
+            "} view schematic \"V\" { include ic at (0, 0); ",
+        );
+        assert!(has(&p, "wirebug::wrong_include_form"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn inline_is_wireable_from_another_fragment() {
+        let p = problems(&[
+            (
+                "main.wb",
+                "use m from \"loom.wb\";\nuse leaf from \"leaf.wb\";\ncomponent m { l: leaf; }\n",
+            ),
+            (
+                "loom.wb",
+                "extend m { inline ic { port a \"A\" pin 1; } wire red 1 [l.a, ic.a]; }\n",
+            ),
+            ("leaf.wb", "component leaf { pub port a \"A\"; }\n"),
+        ]);
+        assert!(p.is_empty(), "{:?}", codes(&p));
     }
 
     /// A two-file project whose `main.wb` is a single top-level component

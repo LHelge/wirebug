@@ -355,6 +355,80 @@ pub enum Problem {
         first: SourceSpan,
     },
 
+    /// An `inline` body property line uses a key other than `male`/`female`.
+    #[error("unknown inline connector property `{key}`")]
+    #[diagnostic(
+        code(wirebug::unknown_inline_property),
+        help(
+            "an inline body takes `male: <ConnectorType>;` and `female: <ConnectorType>;` before its ports"
+        )
+    )]
+    UnknownInlineProperty {
+        key: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("no such property")]
+        at: SourceSpan,
+    },
+
+    /// An `inline` declares the same housing half twice.
+    #[error("duplicate inline connector half `{half}`")]
+    #[diagnostic(code(wirebug::duplicate_inline_half))]
+    DuplicateInlineHalf {
+        half: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("declared again here")]
+        at: SourceSpan,
+        #[label("first declared here")]
+        first: SourceSpan,
+    },
+
+    /// A harness include selects a non-half of an inline connector.
+    #[error("`{found}` is not a half of inline connector `{inline}`")]
+    #[diagnostic(
+        code(wirebug::unknown_inline_half),
+        help("write `include {inline}.male` or `include {inline}.female`")
+    )]
+    UnknownInlineHalf {
+        found: String,
+        inline: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("no such half")]
+        at: SourceSpan,
+    },
+
+    /// A harness include selects a half the inline never declared.
+    #[error("inline connector `{inline}` does not declare a `{half}` half")]
+    #[diagnostic(
+        code(wirebug::undeclared_inline_half),
+        help("declare `{half}: <ConnectorType>;` in `inline {inline}`")
+    )]
+    UndeclaredInlineHalf {
+        half: String,
+        inline: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("half not declared")]
+        at: SourceSpan,
+    },
+
+    /// `pub` on an inline connector port has no effect: inline ports are
+    /// only addressable within the defining component.
+    #[error("`pub` has no effect on an inline connector port")]
+    #[diagnostic(
+        severity(Warning),
+        code(wirebug::inline_pub_port),
+        help("inline connector ports are always addressable within the defining component")
+    )]
+    InlinePubPort {
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("this `pub`")]
+        at: SourceSpan,
+    },
+
     /// Two cables in one component share a designator.
     #[error("duplicate cable designator `{name}`")]
     #[diagnostic(
