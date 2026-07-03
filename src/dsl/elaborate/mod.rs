@@ -12,8 +12,8 @@ use crate::dsl::diagnostics::Problem;
 use crate::dsl::ir::{
     CableMeta, CableName, Connector, ConnectorCavity, ConnectorFaceLayout, ConnectorGridLayout,
     ConnectorLayout, ConnectorName, ConnectorPin, ConnectorRef, ConnectorTypeName, Design,
-    EnclosurePort, Include, Instance, InstanceName, InstancePath, Port, PortName, Side, TypeName,
-    View, Visibility, Wire, WireColor, WireEnd,
+    EnclosurePort, Half, Include, InlineHalfMeta, InlineMeta, Instance, InstanceName, InstancePath,
+    Port, PortName, Side, TypeName, View, Visibility, Wire, WireColor, WireEnd,
 };
 use crate::dsl::resolve::{DefId, Resolved};
 
@@ -185,6 +185,21 @@ impl Elaborator<'_> {
             children.insert(name.clone(), path.child(name.clone()));
         }
 
+        // Inline (mid-harness) connectors become synthetic child instances:
+        // one node per mated pair, its shared port set addressable like any
+        // child's, the housing halves' part metadata in `Instance.inline`.
+        let mut inline_jobs: Vec<Instance> = Vec::new();
+        for &frag in &fragments {
+            for (name, facts) in &self.resolved.defs[frag].inlines {
+                if children.contains_key(name) {
+                    continue; // duplicate name, already reported
+                }
+                let child_path = path.child(name.clone());
+                children.insert(name.clone(), child_path.clone());
+                inline_jobs.push(self.inline_instance(child_path, facts));
+            }
+        }
+
         self.instances.insert(
             path.clone(),
             Instance {
@@ -196,6 +211,7 @@ impl Elaborator<'_> {
                 wires,
                 cables,
                 connectors,
+                inline: None,
             },
         );
 
@@ -203,8 +219,85 @@ impl Elaborator<'_> {
             let child_path = path.child(name);
             self.stamp(tid, &child_path, label, type_stack);
         }
+        for instance in inline_jobs {
+            self.instances.insert(instance.path.clone(), instance);
+        }
 
         type_stack.pop();
+    }
+
+    /// Materialize an inline connector as a synthetic child [`Instance`]:
+    /// public ports (they are only addressable within the defining
+    /// component anyway), one designator-named connector carrying the pin
+    /// bindings, and the halves' connector-type metadata in `inline`.
+    fn inline_instance(
+        &self,
+        path: InstancePath,
+        facts: &crate::dsl::resolve::InlineFacts,
+    ) -> Instance {
+        let inline = facts.ast;
+        let designator = ConnectorName::from(inline.name.node.as_str());
+        let cref = ConnectorRef {
+            name: designator.clone(),
+            description: None,
+            index: 0,
+        };
+        let ports: IndexMap<PortName, Port> = facts
+            .ports
+            .iter()
+            .map(|(name, pf)| {
+                (
+                    name.clone(),
+                    Port {
+                        name: name.clone(),
+                        label: pf.label.to_string(),
+                        visibility: Visibility::Public,
+                        connector: Some(cref.clone()),
+                        pins: pf.pins.clone(),
+                    },
+                )
+            })
+            .collect();
+        let connector = Connector {
+            name: designator.clone(),
+            type_name: None,
+            description: None,
+            properties: IndexMap::new(),
+            layout: None,
+            pins: inline
+                .ports
+                .iter()
+                .flat_map(|port| {
+                    port.pins.iter().map(|pin| ConnectorPin {
+                        pin: crate::dsl::ir::Pin(pin.node),
+                        port: PortName::from(port.name.node.as_str()),
+                    })
+                })
+                .collect(),
+        };
+        let half_meta = |type_id: Option<usize>| {
+            let connector_type = self.resolved.connector_types[type_id?].ast;
+            Some(InlineHalfMeta {
+                type_name: ConnectorTypeName::from(connector_type.name.node.as_str()),
+                description: connector_type.description.node.clone(),
+                properties: connector_type_properties(connector_type),
+                layout: connector_type_layout(connector_type),
+            })
+        };
+        Instance {
+            path,
+            type_name: TypeName::from(inline.name.node.as_str()),
+            label: inline.label.as_ref().map(|l| l.node.clone()),
+            ports,
+            children: IndexMap::new(),
+            wires: Vec::new(),
+            cables: IndexMap::new(),
+            connectors: IndexMap::from([(designator, connector)]),
+            inline: Some(InlineMeta {
+                male: half_meta(facts.male),
+                female: half_meta(facts.female),
+            }),
+        }
     }
 
     fn elaborate_views(&self) -> Vec<View> {
@@ -214,8 +307,10 @@ impl Elaborator<'_> {
             .filter_map(|binding| {
                 let subject = binding.subject?;
                 let v = binding.ast;
+                let kind = crate::dsl::ir::ViewKind::from(v.kind.node.as_str());
+                let is_harness = kind.is_harness();
                 Some(View {
-                    kind: crate::dsl::ir::ViewKind::from(v.kind.node.as_str()),
+                    kind,
                     title: v.title.node.clone(),
                     grid: v.grid.as_ref().map(|g| g.node),
                     subject: TypeName::from(self.resolved.defs[subject].name),
@@ -229,24 +324,50 @@ impl Elaborator<'_> {
                     includes: v
                         .includes
                         .iter()
-                        .map(|inc| Include {
-                            instance: InstanceName::from(inc.instance.node.as_str()),
-                            connector: inc
-                                .connector
-                                .as_ref()
-                                .map(|c| ConnectorName::from(c.node.as_str())),
-                            x: inc.x.node,
-                            y: inc.y.node,
-                            // Sides that failed to parse were already reported
-                            // by resolve; drop them here.
-                            ports: inc
-                                .ports
-                                .iter()
-                                .filter_map(|p| {
-                                    let side = p.side.node.as_str().parse::<Side>().ok()?;
-                                    Some((PortName::from(p.port.node.as_str()), side))
-                                })
-                                .collect(),
+                        .map(|inc| {
+                            let instance = InstanceName::from(inc.instance.node.as_str());
+                            // An inline-connector include is normalized: the
+                            // authored `male`/`female` segment moves to
+                            // `half`, and `connector` becomes the inline's
+                            // designator — which is what the harness layout
+                            // keys nodes and endpoints by.
+                            let is_inline =
+                                is_harness
+                                    && self.resolved.fragments(subject).into_iter().any(|f| {
+                                        self.resolved.defs[f].inlines.contains_key(&instance)
+                                    });
+                            let (connector, half) = if is_inline {
+                                (
+                                    Some(ConnectorName::from(instance.as_str())),
+                                    inc.connector
+                                        .as_ref()
+                                        .and_then(|c| c.node.as_str().parse::<Half>().ok()),
+                                )
+                            } else {
+                                (
+                                    inc.connector
+                                        .as_ref()
+                                        .map(|c| ConnectorName::from(c.node.as_str())),
+                                    None,
+                                )
+                            };
+                            Include {
+                                instance,
+                                connector,
+                                half,
+                                x: inc.x.node,
+                                y: inc.y.node,
+                                // Sides that failed to parse were already reported
+                                // by resolve; drop them here.
+                                ports: inc
+                                    .ports
+                                    .iter()
+                                    .filter_map(|p| {
+                                        let side = p.side.node.as_str().parse::<Side>().ok()?;
+                                        Some((PortName::from(p.port.node.as_str()), side))
+                                    })
+                                    .collect(),
+                            }
                         })
                         .collect(),
                     texts: v
@@ -367,23 +488,7 @@ fn typed_connector(
         name,
         type_name: Some(ConnectorTypeName::from(connector_type.name.node.as_str())),
         description: Some(connector_type.description.node.clone()),
-        properties: connector_type
-            .properties
-            .iter()
-            .map(|p| {
-                (
-                    p.key.node.as_str().to_string(),
-                    match &p.value {
-                        ConnectorPropertyValue::Str(s) => {
-                            crate::dsl::ir::ConnectorPropertyValue::Str(s.node.clone())
-                        }
-                        ConnectorPropertyValue::Number(n) => {
-                            crate::dsl::ir::ConnectorPropertyValue::Number(n.node)
-                        }
-                    },
-                )
-            })
-            .collect(),
+        properties: connector_type_properties(connector_type),
         layout: connector_type_layout(connector_type),
         pins: conn
             .ports
@@ -396,6 +501,29 @@ fn typed_connector(
             })
             .collect(),
     }
+}
+
+/// Map a connector type's faithful AST properties to the typed IR map.
+fn connector_type_properties(
+    connector_type: &ast::ConnectorType,
+) -> IndexMap<String, crate::dsl::ir::ConnectorPropertyValue> {
+    connector_type
+        .properties
+        .iter()
+        .map(|p| {
+            (
+                p.key.node.as_str().to_string(),
+                match &p.value {
+                    ConnectorPropertyValue::Str(s) => {
+                        crate::dsl::ir::ConnectorPropertyValue::Str(s.node.clone())
+                    }
+                    ConnectorPropertyValue::Number(n) => {
+                        crate::dsl::ir::ConnectorPropertyValue::Number(n.node)
+                    }
+                },
+            )
+        })
+        .collect()
 }
 
 fn connector_type_layout(connector_type: &ast::ConnectorType) -> Option<ConnectorLayout> {
@@ -674,6 +802,105 @@ mod tests {
         assert!(connector.type_name.is_none());
         assert_eq!(connector.description.as_deref(), Some("Legacy 2p"));
         assert_eq!(connector.pins.len(), 2);
+    }
+
+    #[test]
+    fn inline_member_elaborates_as_a_synthetic_child() {
+        let (design, problems) = elaborate_files(&[(
+            "main.wb",
+            "connector_type m4 \"DT04-4P\" {
+                part: \"DT04-4P\";
+                layout grid { rows: 2; cols: 2; numbering: row_major; }
+            }
+            connector_type f4 \"DT06-4S\" { part: \"DT06-4S\"; }
+            component top {
+                pub port a \"A\"; pub port b \"B\";
+                inline ic \"Pedal branch\" {
+                    male: m4;
+                    female: f4;
+                    port sig \"SIG\" pin 1;
+                    port gnd \"GND\" pin 2;
+                }
+                cable left { wire red 1 [a, ic.sig]; }
+                cable right { wire red 1 [ic.sig, b]; }
+            }\n",
+        )]);
+        assert!(problems.is_empty(), "{problems:?}");
+        let design = design.unwrap();
+        let root = design.get(&design.root).unwrap();
+
+        // The inline is a child like any instance, addressable by path.
+        let ic_path = design.root.clone().child(InstanceName::from("ic"));
+        assert_eq!(root.children.get(&InstanceName::from("ic")), Some(&ic_path));
+        let ic = design.get(&ic_path).expect("synthetic inline instance");
+        assert_eq!(ic.label.as_deref(), Some("Pedal branch"));
+
+        // Its ports are public and grouped under the designator-named
+        // connector, pins bound from the port clauses.
+        let sig = ic.ports.get(&PortName::from("sig")).expect("sig port");
+        assert_eq!(sig.visibility, Visibility::Public);
+        assert_eq!(sig.connector.as_ref().map(|c| c.name.as_str()), Some("ic"));
+        let conn = ic.connectors.get(&ConnectorName::from("ic")).unwrap();
+        assert_eq!(conn.pins.len(), 2);
+
+        // The halves carry their connector types' metadata.
+        let meta = ic.inline.as_ref().expect("inline meta");
+        let male = meta.male.as_ref().expect("male half");
+        assert_eq!(male.description, "DT04-4P");
+        assert_eq!(
+            male.properties.get("part"),
+            Some(&crate::dsl::ir::ConnectorPropertyValue::Str(
+                "DT04-4P".to_string()
+            ))
+        );
+        assert!(male.layout.is_some());
+        let female = meta.female.as_ref().expect("female half");
+        assert_eq!(female.type_name.as_str(), "f4");
+        assert!(female.layout.is_none());
+
+        // Both cables' conductors land on the inline as ordinary
+        // `WireEnd::Child` endpoints sharing the pin.
+        let on_ic = |w: &Wire| {
+            w.endpoints.iter().any(
+                |e| matches!(e, WireEnd::Child { instance, port } if instance.as_str() == "ic" && port.as_str() == "sig"),
+            )
+        };
+        assert_eq!(root.wires.iter().filter(|w| on_ic(w)).count(), 2);
+    }
+
+    #[test]
+    fn half_less_inline_elaborates_with_empty_meta() {
+        let (design, problems) = elaborate_files(&[(
+            "main.wb",
+            "component top { inline ic { port a \"A\" pin 1; } }\n",
+        )]);
+        assert!(problems.is_empty(), "{problems:?}");
+        let design = design.unwrap();
+        let ic_path = design.root.clone().child(InstanceName::from("ic"));
+        let ic = design.get(&ic_path).unwrap();
+        let meta = ic.inline.as_ref().expect("inline meta");
+        assert!(meta.male.is_none() && meta.female.is_none());
+    }
+
+    #[test]
+    fn inline_include_is_normalized_to_designator_plus_half() {
+        let (design, problems) = elaborate_files(&[(
+            "main.wb",
+            "connector_type f4 \"DT06-4S\" { }
+            component top {
+                pub port a \"A\";
+                inline ic { female: f4; port sig \"SIG\" pin 1; }
+                wire red 1 [a, ic.sig];
+            }
+            view harness \"V\" { include ic.female at (0, 0); }\n",
+        )]);
+        assert!(problems.is_empty(), "{problems:?}");
+        let design = design.unwrap();
+        let view = &design.views[0];
+        let inc = &view.includes[0];
+        assert_eq!(inc.instance.as_str(), "ic");
+        assert_eq!(inc.connector.as_ref().map(|c| c.as_str()), Some("ic"));
+        assert_eq!(inc.half, Some(Half::Female));
     }
 
     #[test]

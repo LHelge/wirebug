@@ -635,6 +635,7 @@ mod tests {
                 .map(|(connector, x, y)| Include {
                     instance: InstanceName::from(*connector),
                     connector: None,
+                    half: None,
                     x: *x,
                     y: *y,
                     ports: Vec::new(),
