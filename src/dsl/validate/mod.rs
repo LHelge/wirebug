@@ -120,6 +120,12 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
                     || d.connectors
                         .values()
                         .any(|c| c.ast.type_name.node.as_str() == name)
+                    || d.inlines.values().any(|i| {
+                        i.ast
+                            .halves
+                            .iter()
+                            .any(|h| h.type_name.node.as_str() == name)
+                    })
             });
             // A fragment pull (`use Vehicle from "traction.wb";`) isn't
             // instantiated — it merges. It counts as used when this file owns a
@@ -378,6 +384,24 @@ mod tests {
             (
                 "main.wb",
                 "use ampseal from \"connectors.wb\";\ncomponent m { connector x1: ampseal { pub port a \"A\" pin 1; } }\n",
+            ),
+            (
+                "connectors.wb",
+                "connector_type ampseal \"AMPSEAL\" { part: \"TE\"; }\n",
+            ),
+        ]);
+        assert!(
+            !codes.iter().any(|c| c == "wirebug::unused_import"),
+            "{codes:?}"
+        );
+    }
+
+    #[test]
+    fn connector_type_import_used_by_an_inline_half_does_not_warn() {
+        let codes = validate_files(&[
+            (
+                "main.wb",
+                "use ampseal from \"connectors.wb\";\ncomponent m { inline ic { male: ampseal; port a \"A\" pin 1; } }\n",
             ),
             (
                 "connectors.wb",

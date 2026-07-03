@@ -1,0 +1,13 @@
+// Accelerator pedal
+// Dual-track APPS (accelerator pedal position sensor): two opposed
+// analog tracks so the VCM can cross-check for a stuck or shorted
+// signal, fed from the VCM's 5V sensor supply.
+
+component AcceleratorPedal {
+    connector x1 "AMP Superseal 4p" {
+        pub port apps1   "APPS1" pin 1;
+        pub port apps2   "APPS2" pin 2;
+        pub port sens_5v "5V"    pin 3;
+        pub port gnd     "GND"   pin 4;
+    }
+}

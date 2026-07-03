@@ -71,3 +71,26 @@ connector_type InverterControl "Inverter control 47+13p" {
         cavity 13 at (14, 3);
     }
 }
+// Deutsch DT 4-way mated pair — the inline connector splitting the cab
+// loom's pedal branch (looms/pedal_branch.wb). One type per housing;
+// an `inline` references both halves.
+
+connector_type Dt04_4p "Deutsch DT04-4P" {
+    part: "DT04-4P";
+
+    layout grid {
+        rows: 2;
+        cols: 2;
+        numbering: row_major;
+    }
+}
+
+connector_type Dt06_4s "Deutsch DT06-4S" {
+    part: "DT06-4S";
+
+    layout grid {
+        rows: 2;
+        cols: 2;
+        numbering: row_major;
+    }
+}
