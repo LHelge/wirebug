@@ -506,3 +506,424 @@ fn include_target(inc: &ast::Include, is_harness: bool) -> Option<String> {
         Some(instance.to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::dsl::diagnostics::Problem;
+    use crate::dsl::resolve::testkit::{LEAF, codes, has, inline_project, problems};
+
+    #[test]
+    fn unknown_view_kind_is_reported() {
+        let p = problems(&[("main.wb", "component m { } view schemtic \"V\" { }\n")]);
+        assert!(has(&p, "wirebug::unknown_view_kind"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn unknown_view_include_is_reported() {
+        let p = problems(&[(
+            "main.wb",
+            "component m { } view schematic \"V\" { include ghost at (0, 0); }\n",
+        )]);
+        assert!(has(&p, "wirebug::unknown_include"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn bare_inline_harness_include_is_wrong_form() {
+        let p = inline_project(
+            "male: M2; port a \"A\" pin 1;",
+            "} view harness \"V\" { include ic at (0, 0); ",
+        );
+        assert!(has(&p, "wirebug::wrong_include_form"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn unknown_inline_half_in_include_is_reported() {
+        let p = inline_project(
+            "male: M2; port a \"A\" pin 1;",
+            "} view harness \"V\" { include ic.plug at (0, 0); ",
+        );
+        assert!(has(&p, "wirebug::unknown_inline_half"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn undeclared_inline_half_in_include_is_reported() {
+        let p = inline_project(
+            "male: M2; port a \"A\" pin 1;",
+            "} view harness \"V\" { include ic.female at (0, 0); ",
+        );
+        assert!(
+            has(&p, "wirebug::undeclared_inline_half"),
+            "{:?}",
+            codes(&p)
+        );
+    }
+
+    #[test]
+    fn both_halves_in_one_view_is_a_duplicate_include() {
+        let p = inline_project(
+            "male: M2; female: F2; port a \"A\" pin 1;",
+            "} view harness \"V\" { include ic.male at (0, 0); include ic.female at (10, 0); ",
+        );
+        assert!(
+            has(&p, "wirebug::duplicate_view_include"),
+            "{:?}",
+            codes(&p)
+        );
+    }
+
+    #[test]
+    fn schematic_include_of_inline_is_wrong_form() {
+        let p = inline_project(
+            "male: M2; port a \"A\" pin 1;",
+            "} view schematic \"V\" { include ic at (0, 0); ",
+        );
+        assert!(has(&p, "wirebug::wrong_include_form"), "{:?}", codes(&p));
+    }
+
+    /// A two-file project whose `main.wb` is a single top-level component
+    /// `m` holding one `leaf` instance `l`, plus a view placing `l` with the
+    /// given `ports { }` body. `leaf` lives in `leaf.wb`.
+    fn view_with_ports(leaf_body: &str, ports_body: &str) -> Vec<Problem> {
+        problems(&[
+            (
+                "main.wb",
+                &format!(
+                    "use leaf from \"leaf.wb\";\ncomponent m {{ l: leaf; }}\nview schematic \"V\" {{ include l at (0, 0) ports {{ {ports_body} }} }}\n"
+                ),
+            ),
+            ("leaf.wb", &format!("component leaf {{ {leaf_body} }}\n")),
+        ])
+    }
+
+    #[test]
+    fn unknown_port_side_in_view_is_reported() {
+        let p = view_with_ports("pub port a \"A\";", "up: a;");
+        assert!(has(&p, "wirebug::unknown_port_side"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn unknown_port_in_view_is_reported() {
+        let p = view_with_ports("pub port a \"A\";", "west: nope;");
+        assert!(has(&p, "wirebug::unknown_port"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn private_port_in_view_is_reported() {
+        let p = view_with_ports("port secret \"S\";", "west: secret;");
+        assert!(has(&p, "wirebug::private_port"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn duplicate_port_in_view_is_reported() {
+        let p = view_with_ports("pub port a \"A\";", "west: a; east: a;");
+        assert!(has(&p, "wirebug::duplicate_view_port"), "{:?}", codes(&p));
+    }
+
+    /// Single top-level `m` (a `leaf l` child, a `pub` port `a`, a private
+    /// `secret`, wired to the child) with a schematic view carrying the given
+    /// `enclosure { }` body. `leaf` lives in `leaf.wb` so `m` is the lone root.
+    fn view_with_enclosure(enclosure_body: &str) -> Vec<Problem> {
+        problems(&[
+            (
+                "main.wb",
+                &format!(
+                    "use leaf from \"leaf.wb\";\ncomponent m {{ l: leaf; pub port a \"A\"; port secret \"S\"; wire red 1 [a, l.p]; }}\nview schematic \"V\" {{ enclosure {{ {enclosure_body} }} include l at (0, 0) ports {{ west: p; }} }}\n"
+                ),
+            ),
+            ("leaf.wb", "component leaf { pub port p \"P\"; }\n"),
+        ])
+    }
+
+    #[test]
+    fn enclosure_anchor_without_a_side_is_reported() {
+        let p = view_with_enclosure("a at (1, 2);");
+        assert!(has(&p, "wirebug::enclosure_anchor"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn enclosure_side_in_the_wrong_slot_is_reported() {
+        // north names a horizontal edge, so it belongs in the second slot.
+        let p = view_with_enclosure("a at (north, 2);");
+        assert!(has(&p, "wirebug::enclosure_anchor"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn enclosure_unknown_side_is_reported() {
+        let p = view_with_enclosure("a at (up, 2);");
+        assert!(has(&p, "wirebug::unknown_port_side"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn enclosure_unknown_subject_port_is_reported() {
+        let p = view_with_enclosure("nope at (west, 2);");
+        assert!(has(&p, "wirebug::unknown_port"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn enclosure_private_subject_port_is_reported() {
+        let p = view_with_enclosure("secret at (west, 2);");
+        assert!(has(&p, "wirebug::private_port"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn well_formed_enclosure_resolves_cleanly() {
+        let p = view_with_enclosure("a at (west, 2);");
+        assert!(p.is_empty(), "unexpected problems: {:?}", codes(&p));
+    }
+
+    #[test]
+    fn view_body_items_may_appear_in_any_order() {
+        // include first, then enclosure, then grid — the reverse of the
+        // canonical order — still parses and resolves cleanly.
+        let p = problems(&[
+            (
+                "main.wb",
+                "use leaf from \"leaf.wb\";\ncomponent m { l: leaf; pub port a \"A\"; wire red 1 [a, l.p]; }\nview schematic \"V\" { include l at (0,0) ports { west: p; } enclosure { a at (west, 2); } grid: 10; }\n",
+            ),
+            ("leaf.wb", "component leaf { pub port p \"P\"; }\n"),
+        ]);
+        assert!(p.is_empty(), "unexpected problems: {:?}", codes(&p));
+    }
+
+    #[test]
+    fn duplicate_grid_in_view_is_reported() {
+        let p = problems(&[(
+            "main.wb",
+            "component m { } view schematic \"V\" { grid: 10; grid: 20; }\n",
+        )]);
+        assert!(has(&p, "wirebug::duplicate_view_item"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn duplicate_enclosure_in_view_is_reported() {
+        let p = problems(&[(
+            "main.wb",
+            "component m { pub port a \"A\"; } view schematic \"V\" { enclosure { a at (west, 0); } enclosure { } }\n",
+        )]);
+        assert!(has(&p, "wirebug::duplicate_view_item"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn duplicate_text_box_in_view_is_reported() {
+        let p = problems(&[(
+            "main.wb",
+            "component m { } view schematic \"V\" { text note at (0, 0) \"A\"; text note at (1, 1) \"B\"; }\n",
+        )]);
+        assert!(has(&p, "wirebug::duplicate_view_text"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn duplicate_schematic_include_is_reported() {
+        let p = problems(&[
+            (
+                "main.wb",
+                "use leaf from \"leaf.wb\";\ncomponent m { l: leaf; }\nview schematic \"V\" { include l at (0, 0); include l at (2, 0); }\n",
+            ),
+            ("leaf.wb", "component leaf { pub port p \"P\"; }\n"),
+        ]);
+        assert!(
+            has(&p, "wirebug::duplicate_view_include"),
+            "{:?}",
+            codes(&p)
+        );
+    }
+
+    #[test]
+    fn duplicate_harness_connector_include_is_reported() {
+        let p = problems(&[
+            (
+                "main.wb",
+                "use leaf from \"leaf.wb\";\ncomponent m { l: leaf; }\nview harness \"H\" { include l.j1 at (0, 0); include l.j1 at (2, 0); }\n",
+            ),
+            (
+                "leaf.wb",
+                "component leaf { connector j1 \"J1\" { pub port p \"P\" pin 1; } }\n",
+            ),
+        ]);
+        assert!(
+            has(&p, "wirebug::duplicate_view_include"),
+            "{:?}",
+            codes(&p)
+        );
+    }
+
+    #[test]
+    fn harness_can_include_two_connectors_from_one_instance() {
+        let p = problems(&[
+            (
+                "main.wb",
+                "use leaf from \"leaf.wb\";\ncomponent m { l: leaf; }\nview harness \"H\" { include l.j1 at (0, 0); include l.j2 at (2, 0); }\n",
+            ),
+            (
+                "leaf.wb",
+                "component leaf { connector j1 \"J1\" { pub port p \"P\" pin 1; } connector j2 \"J2\" { pub port q \"Q\" pin 1; } }\n",
+            ),
+        ]);
+        assert!(p.is_empty(), "unexpected problems: {:?}", codes(&p));
+    }
+
+    #[test]
+    fn text_box_in_harness_view_is_reported() {
+        let p = problems(&[(
+            "main.wb",
+            "component m { } view harness \"H\" { text note at (0, 0) \"A\"; }\n",
+        )]);
+        assert!(has(&p, "wirebug::unsupported_view_text"), "{:?}", codes(&p));
+    }
+
+    /// A two-file project whose `main.wb` holds one `leaf` instance `l` and a
+    /// harness view with the given include body. `leaf` (in `leaf.wb`) has a
+    /// connector designated `hv`.
+    fn harness_view(include: &str) -> Vec<Problem> {
+        problems(&[
+            (
+                "main.wb",
+                &format!(
+                    "use leaf from \"leaf.wb\";\ncomponent m {{ l: leaf; }}\nview harness \"H\" {{ {include} }}\n"
+                ),
+            ),
+            (
+                "leaf.wb",
+                "component leaf { connector hv \"HV 2p\" { pub port hv_pos \"HV+\" pin 1; pub port hv_neg \"HV-\" pin 2; } }\n",
+            ),
+        ])
+    }
+
+    #[test]
+    fn harness_include_resolves_cleanly() {
+        let p = harness_view("include l.hv at (0, 0);");
+        assert!(p.is_empty(), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn harness_include_resolves_connector_instance() {
+        let p = problems(&[
+            (
+                "main.wb",
+                "use leaf from \"leaf.wb\";\ncomponent m { l: leaf; }\nview harness \"H\" { include l.hv at (0, 0); }\n",
+            ),
+            (
+                "leaf.wb",
+                "connector_type hv_2p \"HV 2p\" { }\ncomponent leaf { connector hv: hv_2p { pub port hv_pos \"HV+\" pin 1; } }\n",
+            ),
+        ]);
+        assert!(p.is_empty(), "unexpected problems: {:?}", codes(&p));
+    }
+
+    #[test]
+    fn unknown_connector_errors() {
+        let p = harness_view("include l.nope at (0, 0);");
+        assert!(has(&p, "wirebug::unknown_connector"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn harness_include_without_connector_errors() {
+        let p = harness_view("include l at (0, 0);");
+        assert!(has(&p, "wirebug::wrong_include_form"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn ports_block_on_harness_include_errors() {
+        let p = harness_view("include l.hv at (0, 0) ports { west: hv_pos; }");
+        assert!(has(&p, "wirebug::wrong_include_form"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn connector_on_schematic_include_errors() {
+        let p = problems(&[
+            (
+                "main.wb",
+                "use leaf from \"leaf.wb\";\ncomponent m { l: leaf; }\nview schematic \"S\" { include l.hv at (0, 0); }\n",
+            ),
+            (
+                "leaf.wb",
+                "component leaf { connector hv \"HV 2p\" { pub port hv_pos \"HV+\" pin 1; } }\n",
+            ),
+        ]);
+        assert!(has(&p, "wirebug::wrong_include_form"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn pinout_include_resolves_subject_connector_instance() {
+        let p = problems(&[(
+            "main.wb",
+            "connector_type ampseal \"AMPSEAL\" { }
+            component m {
+                connector x1: ampseal { pub port can_h \"CAN H\" pin 1; }
+            }
+            view pinout \"X1\" { include x1 at (0, 0); }\n",
+        )]);
+        assert!(p.is_empty(), "unexpected problems: {:?}", codes(&p));
+    }
+
+    #[test]
+    fn pinout_include_resolves_inline_subject_connector() {
+        let p = problems(&[(
+            "main.wb",
+            "component m {
+                connector x1 \"Legacy 1p\" { pub port can_h \"CAN H\" pin 1; }
+            }
+            view pinout \"X1\" { include x1 at (0, 0); }\n",
+        )]);
+        assert!(p.is_empty(), "unexpected problems: {:?}", codes(&p));
+    }
+
+    #[test]
+    fn pinout_unknown_connector_errors() {
+        let p = problems(&[(
+            "main.wb",
+            "component m { } view pinout \"X1\" { include x1 at (0, 0); }\n",
+        )]);
+        assert!(has(&p, "wirebug::unknown_connector"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn pinout_include_with_instance_connector_form_errors() {
+        let p = problems(&[(
+            "main.wb",
+            "connector_type ampseal \"AMPSEAL\" { }
+            component m {
+                connector x1: ampseal { pub port can_h \"CAN H\" pin 1; }
+            }
+            view pinout \"X1\" { include child.x1 at (0, 0); }\n",
+        )]);
+        assert!(has(&p, "wirebug::wrong_include_form"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn ports_block_on_pinout_include_errors() {
+        let p = problems(&[(
+            "main.wb",
+            "connector_type ampseal \"AMPSEAL\" { }
+            component m {
+                connector x1: ampseal { pub port can_h \"CAN H\" pin 1; }
+            }
+            view pinout \"X1\" { include x1 at (0, 0) ports { west: can_h; } }\n",
+        )]);
+        assert!(has(&p, "wirebug::wrong_include_form"), "{:?}", codes(&p));
+    }
+
+    // --- `extend` fragments (split a component across files) ---
+
+    #[test]
+    fn fragment_view_includes_an_instance_from_another_fragment() {
+        // A schematic in `traction.wb` includes `pack`, which lives in `main`.
+        let p = problems(&[
+            (
+                "main.wb",
+                "use vehicle from \"traction.wb\";\nuse leaf from \"leaf.wb\";\n\
+                 component vehicle { pack: leaf \"Pack\"; }\n",
+            ),
+            (
+                "traction.wb",
+                "use leaf from \"leaf.wb\";\nextend vehicle { inv: leaf \"Inv\"; }\n\
+                 view schematic \"Traction\" {\n\
+                   include pack at (2, 2) ports { east: a; }\n\
+                   include inv  at (8, 2) ports { west: a; }\n\
+                 }\n",
+            ),
+            ("leaf.wb", LEAF),
+        ]);
+        assert!(p.is_empty(), "{:?}", codes(&p));
+    }
+}
