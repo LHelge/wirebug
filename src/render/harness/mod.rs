@@ -188,6 +188,7 @@ mod tests {
                 .map(|(inst, conn, x, y)| Include {
                     instance: InstanceName::from(*inst),
                     connector: Some(ConnectorName::from(*conn)),
+                    half: None,
                     x: *x,
                     y: *y,
                     ports: Vec::new(),

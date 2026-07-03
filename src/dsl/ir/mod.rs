@@ -363,6 +363,11 @@ pub struct Instance {
     pub cables: IndexMap<CableName, CableMeta>,
     /// Physical connectors declared at this level, keyed by designator.
     pub connectors: IndexMap<ConnectorName, Connector>,
+    /// `Some` marks this as a synthetic inline-connector instance — a mated
+    /// mid-harness pair elaborated from an `inline` member. Its port set is
+    /// shared by both housing halves; the halves' part metadata lives here.
+    /// `None` for every ordinary instance.
+    pub inline: Option<InlineMeta>,
 }
 
 /// Physical metadata for a declared cable. Its conductor wires live in
@@ -374,6 +379,72 @@ pub struct CableMeta {
     pub r#type: Option<String>,
     /// Length in metres.
     pub length: Option<f64>,
+}
+
+/// One housing half of a mated inline connector pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Half {
+    Male,
+    Female,
+}
+
+impl Half {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Half::Male => "male",
+            Half::Female => "female",
+        }
+    }
+
+    /// The one-letter chip drawn on a harness node's header.
+    pub fn badge(self) -> &'static str {
+        match self {
+            Half::Male => "M",
+            Half::Female => "F",
+        }
+    }
+}
+
+impl std::str::FromStr for Half {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s {
+            "male" => Half::Male,
+            "female" => Half::Female,
+            _ => return Err(()),
+        })
+    }
+}
+
+/// Pair metadata of a synthetic inline-connector instance: the connector
+/// type behind each declared housing half. Both halves share the instance's
+/// one port set — mated pin N is electrically pin N on either side.
+#[derive(Debug, Clone)]
+pub struct InlineMeta {
+    pub male: Option<InlineHalfMeta>,
+    pub female: Option<InlineHalfMeta>,
+}
+
+impl InlineMeta {
+    pub fn half(&self, h: Half) -> Option<&InlineHalfMeta> {
+        match h {
+            Half::Male => self.male.as_ref(),
+            Half::Female => self.female.as_ref(),
+        }
+    }
+}
+
+/// One housing half's materialized connector-type metadata (mirrors the
+/// type-derived fields of [`Connector`]).
+#[derive(Debug, Clone)]
+pub struct InlineHalfMeta {
+    pub type_name: ConnectorTypeName,
+    pub description: String,
+    /// Free-form connector metadata from the type; carries `part`.
+    pub properties: IndexMap<String, ConnectorPropertyValue>,
+    /// Harness-side pinout layout, for a future per-half pinout view.
+    pub layout: Option<ConnectorLayout>,
 }
 
 /// A materialized physical connector on an instance.
@@ -582,7 +653,12 @@ pub struct EnclosurePort {
 pub struct Include {
     pub instance: InstanceName,
     /// The connector designator for a harness include; `None` for schematic.
+    /// For an inline-connector include this is normalized to the inline's
+    /// designator (the authored `male`/`female` segment moves to `half`).
     pub connector: Option<ConnectorName>,
+    /// The housing half selected by an inline-connector harness include
+    /// (`include ic.female`); `None` for ordinary includes.
+    pub half: Option<Half>,
     pub x: f64,
     pub y: f64,
     pub ports: Vec<(PortName, Side)>,

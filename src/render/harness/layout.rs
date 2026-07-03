@@ -767,6 +767,7 @@ component Root {
                 crate::dsl::ir::Include {
                     instance: InstanceName::from("left"),
                     connector: Some(ConnectorName::from("j")),
+                    half: None,
                     x: 0.0,
                     y: 0.0,
                     ports: Vec::new(),
@@ -774,6 +775,7 @@ component Root {
                 crate::dsl::ir::Include {
                     instance: InstanceName::from("right"),
                     connector: Some(ConnectorName::from("j")),
+                    half: None,
                     x: 30.0,
                     y: 0.0,
                     ports: Vec::new(),
@@ -869,6 +871,7 @@ component Root {
             wires: Vec::new(),
             cables: IndexMap::new(),
             connectors: IndexMap::new(),
+            inline: None,
         };
 
         let visible: HashSet<PortName> = [PortName::from("p")].into_iter().collect();
@@ -909,6 +912,7 @@ component Root {
             wires: Vec::new(),
             cables: IndexMap::new(),
             connectors: IndexMap::new(),
+            inline: None,
         };
 
         let visible: HashSet<PortName> = [PortName::from("a"), PortName::from("c")]

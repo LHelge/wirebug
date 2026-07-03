@@ -225,6 +225,7 @@ pub(crate) mod tests {
                 .map(|(name, x, y, ports)| Include {
                     instance: InstanceName::from(*name),
                     connector: None,
+                    half: None,
                     x: *x,
                     y: *y,
                     ports: ports
