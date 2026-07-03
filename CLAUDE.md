@@ -138,6 +138,23 @@ stamp text in their fixed-size footer instead of in the SVG.
   for free, and only the harness renderer reads the tags. Cable
   conductors are 2-endpoint by rule; shared rails stay loose
   multi-endpoint wires.
+- **Inline connectors (`inline`)** — a mated plug/receptacle pair
+  mid-harness (a loom's branch point): one shared port set, two optional
+  `male:`/`female:` housing halves, each a `connector_type` ref. Inlines
+  share the instance namespace (endpoints say `ic.sig`) and elaborate as a
+  **synthetic child `Instance`** marked by `Instance.inline: Option<
+  InlineMeta>` (halves' description/`part`/layout) with one
+  designator-named connector — so `rewrite_wire`, the harness layout's
+  endpoint/node keys, and the schematic renderer need no special cases.
+  A harness include selects a half (`include ic.female`); elaboration
+  normalizes the include's connector slot to the designator and records
+  `Include.half`, and the harness node renders that half's part identity
+  plus an M/F header chip. Each loom's view shows the half crimped onto
+  that loom; auto-scoping drops the other loom's conductors. Both halves
+  in one view is a `duplicate_view_include`; schematic includes of
+  inlines are `wrong_include_form`; `pub` on inline ports warns
+  (`inline_pub_port`). Per-half pinout faces and a one-sided-pin lint are
+  future work.
 
 ## Render mental model (IR → SVG)
 

@@ -312,6 +312,64 @@ cavity occupies one slot; `size large` occupies a 2x2 slot cavity. The renderer
 normalizes the authored coordinates to the occupied cavities, so leading empty
 slots are not shown as extra padding.
 
+## Inline connectors
+
+An `inline` member is a mated plug/receptacle pair mid-harness — the branch
+point where a big loom splits off a smaller one (an engine-bay loom feeding a
+pedal stub, say). It is **one shared port set with two housing halves**: mated
+pin N is electrically pin N on either side, and each half references the
+`connector_type` of its physical housing.
+
+```
+inline ic_pedal "Pedal branch" {
+    male:   Dt04_4p;      // connector_type refs, imported via `use` as usual
+    female: Dt06_4s;
+    port apps1 "APPS1" pin 1;
+    port apps2 "APPS2" pin 2;
+    port gnd   "GND"   pin 3;
+}
+```
+
+Format and semantics:
+
+- `inline <name> ["<label>"] { <half>* <port>* }` — a component member,
+  alongside instances and wires. It belongs in the loom fragment that owns the
+  branch point.
+- `male:`/`female:` each name a `connector_type` (where `part:` and future
+  terminal/seal part numbers live). Both are optional and each may appear at
+  most once; halves and ports may interleave.
+- Ports use the ordinary connector-body port form. **No `pub`** — inline
+  ports are always addressable within the defining (merged) component, so
+  `pub` is meaningless and warns.
+- Inlines share the **instance namespace**: wire endpoints address them like
+  an instance (`[vcm.accel_1, ic_pedal.apps1]`), and a name collision with an
+  instance is a duplicate error. Both looms' conductors land on the *same*
+  ports — the engine-side cable ends at `ic_pedal.apps1` and the stub-side
+  cable starts there; that shared endpoint is the electrical continuity
+  through the mated pair.
+
+**Harness views select a housing half:**
+
+```
+view harness "Cab loom — pedal branch" {
+    include vcm.accel       at (0, 0);
+    include ic_pedal.female at (36, 0);   // the half crimped onto THIS loom
+}
+
+view harness "Pedal stub" {
+    include ic_pedal.male at (0, 0);
+    include pedal.x1      at (36, 0);
+}
+```
+
+Each loom's drawing includes the half physically built onto that bundle; the
+node's header shows that half's description and `part` plus an **M/F chip**,
+and auto-scoping keeps the other loom's conductors out of the drawing. The
+half must be declared on the inline; including **both halves in one view is
+an error** (every conductor would attach to both nodes), and an inline cannot
+appear in a schematic include. Pinout views of the halves are a future
+refinement.
+
 ## Instantiation
 
 A *type* is a definition; an *instance* is a placement of that definition. To instantiate, write the instance name first, then a colon and the type — like a Rust `let` binding or struct field:
@@ -539,6 +597,7 @@ wire orange 50 [pack.hv_neg, inv.dc_neg, charger.hv_neg, conv.hv_neg];
 - **Do not** reference unexposed (non-`pub`) ports of nested components from outside. Private is private.
 - **Do not** introduce new keywords or option fields that aren't documented in this skill or already used in the project's `.wb` files. If something is awkward to express, raise it with the user rather than inventing syntax.
 - **Do not** add junction nodes by hand — multi-endpoint wires imply junctions automatically.
+- **Do not** put `pub` on an inline connector's ports, include both halves of one inline in a single harness view, or include an inline in a schematic view.
 - **Do not** put a multi-endpoint wire inside a `cable` — cable conductors are point-to-point (exactly two endpoints). Keep fan-out rails as loose wires.
 - **Do not** use block comments (`/* */`). Line comments (`//`) only.
 - **Do not** mix grid coordinates with pixel coordinates. View positions are in grid cells.
