@@ -177,7 +177,7 @@ impl PdfExporter {
         if let Some(m) = manifest {
             info.title(TextStr(&format!("{} v{}", m.name, m.version)));
         }
-        info.producer(TextStr("wirebug"));
+        info.producer(TextStr(&format!("wirebug {}", super::stamp::APP_VERSION)));
         info.finish();
 
         Ok(pdf.finish())
@@ -431,8 +431,13 @@ mod tests {
             .expect("exports");
         // The stamp text sits in each page's content stream; pdf-writer
         // hex-encodes strings with non-ASCII bytes (the `·` is WinAnsi
-        // 0xB7), so match the hex form.
-        let hex: String = win_ansi("demo v1.2.3 · rev abc1234")
+        // 0xB7), so match the hex form. The stamp always ends with the
+        // wirebug-version suffix.
+        let stamp_text = format!(
+            "demo v1.2.3 · rev abc1234 · wirebug v{}",
+            env!("CARGO_PKG_VERSION")
+        );
+        let hex: String = win_ansi(&stamp_text)
             .iter()
             .map(|b| format!("{b:02X}"))
             .collect();

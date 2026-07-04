@@ -152,6 +152,10 @@ pub fn embed_stylesheet() -> String {
 #[derive(Debug, Serialize)]
 pub struct EmbedManifest<'a> {
     pub project: Option<&'a Manifest>,
+    /// The wirebug that produced these SVGs (`wirebug v<version>`). Embed
+    /// SVGs suppress the in-drawing stamp, so the generator identity lives
+    /// here instead.
+    pub generator: &'static str,
     /// File name of the companion stylesheet (a sibling of the manifest),
     /// so a host discovers it the same way it discovers views.
     pub stylesheet: &'static str,
@@ -174,6 +178,7 @@ pub fn embed_manifest<'a>(
 ) -> EmbedManifest<'a> {
     EmbedManifest {
         project,
+        generator: concat!("wirebug v", env!("CARGO_PKG_VERSION")),
         stylesheet: EMBED_STYLESHEET_FILENAME,
         views: views
             .iter()
@@ -454,6 +459,10 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&json).expect("re-parses");
 
         assert!(parsed["project"].is_null());
+        assert_eq!(
+            parsed["generator"],
+            concat!("wirebug v", env!("CARGO_PKG_VERSION"))
+        );
         assert_eq!(parsed["stylesheet"], EMBED_STYLESHEET_FILENAME);
         let entries = parsed["views"].as_array().expect("views array");
         assert_eq!(entries.len(), 3);

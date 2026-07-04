@@ -17,8 +17,12 @@ pub(crate) const STAMP_HEIGHT: f64 = 22.0;
 /// Inset from the viewBox's right/bottom edge to the stamp text baseline.
 pub(crate) const STAMP_INSET: f64 = 8.0;
 
+/// Version of the wirebug that produced the drawing (this crate's version).
+pub(crate) const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// Build the human-readable stamp string: `"<name> v<version>"`, then
-/// `" · rev <revision>"` and `" (<date>)"` when those fields are set.
+/// `" · rev <revision>"` and `" (<date>)"` when those fields are set, and
+/// always a trailing `" · wirebug v<appver>"` recording the generator.
 pub(crate) fn stamp_text(manifest: &Manifest) -> String {
     let mut s = format!("{} v{}", manifest.name, manifest.version);
     if let Some(rev) = &manifest.revision {
@@ -28,6 +32,8 @@ pub(crate) fn stamp_text(manifest: &Manifest) -> String {
     if let Some(date) = manifest.date {
         s.push_str(&format!(" ({date})"));
     }
+    s.push_str(" · wirebug v");
+    s.push_str(APP_VERSION);
     s
 }
 
@@ -58,9 +64,18 @@ mod tests {
         }
     }
 
+    /// The wirebug-version suffix every stamp carries, built from the same
+    /// env var as `APP_VERSION` so these assertions stay exact across bumps.
+    fn app_suffix() -> String {
+        format!(" · wirebug v{}", env!("CARGO_PKG_VERSION"))
+    }
+
     #[test]
     fn name_and_version_only() {
-        assert_eq!(stamp_text(&minimal()), "demo v1.2.3");
+        assert_eq!(
+            stamp_text(&minimal()),
+            format!("demo v1.2.3{}", app_suffix())
+        );
     }
 
     #[test]
@@ -69,7 +84,10 @@ mod tests {
             revision: Some("abc1234".to_string()),
             ..minimal()
         };
-        assert_eq!(stamp_text(&m), "demo v1.2.3 · rev abc1234");
+        assert_eq!(
+            stamp_text(&m),
+            format!("demo v1.2.3 · rev abc1234{}", app_suffix())
+        );
     }
 
     #[test]
@@ -78,7 +96,10 @@ mod tests {
             revision: Some("abc1234-dirty".to_string()),
             ..minimal()
         };
-        assert_eq!(stamp_text(&m), "demo v1.2.3 · rev abc1234-dirty");
+        assert_eq!(
+            stamp_text(&m),
+            format!("demo v1.2.3 · rev abc1234-dirty{}", app_suffix())
+        );
     }
 
     #[test]
@@ -87,7 +108,10 @@ mod tests {
             date: Some(NaiveDate::from_ymd_opt(2026, 5, 28).unwrap()),
             ..minimal()
         };
-        assert_eq!(stamp_text(&m), "demo v1.2.3 (2026-05-28)");
+        assert_eq!(
+            stamp_text(&m),
+            format!("demo v1.2.3 (2026-05-28){}", app_suffix())
+        );
     }
 
     #[test]
@@ -97,6 +121,14 @@ mod tests {
             date: Some(NaiveDate::from_ymd_opt(2026, 5, 28).unwrap()),
             ..minimal()
         };
-        assert_eq!(stamp_text(&m), "demo v1.2.3 · rev B (2026-05-28)");
+        assert_eq!(
+            stamp_text(&m),
+            format!("demo v1.2.3 · rev B (2026-05-28){}", app_suffix())
+        );
+    }
+
+    #[test]
+    fn wirebug_version_always_appended() {
+        assert!(stamp_text(&minimal()).ends_with(&app_suffix()));
     }
 }

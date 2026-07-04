@@ -91,10 +91,22 @@ the field stays `None`.
 
 The parsed `Manifest` rides on `Project` → `ir::Design` (as an
 `Option<Manifest>` so synthetic test designs need not invent one).
-Renderers stamp `<name> v<version> · rev … (date)` in the SVG's
-bottom-right corner; the HTML index puts the project name in `<h1>`
-with the version and description below it; PDF pages carry the same
-stamp text in their fixed-size footer instead of in the SVG.
+Renderers stamp `<name> v<version> · rev … (date) · wirebug v<appver>`
+in the SVG's bottom-right corner — the trailing `wirebug v…`
+(`stamp::APP_VERSION`, this crate's `CARGO_PKG_VERSION`) records the
+generator and is always present; `stamp::stamp_text` is the single
+source, so the three SVG renderers and the PDF footer all carry it. The
+HTML index puts the project name in `<h1>` with the version and
+description below it; PDF pages carry the same stamp text in their
+fixed-size footer (and set the PDF `Producer` to `wirebug <appver>`).
+Embed mode suppresses the in-drawing stamp, so `manifest.json` carries a
+`generator: "wirebug v<appver>"` field instead.
+
+`wirebug manifest version` prints the manifest's version `v`-prefixed
+(`v0.1.0`) to stdout, for CI to check against a git tag. It's backed by
+`dsl::load_manifest` (discovery + `manifest::load` only, skipping the
+check pipeline), so it works even when the `.wb` sources don't compile.
+Distinct from clap's `--version`, which prints the wirebug app version.
 
 ## DSL mental model
 
@@ -371,7 +383,7 @@ redesign each when it lands.
 
 ```
 src/
-├── main.rs          # clap CLI: `check`, `render`, `serve`, `lsp` (all over the .wb DSL)
+├── main.rs          # clap CLI: `check`, `render`, `serve`, `lsp`, `manifest version` (all over the .wb DSL)
 ├── lib.rs           # re-exports; dsl::check_project + render::render_views
 │
 │  # ── DSL parse-and-check pipeline (the only input: .wb) ──

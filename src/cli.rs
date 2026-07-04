@@ -86,6 +86,11 @@ pub enum Command {
         #[arg(long)]
         embed: bool,
     },
+    /// Inspect the project manifest (wirebug.toml).
+    Manifest {
+        #[command(subcommand)]
+        what: ManifestCommand,
+    },
     /// Run the language server over stdio (for editor integration).
     Lsp,
     /// Serve a project with live reload, re-rendering on every change.
@@ -102,5 +107,18 @@ pub enum Command {
         /// reach it.
         #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
         host: IpAddr,
+    },
+}
+
+/// Subcommands of `wirebug manifest`.
+#[derive(Debug, Subcommand)]
+pub enum ManifestCommand {
+    /// Print the project version, `v`-prefixed (e.g. `v0.1.0`), from
+    /// wirebug.toml — for CI to check a git tag against.
+    Version {
+        /// A project manifest, project directory, or `.wb` file. Defaults
+        /// to the project containing the current directory (found by
+        /// walking up to `wirebug.toml`).
+        target: Option<PathBuf>,
     },
 }

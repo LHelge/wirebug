@@ -87,6 +87,18 @@ wirebug check --strict --format json examples
 
 Problems are reported with source snippets and carets (via miette); a clean run exits 0.
 
+Print the project's version (from `wirebug.toml`), `v`-prefixed to match a
+git tag — handy in CI to verify a pushed tag matches the manifest:
+
+```sh
+wirebug manifest version           # -> v0.1.0  (walks up to wirebug.toml)
+wirebug manifest version examples  # or point at a project / manifest
+```
+
+It reads only the manifest, so it prints a version even when the `.wb` sources
+don't yet check. (`wirebug --version` still prints the wirebug *application*
+version.)
+
 ## Concepts
 
 **Component** — a *type*, not an instance: a named definition with `pub` ports (its interface) and, optionally, instances of other components plus the wires between them (its implementation). Components can nest; nested definitions are private to their parent.
@@ -118,11 +130,11 @@ revision    = "B"             # optional; auto-filled from git when absent
 date        = "2026-05-28"    # optional; ISO date
 ```
 
-`name` and `version` appear in the rendered output: as a small stamp in the bottom-right corner of every SVG, as the page header on the HTML index, and in every PDF page's footer beside the page number. `revision` and `date`, when set, are appended to the stamp.
+`name` and `version` appear in the rendered output: as a small stamp in the bottom-right corner of every SVG, as the page header on the HTML index, and in every PDF page's footer beside the page number. `revision` and `date`, when set, are appended to the stamp. Every stamp also ends with the wirebug application version that produced the drawing (`· wirebug v<x.y.z>`), so a rendered artifact records which wirebug generated it.
 
 **Revision from git.** If `revision` is omitted, wirebug shells out to `git rev-parse --short HEAD` in the project directory and uses the result, suffixed `-dirty` when the working tree has uncommitted changes. An explicit `revision = "..."` in the manifest always wins. If `git` isn't on `PATH`, or the directory isn't a git repo, the field stays empty and the stamp simply omits it — no error.
 
-**Embedding into another document.** Pass `--embed` to `wirebug render` to emit SVGs intended for inclusion in another page, report, or static site. Embed-mode SVGs drop the built-in `<style>` block (the host stylesheet owns the look), suppress the bottom-right project-identity stamp, and class-tag the root `<svg>` with `wirebug wirebug-schematic` (or `wirebug-harness`) so host CSS can scope rules under `.wirebug`. The HTML index is replaced by a `manifest.json` sidecar listing every view (title, filename, kind) plus the project's identity, so a downstream build can enumerate and embed views without parsing each SVG. A `wirebug.css` starter stylesheet lands beside the manifest (and is referenced by its `stylesheet` field): the built-in styles re-scoped under `.wirebug-schematic` / `.wirebug-harness` / `.wirebug-pinout`, so linking it reproduces the standalone look — copy it into your own assets and edit the copy to theme. (The previous `--no-stamp` flag is removed: embedding was its only use case, and `--embed` now expresses it directly.)
+**Embedding into another document.** Pass `--embed` to `wirebug render` to emit SVGs intended for inclusion in another page, report, or static site. Embed-mode SVGs drop the built-in `<style>` block (the host stylesheet owns the look), suppress the bottom-right project-identity stamp, and class-tag the root `<svg>` with `wirebug wirebug-schematic` (or `wirebug-harness`) so host CSS can scope rules under `.wirebug`. The HTML index is replaced by a `manifest.json` sidecar listing every view (title, filename, kind) plus the project's identity and a `generator` field (`wirebug v<x.y.z>`, since embed SVGs carry no in-drawing stamp), so a downstream build can enumerate and embed views without parsing each SVG. A `wirebug.css` starter stylesheet lands beside the manifest (and is referenced by its `stylesheet` field): the built-in styles re-scoped under `.wirebug-schematic` / `.wirebug-harness` / `.wirebug-pinout`, so linking it reproduces the standalone look — copy it into your own assets and edit the copy to theme. (The previous `--no-stamp` flag is removed: embedding was its only use case, and `--embed` now expresses it directly.)
 
 ## Rendering
 

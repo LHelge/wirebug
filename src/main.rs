@@ -18,7 +18,8 @@ use clap::Parser;
 use miette::{GraphicalReportHandler, JSONReportHandler};
 use tracing_subscriber::EnvFilter;
 
-use cli::{Cli, Command};
+use cli::{Cli, Command, ManifestCommand};
+use wirebug::dsl::diagnostics::Problem;
 use wirebug::dsl::{self, CheckReport, Format};
 use wirebug::error::Error;
 
@@ -106,6 +107,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             pdf,
             embed,
         } => render_command(target.as_deref(), &out, strict, png, pdf, embed),
+        Command::Manifest { what } => Ok(manifest_command(what)),
         Command::Lsp => lsp_command(),
         Command::Serve { target, port, host } => serve_command(target.as_deref(), host, port),
     }
@@ -144,7 +146,7 @@ fn check_command(target: Option<&Path>, strict: bool, format: Format) -> ExitCod
 
     match format {
         Format::Human => {
-            eprint!("{}", render_problems_human(&report));
+            eprint!("{}", render_problems(&report.problems));
             match &report.design {
                 Some(design) if report.problems.is_empty() => eprintln!(
                     "ok — {} instances, {} views",
@@ -186,7 +188,7 @@ fn render_command(
 
     // Surface any check problems first; an erroring project (or, under
     // --strict, a warning) is not rendered.
-    eprint!("{}", render_problems_human(&report));
+    eprint!("{}", render_problems(&report.problems));
     if report.has_blocking_problems(strict) {
         eprintln!(
             "{} error(s), {} warning(s) — not rendering",
@@ -278,11 +280,32 @@ fn write_file(out_dir: &Path, filename: &str, contents: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// Render a report's problems with miette's graphical handler.
-fn render_problems_human(report: &CheckReport) -> String {
+/// Print the project's manifest version (`v<version>`) to stdout, or the
+/// discovery/parse problems to stderr. Skips the check pipeline, so it
+/// reports a version even when the `.wb` sources don't compile.
+fn manifest_command(what: ManifestCommand) -> ExitCode {
+    match what {
+        ManifestCommand::Version { target } => {
+            let (manifest, problems) = dsl::load_manifest(target.as_deref());
+            match manifest {
+                Some(manifest) => {
+                    println!("v{}", manifest.version);
+                    ExitCode::SUCCESS
+                }
+                None => {
+                    eprint!("{}", render_problems(&problems));
+                    ExitCode::FAILURE
+                }
+            }
+        }
+    }
+}
+
+/// Render a list of problems with miette's graphical handler.
+fn render_problems(problems: &[Problem]) -> String {
     let handler = GraphicalReportHandler::new();
     let mut out = String::new();
-    for problem in &report.problems {
+    for problem in problems {
         let _ = handler.render_report(&mut out, problem);
     }
     out

@@ -330,6 +330,57 @@ fn check_accepts_a_manifest_target() {
 }
 
 #[test]
+fn manifest_version_prints_the_v_prefixed_project_version() {
+    // The fixture manifest declares version 0.1.0.
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["manifest", "version", FIXTURE_ROOT])
+        .assert()
+        .success()
+        .stdout(predicate::str::diff("v0.1.0\n"));
+}
+
+#[test]
+fn manifest_version_accepts_a_manifest_target() {
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["manifest", "version", FIXTURE_MANIFEST])
+        .assert()
+        .success()
+        .stdout(predicate::str::diff("v0.1.0\n"));
+}
+
+#[test]
+fn manifest_version_works_even_when_the_wb_sources_do_not_compile() {
+    // A project whose main.wb is broken still has a readable manifest, so
+    // CI can check the tag before the design necessarily checks clean.
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(
+        tmp.path().join("wirebug.toml"),
+        "[project]\nname = \"broken\"\nversion = \"9.9.9\"\n",
+    )
+    .expect("write wirebug.toml");
+    std::fs::write(tmp.path().join("main.wb"), "component c { @ }\n").expect("write main.wb");
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["manifest", "version", tmp.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::diff("v9.9.9\n"));
+}
+
+#[test]
+fn manifest_version_fails_when_there_is_no_project() {
+    let tmp = tempdir().expect("tempdir");
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["manifest", "version", tmp.path().to_str().unwrap()])
+        .assert()
+        .failure();
+}
+
+#[test]
 fn check_rejects_a_dangling_use() {
     let tmp = tempdir().expect("tempdir");
     let main = tmp.path().join("main.wb");

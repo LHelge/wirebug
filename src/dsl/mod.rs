@@ -67,6 +67,19 @@ impl CheckReport {
     }
 }
 
+/// Load just the project manifest for `target` — project discovery plus a
+/// `wirebug.toml` parse, skipping the full check pipeline so it works even
+/// when the `.wb` sources have errors. Backs `wirebug manifest version`.
+///
+/// Returns `None` together with at least one [`Problem`] when the project
+/// can't be discovered or the manifest can't be read/parsed.
+pub fn load_manifest(target: Option<&Path>) -> (Option<manifest::Manifest>, Vec<Problem>) {
+    match project::discover(target) {
+        Ok(entry) => manifest::load(entry.parent().unwrap_or_else(|| Path::new("."))),
+        Err(problem) => (None, vec![problem]),
+    }
+}
+
 /// Run the parse-and-check pipeline against the project containing
 /// `target` (or the project discovered by walking up from the current
 /// directory when `target` is `None`).
@@ -98,6 +111,43 @@ pub fn check_project(target: Option<&Path>) -> CheckReport {
 mod tests {
     use super::*;
     use miette::NamedSource;
+    use std::path::PathBuf;
+
+    fn fixture(name: &str) -> PathBuf {
+        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures")).join(name)
+    }
+
+    #[test]
+    fn load_manifest_reads_the_project_version() {
+        let (manifest, problems) = load_manifest(Some(&fixture("basic_project")));
+        assert!(problems.is_empty(), "unexpected problems: {problems:?}");
+        assert_eq!(manifest.expect("manifest loaded").version, "0.1.0");
+    }
+
+    #[test]
+    fn load_manifest_ignores_broken_wb_sources() {
+        // The manifest is independent of the check pipeline, so a project
+        // whose `.wb` won't parse still yields its version.
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("wirebug.toml"),
+            "[project]\nname = \"broken\"\nversion = \"9.9.9\"\n",
+        )
+        .expect("write wirebug.toml");
+        std::fs::write(dir.path().join("main.wb"), "component c { @ }\n").expect("write main.wb");
+
+        let (manifest, problems) = load_manifest(Some(dir.path()));
+        assert!(problems.is_empty(), "unexpected problems: {problems:?}");
+        assert_eq!(manifest.expect("manifest loaded").version, "9.9.9");
+    }
+
+    #[test]
+    fn load_manifest_reports_a_problem_when_no_project() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (manifest, problems) = load_manifest(Some(dir.path()));
+        assert!(manifest.is_none());
+        assert!(!problems.is_empty(), "expected a discovery problem");
+    }
 
     #[test]
     fn check_report_counts_errors_and_warnings() {
