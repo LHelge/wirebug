@@ -24,6 +24,7 @@ component FuseBox {
     pub port inv       "INV";
     pub port bms_front "BMS F";
     pub port bms_rear  "BMS R";
+    pub port key       "KEY";
 
     // Fused 12V feed that sources the HV interlock loop
     pub port interlock "INTLK";

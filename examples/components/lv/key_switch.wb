@@ -1,0 +1,13 @@
+// Ignition key switch
+// A dash-mounted starter key. A fused 12 V feed comes in on BATT; the key
+// switches it through to IGN in the run position and to CRANK in the start
+// position. Both outputs run straight to the VCM, which owns the actual
+// power-up / crank sequencing.
+
+component KeySwitch {
+    connector x1 "Ignition switch 3p" {
+        pub port batt  "BATT"  pin 1;   // fused 12 V feed in
+        pub port ign   "IGN"   pin 2;   // ignition-on output (RUN)
+        pub port crank "CRANK" pin 3;   // crank output (START)
+    }
+}

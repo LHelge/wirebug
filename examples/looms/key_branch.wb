@@ -1,0 +1,55 @@
+// Aphid EV — ignition key loom.
+//
+// The dash-mounted starter key hangs off the cab harness through its own
+// inline connector (a mated Deutsch DT 3-way pair) so the ~2 m key loom
+// can be unplugged as one. Three conductors cross the branch: a fused 12 V
+// feed in from the fuse box, and the key's IGN and CRANK outputs back to
+// the VCM. The main run carries the female half; the key loom the male.
+
+use KeySwitch from "../components/lv/key_switch.wb";
+use Dt04_3p from "../components/connectors.wb";
+use Dt06_3s from "../components/connectors.wb";
+
+extend Vehicle {
+    key: KeySwitch "Ignition key";
+
+    // The mated pair: the main loom carries the female half, the key loom
+    // the male half.
+    inline ic_key "Key branch" {
+        male:   Dt04_3p;
+        female: Dt06_3s;
+        port feed  "FEED"  pin 1;
+        port ign   "IGN"   pin 2;
+        port crank "CRANK" pin 3;
+    }
+
+    // Cab side: fused feed from the fuse box, key signals to the VCM.
+    cable key_feed "Key feed" {
+        type: "3-core";
+
+        wire red    1.0 "FEED"  [fuses.key,     ic_key.feed];
+        wire violet 0.5 "IGN"   [ic_key.ign,    vcm.ign];
+        wire grey   0.5 "CRANK" [ic_key.crank,  vcm.crank];
+    }
+
+    // Key loom: the ~2 m run from the branch point to the dash key switch.
+    cable key_loom "Key loom" {
+        type:   "3-core";
+        length: 2.0;
+
+        wire red    1.0 "FEED"  [ic_key.feed,   key.batt];
+        wire violet 0.5 "IGN"   [ic_key.ign,    key.ign];
+        wire grey   0.5 "CRANK" [ic_key.crank,  key.crank];
+    }
+}
+
+// --- View: key loom ---
+// The key-side build document: the inline's male half (crimped onto this
+// loom) feeding the dash key switch.
+
+view harness "Key loom" {
+    grid: 20;
+
+    include ic_key.male at (0, 0);
+    include key.x1      at (36, 0);
+}
