@@ -51,6 +51,12 @@ component Vcm {
         pub port brake "BRAKE" pin 1;
     }
 
+    // Ignition key inputs — the RUN and START signals from the dash key.
+    connector key "Key 2p" {
+        pub port ign   "IGN"   pin 1;
+        pub port crank "CRANK" pin 2;
+    }
+
     // Interlock termination — single input, no output
     pub port interlock "INTLK";
 
