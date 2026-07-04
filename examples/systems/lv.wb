@@ -43,14 +43,20 @@ extend Vehicle {
     wire red 2.5 [fuses.bms_front, front.b_pos];
     wire red 2.5 [fuses.bms_rear, rear.b_pos];
 
-    // --- Chassis ground bus ---
-    // (the rear pack grounds through the tunnel loom)
-
+    // --- Chassis ground ---
+    // Power returns share the chassis ground bus. The three grounds that sit
+    // on signal connectors (OBC signal GND, inverter B-, front BMS GND) come
+    // back to the VCM ground on their own leads, so the shared bus never
+    // decomposes into a segment drawn across those connectors in a harness
+    // view. (The rear pack grounds through the tunnel loom.)
     wire black 6.0 [
-        charger.out_neg, charger.gnd, aux.neg, vcm.gnd, inv.b_neg, front.gnd,
+        charger.out_neg, aux.neg, vcm.gnd,
         pump.gnd, fan.gnd,
         bl_left.gnd, bl_right.gnd, bl_chmsl.gnd,
     ];
+    wire black 1.0 [vcm.gnd, charger.gnd];
+    wire black 2.5 [vcm.gnd, inv.b_neg];
+    wire black 2.5 [vcm.gnd, front.gnd];
 }
 
 // --- View: 12V supply ---
