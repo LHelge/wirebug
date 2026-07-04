@@ -46,9 +46,41 @@ jobs:
           name: wirebug-${{ matrix.target }}
           path: target/${{ matrix.target }}/release/wirebug
 
+  vsix:
+    name: Build VSCode extension
+    needs: quality-checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: editors/vscode/package-lock.json
+
+      # Version the .vsix from the release tag so it always matches, no
+      # matter what package.json carries. --no-git-tag-version keeps vsce
+      # from touching git in the ephemeral checkout.
+      - name: Build VSIX
+        working-directory: editors/vscode
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          npm ci
+          npm run check
+          npm run compile
+          npx vsce package "$VERSION" --no-git-tag-version -o "wirebug-$VERSION.vsix"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: wirebug-vsix
+          path: editors/vscode/wirebug-*.vsix
+
   release:
     name: Create GitHub Release
-    needs: build
+    needs: [build, vsix]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -81,6 +113,7 @@ jobs:
             artifacts/wirebug-linux-x86_64
             artifacts/wirebug-macos-x86_64
             artifacts/wirebug-macos-aarch64
+            artifacts/wirebug-vsix/*.vsix
           body_path: RELEASE_NOTES.md
           make_latest: true
 

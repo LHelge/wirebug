@@ -14,8 +14,8 @@ main() {
         Darwin) platform="macos" ;;
         *)
             echo "Unsupported OS: $os"
-            echo "Falling back to: cargo install wirebug"
-            cargo install wirebug
+            echo "Falling back to: cargo install --locked wirebug"
+            cargo install --locked wirebug
             return
             ;;
     esac
@@ -25,8 +25,8 @@ main() {
         arm64|aarch64)   arch="aarch64" ;;
         *)
             echo "Unsupported architecture: $arch"
-            echo "Falling back to: cargo install wirebug"
-            cargo install wirebug
+            echo "Falling back to: cargo install --locked wirebug"
+            cargo install --locked wirebug
             return
             ;;
     esac
@@ -34,8 +34,8 @@ main() {
     # Only macOS ships an arm64 binary; Linux is x86_64-only for now.
     if [ "$platform" = "linux" ] && [ "$arch" != "x86_64" ]; then
         echo "No prebuilt Linux binary for ${arch}."
-        echo "Falling back to: cargo install wirebug"
-        cargo install wirebug
+        echo "Falling back to: cargo install --locked wirebug"
+        cargo install --locked wirebug
         return
     fi
 
@@ -50,15 +50,15 @@ main() {
             | grep '"tag_name"' | head -1 | cut -d'"' -f4)"
     else
         echo "Neither curl nor wget found."
-        echo "Falling back to: cargo install wirebug"
-        cargo install wirebug
+        echo "Falling back to: cargo install --locked wirebug"
+        cargo install --locked wirebug
         return
     fi
 
     if [ -z "$tag" ]; then
         echo "Could not determine latest release."
-        echo "Falling back to: cargo install wirebug"
-        cargo install wirebug
+        echo "Falling back to: cargo install --locked wirebug"
+        cargo install --locked wirebug
         return
     fi
 
@@ -71,15 +71,15 @@ main() {
     if command -v curl >/dev/null 2>&1; then
         if ! curl -fsSL -o "${tmpdir}/${BINARY}" "$url"; then
             echo "Binary download failed."
-            echo "Falling back to: cargo install wirebug"
-            cargo install wirebug
+            echo "Falling back to: cargo install --locked wirebug"
+            cargo install --locked wirebug
             return
         fi
     else
         if ! wget -qO "${tmpdir}/${BINARY}" "$url"; then
             echo "Binary download failed."
-            echo "Falling back to: cargo install wirebug"
-            cargo install wirebug
+            echo "Falling back to: cargo install --locked wirebug"
+            cargo install --locked wirebug
             return
         fi
     fi

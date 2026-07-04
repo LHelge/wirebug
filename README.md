@@ -11,7 +11,7 @@ A project is a directory rooted at a `wirebug.toml` manifest, with `main.wb` as 
 ### Cargo
 
 ```sh
-cargo install wirebug
+cargo install --locked wirebug
 ```
 
 ### Homebrew
@@ -33,8 +33,22 @@ This detects your OS and architecture, downloads the right binary from GitHub Re
 ### From source
 
 ```sh
-cargo install --path .
+cargo install --locked --path .
 ```
+
+### VSCode extension
+
+Each [release](https://github.com/LHelge/wirebug/releases/latest) attaches a
+`wirebug-<version>.vsix`. Download it and install:
+
+```sh
+code --install-extension wirebug-<version>.vsix
+```
+
+Or, in VSCode: **Extensions** panel → **⋯** menu → **Install from VSIX…**. The
+extension provides syntax highlighting plus live diagnostics and completion via
+`wirebug lsp`, so it needs the `wirebug` binary on your `PATH` (any install
+method above) or a path set in the `wirebug.server.path` setting.
 
 ## Why
 
@@ -277,7 +291,7 @@ To put the `wirebug` CLI on your `PATH` — which is also how the VSCode
 extension finds its language server (`wirebug lsp`):
 
 ```sh
-cargo install --path .
+cargo install --locked --path .
 ```
 
 For the local development loop, install [`bacon`](https://dystroy.org/bacon/):
