@@ -1,0 +1,53 @@
+// Aphid EV — gear selector loom.
+//
+// The shift-by-wire gear lever hangs off the cab harness through its own
+// inline connector (a mated Deutsch DT 3-way pair) on a ~2 m loom, exactly
+// like the key branch. Three conductors cross: a fused 12 V feed in, and
+// the lever's momentary R and D requests back to the VCM. The main run
+// carries the female half; the gear loom the male.
+
+use GearLever from "../components/lv/gear_lever.wb";
+use Dt04_3p from "../components/connectors.wb";
+use Dt06_3s from "../components/connectors.wb";
+
+extend Vehicle {
+    gear: GearLever "Gear lever";
+
+    inline ic_gear "Gear branch" {
+        male:   Dt04_3p;
+        female: Dt06_3s;
+        port feed "FEED" pin 1;
+        port r    "R"    pin 2;
+        port d    "D"    pin 3;
+    }
+
+    // Cab side: fused feed from the fuse box, R/D requests to the VCM.
+    cable gear_feed "Gear feed" {
+        type: "3-core";
+
+        wire red    1.0 "FEED" [fuses.shift, ic_gear.feed];
+        wire green  0.5 "R"    [ic_gear.r,   vcm.r];
+        wire yellow 0.5 "D"    [ic_gear.d,   vcm.d];
+    }
+
+    // Gear loom: the ~2 m run from the branch point to the gear lever.
+    cable gear_loom "Gear loom" {
+        type:   "3-core";
+        length: 2.0;
+
+        wire red    1.0 "FEED" [ic_gear.feed, gear.feed];
+        wire green  0.5 "R"    [ic_gear.r,    gear.r];
+        wire yellow 0.5 "D"    [ic_gear.d,    gear.d];
+    }
+}
+
+// --- View: gear loom ---
+// The lever-side build document: the inline's male half feeding the
+// shift-by-wire gear lever.
+
+view harness "Gear loom" {
+    grid: 20;
+
+    include ic_gear.male at (0, 0);
+    include gear.x1      at (36, 0);
+}
