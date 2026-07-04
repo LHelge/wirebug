@@ -4,7 +4,7 @@
 //! the project for changes: each save re-runs the pipeline and pushes a
 //! reload to connected browsers over a websocket. Nothing is written to disk.
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -24,8 +24,10 @@ use state::AppState;
 use watcher::ProjectWatcher;
 
 /// Serve the project at `target` (or the project containing the current
-/// directory) on `port`, rebuilding and live-reloading on every change.
-pub async fn serve(target: Option<&Path>, port: u16) -> anyhow::Result<()> {
+/// directory) on `host:port`, rebuilding and live-reloading on every change.
+/// `host` is the bind address — `127.0.0.1` for local-only, `0.0.0.0` to
+/// expose the server on every interface.
+pub async fn serve(target: Option<&Path>, host: IpAddr, port: u16) -> anyhow::Result<()> {
     // The project root is the directory holding `wirebug.toml`; watch it whole.
     let entry = project::discover(target)
         .map_err(|problem| anyhow::anyhow!("{problem}"))
@@ -45,11 +47,11 @@ pub async fn serve(target: Option<&Path>, port: u16) -> anyhow::Result<()> {
     let watcher_state = Arc::clone(&state);
     let watcher_handle = tokio::spawn(async move { watcher.run(&watcher_state).await });
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let addr = SocketAddr::new(host, port);
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("binding {addr}"))?;
-    tracing::info!("serving at http://localhost:{port}");
+    tracing::info!("serving at http://{addr}");
 
     let shutdown_state = Arc::clone(&state);
     axum::serve(listener, router)

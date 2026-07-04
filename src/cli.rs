@@ -4,6 +4,7 @@
 //! output-format flag into the library's [`Format`]. The command
 //! implementations live in `main.rs`.
 
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -96,5 +97,10 @@ pub enum Command {
         /// Port to listen on.
         #[arg(short, long, default_value_t = 3000)]
         port: u16,
+        /// Address to bind. Defaults to localhost; pass `0.0.0.0` to expose
+        /// the server on all interfaces so other devices on the network can
+        /// reach it.
+        #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::LOCALHOST))]
+        host: IpAddr,
     },
 }
