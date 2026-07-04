@@ -1,0 +1,72 @@
+// Aphid EV — separate brake-sensor loom.
+//
+// Two brake sensors sit at the front, 15 cm apart. They hang off the cab
+// loom through their own inline connector (a mated Deutsch DT 3-way pair)
+// so the ~2 m brake loom can be unplugged as one. The main run's
+// conductors are crimped into the female half; the brake loom carries the
+// male half. Three conductors cross the branch: an EV-12V feed plus the
+// two sensor signals. The 12V lead is a single jumper daisy-chained across
+// both sensors; each sensor returns a switched signal to the VCM.
+
+use BrakeSensor from "../components/lv/brake_sensor.wb";
+use Dt04_3p from "../components/connectors.wb";
+use Dt06_3s from "../components/connectors.wb";
+
+extend Vehicle {
+    bs1: BrakeSensor "Brake sensor 1";
+    bs2: BrakeSensor "Brake sensor 2";
+
+    // The mated pair: one shared pin set, two housings. The main loom
+    // carries the female half, the brake loom the male half.
+    inline ic_brake "Brake branch" {
+        male:   Dt04_3p;
+        female: Dt06_3s;
+        port v12    "EV 12V" pin 1;
+        port brake1 "BRAKE1" pin 2;
+        port brake2 "BRAKE2" pin 3;
+    }
+
+    // Cab side: EV-12V from the fuse box relay, brake signals to the VCM.
+    cable brake_feed "Brake feed" {
+        type: "3-core";
+
+        wire red   0.75 "EV 12V" [fuses.ev_12v, ic_brake.v12];
+        wire brown 0.5  "BRAKE1" [vcm.brake_1,  ic_brake.brake1];
+        wire grey  0.5  "BRAKE2" [vcm.brake_2,  ic_brake.brake2];
+    }
+
+    // Brake loom: the ~2 m run from the branch point to the front sensors.
+    // Carries the EV-12V feed (to the first sensor) plus both signals.
+    cable brake_loom "Brake loom" {
+        type:   "3-core";
+        length: 2.0;
+
+        wire red   0.75 "EV 12V" [ic_brake.v12,   bs1.b_pos];
+        wire brown 0.5  "BRAKE1" [ic_brake.brake1, bs1.sig];
+        wire grey  0.5  "BRAKE2" [ic_brake.brake2, bs2.sig];
+    }
+
+    // The single EV-12V lead is jumpered on from the first sensor to the
+    // second, 15 cm away — its own short cable.
+    cable brake_jumper "12V jumper" {
+        type:   "1-core";
+        length: 0.15;
+
+        wire red 0.75 "EV 12V" [bs1.b_pos, bs2.b_pos];
+    }
+}
+
+// --- View: brake loom ---
+// The sensor-side build document: the inline's male half (crimped onto
+// this loom) feeding the two sensors' spade terminals. The EV-12V lead
+// daisy-chains bs1 → bs2 (the 15 cm jumper).
+
+view harness "Brake loom" {
+    grid: 20;
+
+    include ic_brake.male at (0, 0);
+    include bs2.pwr       at (0, -7);
+    include bs1.pwr       at (60, -6);
+    include bs1.sig       at (60, 0);
+    include bs2.sig       at (60, 6);
+}

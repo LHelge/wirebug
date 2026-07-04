@@ -1,0 +1,16 @@
+// Brake sensor
+// A simple two-terminal brake switch: the front loom feeds it EV-12V on
+// one spade, and it returns a switched signal to the VCM on the other.
+// Each terminal is an individual female spade (Faston), not a housing.
+
+use FastonF63 from "../connectors.wb";
+
+component BrakeSensor {
+    connector pwr: FastonF63 {
+        pub port b_pos "B+" pin 1;   // EV-12V supply spade
+    }
+
+    connector sig: FastonF63 {
+        pub port sig "SIG" pin 1;    // switched-signal spade to the VCM
+    }
+}

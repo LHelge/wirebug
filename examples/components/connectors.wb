@@ -94,3 +94,40 @@ connector_type Dt06_4s "Deutsch DT06-4S" {
         numbering: row_major;
     }
 }
+
+// Deutsch DT 3-way mated pair — the inline connector splitting the
+// separate brake loom off the cab harness (looms/brake_branch.wb). Three
+// conductors: EV-12V feed plus the two brake-sensor signals.
+
+connector_type Dt04_3p "Deutsch DT04-3P" {
+    part: "DT04-3P";
+
+    layout grid {
+        rows: 1;
+        cols: 3;
+        numbering: row_major;
+    }
+}
+
+connector_type Dt06_3s "Deutsch DT06-3S" {
+    part: "DT06-3S";
+
+    layout grid {
+        rows: 1;
+        cols: 3;
+        numbering: row_major;
+    }
+}
+
+// Single female spade (Faston 6.3) — an individual crimped receptacle, one
+// per conductor. Used for the loose brake-sensor terminals.
+
+connector_type FastonF63 "Faston 6.3 female" {
+    part: "FLDNY2-250";
+
+    layout grid {
+        rows: 1;
+        cols: 1;
+        numbering: row_major;
+    }
+}
