@@ -5,9 +5,11 @@
 // fragments; this file owns the *signals* — 12V, ground, safe power.
 
 use FuseBox from "../components/lv/fuse_box.wb";
+use LvBattery from "../components/lv/lv_battery.wb";
 
 extend Vehicle {
-    fuses: FuseBox "Fuse Box";
+    fuses: FuseBox   "Fuse Box";
+    aux:   LvBattery "12V battery";
 
     // --- Safe power ---
     // VCM enables safe power when interlock OK + safety checks pass.
@@ -23,9 +25,10 @@ extend Vehicle {
     wire blue 0.5 [vcm.fan_ctrl, fuses.fan_ctrl];
 
     // --- 12V distribution ---
-    // OBC/DC-DC output feeds fuse box; fuse box distributes to subsystems
+    // DC-DC charges the 12V battery and feeds the fuse box; the battery
+    // buffers the bus and keeps it always-hot. Fuse box distributes onward.
 
-    wire red 6.0 [charger.out_pos, fuses.batt_in];
+    wire red 6.0 [charger.out_pos, aux.pos, fuses.batt_in];
 
     wire red 2.5 [fuses.vcm, vcm.b_pos];
     wire red 2.5 [fuses.inv, inv.b_pos];
@@ -36,8 +39,29 @@ extend Vehicle {
     // (the rear pack grounds through the tunnel loom)
 
     wire black 6.0 [
-        charger.out_neg, vcm.gnd, inv.b_neg, front.gnd,
+        charger.out_neg, aux.neg, vcm.gnd, inv.b_neg, front.gnd,
         pump.gnd, fan.gnd,
         bl_left.gnd, bl_right.gnd, bl_chmsl.gnd,
     ];
+}
+
+// --- View: 12V supply ---
+// The DC-DC keeps the 12V battery charged and feeds the fuse box; the
+// battery sits across the bus (always-hot). Grounds return to chassis.
+
+view schematic "12V supply" {
+    grid: 20;
+
+    include charger at (3, 4) ports {
+        east: out_pos, out_neg;
+    }
+
+    include aux at (3, 13) ports {
+        east: pos, neg;
+    }
+
+    include fuses at (22, 8) ports {
+        west: batt_in;
+        east: vcm, key;
+    }
 }

@@ -1,0 +1,9 @@
+// 12V auxiliary battery
+// Buffers the low-voltage system and keeps it always-hot: the DC-DC holds
+// it charged while the vehicle runs, and it powers wake-up loads (the
+// ignition key feed) when the DC-DC is down.
+
+component LvBattery {
+    pub port pos "B+";
+    pub port neg "B-";
+}
