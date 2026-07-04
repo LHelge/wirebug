@@ -289,16 +289,36 @@ impl HarnessLayout {
         }
     }
 
-    /// The spine x: midway between the leftmost and rightmost node centres
-    /// (0 when there are no nodes).
+    /// The spine x: centred in the *gap* between the left-hand and right-hand
+    /// connector columns, so a cable box's lead-in and lead-out read equal
+    /// even when the two sides differ in width (centring on the node *centres*
+    /// skews the box toward the wider side). Nodes are split at the midpoint
+    /// of their centres; the spine sits midway between the left column's
+    /// rightmost edge and the right column's leftmost edge. Falls back to the
+    /// centre midpoint when the split is degenerate — everything on one side,
+    /// or columns that horizontally overlap (0 when there are no nodes).
     fn spine_x(nodes: &[ConnectorNode]) -> f64 {
-        let xs = nodes.iter().map(|n| n.centre().x);
-        let min = xs.clone().fold(f64::INFINITY, f64::min);
-        let max = xs.fold(f64::NEG_INFINITY, f64::max);
-        if min.is_finite() {
-            (min + max) / 2.0
+        let centres = nodes.iter().map(|n| n.centre().x);
+        let min = centres.clone().fold(f64::INFINITY, f64::min);
+        let max = centres.fold(f64::NEG_INFINITY, f64::max);
+        if !min.is_finite() {
+            return 0.0;
+        }
+        let midpoint = (min + max) / 2.0;
+        let left_edge = nodes
+            .iter()
+            .filter(|n| n.centre().x <= midpoint)
+            .map(|n| n.origin.x + n.width)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let right_edge = nodes
+            .iter()
+            .filter(|n| n.centre().x > midpoint)
+            .map(|n| n.origin.x)
+            .fold(f64::INFINITY, f64::min);
+        if right_edge >= left_edge && left_edge.is_finite() && right_edge.is_finite() {
+            (left_edge + right_edge) / 2.0
         } else {
-            0.0
+            midpoint
         }
     }
 
