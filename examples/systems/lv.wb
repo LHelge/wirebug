@@ -24,6 +24,14 @@ extend Vehicle {
     // VCM drives the fuse box's radiator fan relay coil.
     wire blue 0.5 [vcm.fan_ctrl, fuses.fan_ctrl];
 
+    // --- OBC / DC-DC control (Outlander unit) ---
+    // SENSE is permanent 12V; IGCT is switched with the HV-active EV-12V
+    // rail so the OBC only draws HV after precharge; the VCM asserts DC SW
+    // to enable the DC/DC output once the HV system is up.
+    wire red  1.0 [fuses.obc,    charger.sense];
+    wire red  1.0 [fuses.ev_12v, charger.igct];
+    wire blue 0.5 [vcm.dcdc_en,  charger.dc_sw];
+
     // --- 12V distribution ---
     // DC-DC charges the 12V battery and feeds the fuse box; the battery
     // buffers the bus and keeps it always-hot. Fuse box distributes onward.
@@ -39,7 +47,7 @@ extend Vehicle {
     // (the rear pack grounds through the tunnel loom)
 
     wire black 6.0 [
-        charger.out_neg, aux.neg, vcm.gnd, inv.b_neg, front.gnd,
+        charger.out_neg, charger.gnd, aux.neg, vcm.gnd, inv.b_neg, front.gnd,
         pump.gnd, fan.gnd,
         bl_left.gnd, bl_right.gnd, bl_chmsl.gnd,
     ];

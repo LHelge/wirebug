@@ -1,11 +1,14 @@
 // AC charge inlet
 // The vehicle-side single-phase mains inlet: line, neutral, and protective
-// earth run straight to the on-board charger.
+// earth run to the on-board charger; the control pilot (CP) goes to the
+// OBC and the proximity pilot (PP) to the VCM for cable detection.
 
 component ChargeInlet {
-    connector x1 "AC inlet 3p" {
+    connector x1 "AC inlet 5p" {
         pub port l  "L"  pin 1;
         pub port n  "N"  pin 2;
         pub port pe "PE" pin 3;
+        pub port cp "CP" pin 4;   // control pilot → OBC
+        pub port pp "PP" pin 5;   // proximity pilot → VCM
     }
 }

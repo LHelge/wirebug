@@ -43,7 +43,7 @@ view harness "CAN harness" {
     include front.bms_signals at (0, 4);
     include rear.bms_signals  at (42, 4);
 
-    include charger.can at (0, 14);
+    include charger.sig at (0, 14);
     include vcm.can2    at (42, 14);
 
     include vcm.can1 at (0, 20);
