@@ -6,6 +6,36 @@ Text-defined electrical schematics and wiring harnesses.
 
 A project is a directory rooted at a `wirebug.toml` manifest, with `main.wb` as the conventional entry file beside it. Components are *types* with `pub` ports; you instantiate them, wire the instances together, and split a system across files with `use`. The full language is documented in `.agents/skills/wirebug-dsl/` and mirrored in `.claude/skills/wirebug-dsl/`.
 
+## Install
+
+### Cargo
+
+```sh
+cargo install wirebug
+```
+
+### Homebrew
+
+```sh
+brew install lhelge/tap/wirebug
+```
+
+### Prebuilt binary
+
+Download the latest release binary for your platform (Linux x86_64, macOS x86_64/arm64):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/LHelge/wirebug/main/install.sh | sh
+```
+
+This detects your OS and architecture, downloads the right binary from GitHub Releases, and installs it to `/usr/local/bin`. Set `WIREBUG_INSTALL_DIR` to change the install location. Falls back to `cargo install` if no pre-built binary is available.
+
+### From source
+
+```sh
+cargo install --path .
+```
+
 ## Why
 
 When designing an EV conversion — or any electrical system that isn't a PCB — traditional EDA tools like KiCad are overkill, and iterating in a GUI gets tedious. WireViz solved this beautifully for harness drawings. wirebug brings the same text-defined, git-friendly, regenerable-from-source workflow to system-level schematics, and ties schematics to harness drawings via a shared model so the two stay consistent by construction.
