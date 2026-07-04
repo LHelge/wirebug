@@ -64,6 +64,13 @@ component Vcm {
         pub port d "D" pin 2;
     }
 
+    // AC charging — proximity pilot from the charge port (cable detection),
+    // and the DC/DC enable that starts the OBC once the HV system is up.
+    connector charge "Charge 2p" {
+        pub port pp      "PP"      pin 1;
+        pub port dcdc_en "DCDC EN" pin 2;
+    }
+
     // Interlock termination — single input, no output
     pub port interlock "INTLK";
 

@@ -19,9 +19,18 @@ component ObcDcdc {
         pub port out_neg "12V OUT-" pins [3, 4];
     }
 
-    connector can "CAN 4p" {
-        pub port can_h "CAN H" pin 1;
-        pub port can_l "CAN L" pin 2;
+    // 13-pin signal connector (Sumitomo 6189-1092). Carries the CAN control
+    // bus, the DC/DC enable and its supply/sense lines, and the charge-port
+    // control pilot. Pin numbers follow the Mitsubishi wiring diagram.
+    // (openinverter.org/wiki/Mitsubishi_Outlander_DCDC_OBC)
+    connector sig "Signal 13p" {
+        pub port dc_sw "DC SW" pin 4;    // DC/DC enable — from the VCM
+        pub port can_h "CAN H" pin 6;
+        pub port sense "SENSE" pin 7;    // permanent +12V sense
+        pub port igct  "IGCT"  pin 8;    // switched +12V main supply (HV-active)
+        pub port cp    "CP"    pin 9;    // control pilot from the charge port
+        pub port gnd   "GND"   pin 10;
+        pub port can_l "CAN L" pin 13;
     }
 
     connector intlk "Interlock 2p" {
