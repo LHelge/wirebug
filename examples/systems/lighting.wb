@@ -1,0 +1,34 @@
+// Aphid EV — exterior lighting (stop lamps).
+//
+// A `Vehicle` fragment owning the brake lights. They are driven directly
+// from the VCM's brake-light output — no relay — so the VCM can light them
+// on either a brake switch press or regenerative braking. The three lamps
+// share one feed; their chassis grounds live in the 12V fragment
+// (systems/lv.wb) with every other ground.
+
+use BrakeLight from "../components/lv/brake_light.wb";
+
+extend Vehicle {
+    bl_left:  BrakeLight "Brake light L";
+    bl_right: BrakeLight "Brake light R";
+    bl_chmsl: BrakeLight "High-mount stop lamp";
+
+    // One high-side stop feed fans out to all three lamps.
+    wire red 1.0 "STOP" [vcm.brake, bl_left.stop, bl_right.stop, bl_chmsl.stop];
+}
+
+// --- View: brake lights ---
+// The VCM's brake-light output feeding the left, right, and high-mount
+// stop lamps in parallel.
+
+view schematic "Brake lights" {
+    grid: 20;
+
+    include vcm at (4, 8) ports {
+        east: brake;
+    }
+
+    include bl_left  at (26, 3)  ports { west: stop; }
+    include bl_right at (26, 8)  ports { west: stop; }
+    include bl_chmsl at (26, 13) ports { west: stop; }
+}

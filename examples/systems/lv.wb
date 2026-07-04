@@ -35,5 +35,9 @@ extend Vehicle {
     // --- Chassis ground bus ---
     // (the rear pack grounds through the tunnel loom)
 
-    wire black 6.0 [charger.out_neg, vcm.gnd, inv.b_neg, front.gnd, pump.gnd, fan.gnd];
+    wire black 6.0 [
+        charger.out_neg, vcm.gnd, inv.b_neg, front.gnd,
+        pump.gnd, fan.gnd,
+        bl_left.gnd, bl_right.gnd, bl_chmsl.gnd,
+    ];
 }
