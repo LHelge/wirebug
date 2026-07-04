@@ -751,6 +751,48 @@ component sys {
         insta::assert_snapshot!(structural(&compute(&design, &view)));
     }
 
+    /// The cable box centres in the *gap* between the two connector columns,
+    /// so its lead-in and lead-out read equal even when one side is far wider
+    /// than the other. Regression: centring the spine on node *centres* skewed
+    /// the box toward the wider connector.
+    #[test]
+    fn cable_box_centres_in_the_gap_when_sides_differ_in_width() {
+        let design = design_from(
+            r#"
+component sys {
+    a: wide "Source with a deliberately very long instance label";
+    b: snk "B";
+    cable feed "Feed" {
+        wire orange 1 "V+" [a.pos, b.pos];
+    }
+    component wide {
+        connector hv "HV 1p" { pub port pos "V+" pin 1; }
+    }
+    component snk {
+        connector hv "HV 1p" { pub port pos "V+" pin 1; }
+    }
+}
+"#,
+        );
+        let view = harness_view("sys", &[("a", "hv", 0.0, 0.0), ("b", "hv", 30.0, 0.0)]);
+        let layout = compute(&design, &view);
+
+        let (a, b) = (&layout.nodes[0], &layout.nodes[1]);
+        assert!(a.width > b.width, "the source node is the wider column");
+        let cable = &layout.cable_boxes[0];
+        // `a` faces east (attaches on its right edge), `b` west (left edge).
+        let lead_in = cable.origin.x - (a.origin.x + a.width);
+        let lead_out = b.origin.x - (cable.origin.x + cable.width);
+        assert!(
+            lead_in > 0.0 && lead_out > 0.0,
+            "box sits between the columns (lead-in {lead_in}, lead-out {lead_out})"
+        );
+        assert!(
+            (lead_in - lead_out).abs() < 1.0,
+            "box centred in the gap: lead-in {lead_in}, lead-out {lead_out}"
+        );
+    }
+
     /// Build the layout for `view` against `design`'s subject instance.
     fn compute(design: &Design, view: &View) -> HarnessLayout {
         let subject = design
