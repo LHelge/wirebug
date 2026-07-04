@@ -9,6 +9,7 @@
 mod cli;
 
 use std::fs;
+use std::net::IpAddr;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -106,7 +107,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             embed,
         } => render_command(target.as_deref(), &out, strict, png, pdf, embed),
         Command::Lsp => lsp_command(),
-        Command::Serve { target, port } => serve_command(target.as_deref(), port),
+        Command::Serve { target, port, host } => serve_command(target.as_deref(), host, port),
     }
 }
 
@@ -126,14 +127,14 @@ fn lsp_command() -> Result<ExitCode> {
 /// Run the live-reloading dev server. `serve` is the only async command, so
 /// it spins up a Tokio runtime locally rather than making all of `main`
 /// async; `check` and `render` stay synchronous.
-fn serve_command(target: Option<&Path>, port: u16) -> Result<ExitCode> {
+fn serve_command(target: Option<&Path>, host: IpAddr, port: u16) -> Result<ExitCode> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .init();
     let runtime = tokio::runtime::Runtime::new().context("starting the async runtime")?;
-    runtime.block_on(wirebug::serve::serve(target, port))?;
+    runtime.block_on(wirebug::serve::serve(target, host, port))?;
     Ok(ExitCode::SUCCESS)
 }
 

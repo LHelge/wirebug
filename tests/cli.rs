@@ -302,6 +302,16 @@ fn serve_help_documents_the_port_flag() {
 }
 
 #[test]
+fn serve_help_documents_the_host_flag() {
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["serve", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--host"));
+}
+
+#[test]
 fn check_accepts_the_fixture_project() {
     Command::cargo_bin("wirebug")
         .expect("binary present")
