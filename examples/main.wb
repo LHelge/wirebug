@@ -16,6 +16,7 @@ use Vehicle from "systems/cooling.wb";
 use Vehicle from "systems/lighting.wb";
 use Vehicle from "looms/tunnel.wb";
 use Vehicle from "looms/engine_bay.wb";
+use Vehicle from "looms/ac_charge.wb";
 use Vehicle from "looms/pedal_branch.wb";
 use Vehicle from "looms/brake_branch.wb";
 use Vehicle from "looms/key_branch.wb";

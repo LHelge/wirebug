@@ -1,0 +1,11 @@
+// AC charge inlet
+// The vehicle-side single-phase mains inlet: line, neutral, and protective
+// earth run straight to the on-board charger.
+
+component ChargeInlet {
+    connector x1 "AC inlet 3p" {
+        pub port l  "L"  pin 1;
+        pub port n  "N"  pin 2;
+        pub port pe "PE" pin 3;
+    }
+}

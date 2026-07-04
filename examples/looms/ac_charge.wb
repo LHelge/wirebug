@@ -1,0 +1,30 @@
+// Aphid EV — AC charge harness.
+//
+// The mains charge inlet feeds the on-board charger over a single 3-lead
+// cable (line, neutral, protective earth) — no branch, straight from the
+// inlet to the OBC's AC connector.
+
+use ChargeInlet from "../components/hv/charge_inlet.wb";
+
+extend Vehicle {
+    ac_inlet: ChargeInlet "AC charge inlet";
+
+    cable ac_charge "AC charge lead" {
+        type:   "3-core";
+        length: 0.6;
+
+        wire brown        2.5 "AC L"  [ac_inlet.l,  charger.ac_l];
+        wire blue         2.5 "AC N"  [ac_inlet.n,  charger.ac_n];
+        wire green/yellow 2.5 "AC PE" [ac_inlet.pe, charger.ac_pe];
+    }
+}
+
+// --- View: AC charge harness ---
+// The inlet's three leads straight into the OBC's AC connector.
+
+view harness "AC charge harness" {
+    grid: 20;
+
+    include ac_inlet.x1 at (0, 0);
+    include charger.ac  at (36, 0);
+}
