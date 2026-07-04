@@ -44,6 +44,13 @@ component Vcm {
         pub port fan_ctrl  "FAN CTRL"  pin 3;
     }
 
+    // Exterior lighting. The stop lamps are driven high-side straight from
+    // here — the VCM asserts them on a brake switch input (brake_1/brake_2)
+    // or active regenerative braking, so regen alone still lights the stops.
+    connector lights "Lights 1p" {
+        pub port brake "BRAKE" pin 1;
+    }
+
     // Interlock termination — single input, no output
     pub port interlock "INTLK";
 

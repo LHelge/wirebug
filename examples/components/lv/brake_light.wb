@@ -1,0 +1,10 @@
+// Brake light
+// A stop lamp (LED cluster): a switched feed from the VCM's brake-light
+// output and a chassis ground return.
+
+component BrakeLight {
+    connector x1 "Lamp 2p" {
+        pub port stop "STOP" pin 1;
+        pub port gnd  "GND"  pin 2;
+    }
+}
