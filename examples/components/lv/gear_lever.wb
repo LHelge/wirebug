@@ -1,0 +1,14 @@
+// Gear lever
+// A shift-by-wire selector with two momentary buttons. A fused 12 V feed
+// comes in on FEED; pressing R or D switches it through to that line. Both
+// go straight to the VCM, which edge-detects a press and only accepts a
+// direction change when the brake is applied and the vehicle is stopped
+// (no button pressed = neutral).
+
+component GearLever {
+    connector x1 "Shifter 3p" {
+        pub port feed "FEED" pin 1;   // fused 12 V feed in
+        pub port r    "R"    pin 2;   // reverse request (momentary)
+        pub port d    "D"    pin 3;   // drive request (momentary)
+    }
+}

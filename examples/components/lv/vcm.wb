@@ -57,6 +57,13 @@ component Vcm {
         pub port crank "CRANK" pin 2;
     }
 
+    // Gear selector — momentary R/D requests. Accepted only on a press edge
+    // with the brake applied and the vehicle stopped; otherwise neutral.
+    connector gear "Gear 2p" {
+        pub port r "R" pin 1;
+        pub port d "D" pin 2;
+    }
+
     // Interlock termination — single input, no output
     pub port interlock "INTLK";
 

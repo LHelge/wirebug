@@ -19,6 +19,7 @@ use Vehicle from "looms/engine_bay.wb";
 use Vehicle from "looms/pedal_branch.wb";
 use Vehicle from "looms/brake_branch.wb";
 use Vehicle from "looms/key_branch.wb";
+use Vehicle from "looms/gear_branch.wb";
 use Vcm     from "components/lv/vcm.wb";
 
 component Vehicle {
