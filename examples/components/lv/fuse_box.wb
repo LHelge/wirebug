@@ -3,6 +3,18 @@
 // Each output is an individually fused +12V feed.
 
 component FuseBox {
+    // EV-12V master relay: battery 12V (com) is switched through to the
+    // EV-12V output (no) when the VCM energises the coil. Only the coil's
+    // high side is modelled; coil- grounds implicitly (see box convention).
+    component Relay {
+        pub port coil_p "COIL+";
+        pub port coil_n "COIL-";
+        pub port com    "COM";
+        pub port no     "NO";
+    }
+
+    ev_relay: Relay "EV-12V relay";
+
     // Input from DC-DC converter
     pub port batt_in "BATT IN";
 
@@ -14,4 +26,13 @@ component FuseBox {
 
     // Fused 12V feed that sources the HV interlock loop
     pub port interlock "INTLK";
+
+    // EV-12V master relay control (from VCM) and switched output
+    pub port ev_ctrl "EV CTRL";
+    pub port ev_12v  "EV 12V";
+
+    wire red  6.0 [batt_in, ev_relay.com];
+    wire red  2.5 [ev_relay.no, ev_12v];
+    wire blue 0.5 [ev_ctrl, ev_relay.coil_p];
+    // ev_relay.coil_n grounds to chassis implicitly.
 }

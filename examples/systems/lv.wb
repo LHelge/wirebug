@@ -16,6 +16,9 @@ extend Vehicle {
 
     wire red 2.5 [vcm.safe_pwr, rear.safe_pwr];
 
+    // VCM drives the fuse box's EV-12V master relay coil.
+    wire blue 0.5 [vcm.ev_ctrl, fuses.ev_ctrl];
+
     // --- 12V distribution ---
     // OBC/DC-DC output feeds fuse box; fuse box distributes to subsystems
 
