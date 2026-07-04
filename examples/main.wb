@@ -12,6 +12,7 @@ use Vehicle from "systems/traction.wb";
 use Vehicle from "systems/safety.wb";
 use Vehicle from "systems/lv.wb";
 use Vehicle from "systems/can.wb";
+use Vehicle from "systems/cooling.wb";
 use Vehicle from "looms/tunnel.wb";
 use Vehicle from "looms/engine_bay.wb";
 use Vehicle from "looms/pedal_branch.wb";

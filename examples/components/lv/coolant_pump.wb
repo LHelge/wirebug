@@ -1,0 +1,14 @@
+// Coolant pump
+// A smart 4-wire pump: switched 12 V from the EV-12V rail plus a low-current
+// PWM speed command from the VCM, and a tacho line that pulses once per
+// revolution back to the VCM for closed-loop control and stall detection.
+// No relay of its own — the EV-12V master relay gates its supply.
+
+component CoolantPump {
+    connector x1 "Pump 4p" {
+        pub port v12  "12V"  pin 1;
+        pub port gnd  "GND"  pin 2;
+        pub port pwm  "PWM"  pin 3;
+        pub port tach "TACH" pin 4;
+    }
+}

@@ -13,7 +13,8 @@ component FuseBox {
         pub port no     "NO";
     }
 
-    ev_relay: Relay "EV-12V relay";
+    ev_relay:  Relay "EV-12V relay";
+    fan_relay: Relay "Radiator fan relay";
 
     // Input from DC-DC converter
     pub port batt_in "BATT IN";
@@ -31,8 +32,16 @@ component FuseBox {
     pub port ev_ctrl "EV CTRL";
     pub port ev_12v  "EV 12V";
 
+    // Radiator fan relay control (from VCM) and switched output
+    pub port fan_ctrl "FAN CTRL";
+    pub port fan_12v  "FAN 12V";
+
     wire red  6.0 [batt_in, ev_relay.com];
     wire red  2.5 [ev_relay.no, ev_12v];
     wire blue 0.5 [ev_ctrl, ev_relay.coil_p];
-    // ev_relay.coil_n grounds to chassis implicitly.
+
+    wire red  6.0 [batt_in, fan_relay.com];
+    wire red  4.0 [fan_relay.no, fan_12v];
+    wire blue 0.5 [fan_ctrl, fan_relay.coil_p];
+    // Both relays' coil_n grounds to chassis implicitly.
 }

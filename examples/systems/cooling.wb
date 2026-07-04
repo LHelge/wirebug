@@ -1,0 +1,53 @@
+// Aphid EV — thermal management (coolant pump + radiator fan).
+//
+// A `Vehicle` fragment owning the cooling devices and their control wiring.
+// The coolant pump is a smart 4-wire unit fed from the EV-12V rail (the
+// fuse box's master relay) and PWM-driven by the VCM, which also reads its
+// tacho. The radiator fan is a plain load switched by its own fuse-box
+// relay. The relay-coil control net and chassis grounds live in the 12V
+// fragment (systems/lv.wb), as does every other 12V/ground signal.
+
+use CoolantPump from "../components/lv/coolant_pump.wb";
+use RadiatorFan from "../components/lv/radiator_fan.wb";
+
+extend Vehicle {
+    pump: CoolantPump "Coolant pump";
+    fan:  RadiatorFan "Radiator fan";
+
+    // Pump — EV-12V supply plus the VCM's PWM command and tacho return.
+    wire red   1.5 "EV 12V"    [fuses.ev_12v, pump.v12];
+    wire blue  0.5 "PUMP PWM"  [vcm.pump_pwm, pump.pwm];
+    wire green 0.5 "PUMP TACH" [pump.tach, vcm.pump_tach];
+
+    // Fan — switched 12 V from its fuse-box relay.
+    wire red 2.5 "FAN 12V" [fuses.fan_12v, fan.v12];
+}
+
+// --- View: cooling system ---
+// VCM and fuse box on the left drive the pump and fan on the right: the
+// pump takes EV-12V + PWM + tacho, the fan takes relay-switched 12 V with
+// the VCM commanding the relay coil.
+
+view schematic "Cooling system" {
+    grid: 20;
+
+    include vcm at (4, 4) ports {
+        east:  pump_pwm, pump_tach;
+        south: fan_ctrl;
+    }
+
+    include fuses at (4, 14) ports {
+        north: fan_ctrl;
+        east:  ev_12v, fan_12v;
+    }
+
+    include pump at (26, 4) ports {
+        west:  pwm, tach, v12;
+        south: gnd;
+    }
+
+    include fan at (26, 15) ports {
+        west:  v12;
+        south: gnd;
+    }
+}

@@ -36,6 +36,14 @@ component Vcm {
         pub port brake_2 "BRAKE 2" pin 2;
     }
 
+    // Thermal management: PWM-drive the coolant pump and read its tacho,
+    // and switch the radiator fan relay.
+    connector cooling "Cooling 3p" {
+        pub port pump_pwm  "PUMP PWM"  pin 1;
+        pub port pump_tach "PUMP TACH" pin 2;
+        pub port fan_ctrl  "FAN CTRL"  pin 3;
+    }
+
     // Interlock termination — single input, no output
     pub port interlock "INTLK";
 

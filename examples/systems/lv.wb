@@ -19,6 +19,9 @@ extend Vehicle {
     // VCM drives the fuse box's EV-12V master relay coil.
     wire blue 0.5 [vcm.ev_ctrl, fuses.ev_ctrl];
 
+    // VCM drives the fuse box's radiator fan relay coil.
+    wire blue 0.5 [vcm.fan_ctrl, fuses.fan_ctrl];
+
     // --- 12V distribution ---
     // OBC/DC-DC output feeds fuse box; fuse box distributes to subsystems
 
@@ -32,5 +35,5 @@ extend Vehicle {
     // --- Chassis ground bus ---
     // (the rear pack grounds through the tunnel loom)
 
-    wire black 6.0 [charger.out_neg, vcm.gnd, inv.b_neg, front.gnd];
+    wire black 6.0 [charger.out_neg, vcm.gnd, inv.b_neg, front.gnd, pump.gnd, fan.gnd];
 }

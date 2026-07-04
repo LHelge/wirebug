@@ -1,0 +1,10 @@
+// Radiator fan
+// A plain 12 V fan switched on/off by the VCM through its own fuse-box
+// relay (thermostatic — runs only when coolant temperature demands it).
+
+component RadiatorFan {
+    connector x1 "Fan 2p" {
+        pub port v12 "12V" pin 1;
+        pub port gnd "GND" pin 2;
+    }
+}
