@@ -378,6 +378,67 @@ fn render_refuses_a_non_positive_cable_length() {
         .stderr(predicate::str::contains("not rendering"));
 }
 
+const DEGENERATE_WIRES_ROOT: &str = "tests/fixtures/degenerate_wires_project";
+
+#[test]
+fn check_rejects_a_repeated_endpoint_and_warns_on_an_empty_cable() {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--format", "json", DEGENERATE_WIRES_ROOT])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+    let main = std::fs::read_to_string(format!("{DEGENERATE_WIRES_ROOT}/main.wb"))
+        .expect("fixture main.wb");
+
+    /// A problem as (code, severity, the offset and text of every label).
+    type Found<'a> = (&'a str, &'a str, Vec<(usize, &'a str)>);
+    let found: Vec<Found> = problems
+        .iter()
+        .map(|p| {
+            let labels = p["labels"]
+                .as_array()
+                .expect("labels")
+                .iter()
+                .map(|l| {
+                    let offset = l["span"]["offset"].as_u64().expect("offset") as usize;
+                    let length = l["span"]["length"].as_u64().expect("length") as usize;
+                    (offset, &main[offset..offset + length])
+                })
+                .collect();
+            (
+                p["code"].as_str().expect("code"),
+                p["severity"].as_str().expect("severity"),
+                labels,
+            )
+        })
+        .collect();
+
+    // Both occurrences in the looping wire are named; the double crimp on
+    // `pump.gnd` is not reported.
+    let looping = main
+        .find("[ecu.gnd, ecu.gnd]")
+        .expect("looping wire in fixture");
+    let first = looping + 1;
+    let again = looping + "[ecu.gnd, ".len();
+    let spare = main.find("spare").expect("empty cable in fixture");
+    assert_eq!(
+        found,
+        [
+            (
+                "wirebug::duplicate_endpoint",
+                "error",
+                vec![(again, "ecu.gnd"), (first, "ecu.gnd")],
+            ),
+            ("wirebug::empty_cable", "warning", vec![(spare, "spare")]),
+        ]
+    );
+}
+
 #[test]
 fn check_accepts_a_manifest_target() {
     Command::cargo_bin("wirebug")

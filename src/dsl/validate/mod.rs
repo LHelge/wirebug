@@ -7,6 +7,8 @@
 //! - wire arity (a wire needs at least two endpoints) — an error;
 //! - pin number range (pins are positive integers) — an error;
 //! - wire gauge and cable `length` (both must be positive) — errors;
+//! - an endpoint repeated within one wire — an error;
+//! - a cable with no conductors — a warning;
 //! - unused imports and pin assignments outside a connector — warnings,
 //!   which only fail the run under `--strict`.
 //!
@@ -18,7 +20,7 @@ use std::collections::HashMap;
 
 use crate::dsl::ast::{CablePropertyValue, Member, Port, Wire};
 use crate::dsl::diagnostics::Problem;
-use crate::dsl::ir::ColorName;
+use crate::dsl::ir::{ColorName, WireEnd};
 use crate::dsl::resolve::Resolved;
 use crate::dsl::span::{FileId, Span, Spanned};
 
@@ -40,6 +42,7 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
                     }
                     validate_wire_colors(wire, def.file, resolved, &mut problems);
                     validate_gauge(wire, def.file, resolved, &mut problems);
+                    validate_distinct_endpoints(wire, def.file, resolved, &mut problems);
                 }
                 Member::Port(port) if !port.pins.is_empty() => {
                     validate_pin_numbers(port, def.file, resolved, &mut problems);
@@ -60,6 +63,13 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
                     }
                 }
                 Member::Cable(cable) => {
+                    if cable.wires().next().is_none() {
+                        problems.push(Problem::EmptyCable {
+                            name: cable.name.node.as_str().to_string(),
+                            src: src(),
+                            at: cable.name.span.into(),
+                        });
+                    }
                     // A conductor is point-to-point: shared rails stay loose.
                     for wire in cable.wires() {
                         if wire.endpoints.len() != 2 {
@@ -71,6 +81,7 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
                         }
                         validate_wire_colors(wire, def.file, resolved, &mut problems);
                         validate_gauge(wire, def.file, resolved, &mut problems);
+                        validate_distinct_endpoints(wire, def.file, resolved, &mut problems);
                     }
                     let mut seen: HashMap<&str, Span> = HashMap::new();
                     for p in &cable.properties {
@@ -184,6 +195,32 @@ fn validate_gauge(wire: &Wire, file: FileId, resolved: &Resolved, problems: &mut
             src: resolved.project.source(file),
             at: wire.gauge.span.into(),
         });
+    }
+}
+
+/// A wire that lists one endpoint twice connects a port to itself. The
+/// comparison is on the resolved [`WireEnd`], so an own port `gnd` and a
+/// child's `ecu.gnd` stay distinct. Different wires sharing a port are not
+/// compared: that is a deliberate double crimp.
+fn validate_distinct_endpoints(
+    wire: &Wire,
+    file: FileId,
+    resolved: &Resolved,
+    problems: &mut Vec<Problem>,
+) {
+    let mut seen: HashMap<WireEnd, Span> = HashMap::new();
+    for ep in &wire.endpoints {
+        let end = WireEnd::from(ep);
+        if let Some(&first) = seen.get(&end) {
+            problems.push(Problem::DuplicateEndpoint {
+                endpoint: end.to_string(),
+                src: resolved.project.source(file),
+                at: ep.span.into(),
+                first: first.into(),
+            });
+        } else {
+            seen.insert(end, ep.span);
+        }
     }
 }
 
@@ -401,6 +438,115 @@ mod tests {
              component m { l1: leaf; l2: leaf; }\n",
         )]);
         assert_eq!(codes, ["wirebug::invalid_length"]);
+    }
+
+    /// A leaf type with two `pub` ports and a parent `m` around one instance
+    /// `l` of it, with own ports `a` and `gnd`; `body` goes inside `m`.
+    fn with_leaf(body: &str) -> String {
+        format!(
+            "component leaf {{ pub port a \"A\"; pub port gnd \"GND\"; }}\n\
+             component m {{ pub port a \"A\"; pub port gnd \"GND\"; l: leaf; {body} }}\n"
+        )
+    }
+
+    #[test]
+    fn repeated_endpoint_in_one_wire_errors() {
+        let codes = validate_files(&[("main.wb", &with_leaf("wire black 1 [l.gnd, l.gnd];"))]);
+        assert_eq!(codes, ["wirebug::duplicate_endpoint"]);
+    }
+
+    #[test]
+    fn repeated_own_port_in_one_wire_errors() {
+        let codes = validate_files(&[("main.wb", &with_leaf("wire black 1 [gnd, l.a, gnd];"))]);
+        assert_eq!(codes, ["wirebug::duplicate_endpoint"]);
+    }
+
+    #[test]
+    fn duplicate_endpoint_labels_both_occurrences() {
+        let src = with_leaf("wire black 1 [l.gnd, a, l.gnd];");
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("main.wb"), &src).expect("write");
+        let (project, _) = load(&dir.path().join("main.wb"));
+        let resolved = resolve(project.as_ref().expect("loads"));
+        let problems = validate(&resolved);
+        let [problem] = problems.as_slice() else {
+            panic!("expected one problem, got {problems:?}");
+        };
+        assert!(problem.is_error());
+        assert_eq!(problem.to_string(), "wire lists endpoint `l.gnd` twice");
+        let first = src.find("l.gnd").expect("first occurrence");
+        let again = src.rfind("l.gnd").expect("second occurrence");
+        let mut offsets: Vec<(usize, usize)> = problem
+            .labels()
+            .into_iter()
+            .flatten()
+            .map(|l| (l.offset(), l.len()))
+            .collect();
+        offsets.sort_unstable();
+        assert_eq!(offsets, [(first, 5), (again, 5)]);
+    }
+
+    #[test]
+    fn endpoint_listed_three_times_reports_each_repeat() {
+        let codes = validate_files(&[("main.wb", &with_leaf("wire black 1 [a, l.a, a, a];"))]);
+        assert_eq!(
+            codes,
+            ["wirebug::duplicate_endpoint", "wirebug::duplicate_endpoint"]
+        );
+    }
+
+    #[test]
+    fn own_port_and_child_port_of_the_same_name_are_distinct_endpoints() {
+        let codes = validate_files(&[("main.wb", &with_leaf("wire black 1 [gnd, l.gnd];"))]);
+        assert!(codes.is_empty(), "{codes:?}");
+    }
+
+    #[test]
+    fn two_wires_on_one_port_are_a_double_crimp_not_a_problem() {
+        let codes = validate_files(&[(
+            "main.wb",
+            &with_leaf("wire black 1 [l.gnd, gnd]; wire black 1 [l.gnd, a];"),
+        )]);
+        assert!(codes.is_empty(), "{codes:?}");
+    }
+
+    #[test]
+    fn repeated_endpoint_in_a_cable_conductor_errors() {
+        let codes = cable("twisted { wire red 1 [a, b]; wire blue 1 [c, c]; }");
+        assert_eq!(codes, ["wirebug::duplicate_endpoint"]);
+    }
+
+    #[test]
+    fn repeated_endpoint_in_a_type_instantiated_twice_reports_once() {
+        let codes = validate_files(&[(
+            "main.wb",
+            "component leaf { pub port a \"A\"; wire red 1 [a, a]; }\n\
+             component m { l1: leaf; l2: leaf; }\n",
+        )]);
+        assert_eq!(codes, ["wirebug::duplicate_endpoint"]);
+    }
+
+    #[test]
+    fn cable_without_conductors_warns() {
+        for body in ["", "type: \"Twisted pair\"; length: 1.5;"] {
+            let codes = cable(body);
+            assert_eq!(codes, ["wirebug::empty_cable"], "body {body:?}");
+        }
+    }
+
+    #[test]
+    fn empty_cable_is_a_warning_labelled_on_its_name() {
+        let src = "component m { cable spare \"Spare\" { } }\n";
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("main.wb"), src).expect("write");
+        let (project, _) = load(&dir.path().join("main.wb"));
+        let resolved = resolve(project.as_ref().expect("loads"));
+        let problems = validate(&resolved);
+        let [problem] = problems.as_slice() else {
+            panic!("expected one problem, got {problems:?}");
+        };
+        assert!(!problem.is_error());
+        assert_eq!(labelled_text(src), ["spare"]);
     }
 
     #[test]

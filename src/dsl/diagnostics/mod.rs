@@ -460,6 +460,40 @@ pub enum Problem {
         at: SourceSpan,
     },
 
+    /// One wire lists the same endpoint twice: it connects a port to
+    /// itself. (Two *different* wires on one port are a deliberate double
+    /// crimp and are fine.)
+    #[error("wire lists endpoint `{endpoint}` twice")]
+    #[diagnostic(
+        code(wirebug::duplicate_endpoint),
+        help("remove the repeat, or name the endpoint this wire was meant to reach")
+    )]
+    DuplicateEndpoint {
+        endpoint: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("listed again here")]
+        at: SourceSpan,
+        #[label("first listed here")]
+        first: SourceSpan,
+    },
+
+    /// A cable carries no conductors. Nothing breaks (a harness view just
+    /// draws no cable box for it), so this is a warning.
+    #[error("cable `{name}` has no conductors")]
+    #[diagnostic(
+        severity(Warning),
+        code(wirebug::empty_cable),
+        help("add its conductors as `wire <color> <gauge> [a, b];` lines, or remove the cable")
+    )]
+    EmptyCable {
+        name: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("this cable")]
+        at: SourceSpan,
+    },
+
     /// A cable property uses a key other than `type` or `length`.
     #[error("unknown cable property `{key}`")]
     #[diagnostic(
