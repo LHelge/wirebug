@@ -18,6 +18,7 @@ use crate::error::{Error, Result, ViewError, ViewErrorKind, ViewResult};
 pub mod geometry;
 pub mod harness;
 pub mod lint;
+pub mod output;
 pub mod pdf;
 pub mod pinout;
 pub mod png;
@@ -367,7 +368,7 @@ impl FilenameAllocator {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::render::geometry::Side;
 
@@ -501,7 +502,7 @@ mod tests {
 
     /// A design with two boxes wired together, and one view per title in
     /// `views`; a view titled `Lost …` documents a type with no instance.
-    fn design_with_views(titles: &[&str]) -> Design {
+    pub(crate) fn design_with_views(titles: &[&str]) -> Design {
         let mut design = schematic::tests::design_from(
             r#"
 component sys {

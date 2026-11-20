@@ -440,8 +440,9 @@ phases above). Render adds only geometry/dispatch errors, in `src/error.rs`
   (so the index places the failure in the right tab), and a boxed
   `cause: ViewErrorKind`. It prints `view "<title>": <cause>`. Renderers
   and converters return `ViewResult<T>` (`Result<T, ViewErrorKind>`);
-  `render_views`, the PNG step in `main` and `PdfExporter::to_pdf` (the
-  last two via `RenderedView::failed`) attach the view, so no per-view
+  `render_views`, the PNG step in `render::output` and
+  `PdfExporter::to_pdf` (the last two via `RenderedView::failed`) attach
+  the view, so no per-view
   error exists
   without the view it happened in. The kinds:
   - an unknown view `kind:` (`schematic`, `harness`, and `pinout` render
@@ -458,12 +459,16 @@ phases above). Render adds only geometry/dispatch errors, in `src/error.rs`
   - a non-positive `grid:`, or a `grid:` finer than a port label needs;
   - our own SVG failing to parse or convert for `--png` / `--pdf`.
 - **`error::Error`** — what stops the whole render: file IO when writing
-  output (`Write`) and the HTML index template (`Template`).
+  output (`Write`), the HTML index template (`Template`) and serializing
+  the `--embed` manifest (`EmbedManifest`).
 
 `render_views` returns one `Result<RenderedView, ViewError>` per view, in
 declaration order; a failure never stops the others, and file names are
 allocated to failed views too, so a failure never renames another view's
-file. What each output mode does with a failure:
+file. `render::output::Output::write` renders the design and writes it in
+one mode (`main` maps the flags onto an `Output`), returning a `Written`:
+the failures, and as its `Display` the summary line `render` prints. What
+each output mode does with a failure:
 
 - **SVG / `--png`** — the views that rendered (and rasterised) are written;
   `index.html` shows each failure, titled, where its drawing would be.
@@ -527,6 +532,8 @@ src/
 │   ├── lint.rs      # layout checks for `check`: overlaps, crowded ports,
 │   │                #   unroutable wires, undrawn harness conductors,
 │   │                #   from each renderer's `layout`
+│   ├── output.rs    # Output::write: one render mode's files on disk (per-view
+│   │                #   SVG/PNG + index or embed manifest, or the PDF) → Written
 │   ├── png.rs       # SVG → PNG rasterisation for --png (resvg/usvg/tiny_skia)
 │   ├── stamp.rs     # project-identity stamp text/element (corner of every SVG)
 │   ├── schematic/   # rectangle-based SVG renderer (kind: schematic)
@@ -558,7 +565,8 @@ src/
 │  # ── live-reloading dev server (`serve`) ──
 ├── serve/
 │   ├── mod.rs        # serve(): discover root, build site, router, watcher, shutdown
-│   ├── build.rs      # build_site: check→render→index_html; diagnostics page on error
+│   ├── build.rs      # build_site: check, then Build::rendered (render→index_html);
+│   │                 #   diagnostics page on error
 │   ├── state.rs      # AppState (RwLock<Site> + broadcast + Notify); Site = index + svgs
 │   ├── server.rs     # axum router: GET / (index), /ws, fallback SVG-by-name
 │   ├── livereload.rs # websocket handler broadcasting "reload"
