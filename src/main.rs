@@ -4,7 +4,8 @@
 //! `render` writes one SVG (or PNG) per view in the design — or, with
 //! `--pdf`, a single multi-page A4 PDF — and `serve` runs a live-reloading
 //! dev server. Each discovers the project by walking up to `wirebug.toml`
-//! when given no target.
+//! when given no target. A view that fails to render is reported by title
+//! and left out; the others are still written, and `render` exits non-zero.
 
 mod cli;
 
@@ -21,7 +22,8 @@ use tracing_subscriber::EnvFilter;
 use cli::{Cli, Command, ManifestCommand};
 use wirebug::dsl::diagnostics::Problem;
 use wirebug::dsl::{self, CheckReport, Format};
-use wirebug::error::Error;
+use wirebug::error::{Error, ViewError};
+use wirebug::render::{RenderedView, ViewOutcome};
 
 #[derive(Debug, Clone, Copy)]
 enum RenderFormat {
@@ -45,38 +47,44 @@ impl RenderFormat {
         }
     }
 
-    fn write_views(
-        self,
-        views: Vec<wirebug::render::RenderedView>,
-        out_dir: &Path,
-    ) -> Result<Vec<wirebug::render::RenderedView>> {
+    /// Write every rendered view to `out_dir` in this format, returning
+    /// the views as the index should list them (file names in this
+    /// format). Failed views pass through, and a view that fails to
+    /// rasterise joins them; only a disk error stops the render.
+    fn write_views(self, views: Vec<ViewOutcome>, out_dir: &Path) -> Result<Vec<ViewOutcome>> {
         match self {
             Self::Svg => {
-                for view in &views {
+                for view in views.iter().flatten() {
                     write_file(out_dir, &view.filename, view.svg.as_bytes())?;
                 }
                 Ok(views)
             }
             Self::Png { scale } => {
                 let rasterizer = wirebug::render::png::PngRasterizer::new();
-                let mut index_views = Vec::with_capacity(views.len());
-                for view in views {
-                    let filename = Path::new(&view.filename)
-                        .with_extension("png")
-                        .to_string_lossy()
-                        .into_owned();
-                    let bytes = rasterizer
-                        .to_png(&view.svg, scale)
-                        .context("rasterising view to PNG")?;
-                    write_file(out_dir, &filename, &bytes)?;
-                    index_views.push(wirebug::render::RenderedView {
-                        title: view.title,
-                        filename,
-                        kind: view.kind,
-                        svg: String::new(),
-                    });
-                }
-                Ok(index_views)
+                views
+                    .into_iter()
+                    .map(|view| {
+                        let view = match view {
+                            Ok(view) => view,
+                            Err(failure) => return Ok(Err(failure)),
+                        };
+                        let bytes = match rasterizer.to_png(&view.svg, scale) {
+                            Ok(bytes) => bytes,
+                            Err(cause) => return Ok(Err(view.failed(cause))),
+                        };
+                        let filename = Path::new(&view.filename)
+                            .with_extension("png")
+                            .to_string_lossy()
+                            .into_owned();
+                        write_file(out_dir, &filename, &bytes)?;
+                        Ok(Ok(RenderedView {
+                            title: view.title,
+                            filename,
+                            kind: view.kind,
+                            svg: String::new(),
+                        }))
+                    })
+                    .collect()
             }
         }
     }
@@ -211,7 +219,7 @@ fn render_command(
     } else {
         wirebug::render::SvgMode::Standalone
     };
-    let views = wirebug::render_views(design, mode).context("rendering views")?;
+    let views = wirebug::render_views(design, mode);
 
     fs::create_dir_all(out_dir).map_err(|source| Error::Write {
         path: out_dir.to_path_buf(),
@@ -219,30 +227,45 @@ fn render_command(
     })?;
 
     // PDF is one artifact for the whole design, not per-view files plus a
-    // sidecar, so it exits before the per-view format machinery.
+    // sidecar, so it exits before the per-view format machinery. Its pages
+    // are the views that rendered; with views but none rendered, no PDF is
+    // written at all.
     if pdf {
-        let bytes = wirebug::render::pdf::PdfExporter::new()
-            .to_pdf(&views, design.manifest.as_ref())
-            .context("exporting views to PDF")?;
+        let total = views.len();
+        let (rendered, failed): (Vec<_>, Vec<_>) = views.into_iter().partition(Result::is_ok);
+        let rendered: Vec<RenderedView> = rendered.into_iter().flatten().collect();
+        let mut failures: Vec<ViewError> = failed.into_iter().filter_map(Result::err).collect();
+        let export =
+            wirebug::render::pdf::PdfExporter::new().to_pdf(&rendered, design.manifest.as_ref());
+        failures.extend(export.failures);
+        report_failures(&failures);
         let filename = wirebug::render::pdf_filename(design.manifest.as_ref());
-        write_file(out_dir, &filename, &bytes)?;
-        eprintln!(
-            "rendered {} view(s) as pdf to {} ({})",
-            views.len(),
-            out_dir.display(),
-            out_dir.join(&filename).display(),
-        );
-        return Ok(ExitCode::SUCCESS);
+        if export.pages == 0 && !failures.is_empty() {
+            eprintln!("no view rendered — {filename} not written");
+        } else {
+            write_file(out_dir, &filename, &export.bytes)?;
+            eprintln!(
+                "rendered {} as pdf to {} ({})",
+                rendered_count(export.pages, total),
+                out_dir.display(),
+                out_dir.join(&filename).display(),
+            );
+        }
+        return Ok(exit_code_for(&failures));
     }
 
+    let total = views.len();
     let render_format = RenderFormat::from_png_flag(png);
     let index_views = render_format.write_views(views, out_dir)?;
 
     // Embed-mode writes a structured manifest sidecar for a downstream
     // host (e.g. a static site generator). The HTML index is for
-    // wirebug's own browsing UI and would only get in the host's way.
+    // wirebug's own browsing UI and would only get in the host's way. The
+    // manifest lists only the views that were written; the HTML index
+    // shows a failed view's error in its place.
     let sidecar_path = if embed {
-        let manifest = wirebug::render::embed_manifest(&index_views, design.manifest.as_ref());
+        let manifest =
+            wirebug::render::embed_manifest(index_views.iter().flatten(), design.manifest.as_ref());
         let json = serde_json::to_string_pretty(&manifest).context("serializing embed manifest")?;
         let path = out_dir.join(wirebug::render::EMBED_MANIFEST_FILENAME);
         write_file(
@@ -264,14 +287,41 @@ fn render_command(
         path
     };
 
+    let failures: Vec<ViewError> = index_views.into_iter().filter_map(Result::err).collect();
+    report_failures(&failures);
     eprintln!(
-        "rendered {} view(s) as {} to {} ({})",
-        index_views.len(),
+        "rendered {} as {} to {} ({})",
+        rendered_count(total - failures.len(), total),
         render_format.label(),
         out_dir.display(),
         sidecar_path.display(),
     );
-    Ok(ExitCode::SUCCESS)
+    Ok(exit_code_for(&failures))
+}
+
+/// Print each view that failed to render, naming it.
+fn report_failures(failures: &[ViewError]) {
+    for failure in failures {
+        eprintln!("error: {failure}");
+    }
+}
+
+/// `3 view(s)` when every view rendered, `2 of 3 view(s)` when some failed.
+fn rendered_count(rendered: usize, total: usize) -> String {
+    if rendered == total {
+        format!("{rendered} view(s)")
+    } else {
+        format!("{rendered} of {total} view(s)")
+    }
+}
+
+/// A render that left out a failed view fails, so scripts and CI notice.
+fn exit_code_for(failures: &[ViewError]) -> ExitCode {
+    if failures.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
 }
 
 fn write_file(out_dir: &Path, filename: &str, contents: &[u8]) -> Result<()> {

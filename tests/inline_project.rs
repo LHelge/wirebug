@@ -19,7 +19,10 @@ fn rendered() -> Vec<RenderedView> {
         report.problems
     );
     let design = report.design.expect("a design");
-    render_views(&design, SvgMode::Standalone).expect("renders")
+    render_views(&design, SvgMode::Standalone)
+        .into_iter()
+        .collect::<Result<_, _>>()
+        .expect("renders")
 }
 
 #[test]

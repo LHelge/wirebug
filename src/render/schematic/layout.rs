@@ -16,8 +16,10 @@ use super::{
     CHAR_WIDTH, DEFAULT_GRID, LABEL_INSET, MIN_HEIGHT, MIN_PORT_PITCH, MIN_WIDTH, SVG_MARGIN,
     TEXT_BOX_HEIGHT, TEXT_BOX_MIN_WIDTH, TEXT_BOX_PAD_X,
 };
-use crate::dsl::ir::{Design, Instance, InstanceName, Pin, Port, PortName, View, WireColor};
-use crate::error::{Error, Result};
+use crate::dsl::ir::{
+    Design, Instance, InstanceName, Pin, Port, PortName, View, WireColor, WireEnd,
+};
+use crate::error::{ViewErrorKind, ViewResult};
 use crate::render::geometry::{Bounds, Point, Side};
 
 /// A port's identity within a view: a port on an included child instance, or
@@ -61,14 +63,14 @@ impl Grid {
     /// The grid `view` asks for (`DEFAULT_GRID` when it names none),
     /// validated: ports sit two steps apart, so that pitch must clear a
     /// port label or adjacent labels would overlap.
-    pub(super) fn of_view(view: &View) -> Result<Self> {
+    pub(super) fn of_view(view: &View) -> ViewResult<Self> {
         let step = view.grid.unwrap_or(DEFAULT_GRID);
         if step <= 0.0 {
-            return Err(Error::NonPositiveGrid { grid: step });
+            return Err(ViewErrorKind::NonPositiveGrid { grid: step });
         }
         let min_step = MIN_PORT_PITCH / 2.0;
         if step < min_step {
-            return Err(Error::GridTooSmall {
+            return Err(ViewErrorKind::GridTooSmall {
                 grid: step,
                 minimum: min_step,
             });
@@ -191,6 +193,21 @@ pub(super) struct Connection<'a> {
     pub(super) owners: [Option<&'a InstanceName>; 2],
 }
 
+impl Connection<'_> {
+    /// The segment's two ends as the design names them: `instance.port`,
+    /// or the subject's own `port` for one on the enclosure.
+    pub(super) fn ends(&self) -> [WireEnd; 2] {
+        let end = |owner: Option<&InstanceName>, port: &PlacedPort| match owner {
+            Some(instance) => WireEnd::Child {
+                instance: instance.clone(),
+                port: port.port.clone(),
+            },
+            None => WireEnd::Own(port.port.clone()),
+        };
+        [end(self.owners[0], self.a), end(self.owners[1], self.b)]
+    }
+}
+
 pub(super) struct ViewBox {
     pub(super) x: f64,
     pub(super) y: f64,
@@ -237,7 +254,7 @@ impl Placement {
         subject: &Instance,
         view: &crate::dsl::ir::View,
         grid: Grid,
-    ) -> Result<Self> {
+    ) -> ViewResult<Self> {
         // Resolve each include to its child instance, world centre, and
         // authored port placements, preserving include order.
         let mut boxes: IndexMap<InstanceName, BoxEntry> = IndexMap::new();
