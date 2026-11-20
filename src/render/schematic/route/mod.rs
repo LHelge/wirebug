@@ -24,6 +24,7 @@ mod nudge;
 mod visibility;
 
 use geometry::{Dir, Rect};
+use pathfinding::prelude::bfs;
 use visibility::Ovg;
 
 use super::layout::{PlacedPort, Placement};
@@ -60,10 +61,7 @@ pub(super) struct Router {
 
 impl Router {
     pub(super) fn build(placement: &Placement, clearance: f64) -> Self {
-        let obstacles: Vec<Rect> = placement
-            .component_bounds()
-            .map(|b| Rect::from(b).inflated(clearance))
-            .collect();
+        let obstacles = keepouts(placement, clearance);
 
         // Each port contributes its connection point and its stub (one
         // clearance out along the normal) as interesting points, so the
@@ -86,6 +84,26 @@ impl Router {
             soft_avoid,
             clearance,
         }
+    }
+
+    /// Whether [`Self::route_all`] finds a route between `a` and `b`: both
+    /// stubs have a graph node and the graph connects them. The search
+    /// only weighs bends, crossings and guide overlaps, never forbids an
+    /// edge, so it fails exactly when the stubs are disconnected — walled
+    /// in by keepouts that meet.
+    pub(super) fn connects(&self, a: &PlacedPort, b: &PlacedPort) -> bool {
+        let (Some(from), Some(to)) = (
+            self.ovg.node_at(stub(a, self.clearance)),
+            self.ovg.node_at(stub(b, self.clearance)),
+        ) else {
+            return false;
+        };
+        bfs(
+            &from,
+            |&node| self.ovg.neighbours(node).iter().map(|&(next, _)| next),
+            |&node| node == to,
+        )
+        .is_some()
     }
 
     /// Route a single connection through the graph.
@@ -157,6 +175,56 @@ impl Router {
         pts.push(raw.b);
         pts
     }
+}
+
+/// Every component box grown by `clearance`: the regions routes must stay
+/// out of, in [`Placement::component_bounds`] order.
+fn keepouts(placement: &Placement, clearance: f64) -> Vec<Rect> {
+    placement
+        .component_bounds()
+        .map(|b| Rect::from(b).inflated(clearance))
+        .collect()
+}
+
+/// A wired port whose wire cannot leave it: its stub lies strictly inside
+/// another component's keepout, so the visibility graph has no node there
+/// and [`Router::route_all`] would fail with `RouteFailed`.
+pub(super) struct BlockedStub<'p> {
+    /// Index of the port's own component, in `component_bounds` order.
+    pub(super) owner: usize,
+    pub(super) port: &'p PlacedPort,
+    /// Index of the component whose keepout swallows the stub.
+    pub(super) blocker: usize,
+}
+
+/// Every wired child port whose stub falls inside another component's
+/// keepout — the router's own precondition for attaching a port, checked
+/// without building the graph. Enclosure ports are not checked: the
+/// enclosure stands four grid steps off the child boxes, so their inward
+/// stubs always clear every keepout.
+pub(super) fn blocked_stubs(placement: &Placement, clearance: f64) -> Vec<BlockedStub<'_>> {
+    let keepouts = keepouts(placement, clearance);
+    let mut blocked = Vec::new();
+    for (owner, (name, component)) in placement.components.iter().enumerate() {
+        for port in &component.ports {
+            if !placement.is_wired(name, &port.port) {
+                continue;
+            }
+            let at = stub(port, clearance);
+            let swallowed = keepouts
+                .iter()
+                .enumerate()
+                .find(|&(i, keepout)| i != owner && keepout.contains_point(at));
+            if let Some((blocker, _)) = swallowed {
+                blocked.push(BlockedStub {
+                    owner,
+                    port,
+                    blocker,
+                });
+            }
+        }
+    }
+    blocked
 }
 
 fn outline(r: Rect) -> Vec<Point> {

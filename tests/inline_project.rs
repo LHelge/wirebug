@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use wirebug::dsl::check_project;
+use wirebug::check_project;
 use wirebug::render::{RenderedView, SvgMode, render_views};
 
 fn rendered() -> Vec<RenderedView> {

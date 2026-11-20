@@ -521,6 +521,119 @@ fn check_strict_fails_on_a_duplicate_view_title() {
         ));
 }
 
+const CROWDED_VIEWS_ROOT: &str = "tests/fixtures/crowded_views_project";
+
+#[test]
+fn check_rejects_includes_that_overlap_or_leave_a_wire_no_route() {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--format", "json", CROWDED_VIEWS_ROOT])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+    let read = |name: &str| {
+        std::fs::read_to_string(format!("{CROWDED_VIEWS_ROOT}/{name}")).expect("fixture file")
+    };
+    let (main, module) = (read("main.wb"), read("components/module.wb"));
+
+    // A problem as (code, severity, file name, the text of every label).
+    let found: Vec<(&str, &str, &str, Vec<&str>)> = problems
+        .iter()
+        .map(|p| {
+            let file = p["filename"].as_str().expect("filename");
+            let src = if file.ends_with("module.wb") {
+                &module
+            } else {
+                &main
+            };
+            let labels = p["labels"]
+                .as_array()
+                .expect("labels")
+                .iter()
+                .map(|l| {
+                    let offset = l["span"]["offset"].as_u64().expect("offset") as usize;
+                    let length = l["span"]["length"].as_u64().expect("length") as usize;
+                    &src[offset..offset + length]
+                })
+                .collect();
+            (
+                p["code"].as_str().expect("code"),
+                p["severity"].as_str().expect("severity"),
+                file.rsplit('/').next().expect("file name"),
+                labels,
+            )
+        })
+        .collect();
+
+    // Each colliding pair is named by both includes, the later one first,
+    // and the walled-in wire by the includes it ends on; the clean
+    // "Touching" view (boxes edge to edge inside an enclosure) reports
+    // nothing.
+    assert_eq!(
+        found,
+        vec![
+            (
+                "wirebug::include_too_close",
+                "error",
+                "main.wb",
+                vec!["right", "left"]
+            ),
+            (
+                "wirebug::overlapping_includes",
+                "error",
+                "main.wb",
+                vec!["rear", "left"]
+            ),
+            (
+                "wirebug::unroutable_wire",
+                "error",
+                "main.wb",
+                vec!["left", "rear"]
+            ),
+            (
+                "wirebug::overlapping_includes",
+                "error",
+                "main.wb",
+                vec!["right.x1", "left.x1"]
+            ),
+            (
+                "wirebug::overlapping_includes",
+                "error",
+                "module.wb",
+                vec!["x2", "x1"]
+            ),
+        ]
+    );
+    assert!(
+        problems[0]["message"]
+            .as_str()
+            .expect("message")
+            .contains("`left.sig`, `right.sig`"),
+        "the crowded ports are named: {}",
+        problems[0]
+    );
+}
+
+#[test]
+fn render_stops_at_check_instead_of_failing_to_route() {
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("svg");
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["render", CROWDED_VIEWS_ROOT, "--out", out.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("include_too_close"))
+        .stderr(predicate::str::contains("not rendering"))
+        .stderr(predicate::str::contains("failed to route").not());
+    assert!(!out.exists(), "nothing is written");
+}
+
 #[test]
 fn check_accepts_a_manifest_target() {
     Command::cargo_bin("wirebug")

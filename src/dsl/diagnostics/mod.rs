@@ -325,6 +325,76 @@ pub enum Problem {
         first: SourceSpan,
     },
 
+    /// Two includes of one view draw boxes that overlap. Box sizes follow
+    /// from ports, labels and pin rows in the renderer's layout, so this is
+    /// found by laying the view out (`render::lint`), not from the DSL.
+    #[error("`{include}` overlaps `{other}` in view \"{view}\"")]
+    #[diagnostic(
+        code(wirebug::overlapping_includes),
+        help(
+            "boxes are sized from their ports and labels; move one include so the boxes no longer overlap (touching edges are fine)"
+        )
+    )]
+    OverlappingIncludes {
+        include: String,
+        other: String,
+        view: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("overlaps `{other}`")]
+        at: SourceSpan,
+        #[label("`{other}` is placed here")]
+        first: SourceSpan,
+    },
+
+    /// A schematic include sits so close to another that a wired port has
+    /// no room for its wire: the router leaves each port by one grid step
+    /// and keeps one step clear of every box, so that stub lands inside the
+    /// other box's clearance and the wire cannot be routed.
+    #[error("no room to route {ports}: `{include}` is too close to `{other}` in view \"{view}\"")]
+    #[diagnostic(
+        code(wirebug::include_too_close),
+        help(
+            "a wire leaves its port by one grid step and keeps one grid step clear of every other box, so leave at least two grid steps between a wired port and the box it faces"
+        )
+    )]
+    IncludeTooClose {
+        include: String,
+        other: String,
+        view: String,
+        /// The blocked ports, as a list of backticked `inst.port`s.
+        ports: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("too close to `{other}`")]
+        at: SourceSpan,
+        #[label("`{other}` is placed here")]
+        first: SourceSpan,
+    },
+
+    /// A schematic wire the router finds no path for, though both its
+    /// ports have room to leave: boxes less than two grid steps apart close
+    /// the gaps between them, walling one end in. Labelled on the includes
+    /// the wire ends on (an enclosure end has none).
+    #[error("no route for the wire from `{from}` to `{to}` in view \"{view}\"")]
+    #[diagnostic(
+        code(wirebug::unroutable_wire),
+        help(
+            "wires keep one grid step clear of every box, so boxes less than two grid steps apart leave no gap between them; open a gap of at least two grid steps in the boxes around the walled-in end"
+        )
+    )]
+    UnroutableWire {
+        from: String,
+        to: String,
+        view: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("the wire ends here")]
+        at: SourceSpan,
+        #[label("and here")]
+        other: Option<SourceSpan>,
+    },
+
     /// Two connectors in one component share a designator.
     #[error("duplicate connector designator `{name}`")]
     #[diagnostic(

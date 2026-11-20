@@ -9,10 +9,12 @@ use svg::Document;
 use svg::node::element::{Group, Line, Rectangle, Style, Text};
 
 use crate::dsl::ir::{
-    Connector, ConnectorLayout, ConnectorName, Design, Instance, Pin, PortName, View,
+    Connector, ConnectorLayout, ConnectorName, Design, Include, Instance, Pin, PortName, View,
 };
 use crate::error::{Error, Result};
 use crate::render::SvgMode;
+use crate::render::geometry::{Bounds, Point};
+use crate::render::lint::{IncludeBox, ViewLayout};
 use crate::render::stamp::{STAMP_HEIGHT, STAMP_INSET, stamp_element};
 
 const DEFAULT_GRID: f64 = 20.0;
@@ -63,16 +65,14 @@ impl PinoutRenderer {
         let mut tables = Vec::new();
         for inc in &view.includes {
             let name = inc.instance.as_str();
-            let connector_name = ConnectorName::from(name);
-            let connector =
-                subject
-                    .connectors
-                    .get(&connector_name)
-                    .ok_or_else(|| Error::UnknownConnector {
-                        subject: subject.type_name.to_string(),
-                        connector: name.to_string(),
-                    })?;
-            tables.push(Table::new(connector, subject, inc.x * step, inc.y * step));
+            let connector = subject
+                .connectors
+                .get(&ConnectorName::from(name))
+                .ok_or_else(|| Error::UnknownConnector {
+                    subject: subject.type_name.to_string(),
+                    connector: name.to_string(),
+                })?;
+            tables.push(Table::new(connector, subject, inc, step));
         }
 
         let has_title = !view.title.is_empty() && mode.titled();
@@ -117,6 +117,34 @@ impl PinoutRenderer {
         }
         Ok(doc.add(group).to_string())
     }
+
+    /// Each include's table box, sized as [`Self::render`] sizes it. An
+    /// include naming no connector on the subject is skipped: rendering
+    /// reports it.
+    pub(super) fn layout(&self, subject: &Instance, view: &View) -> ViewLayout {
+        let step = view.grid.unwrap_or(DEFAULT_GRID);
+        if step <= 0.0 {
+            return ViewLayout::default();
+        }
+        let boxes = view
+            .includes
+            .iter()
+            .enumerate()
+            .filter_map(|(include, inc)| {
+                let connector = subject
+                    .connectors
+                    .get(&ConnectorName::from(inc.instance.as_str()))?;
+                Some(IncludeBox {
+                    include,
+                    bounds: Table::new(connector, subject, inc, step).bounds(),
+                })
+            })
+            .collect();
+        ViewLayout {
+            boxes,
+            ..ViewLayout::default()
+        }
+    }
 }
 
 struct Table {
@@ -131,7 +159,10 @@ struct Table {
 }
 
 impl Table {
-    fn new(connector: &Connector, subject: &Instance, cx: f64, cy: f64) -> Self {
+    /// The table for `connector`, centred where `inc` places it on a grid
+    /// of `step` world units.
+    fn new(connector: &Connector, subject: &Instance, inc: &Include, step: f64) -> Self {
+        let (cx, cy) = (inc.x * step, inc.y * step);
         let title = connector.name.to_string();
         let subtitle = connector_subtitle(connector);
         let rows = connector
@@ -172,6 +203,14 @@ impl Table {
             y: cy - height / 2.0,
             width,
             height,
+        }
+    }
+
+    fn bounds(&self) -> Bounds {
+        Bounds {
+            origin: Point::new(self.x, self.y),
+            width: self.width,
+            height: self.height,
         }
     }
 }
@@ -620,6 +659,7 @@ fn viewbox(tables: &[Table], has_title: bool) -> ViewBox {
 mod tests {
     use super::*;
     use crate::dsl::ir::{Include, InstanceName, TypeName, ViewKind};
+    use crate::dsl::span::{FileId, Span};
     use crate::render::schematic::tests::design_from;
 
     fn pinout_view(subject: &str, includes: &[(&str, f64, f64)]) -> View {
@@ -639,6 +679,7 @@ mod tests {
                     x: *x,
                     y: *y,
                     ports: Vec::new(),
+                    span: Span::new(FileId(0), 0, 0),
                 })
                 .collect(),
             texts: Vec::new(),
@@ -768,7 +809,8 @@ component m {
             .get(&ConnectorName::from("x1"))
             .expect("connector");
 
-        let table = Table::new(connector, subject, 0.0, 0.0);
+        let view = pinout_view("m", &[("x1", 0.0, 0.0)]);
+        let table = Table::new(connector, subject, &view.includes[0], DEFAULT_GRID);
         let face = table.face.as_ref().expect("face");
 
         assert_eq!(table.width, face.width() + 2.0 * FACE_PAD);

@@ -1,8 +1,7 @@
 //! Rectilinear geometry primitives for connector routing: axis-aligned
 //! obstacle rectangles and the four compass directions a route travels.
 
-use super::super::layout::Bounds;
-use crate::render::geometry::{Point, Side};
+use crate::render::geometry::{Bounds, Point, Side};
 
 /// Axis-aligned rectangle in SVG world coordinates.
 #[derive(Debug, Clone, Copy, PartialEq)]

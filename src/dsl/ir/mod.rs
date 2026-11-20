@@ -10,6 +10,7 @@ use indexmap::IndexMap;
 
 use crate::dsl::ast;
 use crate::dsl::manifest::Manifest;
+use crate::dsl::span::Span;
 
 macro_rules! name_newtype {
     ($name:ident, $doc:literal) => {
@@ -690,6 +691,21 @@ pub struct Include {
     pub x: f64,
     pub y: f64,
     pub ports: Vec<(PortName, Side)>,
+    /// Where the include names its target (`inst` or `inst.connector`), so
+    /// a check over the laid-out view can point back at the source.
+    pub span: Span,
+}
+
+/// An include displays as its target, as authored: `inst`, `inst.connector`,
+/// or, for an inline connector, `inst.male` / `inst.female`.
+impl fmt::Display for Include {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match (self.half, &self.connector) {
+            (Some(half), _) => write!(f, "{}.{}", self.instance, half.as_str()),
+            (None, Some(connector)) => write!(f, "{}.{connector}", self.instance),
+            (None, None) => write!(f, "{}", self.instance),
+        }
+    }
 }
 
 /// Which side of a component box a port sits on, named by compass direction.
@@ -760,6 +776,27 @@ mod tests {
     fn wire_color_code_matching_ignores_case() {
         assert_eq!(WireColor::from("White").code(), "WH");
         assert_eq!(WireColor::from("RED").code(), "RD");
+    }
+
+    #[test]
+    fn include_displays_as_its_authored_target() {
+        let include = |connector: Option<&str>, half: Option<Half>| Include {
+            instance: InstanceName::from("ecu"),
+            connector: connector.map(ConnectorName::from),
+            half,
+            x: 0.0,
+            y: 0.0,
+            ports: Vec::new(),
+            span: Span::new(crate::dsl::span::FileId(0), 0, 0),
+        };
+        assert_eq!(include(None, None).to_string(), "ecu");
+        assert_eq!(include(Some("x1"), None).to_string(), "ecu.x1");
+        // An inline include's connector is normalized to the designator;
+        // the half is what the author wrote.
+        assert_eq!(
+            include(Some("ecu"), Some(Half::Female)).to_string(),
+            "ecu.female"
+        );
     }
 
     #[test]

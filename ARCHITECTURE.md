@@ -12,9 +12,18 @@ Keep this file true in the same change that alters what it describes.
 The only input is the **`.wb` DSL** (spec: `.claude/skills/wirebug-dsl/`).
 Four CLI commands share it:
 
-- **`check` (`src/dsl/`)** — lex → parse → load project → resolve →
-  elaborate → validate. Turns a multi-file `.wb` project into an
-  elaborated IR (`ir::Design`) and reports problems via miette.
+- **`check` (`src/dsl/`, then `src/render/lint.rs`)** — lex → parse →
+  load project → resolve → elaborate → validate, then the **layout
+  checks**: every view laid out by its renderer's own layout code, to find
+  includes that collide (see DSL validation). Turns a multi-file `.wb`
+  project into an elaborated IR (`ir::Design`) and reports problems via
+  miette. The entry every command calls is `pipeline::check_project`
+  (re-exported as `wirebug::check_project`; the LSP runs the same stages
+  itself, with `pipeline::extend_with_layout_problems` for the last one).
+  It lives outside `dsl` because the layout checks need `render`: `dsl`
+  ends at `dsl::check_loaded` (resolve → elaborate → validate) and never
+  depends on `render`, while `render::lint` depends on `dsl` like the rest
+  of `render` does; `pipeline` is where both are visible.
 - **`render` (`src/render/`)** — runs the same DSL pipeline, then draws
   every view in the resulting `ir::Design` to SVG (one file per view) plus
   an `index.html` (`render::index_html`) that embeds them all for browsing,
@@ -233,7 +242,10 @@ otherwise sees only world geometry. (Matching the keepout to the pitch was
 tried and reverted: at two steps the inflated box rects overlap on tightly
 packed views and close off the only corridor, so routing fails.)
 Because the pitch is two steps, the grid must be at least
-`MIN_PORT_PITCH / 2`; a finer grid errors.
+`MIN_PORT_PITCH / 2`; a finer grid errors. The keepout is why boxes need
+room: a wired port needs two steps clear in front of it, and boxes closer
+than two steps to each other close the corridor between them. `check`'s
+Layout phase finds both, from the same `Placement` and router geometry.
 
 ### Harness views (`render/harness/`)
 
@@ -357,6 +369,32 @@ so one run reports many. Errors fail the run; warnings fail only under
   check live here (not elaborate) so a type instantiated many times
   reports each once.
 
+- **Layout** (`render/lint.rs`, run by `pipeline` after validate, and only
+  when no earlier phase found an error — an erroring design never renders,
+  and its views may hold includes that failed to resolve) — each view is
+  laid out by its renderer (`SchematicRenderer::layout`,
+  `HarnessRenderer::layout`, `PinoutRenderer::layout`, each returning a
+  `lint::ViewLayout` built from the very layout `render` draws), so the
+  check and the drawing cannot disagree. Errors, each labelled on the
+  includes involved (`ir::Include.span`, the `inst`/`inst.connector` the
+  include names; a view sits in one file, so plain two-label diagnostics):
+  two includes whose boxes overlap (`overlapping_includes`, every view
+  kind; boxes that only touch are fine, and the enclosure, text boxes and
+  harness cable boxes are not includes); a wired schematic port whose
+  routing stub (one clearance out) lands strictly inside another box's
+  clearance-inflated keepout, so the visibility graph has no node there
+  (`include_too_close`, one per pair of includes, naming every blocked
+  port — `route::blocked_stubs`, the router's own precondition); and a
+  schematic wire whose two stubs the visibility graph does not connect —
+  walled in by keepouts that meet (`unroutable_wire`, `Router::connects`,
+  a breadth-first search over the same graph: A\* only weighs bends and
+  crossings, never forbids an edge, so it fails exactly then). Overlapping
+  pairs are not also reported as too close, and `unroutable_wire` is
+  reported only in a view with neither. Together they are exactly the
+  conditions under which `route_all` returns `RouteFailed`, so a project
+  that passes `check` does not fail to route. A later layout-derived check
+  adds a field to `ViewLayout` and a mapping in `ViewLayout::problems`.
+
 Not done on purpose: **unconnected-port** detection. It needs per-instance
 tree analysis and floods intentional unused-pin warnings on a real
 component library — a separate, opt-in concern. See `dsl/validate/mod.rs`.
@@ -370,6 +408,8 @@ miette `Diagnostic`s):
 
 - an unknown view `kind:` (`schematic`, `harness`, and `pinout` render
   today) — normally caught earlier by resolve's `unknown_view_kind`;
+- a schematic wire the router cannot route (`RouteFailed`) — caught
+  earlier by the Layout phase above, so a backstop for hand-built designs;
 - a view subject type with no instance in the design;
 - a non-positive `grid:`, or a `grid:` finer than a port label needs;
 - file IO when writing the SVGs.
@@ -382,11 +422,13 @@ has errors (or, under `--strict`, warnings).
 ```
 src/
 ├── main.rs          # clap CLI: `check`, `render`, `serve`, `lsp`, `manifest version` (all over the .wb DSL)
-├── lib.rs           # re-exports; dsl::check_project + render::render_views
+├── lib.rs           # re-exports; check_project + render::render_views
+├── pipeline.rs      # check_project: dsl::check_loaded, then render::lint
+│                    #   (the layout checks) — the entry every command uses
 │
 │  # ── DSL parse-and-check pipeline (the only input: .wb) ──
 ├── dsl/
-│   ├── mod.rs           # check_project: discover→load→resolve→elaborate→validate
+│   ├── mod.rs           # check_loaded: resolve→elaborate→validate; CheckReport
 │   ├── span.rs          # FileId, Span, Spanned<T>; Span→miette + chumsky::Span impl
 │   ├── lex/
 │   │   ├── mod.rs       # lex() → Vec<SpannedLexeme>; significant() = the trivia dial
@@ -413,7 +455,9 @@ src/
 │   ├── mod.rs       # render_views: subject lookup + per-view dispatch + slug;
 │   │                #   RenderedView{title,filename,kind,svg} + index_html (tabs)
 │   │                #   + embed_manifest (manifest.json sidecar for --embed)
-│   ├── geometry.rs  # Point; re-exports ir::Side (sides are authored)
+│   ├── geometry.rs  # Point, Bounds (+ overlap test); re-exports ir::Side
+│   ├── lint.rs      # layout checks for `check`: overlaps, crowded ports,
+│   │                #   unroutable wires, from each renderer's `layout`
 │   ├── png.rs       # SVG → PNG rasterisation for --png (resvg/usvg/tiny_skia)
 │   ├── stamp.rs     # project-identity stamp text/element (corner of every SVG)
 │   ├── schematic/   # rectangle-based SVG renderer (kind: schematic)
@@ -531,7 +575,8 @@ Runtime:
   returns this crate's types) — bump the two together.
 - [`serde_json`] — serialises the `--embed` `manifest.json` sidecar.
 - [`pathfinding`] — A* over the orthogonal visibility graph for
-  object-avoiding connector routing (render path).
+  object-avoiding connector routing (render path), and the breadth-first
+  reachability test `check` uses to find wires the router cannot route.
 - [`askama`] — compile-time HTML templates (`templates/`); the `index.html`
   shared by `render` and `serve`.
 - [`axum`] (feature `ws`) — the `serve` HTTP server + live-reload websocket.

@@ -24,6 +24,7 @@ use svg::node::element::{Group, Style, Text};
 use crate::dsl::ir::{Design, Instance, View};
 use crate::error::{Error, Result};
 use crate::render::SvgMode;
+use crate::render::lint::{IncludeBox, ViewLayout};
 use crate::render::stamp::{STAMP_HEIGHT, STAMP_INSET, stamp_element};
 
 use layout::HarnessLayout;
@@ -173,12 +174,34 @@ impl HarnessRenderer {
 
         Ok(doc.to_string())
     }
+
+    /// Each include's pin-table box, from the same layout [`Self::render`]
+    /// draws. Empty for a non-positive grid: rendering reports that itself.
+    pub(super) fn layout(&self, design: &Design, subject: &Instance, view: &View) -> ViewLayout {
+        let step = view.grid.unwrap_or(DEFAULT_GRID);
+        if step <= 0.0 {
+            return ViewLayout::default();
+        }
+        let boxes = HarnessLayout::compute(design, subject, view, step)
+            .nodes
+            .iter()
+            .map(|node| IncludeBox {
+                include: node.include,
+                bounds: node.bounds(),
+            })
+            .collect();
+        ViewLayout {
+            boxes,
+            ..ViewLayout::default()
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::dsl::ir::{ConnectorName, Include, InstanceName, TypeName, ViewKind};
+    use crate::dsl::span::{FileId, Span};
     use crate::render::schematic::tests::design_from;
 
     /// A harness view over `subject`, including `(instance, connector, x, y)`.
@@ -199,6 +222,7 @@ mod tests {
                     x: *x,
                     y: *y,
                     ports: Vec::new(),
+                    span: Span::new(FileId(0), 0, 0),
                 })
                 .collect(),
             texts: Vec::new(),

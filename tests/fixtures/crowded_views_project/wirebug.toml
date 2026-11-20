@@ -1,0 +1,4 @@
+[project]
+name = "crowded-views-project"
+version = "0.1.0"
+description = "Fixture whose views place includes on top of, or too close to, each other"

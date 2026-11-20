@@ -3,7 +3,9 @@
 //! Stages: discover the project (the directory rooted at `wirebug.toml`),
 //! load and lex/parse every reachable file, resolve names, elaborate the
 //! type/instance hierarchy into the [`ir`], then validate it. The
-//! terminal artifact is `ir::Design` — nothing here renders.
+//! terminal artifact is `ir::Design` — nothing here renders. The full
+//! check, with the layout-derived checks that need the renderers, is
+//! `pipeline::check_project`.
 
 pub mod ast;
 pub mod diagnostics;
@@ -21,6 +23,7 @@ use std::path::Path;
 
 use diagnostics::Problem;
 use ir::Design;
+use project::Project;
 
 /// Diagnostic output format for `wirebug check`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -80,31 +83,19 @@ pub fn load_manifest(target: Option<&Path>) -> (Option<manifest::Manifest>, Vec<
     }
 }
 
-/// Run the parse-and-check pipeline against the project containing
-/// `target` (or the project discovered by walking up from the current
-/// directory when `target` is `None`).
-pub fn check_project(target: Option<&Path>) -> CheckReport {
-    let entry = match project::discover(target) {
-        Ok(entry) => entry,
-        Err(problem) => {
-            return CheckReport {
-                problems: vec![problem],
-                design: None,
-            };
-        }
-    };
-
-    let (project, mut problems) = project::load(&entry);
-    let mut design = None;
-    if let Some(project) = project {
-        let mut resolved = resolve::resolve(&project);
-        problems.append(&mut resolved.problems);
-        let (elaborated, elab_problems) = elaborate::elaborate(&resolved);
-        problems.extend(elab_problems);
-        problems.extend(validate::validate(&resolved));
-        design = elaborated;
-    }
-    CheckReport { problems, design }
+/// The DSL half of the check pipeline over a loaded project: resolve,
+/// elaborate, validate. Returns the elaborated design, when the project got
+/// far enough to build one, and every problem found.
+///
+/// The layout-derived checks run after this, outside `dsl`: see
+/// `pipeline::check_project`, the entry every command uses.
+pub fn check_loaded(project: &Project) -> (Option<Design>, Vec<Problem>) {
+    let mut resolved = resolve::resolve(project);
+    let mut problems = std::mem::take(&mut resolved.problems);
+    let (design, elab_problems) = elaborate::elaborate(&resolved);
+    problems.extend(elab_problems);
+    problems.extend(validate::validate(&resolved));
+    (design, problems)
 }
 
 #[cfg(test)]

@@ -351,10 +351,15 @@ impl Elaborator<'_> {
                                     None,
                                 )
                             };
+                            let span = inc
+                                .connector
+                                .as_ref()
+                                .map_or(inc.instance.span, |c| inc.instance.span.to(c.span));
                             Include {
                                 instance,
                                 connector,
                                 half,
+                                span,
                                 x: inc.x.node,
                                 y: inc.y.node,
                                 // Sides that failed to parse were already reported

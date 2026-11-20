@@ -1,0 +1,19 @@
+// A module with two connectors. Its pinout view draws the `x2` table
+// over the `x1` table.
+component Module {
+    connector x1 "Signal 2p" {
+        pub port sig "SIG" pin 1;
+        pub port gnd "GND" pin 2;
+    }
+
+    connector x2 "Spare 1p" {
+        pub port aux "AUX" pin 1;
+    }
+}
+
+view pinout "Module Pinout" {
+    grid: 20;
+
+    include x1 at (0, 0);
+    include x2 at (2, 1);
+}
