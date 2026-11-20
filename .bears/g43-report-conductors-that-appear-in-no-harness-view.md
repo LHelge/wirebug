@@ -1,14 +1,15 @@
 ---
 id: g43
 title: Report conductors that appear in no harness view
-status: open
+status: done
 priority: P1
 created: "2026-11-20T21:40:31.980192898Z"
-updated: "2026-11-20T21:40:31.980192898Z"
+updated: "2026-11-20T23:07:01.119934029Z"
 tags:
   - check
   - harness
 parent: kss
+attempts: 1
 ---
 
 ## Summary
