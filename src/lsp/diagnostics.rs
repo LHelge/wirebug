@@ -147,8 +147,8 @@ fn check_one(
 type FileTable<'a> = HashMap<String, (Uri, LineIndex, &'a str)>;
 
 /// Convert one [`Problem`] to `(uri, diagnostic)` via its miette surface:
-/// the primary label gives the range, secondary labels become related
-/// information, and a span-less problem anchors at the top of the entry
+/// the primary label gives the range, secondary labels and the labels of
+/// related notes become related information, and a span-less problem anchors at the top of the entry
 /// file.
 fn convert(problem: &Problem, files: &FileTable, entry: &Path) -> Option<(Uri, Diagnostic)> {
     let labels: Vec<miette::LabeledSpan> =
@@ -159,11 +159,22 @@ fn convert(problem: &Problem, files: &FileTable, entry: &Path) -> Option<(Uri, D
         None => (uri::to_uri(entry)?, Range::default()),
     };
 
-    let related: Vec<DiagnosticRelatedInformation> = labels
-        .iter()
+    // Secondary labels share the problem's file; a related note (e.g. the
+    // first of two same-titled views) brings its own, possibly another, file.
+    let secondary = labels
+        .into_iter()
         .skip(1)
-        .filter_map(|label| {
-            let (uri, range) = locate(problem, label, files)?;
+        .map(|label| (problem as &dyn miette::Diagnostic, label));
+    let notes = problem.related().into_iter().flatten().flat_map(|note| {
+        note.labels()
+            .into_iter()
+            .flatten()
+            .map(move |label| (note, label))
+    });
+    let related: Vec<DiagnosticRelatedInformation> = secondary
+        .chain(notes)
+        .filter_map(|(owner, label)| {
+            let (uri, range) = locate(owner, &label, files)?;
             Some(DiagnosticRelatedInformation {
                 location: Location { uri, range },
                 message: label.label().unwrap_or("related").to_string(),
@@ -198,12 +209,12 @@ fn convert(problem: &Problem, files: &FileTable, entry: &Path) -> Option<(Uri, D
 }
 
 /// Resolve one label to a file URI and range. The label's file comes back
-/// out of the problem's own `#[source_code]` (its `NamedSource` name is the
+/// out of its diagnostic's own `#[source_code]` (its `NamedSource` name is the
 /// path string the loader stamped); a file the project also loaded gets a
 /// precise UTF-16 range via its [`LineIndex`], anything else (e.g.
 /// `wirebug.toml`) falls back to miette's char-counted line/column.
 fn locate(
-    problem: &Problem,
+    problem: &dyn miette::Diagnostic,
     label: &miette::LabeledSpan,
     files: &FileTable,
 ) -> Option<(Uri, Range)> {
@@ -309,6 +320,45 @@ mod tests {
             by_uri.get(&main_uri).is_some_and(|d| !d.is_empty()),
             "expected the overlay's lex error: {by_uri:?}"
         );
+    }
+
+    /// Two views titled alike in different files: the warning lands on the
+    /// repeat's file and points at the first view, in the other file, as
+    /// related information.
+    #[test]
+    fn duplicate_view_title_relates_the_first_view_in_another_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        manifest(dir.path());
+        let main = write(
+            dir.path(),
+            "main.wb",
+            "use Root from \"more.wb\";\ncomponent Root { }\nview schematic \"S\" { }\n",
+        );
+        let more = write(
+            dir.path(),
+            "more.wb",
+            "extend Root { }\nview schematic \"S\" { }\n",
+        );
+
+        let (by_uri, _) = check_open_documents([main.clone()].iter(), &Overlay::default());
+        let main_uri = uri::to_uri(&main.canonicalize().unwrap()).unwrap();
+        let more_uri = uri::to_uri(&more.canonicalize().unwrap()).unwrap();
+        let diags = by_uri.get(&more_uri).expect("diagnostics on more.wb");
+        let dup = diags
+            .iter()
+            .find(|d| {
+                matches!(&d.code, Some(NumberOrString::String(c)) if c == "wirebug::duplicate_view_title")
+            })
+            .expect("a duplicate_view_title diagnostic");
+        assert_eq!(dup.severity, Some(DiagnosticSeverity::WARNING));
+        assert_eq!(dup.range.start.line, 1, "the repeat's view line");
+        let related = dup.related_information.as_deref().expect("related info");
+        let [first] = related else {
+            panic!("expected one related location, got {related:?}");
+        };
+        assert_eq!(first.location.uri, main_uri);
+        assert_eq!(first.location.range.start.line, 2, "the first view's line");
+        assert_eq!(first.message, "first titled here");
     }
 
     #[test]

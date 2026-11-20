@@ -251,7 +251,11 @@ view schematic "Overview" { }
             out.to_str().unwrap(),
         ])
         .assert()
-        .success();
+        // `check` warns on the repeat, which doesn't block a render.
+        .success()
+        .stderr(predicate::str::contains(
+            "duplicate view title \"Overview\"",
+        ));
 
     assert!(out.join("overview.svg").is_file());
     assert!(out.join("overview_2.svg").is_file());
@@ -437,6 +441,84 @@ fn check_rejects_a_repeated_endpoint_and_warns_on_an_empty_cable() {
             ("wirebug::empty_cable", "warning", vec![(spare, "spare")]),
         ]
     );
+}
+
+const DUPLICATE_TITLES_ROOT: &str = "tests/fixtures/duplicate_titles_project";
+
+#[test]
+fn check_warns_on_a_view_title_repeated_in_another_file() {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--format", "json", DUPLICATE_TITLES_ROOT])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+    let read = |name: &str| {
+        std::fs::read_to_string(format!("{DUPLICATE_TITLES_ROOT}/{name}")).expect("fixture file")
+    };
+    let (main, body) = (read("main.wb"), read("body.wb"));
+
+    /// A diagnostic as (code, severity, file name, the text of its labels).
+    fn summary<'a>(
+        p: &'a serde_json::Value,
+        src: &'a str,
+    ) -> (&'a str, &'a str, &'a str, Vec<&'a str>) {
+        let file = p["filename"].as_str().expect("filename");
+        let labels = p["labels"]
+            .as_array()
+            .expect("labels")
+            .iter()
+            .map(|l| {
+                let offset = l["span"]["offset"].as_u64().expect("offset") as usize;
+                let length = l["span"]["length"].as_u64().expect("length") as usize;
+                &src[offset..offset + length]
+            })
+            .collect();
+        (
+            p["code"].as_str().unwrap_or(""),
+            p["severity"].as_str().expect("severity"),
+            file.rsplit('/').next().expect("file name"),
+            labels,
+        )
+    }
+
+    // The repeat in body.wb is the warning; the first view, in main.wb, is
+    // its related note.
+    let [problem] = problems.as_slice() else {
+        panic!("expected one problem, got {problems:?}");
+    };
+    assert_eq!(
+        summary(problem, &body),
+        (
+            "wirebug::duplicate_view_title",
+            "warning",
+            "body.wb",
+            vec!["\"Overview\""]
+        )
+    );
+    let [first] = problem["related"].as_array().expect("related").as_slice() else {
+        panic!("expected one related note: {problem}");
+    };
+    assert_eq!(
+        summary(first, &main),
+        ("", "advice", "main.wb", vec!["\"Overview\""])
+    );
+}
+
+#[test]
+fn check_strict_fails_on_a_duplicate_view_title() {
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--strict", DUPLICATE_TITLES_ROOT])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "duplicate view title \"Overview\"",
+        ));
 }
 
 #[test]

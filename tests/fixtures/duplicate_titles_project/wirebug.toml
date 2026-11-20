@@ -1,0 +1,4 @@
+[project]
+name = "duplicate-titles-project"
+version = "0.1.0"
+description = "Fixture with two views titled alike, in two files of one component"

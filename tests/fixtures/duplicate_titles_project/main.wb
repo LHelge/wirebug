@@ -1,0 +1,17 @@
+// Two views share the title "Overview": this one and the one in the
+// `body.wb` fragment. `check` warns (fatal under `--strict`); `render`
+// still writes both, the repeat to `overview_2.svg`.
+use Lamp from "components/lamp.wb";
+use Vehicle from "body.wb";
+
+component Vehicle {
+    front: Lamp "Front lamp";
+}
+
+view schematic "Overview" {
+    grid: 20;
+
+    include front at (4, 4) ports {
+        east: pwr, gnd;
+    }
+}

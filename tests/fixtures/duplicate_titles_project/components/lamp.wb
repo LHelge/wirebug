@@ -1,0 +1,4 @@
+component Lamp {
+    pub port pwr "PWR";
+    pub port gnd "GND";
+}

@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use crate::dsl::ast::{self, Item};
-use crate::dsl::diagnostics::Problem;
+use crate::dsl::diagnostics::{FirstViewTitle, Problem};
 use crate::dsl::ir::{ConnectorName, InstanceName, PortName, Side, ViewKind};
 use crate::dsl::span::{FileId, Span, Spanned};
 
@@ -387,13 +387,41 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    /// Warn when `view` repeats the title of an earlier view anywhere in the
+    /// project. `seen` maps each title to where it was first used.
+    fn check_duplicate_title(
+        &self,
+        view: &'a ast::View,
+        file: FileId,
+        seen: &mut HashMap<&'a str, (FileId, Span)>,
+        problems: &mut Vec<Problem>,
+    ) {
+        let title = view.title.node.as_str();
+        let Some(&(first_file, first)) = seen.get(title) else {
+            seen.insert(title, (file, view.title.span));
+            return;
+        };
+        problems.push(Problem::DuplicateViewTitle {
+            title: title.to_string(),
+            src: self.project.source(file),
+            at: view.title.span.into(),
+            first: [FirstViewTitle {
+                title: title.to_string(),
+                src: self.project.source(first_file),
+                at: first.into(),
+            }],
+        });
+    }
+
     pub(super) fn resolve_views(&mut self, roots_by_file: &[Vec<DefId>]) -> Vec<ViewBinding<'a>> {
         let mut bindings = Vec::new();
         let mut problems = Vec::new();
+        let mut titles = HashMap::new();
         for (fi, file) in self.project.files.iter().enumerate() {
             let roots = &roots_by_file[fi];
             for item in &file.ast.items {
                 let Item::View(view) = item else { continue };
+                self.check_duplicate_title(view, FileId(fi), &mut titles, &mut problems);
                 let view_kind = ViewKind::from(view.kind.node.as_str());
                 if let ViewKind::Other(kind) = &view_kind {
                     problems.push(Problem::UnknownViewKind {
@@ -901,6 +929,105 @@ mod tests {
             view pinout \"X1\" { include x1 at (0, 0) ports { west: can_h; } }\n",
         )]);
         assert!(has(&p, "wirebug::wrong_include_form"), "{:?}", codes(&p));
+    }
+
+    /// The `(file name, labelled text)` of every label of `problem` and of
+    /// its related notes, primary first.
+    fn labelled(problem: &Problem) -> Vec<(String, String)> {
+        use miette::Diagnostic;
+        fn of(d: &dyn Diagnostic) -> Vec<(String, String)> {
+            let src = d.source_code().expect("source");
+            d.labels()
+                .into_iter()
+                .flatten()
+                .map(|l| {
+                    let span = src.read_span(l.inner(), 0, 0).expect("span");
+                    let text = std::str::from_utf8(span.data()).expect("utf8");
+                    let name = span.name().expect("name");
+                    let file = name.rsplit('/').next().expect("file name");
+                    (file.to_string(), text.to_string())
+                })
+                .collect()
+        }
+        let mut all = of(problem);
+        for related in problem.related().into_iter().flatten() {
+            all.extend(of(related));
+        }
+        all
+    }
+
+    #[test]
+    fn repeated_view_title_in_one_file_warns_on_both_views() {
+        use miette::Diagnostic;
+        let src = "component m { }\nview schematic \"S\" { }\nview harness \"S\" { }\n";
+        let p = problems(&[("main.wb", src)]);
+        let [problem] = p.as_slice() else {
+            panic!("expected one problem, got {:?}", codes(&p));
+        };
+        assert!(!problem.is_error(), "a duplicate title is a warning");
+        assert_eq!(problem.to_string(), "duplicate view title \"S\"");
+        let quoted = ("main.wb".to_string(), "\"S\"".to_string());
+        assert_eq!(labelled(problem), [quoted.clone(), quoted]);
+        // The repeat (the harness view) is the primary label.
+        let primary = problem
+            .labels()
+            .into_iter()
+            .flatten()
+            .next()
+            .expect("label");
+        assert_eq!(primary.offset(), src.rfind("\"S\"").expect("repeat"));
+    }
+
+    #[test]
+    fn repeated_view_title_across_files_labels_each_file() {
+        let p = problems(&[
+            (
+                "main.wb",
+                "use leaf from \"leaf.wb\";\nuse m from \"more.wb\";\ncomponent m { l: leaf; }\nview schematic \"Overview\" { }\n",
+            ),
+            ("more.wb", "extend m { }\nview schematic \"Overview\" { }\n"),
+            ("leaf.wb", LEAF),
+        ]);
+        let [problem] = p.as_slice() else {
+            panic!("expected one problem, got {:?}", codes(&p));
+        };
+        assert!(has(&p, "wirebug::duplicate_view_title"));
+        let files: Vec<String> = labelled(problem).into_iter().map(|(f, _)| f).collect();
+        assert_eq!(files, ["more.wb", "main.wb"]);
+    }
+
+    #[test]
+    fn each_repeat_of_a_title_points_at_the_first_view() {
+        let src = "component m { }\nview schematic \"S\" { }\nview schematic \"S\" { }\nview schematic \"S\" { }\n";
+        let p = problems(&[("main.wb", src)]);
+        assert_eq!(
+            codes(&p),
+            [
+                "wirebug::duplicate_view_title",
+                "wirebug::duplicate_view_title"
+            ]
+        );
+        use miette::Diagnostic;
+        let first = src.find("\"S\"").expect("first view");
+        for problem in &p {
+            let related: Vec<usize> = problem
+                .related()
+                .into_iter()
+                .flatten()
+                .flat_map(|r| r.labels().into_iter().flatten())
+                .map(|l| l.offset())
+                .collect();
+            assert_eq!(related, [first]);
+        }
+    }
+
+    #[test]
+    fn distinct_view_titles_do_not_warn() {
+        let p = problems(&[(
+            "main.wb",
+            "component m { }\nview schematic \"S\" { }\nview schematic \"S 2\" { }\n",
+        )]);
+        assert!(p.is_empty(), "unexpected problems: {:?}", codes(&p));
     }
 
     // --- `extend` fragments (split a component across files) ---

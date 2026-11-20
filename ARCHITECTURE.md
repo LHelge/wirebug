@@ -331,6 +331,13 @@ so one run reports many. Errors fail the run; warnings fail only under
   *subject*: each anchor must name exactly one side in the slot for its axis
   (`enclosure_anchor`) and an existing `pub` subject port (`unknown_port` /
   `private_port`), with the same duplicate guard (`duplicate_view_port`).
+  As a warning: a view title already used by another view anywhere in the
+  project (`duplicate_view_title`, compared exactly). The repeat is the
+  primary label; the first view rides along as a miette `#[related]` note
+  (`FirstViewTitle`), because one diagnostic carries one source file and the
+  two views may sit in different files — the LSP turns a related note's
+  labels into related information like any secondary label. Render's slug
+  de-duplication (`overview_2.svg`) stays as the backstop.
 - **Elaborate** — `main.wb` lacks a single top-level component (no root);
   containment cycle (a component instantiating itself transitively).
 - **Validate** — wire arity (fewer than two endpoints, error); cable wire

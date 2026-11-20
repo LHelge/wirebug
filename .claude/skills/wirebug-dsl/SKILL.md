@@ -491,7 +491,7 @@ view schematic "System Overview" {
 
 Format:
 
-- `view <kind> "<title>" { ... }` — `kind` is `schematic`, `harness`, or `pinout`.
+- `view <kind> "<title>" { ... }` — `kind` is `schematic`, `harness`, or `pinout`. Titles are unique across the project: a repeated title (in any file) is the `duplicate_view_title` warning; the repeat still renders, to a `_2`-suffixed file.
 - `grid: <n>;` — pixels per grid cell. Optional; a sensible default applies.
 - `include <name> at (x, y);` or `include <name> at (x, y) ports { ... }` — place a component by its instance name in the surrounding scope, at grid-cell coordinates (negative is fine). A bare include is a statement and ends with `;`; an include with a `ports { }` block ends at the closing brace, with **no** trailing `;` (like any other brace block).
 - `ports { <side>: <port>, <port>; ... }` — optional. Each line lists the ports on one `side` (`north`, `east`, `south`, `west`), in the order they should appear on that edge. A `west: a, b;` line puts `a` above `b` on the west edge. List the same side more than once and the lines concatenate.
