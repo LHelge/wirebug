@@ -1,14 +1,15 @@
 ---
 id: "2xa"
 title: Diagnose overlapping view includes in `check`
-status: open
+status: done
 priority: P1
 created: "2026-11-20T21:40:31.973081959Z"
-updated: "2026-11-20T21:40:31.973081959Z"
+updated: "2026-11-20T22:43:46.058257237Z"
 tags:
   - check
   - render
 parent: kss
+attempts: 1
 ---
 
 ## Summary
