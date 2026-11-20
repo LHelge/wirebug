@@ -1,0 +1,4 @@
+[project]
+name = "uninstantiated-subject-project"
+version = "0.1.0"
+description = "Fixture with a view of a component the design never instantiates"

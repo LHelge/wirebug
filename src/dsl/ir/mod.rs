@@ -346,6 +346,18 @@ impl Design {
     pub fn get(&self, path: &InstancePath) -> Option<&Instance> {
         self.instances.get(path)
     }
+
+    /// The instance `view` is drawn against: the first one of the type it
+    /// documents (the root for a view of the root component). Synthetic
+    /// inline-connector instances are skipped — their `type_name` is the
+    /// inline's designator, which could shadow a real component type, and
+    /// an inline is never a view subject. `None` when the design never
+    /// instantiates the type.
+    pub fn subject_of(&self, view: &View) -> Option<&Instance> {
+        self.instances
+            .values()
+            .find(|inst| inst.inline.is_none() && inst.type_name == view.subject)
+    }
 }
 
 /// One elaborated instance (one node per placement).
@@ -644,6 +656,9 @@ pub struct View {
     pub title: String,
     /// The authored `grid:`; `None` leaves the renderer's default.
     pub grid: Option<ViewGrid>,
+    /// Where the view's title is written, for a diagnostic about the whole
+    /// view.
+    pub span: Span,
     pub subject: TypeName,
     /// Whether the view authored an `enclosure { }` block. Kept separate from
     /// the port list so an empty enclosure still draws the subject boundary.

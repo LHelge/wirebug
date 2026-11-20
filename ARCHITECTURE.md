@@ -369,7 +369,12 @@ so one run reports many. Errors fail the run; warnings fail only under
   labels into related information like any secondary label. Render's slug
   de-duplication (`overview_2.svg`) stays as the backstop.
 - **Elaborate** — `main.wb` lacks a single top-level component (no root);
-  containment cycle (a component instantiating itself transitively).
+  containment cycle (a component instantiating itself transitively); a
+  view of a component the design never instantiates
+  (`uninstantiated_view_subject`, labelled on the view title,
+  `ir::View.span` — say, a view in a library file `use`d only for its
+  connector types). `ir::Design::subject_of` is the lookup both this check
+  and `render` use to find the instance a view is drawn against.
 - **Validate** — wire arity (fewer than two endpoints, error); cable wire
   arity (a cable conductor that isn't exactly two endpoints,
   `cable_wire_arity`); cable property checks (`unknown_cable_property`,
@@ -468,8 +473,10 @@ phases above). Render adds only geometry/dispatch errors, in `src/error.rs`
     ports: `Router::route_all` fails with `route::Unrouted { pair }`, and
     the schematic renderer names that pair's wire ends
     (`layout::Connection::ends`);
-  - a view subject type with no instance in the design; a pinout include
-    naming a connector its subject lacks;
+  - a view subject type with no instance in the design — caught earlier
+    by elaborate's `uninstantiated_view_subject`; a pinout include naming a
+    connector its subject lacks — caught earlier by resolve's
+    `unknown_connector`; both backstops for hand-built designs;
   - a non-positive `grid:`, or a schematic `grid:` finer than a port label
     needs (`NonPositiveGrid`, `GridTooSmall`, from the renderer's
     `GridFault`) — caught earlier by the Layout phase (`invalid_grid`,

@@ -664,6 +664,7 @@ mod tests {
             kind: ViewKind::Pinout,
             title: "Pinout".to_string(),
             grid: None,
+            span: Span::new(FileId(0), 0, 0),
             subject: TypeName::from(subject),
             has_enclosure: false,
             enclosure: Vec::new(),

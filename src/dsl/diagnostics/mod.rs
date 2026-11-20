@@ -846,6 +846,24 @@ pub enum Problem {
         at: SourceSpan,
     },
 
+    /// A view documents a component the design never instantiates, so
+    /// there is no instance to draw it against.
+    #[error("view \"{view}\" documents `{subject}`, which the design never instantiates")]
+    #[diagnostic(
+        code(wirebug::uninstantiated_view_subject),
+        help(
+            "a view is drawn against an instance of its file's top-level component; instantiate `{subject}` under the root component, or remove the view"
+        )
+    )]
+    UninstantiatedViewSubject {
+        view: String,
+        subject: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("`{subject}` has no instance")]
+        at: SourceSpan,
+    },
+
     // --- Validation ---
     /// A wire has fewer than two endpoints.
     #[error("a wire needs at least two endpoints, found {count}")]

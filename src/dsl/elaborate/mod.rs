@@ -40,7 +40,7 @@ pub fn elaborate(resolved: &Resolved) -> (Option<Design>, Vec<Problem>) {
     let views = e.elaborate_views();
     let Elaborator {
         instances,
-        problems,
+        mut problems,
         ..
     } = e;
 
@@ -50,6 +50,20 @@ pub fn elaborate(resolved: &Resolved) -> (Option<Design>, Vec<Problem>) {
         views,
         manifest: resolved.project.manifest.clone(),
     };
+    // Render draws a view against an instance of the type it documents, so
+    // a view of a type the design never instantiates cannot be drawn.
+    problems.extend(
+        design
+            .views
+            .iter()
+            .filter(|view| design.subject_of(view).is_none())
+            .map(|view| Problem::UninstantiatedViewSubject {
+                view: view.title.clone(),
+                subject: view.subject.to_string(),
+                src: resolved.project.source(view.span.file),
+                at: view.span.into(),
+            }),
+    );
     (Some(design), problems)
 }
 
@@ -312,6 +326,7 @@ impl Elaborator<'_> {
                 Some(View {
                     kind,
                     title: v.title.node.clone(),
+                    span: v.title.span,
                     grid: v.grid.as_ref().map(|g| ViewGrid {
                         step: g.node,
                         span: g.span,
@@ -912,6 +927,60 @@ mod tests {
                 .iter()
                 .any(|p| matches!(p, Problem::ContainmentCycle { .. })),
             "expected a cycle: {problems:?}"
+        );
+    }
+
+    /// A library file: a connector type, and a component `Spare` with a
+    /// view of its own.
+    const SPARE_LIB: &str = "connector_type Plug \"Plug 1p\" { part: \"P1\"; }\n\
+                             component Spare { pub port p \"P\"; }\n\
+                             view schematic \"Spare Detail\" { grid: 20; }\n";
+
+    /// A root that imports each of `uses` from [`SPARE_LIB`], with `body`
+    /// inside it.
+    fn with_spare(uses: &[&str], body: &str) -> (Option<Design>, Vec<Problem>) {
+        let uses: String = uses
+            .iter()
+            .map(|name| format!("use {name} from \"lib.wb\";\n"))
+            .collect();
+        let main = format!(
+            "{uses}\
+             component Vehicle {{\n{body}\n    connector x1: Plug {{ pub port p \"P\" pin 1; }}\n}}\n"
+        );
+        elaborate_files(&[("main.wb", &main), ("lib.wb", SPARE_LIB)])
+    }
+
+    #[test]
+    fn a_view_of_a_component_the_design_never_instantiates_errors() {
+        // Only the connector type is used, so nothing else flags `Spare`.
+        let (design, problems) = with_spare(&["Plug"], "");
+        assert!(design.is_some());
+        let [problem] = problems.as_slice() else {
+            panic!("one problem: {problems:?}");
+        };
+        assert!(problem.is_error());
+        assert_eq!(
+            problem.to_string(),
+            "view \"Spare Detail\" documents `Spare`, which the design never instantiates"
+        );
+        let label = miette::Diagnostic::labels(problem)
+            .and_then(|mut labels| labels.next())
+            .expect("a label");
+        assert_eq!(
+            &SPARE_LIB[label.offset()..label.offset() + label.len()],
+            "\"Spare Detail\""
+        );
+    }
+
+    #[test]
+    fn a_view_of_a_component_instantiated_anywhere_is_drawn_against_it() {
+        let (design, problems) = with_spare(&["Plug", "Spare"], "    spare: Spare;");
+        assert!(problems.is_empty(), "{problems:?}");
+        let design = design.expect("a design");
+        let view = &design.views[0];
+        assert_eq!(
+            design.subject_of(view).map(|i| i.path.to_string()),
+            Some("Vehicle.spare".to_string())
         );
     }
 

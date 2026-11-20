@@ -896,6 +896,7 @@ component Root {
             kind: crate::dsl::ir::ViewKind::Harness,
             title: "Harness".to_string(),
             grid: None,
+            span: crate::dsl::span::Span::new(crate::dsl::span::FileId(0), 0, 0),
             subject: TypeName::from("Root"),
             has_enclosure: false,
             enclosure: Vec::new(),

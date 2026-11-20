@@ -1,0 +1,28 @@
+// Only the connector type is used from `parts.wb`: its `Spare` component
+// is never instantiated, so its view has nothing to be drawn against.
+use Plug from "parts.wb";
+
+component Vehicle {
+    left:  Module "Left";
+    right: Module "Right";
+
+    wire red 1 [left.sig, right.sig];
+
+    component Module {
+        connector x1: Plug {
+            pub port sig "SIG" pin 1;
+        }
+    }
+}
+
+view schematic "Overview" {
+    grid: 20;
+
+    include left at (0, 0) ports {
+        east: sig;
+    }
+
+    include right at (16, 0) ports {
+        west: sig;
+    }
+}

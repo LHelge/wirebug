@@ -300,15 +300,10 @@ pub fn pdf_filename(manifest: Option<&Manifest>) -> String {
     format!("{stem}.pdf")
 }
 
-/// The instance a view renders against: the first one whose type matches
-/// the view's subject. Synthetic inline-connector instances are skipped —
-/// their `type_name` is the inline's designator, which could shadow a real
-/// component type, and an inline is never a view subject.
+/// The instance a view renders against ([`Design::subject_of`]).
 fn subject_instance<'d>(design: &'d Design, view: &View) -> ViewResult<&'d Instance> {
     design
-        .instances
-        .values()
-        .find(|inst| inst.inline.is_none() && inst.type_name == view.subject)
+        .subject_of(view)
         .ok_or_else(|| ViewErrorKind::UnknownSubject {
             subject: view.subject.to_string(),
         })
