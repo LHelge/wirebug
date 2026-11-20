@@ -18,10 +18,12 @@ The only DSL spec is the agent skill file, and it is stale: no `enclosure`, no v
 - [ ] Every code block in the reference parses (a test extracts and checks them)
 - [ ] The reference lives in a tracked `docs/` directory, split by topic (e.g. components, wires and cables, connectors, views, projects)
 - [ ] README links to `docs/` rather than `.claude/skills/`
-- [ ] The skill files point at `docs/` for syntax instead of duplicating it, keeping only agent-specific guidance
+- [ ] The agent skill stays self-contained (it ships to other repositories, where `docs/` does not exist) and is covered by the same code-block test
 
 ## Decided (2026-11-20)
 Bring back `docs/`. The old wiki dump that sat there has been deleted, so the directory is free.
+
+Revised the same day: the skill does not point at `docs/`. `docs/` is the reference written for a human; the skill is a separate, compact reference written for an agent, because it is installed into other repositories by `wirebug skill`. Compressing it and guarding the two against drift are follow-up tasks under this epic.
 
 ## Testing
 - Unit tests beside the code; end-to-end coverage via `tests/fixtures/` (never `examples/`).
