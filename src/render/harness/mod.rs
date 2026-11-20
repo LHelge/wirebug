@@ -22,10 +22,10 @@ use svg::Document;
 use svg::node::element::{Group, Style, Text};
 
 use crate::dsl::ir::{Design, Instance, View};
-use crate::error::{ViewErrorKind, ViewResult};
-use crate::render::SvgMode;
+use crate::error::ViewResult;
 use crate::render::lint::{Conductor, IncludeBox, ViewLayout};
 use crate::render::stamp::{STAMP_HEIGHT, STAMP_INSET, stamp_element};
+use crate::render::{GridFault, SvgMode};
 
 use layout::{HarnessConductor, HarnessLayout};
 
@@ -113,11 +113,7 @@ impl HarnessRenderer {
         view: &View,
         mode: SvgMode,
     ) -> ViewResult<String> {
-        let step = view.grid.unwrap_or(DEFAULT_GRID);
-        if step <= 0.0 {
-            return Err(ViewErrorKind::NonPositiveGrid { grid: step });
-        }
-
+        let step = GridFault::positive_step(view, DEFAULT_GRID)?;
         let layout = HarnessLayout::compute(design, subject, view, step);
 
         let mut doc = Document::new().set("xmlns", "http://www.w3.org/2000/svg");
@@ -176,27 +172,30 @@ impl HarnessRenderer {
     }
 
     /// Each include's pin-table box and the conductors drawn, from the same
-    /// layout [`Self::render`] draws. No boxes for a non-positive grid:
-    /// rendering reports that itself. Which conductors a view draws does
-    /// not depend on its grid, so they are still counted.
+    /// layout [`Self::render`] draws. A non-positive grid lays out no boxes,
+    /// only the fault; which conductors a view draws does not depend on its
+    /// grid, so they are still counted.
     pub(super) fn layout(&self, design: &Design, subject: &Instance, view: &View) -> ViewLayout {
-        let step = view.grid.unwrap_or(DEFAULT_GRID);
+        let (step, fault) = match GridFault::positive_step(view, DEFAULT_GRID) {
+            Ok(step) => (step, None),
+            Err(fault) => (DEFAULT_GRID, Some(fault)),
+        };
         let layout = HarnessLayout::compute(design, subject, view, step);
-        let boxes = if step > 0.0 {
-            layout
+        let boxes = match fault {
+            Some(_) => Vec::new(),
+            None => layout
                 .nodes
                 .iter()
                 .map(|node| IncludeBox {
                     include: node.include,
                     bounds: node.bounds(),
                 })
-                .collect()
-        } else {
-            Vec::new()
+                .collect(),
         };
         ViewLayout {
             boxes,
             drawn: layout.drawn,
+            grid: fault,
             ..ViewLayout::default()
         }
     }

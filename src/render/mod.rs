@@ -314,6 +314,39 @@ fn subject_instance<'d>(design: &'d Design, view: &View) -> ViewResult<&'d Insta
         })
 }
 
+/// Why a renderer cannot draw a view on the grid its `grid:` asks for. Each
+/// renderer's own grid validation returns it, so `render` (through
+/// [`ViewErrorKind`]) and `check` (through `lint`) reject the same grids.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum GridFault {
+    /// Zero or negative.
+    NonPositive { grid: f64 },
+    /// Finer than the renderer's `minimum` step.
+    TooFine { grid: f64, minimum: f64 },
+}
+
+impl GridFault {
+    /// The step `view` is drawn on — its `grid:`, or the renderer's
+    /// `default` when it names none — unless it is not positive.
+    pub(crate) fn positive_step(view: &View, default: f64) -> std::result::Result<f64, Self> {
+        let step = view.grid.map_or(default, |grid| grid.step);
+        if step <= 0.0 {
+            Err(Self::NonPositive { grid: step })
+        } else {
+            Ok(step)
+        }
+    }
+}
+
+impl From<GridFault> for ViewErrorKind {
+    fn from(fault: GridFault) -> Self {
+        match fault {
+            GridFault::NonPositive { grid } => Self::NonPositiveGrid { grid },
+            GridFault::TooFine { grid, minimum } => Self::GridTooSmall { grid, minimum },
+        }
+    }
+}
+
 /// Turn a human title into a safe file-name stem: lowercase, runs of
 /// non-alphanumeric characters collapsed to a single underscore, ends
 /// trimmed. An empty result falls back to `view`.

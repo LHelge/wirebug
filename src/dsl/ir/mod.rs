@@ -642,7 +642,8 @@ impl fmt::Debug for InstancePath {
 pub struct View {
     pub kind: ViewKind,
     pub title: String,
-    pub grid: Option<f64>,
+    /// The authored `grid:`; `None` leaves the renderer's default.
+    pub grid: Option<ViewGrid>,
     pub subject: TypeName,
     /// Whether the view authored an `enclosure { }` block. Kept separate from
     /// the port list so an empty enclosure still draws the subject boundary.
@@ -653,6 +654,14 @@ pub struct View {
     pub enclosure: Vec<EnclosurePort>,
     pub includes: Vec<Include>,
     pub texts: Vec<TextBox>,
+}
+
+/// A view's authored `grid:` step — drawing units per grid cell — and where
+/// its number is written, so a check over the step can point at it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ViewGrid {
+    pub step: f64,
+    pub span: Span,
 }
 
 /// A named annotation box placed at grid coordinates in a schematic view.

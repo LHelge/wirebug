@@ -12,10 +12,10 @@ use crate::dsl::ir::{
     Connector, ConnectorLayout, ConnectorName, Design, Include, Instance, Pin, PortName, View,
 };
 use crate::error::{ViewErrorKind, ViewResult};
-use crate::render::SvgMode;
 use crate::render::geometry::{Bounds, Point};
 use crate::render::lint::{IncludeBox, ViewLayout};
 use crate::render::stamp::{STAMP_HEIGHT, STAMP_INSET, stamp_element};
+use crate::render::{GridFault, SvgMode};
 
 const DEFAULT_GRID: f64 = 20.0;
 const HEADER_HEIGHT: f64 = 44.0;
@@ -57,10 +57,7 @@ impl PinoutRenderer {
         view: &View,
         mode: SvgMode,
     ) -> ViewResult<String> {
-        let step = view.grid.unwrap_or(DEFAULT_GRID);
-        if step <= 0.0 {
-            return Err(ViewErrorKind::NonPositiveGrid { grid: step });
-        }
+        let step = GridFault::positive_step(view, DEFAULT_GRID)?;
 
         let mut tables = Vec::new();
         for inc in &view.includes {
@@ -118,14 +115,14 @@ impl PinoutRenderer {
         Ok(doc.add(group).to_string())
     }
 
-    /// Each include's table box, sized as [`Self::render`] sizes it. An
-    /// include naming no connector on the subject is skipped: rendering
-    /// reports it.
+    /// Each include's table box, sized as [`Self::render`] sizes it, or
+    /// only the fault for a non-positive grid. An include naming no
+    /// connector on the subject is skipped: rendering reports it.
     pub(super) fn layout(&self, subject: &Instance, view: &View) -> ViewLayout {
-        let step = view.grid.unwrap_or(DEFAULT_GRID);
-        if step <= 0.0 {
-            return ViewLayout::default();
-        }
+        let step = match GridFault::positive_step(view, DEFAULT_GRID) {
+            Ok(step) => step,
+            Err(fault) => return ViewLayout::bad_grid(fault),
+        };
         let boxes = view
             .includes
             .iter()
