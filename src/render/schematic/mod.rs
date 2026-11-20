@@ -15,13 +15,14 @@ mod route;
 use svg::Document;
 use svg::node::element::{Group, Style, Text};
 
-use crate::dsl::ir::{Design, Instance, View};
-use crate::error::{Error, Result};
+use crate::dsl::ir::{Design, Instance, InstanceName, View};
+use crate::error::Result;
 use crate::render::SvgMode;
 use crate::render::geometry::Point;
+use crate::render::lint::{CrowdedPort, IncludeBox, UnroutableWire, ViewLayout, WireEndAt};
 use crate::render::stamp::{STAMP_HEIGHT, STAMP_INSET, stamp_element};
 
-use layout::{Grid, Placement};
+use layout::{Grid, PlacedPort, Placement};
 use route::Router;
 
 /// Grid step (world units) used when a view doesn't specify one. Ports
@@ -83,25 +84,12 @@ impl SchematicRenderer {
         view: &View,
         mode: SvgMode,
     ) -> Result<String> {
-        let step = view.grid.unwrap_or(DEFAULT_GRID);
-        if step <= 0.0 {
-            return Err(Error::NonPositiveGrid { grid: step });
-        }
-        // Ports sit two steps apart, so that pitch must clear a port
-        // label or adjacent labels would overlap.
-        let min_step = MIN_PORT_PITCH / 2.0;
-        if step < min_step {
-            return Err(Error::GridTooSmall {
-                grid: step,
-                minimum: min_step,
-            });
-        }
-        let grid = Grid::new(step);
+        let grid = Grid::of_view(view)?;
         let placement = Placement::compute(design, subject, view, grid)?;
 
         // Route before sizing the canvas: wires can detour outside the
         // component bounds, so the viewBox has to enclose them too.
-        let router = Router::build(&placement, step);
+        let router = Router::build(&placement, grid.step());
         let connections = placement.connections();
         let pairs: Vec<_> = connections.iter().map(|c| (c.a, c.b)).collect();
         // Spread parallel wires in a shared channel by the port pitch (two
@@ -187,12 +175,73 @@ impl SchematicRenderer {
 
         Ok(doc.to_string())
     }
+
+    /// What `check` needs from `view`'s layout: each include's box, every
+    /// wired port whose wire [`Self::render`] could not route because
+    /// another box sits inside its clearance, and every wire the router
+    /// finds no path for. Empty when the grid is invalid: rendering reports
+    /// that itself.
+    pub(super) fn layout(&self, design: &Design, subject: &Instance, view: &View) -> ViewLayout {
+        let Ok(grid) = Grid::of_view(view) else {
+            return ViewLayout::default();
+        };
+        let Ok(placement) = Placement::compute(design, subject, view, grid) else {
+            return ViewLayout::default();
+        };
+        let include_named =
+            |name: &InstanceName| view.includes.iter().position(|inc| &inc.instance == name);
+        let include_of = |component: usize| {
+            let (name, _) = placement.components.get_index(component)?;
+            include_named(name)
+        };
+        let boxes = placement
+            .components
+            .values()
+            .enumerate()
+            .filter_map(|(component, pc)| {
+                Some(IncludeBox {
+                    include: include_of(component)?,
+                    bounds: pc.bounds(),
+                })
+            })
+            .collect();
+        let crowded = route::blocked_stubs(&placement, grid.step())
+            .into_iter()
+            .filter_map(|blocked| {
+                Some(CrowdedPort {
+                    include: include_of(blocked.owner)?,
+                    port: blocked.port.port.clone(),
+                    by: include_of(blocked.blocker)?,
+                })
+            })
+            .collect();
+        let router = Router::build(&placement, grid.step());
+        let end = |owner: Option<&InstanceName>, port: &PlacedPort| WireEndAt {
+            include: owner.and_then(include_named),
+            port: port.port.clone(),
+        };
+        let unroutable = placement
+            .connections()
+            .iter()
+            .filter(|c| !router.connects(c.a, c.b))
+            .map(|c| UnroutableWire {
+                ends: [end(c.owners[0], c.a), end(c.owners[1], c.b)],
+            })
+            .collect();
+        ViewLayout {
+            boxes,
+            crowded,
+            unroutable,
+        }
+    }
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
     use crate::dsl::ir::{Include, InstanceName, PortName, Side, TextBox, TypeName, ViewKind};
+    use crate::dsl::span::{FileId, Span};
+    use crate::error::Error;
 
     /// Elaborate a single-file `.wb` source into a [`Design`]. The source
     /// must have a single top-level component (the views are built
@@ -232,6 +281,7 @@ pub(crate) mod tests {
                         .iter()
                         .map(|(p, side)| (PortName::from(*p), *side))
                         .collect(),
+                    span: Span::new(FileId(0), 0, 0),
                 })
                 .collect(),
             texts: Vec::new(),

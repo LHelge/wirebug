@@ -141,7 +141,7 @@ fn serve_command(target: Option<&Path>, host: IpAddr, port: u16) -> Result<ExitC
 }
 
 fn check_command(target: Option<&Path>, strict: bool, format: Format) -> ExitCode {
-    let report = dsl::check_project(target);
+    let report = wirebug::check_project(target);
     let counts = report.counts();
 
     match format {
@@ -183,7 +183,7 @@ fn render_command(
     pdf: bool,
     embed: bool,
 ) -> Result<ExitCode> {
-    let report = dsl::check_project(target);
+    let report = wirebug::check_project(target);
     let counts = report.counts();
 
     // Surface any check problems first; an erroring project (or, under

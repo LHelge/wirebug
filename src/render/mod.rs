@@ -15,6 +15,7 @@ use crate::error::{Error, Result};
 
 pub mod geometry;
 pub mod harness;
+pub mod lint;
 pub mod pdf;
 pub mod pinout;
 pub mod png;

@@ -17,6 +17,7 @@ use crate::dsl::parse::parse_file;
 use crate::dsl::project::{self, Overlay};
 use crate::dsl::span::FileId;
 use crate::dsl::{elaborate, resolve, validate};
+use crate::pipeline;
 
 use super::complete::{self, CompletionIndex};
 use super::line_index::LineIndex;
@@ -132,9 +133,10 @@ fn check_one(
         let mut resolved = resolve::resolve(project);
         problems.append(&mut resolved.problems);
         index = Some(complete::build_index(project, &resolved));
-        let (_, elab_problems) = elaborate::elaborate(&resolved);
+        let (design, elab_problems) = elaborate::elaborate(&resolved);
         problems.extend(elab_problems);
         problems.extend(validate::validate(&resolved));
+        pipeline::extend_with_layout_problems(project, design.as_ref(), &mut problems);
     }
 
     let located = problems
@@ -359,6 +361,46 @@ mod tests {
         assert_eq!(first.location.uri, main_uri);
         assert_eq!(first.location.range.start.line, 2, "the first view's line");
         assert_eq!(first.message, "first titled here");
+    }
+
+    #[test]
+    fn overlapping_includes_are_published_with_both_includes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        manifest(dir.path());
+        write(
+            dir.path(),
+            "lamp.wb",
+            "component Lamp { pub port a \"A\"; }\n",
+        );
+        let main = write(
+            dir.path(),
+            "main.wb",
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n    m: Lamp;\n}\nview schematic \"S\" {\n    include l at (0, 0);\n    include m at (1, 1);\n}\n",
+        );
+
+        let (by_uri, _) = check_open_documents([main.clone()].iter(), &Overlay::default());
+        let main_uri = uri::to_uri(&main.canonicalize().unwrap()).unwrap();
+        let diags = by_uri.get(&main_uri).expect("diagnostics on main.wb");
+        let overlap = diags
+            .iter()
+            .find(|d| {
+                matches!(&d.code, Some(NumberOrString::String(c)) if c == "wirebug::overlapping_includes")
+            })
+            .expect("an overlapping_includes diagnostic");
+        assert_eq!(overlap.severity, Some(DiagnosticSeverity::ERROR));
+        assert_eq!(overlap.range.start.line, 7, "the later include's line");
+        let related = overlap
+            .related_information
+            .as_deref()
+            .expect("related info");
+        let [first] = related else {
+            panic!("expected one related location, got {related:?}");
+        };
+        assert_eq!(
+            first.location.range.start.line, 6,
+            "the earlier include's line"
+        );
+        assert_eq!(first.message, "`l` is placed here");
     }
 
     #[test]

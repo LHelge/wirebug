@@ -28,7 +28,7 @@ use crate::dsl::ir::{
     CableMeta, CableName, ConnectorName, ConnectorPropertyValue, Design, Half, Instance,
     InstanceName, Pin, PortName, WireColor, WireEnd,
 };
-use crate::render::geometry::{Point, Side};
+use crate::render::geometry::{Bounds, Point, Side};
 
 /// A node's identity within a harness view: which instance, which connector.
 type NodeKey = (InstanceName, ConnectorName);
@@ -51,6 +51,8 @@ pub(super) struct PinRow {
 
 /// A connector drawn as a pin table.
 pub(super) struct ConnectorNode {
+    /// Index of the include that placed this node, in `view.includes`.
+    pub(super) include: usize,
     /// Instance label (or instance name) shown as the node title.
     pub(super) title: String,
     /// `<designator> · <part>`, the connector subtitle.
@@ -68,6 +70,15 @@ pub(super) struct ConnectorNode {
 }
 
 impl ConnectorNode {
+    /// The pin table's box, header included.
+    pub(super) fn bounds(&self) -> Bounds {
+        Bounds {
+            origin: self.origin,
+            width: self.width,
+            height: self.height,
+        }
+    }
+
     fn centre(&self) -> Point {
         Point::new(
             self.origin.x + self.width / 2.0,
@@ -204,7 +215,7 @@ impl HarnessLayout {
         }
 
         let no_pins = HashSet::new();
-        for inc in &view.includes {
+        for (i, inc) in view.includes.iter().enumerate() {
             let Some(conn) = &inc.connector else { continue };
             let Some(child) = subject
                 .children
@@ -216,8 +227,8 @@ impl HarnessLayout {
             let visible = wired
                 .get(&(inc.instance.clone(), conn.clone()))
                 .unwrap_or(&no_pins);
-            let Some(node) = build_node(child, conn, visible, inc.x * step, inc.y * step, inc.half)
-            else {
+            let centre = Point::new(inc.x * step, inc.y * step);
+            let Some(node) = build_node(i, child, conn, visible, centre, inc.half) else {
                 continue;
             };
             index.insert((inc.instance.clone(), conn.clone()), nodes.len());
@@ -455,18 +466,19 @@ pub(super) struct ViewBox {
 }
 
 /// Build one connector node from `child`'s ports that belong to connector
-/// `conn`, centred at world (`cx`, `cy`). Returns `None` if the connector
-/// has no ports on this instance (already reported by resolve as unknown).
+/// `conn`, placed by include number `include` and centred at world
+/// `centre`. Returns `None` if the connector has no ports on this instance
+/// (already reported by resolve as unknown).
 ///
 /// `half` is the housing half an inline-connector include selected: the
 /// node's subtitle carries that half's part identity (each loom's drawing
 /// shows the half crimped onto it) and its header gets an M/F chip.
 fn build_node(
+    include: usize,
     child: &Instance,
     conn: &ConnectorName,
     visible: &HashSet<PortName>,
-    cx: f64,
-    cy: f64,
+    centre: Point,
     half: Option<Half>,
 ) -> Option<ConnectorNode> {
     // `found` (the connector exists on this child, with its optional
@@ -544,7 +556,7 @@ fn build_node(
     let width = body_width.max(header_width).max(MIN_NODE_WIDTH);
     let height = HEADER_HEIGHT + rows.len() as f64 * ROW_HEIGHT;
 
-    let origin = Point::new(cx - width / 2.0, cy - height / 2.0);
+    let origin = Point::new(centre.x - width / 2.0, centre.y - height / 2.0);
     let pins = rows
         .into_iter()
         .enumerate()
@@ -559,6 +571,7 @@ fn build_node(
         .collect();
 
     Some(ConnectorNode {
+        include,
         title,
         subtitle,
         origin,
@@ -825,6 +838,7 @@ component Root {
                     x: 0.0,
                     y: 0.0,
                     ports: Vec::new(),
+                    span: crate::dsl::span::Span::new(crate::dsl::span::FileId(0), 0, 0),
                 },
                 crate::dsl::ir::Include {
                     instance: InstanceName::from("right"),
@@ -833,6 +847,7 @@ component Root {
                     x: 30.0,
                     y: 0.0,
                     ports: Vec::new(),
+                    span: crate::dsl::span::Span::new(crate::dsl::span::FileId(0), 0, 0),
                 },
             ],
             texts: Vec::new(),
@@ -929,7 +944,8 @@ component Root {
         };
 
         let visible: HashSet<PortName> = [PortName::from("p")].into_iter().collect();
-        let node = build_node(&instance, &connector, &visible, 0.0, 0.0, None).expect("node");
+        let node =
+            build_node(0, &instance, &connector, &visible, Point::ORIGIN, None).expect("node");
         let expected = title.chars().count() as f64 * CHAR_WIDTH + 2.0 * NODE_PAD;
         assert!(node.width >= expected);
     }
@@ -972,12 +988,20 @@ component Root {
         let visible: HashSet<PortName> = [PortName::from("a"), PortName::from("c")]
             .into_iter()
             .collect();
-        let node = build_node(&instance, &connector, &visible, 0.0, 0.0, None).expect("node");
+        let node =
+            build_node(0, &instance, &connector, &visible, Point::ORIGIN, None).expect("node");
         let rows: Vec<&str> = node.pins.iter().map(|r| r.port.as_str()).collect();
         assert_eq!(rows, ["a", "c"], "only wired pins, still in pin order");
 
-        let node =
-            build_node(&instance, &connector, &HashSet::new(), 0.0, 0.0, None).expect("node");
+        let node = build_node(
+            0,
+            &instance,
+            &connector,
+            &HashSet::new(),
+            Point::ORIGIN,
+            None,
+        )
+        .expect("node");
         assert!(node.pins.is_empty(), "unwired include is a header-only box");
         assert_eq!(node.height, HEADER_HEIGHT);
     }

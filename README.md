@@ -66,6 +66,7 @@ What works today:
   - name resolution (types, instances, ports, view includes);
   - elaboration of the type/instance hierarchy into a flat, addressable IR;
   - validation (undefined names, duplicates, private-port access, containment cycles, …);
+  - layout checks that lay every view out as `render` would: includes whose boxes overlap, and schematic wires with no room to route, fail `check` instead of `render`;
   - rich diagnostics via [`miette`](https://github.com/zkat/miette) — source snippets, carets, `--format json`.
 - Three SVG renderers driven straight off the elaborated IR, one file per view plus an HTML index that groups them into Schematics/Harnesses/Pinouts tabs:
   - a **schematic** renderer (rectangle blocks, labeled ports, object-avoiding orthogonal wire routing);
@@ -183,6 +184,8 @@ date        = "2026-05-28"    # optional; ISO date
 ## Rendering
 
 `render` runs the same DSL pipeline as `check`, then draws every view in the design to its own SVG. Each `include` position is in **grid units**: the renderer multiplies by the grid step, and `x`/`y` are the box **centre**. Ports sit two grid steps apart and are centred on each side, so lining two components up makes the wire between them run straight. A box sizes itself from its busiest side (there is no explicit size in the DSL); omit `grid:` for the default. The grid must be coarse enough that the two-step port pitch clears a label — too fine a grid errors rather than overlapping labels.
+
+Boxes may touch but not overlap (`overlapping_includes`). A wire leaves its port by one grid step and keeps one grid step clear of every other box, so a wired port needs two grid steps of space in front of it (`include_too_close`), and boxes less than two steps apart close the gap between them — a wire walled in on every side is `unroutable_wire`. `check` lays each view out to find these, so a project that passes `check` does not fail to route in `render`.
 
 The view authors each port's side and order directly in its `ports` block, and that listing is also the scope: a box shows exactly the ports it lists, and a wire draws only where both ends are listed. Place a port on the side facing the box it connects to.
 

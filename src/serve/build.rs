@@ -9,7 +9,7 @@ use miette::{GraphicalReportHandler, GraphicalTheme};
 
 use super::livereload::ERROR_PAGE_SCRIPT;
 use super::state::Site;
-use crate::dsl::{self, CheckReport};
+use crate::dsl::CheckReport;
 use crate::render::{SvgMode, index_html, render_views};
 
 /// The outcome of one build: the servable site plus a count of what `check`
@@ -50,7 +50,7 @@ impl Build {
 /// serves a diagnostics page (with the same live-reload script), so the
 /// browser shows what's wrong and recovers automatically once it's fixed.
 pub(crate) fn build_site(target: Option<&Path>) -> Build {
-    let report = dsl::check_project(target);
+    let report = crate::check_project(target);
     let counts = report.counts();
 
     if counts.errors > 0 {
@@ -162,6 +162,19 @@ mod tests {
         assert!(!build.site.svgs.is_empty(), "expected rendered SVGs");
         assert!(build.site.index_html.contains("wirebug views"));
         assert!(build.site.index_html.contains("new WebSocket"));
+    }
+
+    #[test]
+    fn a_view_whose_includes_collide_yields_a_diagnostics_page() {
+        // `render` would fail to route this fixture's "Crowded" view; the
+        // check finds it first, so the page shows the diagnostics instead.
+        let main = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/crowded_views_project/main.wb");
+        let build = build_site(Some(&main));
+        assert!(build.errors > 0, "colliding includes are errors");
+        assert!(build.site.svgs.is_empty());
+        assert!(build.site.index_html.contains("include_too_close"));
+        assert!(build.site.index_html.contains("overlapping_includes"));
     }
 
     #[test]

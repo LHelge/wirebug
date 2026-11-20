@@ -13,12 +13,12 @@ use std::collections::HashMap;
 use indexmap::IndexMap;
 
 use super::{
-    CHAR_WIDTH, LABEL_INSET, MIN_HEIGHT, MIN_WIDTH, SVG_MARGIN, TEXT_BOX_HEIGHT,
-    TEXT_BOX_MIN_WIDTH, TEXT_BOX_PAD_X,
+    CHAR_WIDTH, DEFAULT_GRID, LABEL_INSET, MIN_HEIGHT, MIN_PORT_PITCH, MIN_WIDTH, SVG_MARGIN,
+    TEXT_BOX_HEIGHT, TEXT_BOX_MIN_WIDTH, TEXT_BOX_PAD_X,
 };
-use crate::dsl::ir::{Design, Instance, InstanceName, Pin, Port, PortName, WireColor};
-use crate::error::Result;
-use crate::render::geometry::{Point, Side};
+use crate::dsl::ir::{Design, Instance, InstanceName, Pin, Port, PortName, View, WireColor};
+use crate::error::{Error, Result};
+use crate::render::geometry::{Bounds, Point, Side};
 
 /// A port's identity within a view: a port on an included child instance, or
 /// one of the subject's own ports drawn on the enclosure boundary.
@@ -29,6 +29,16 @@ enum PortKey {
         port: PortName,
     },
     Enclosure(PortName),
+}
+
+impl PortKey {
+    /// The included instance the port belongs to; `None` on the enclosure.
+    fn owner(&self) -> Option<&InstanceName> {
+        match self {
+            PortKey::Child { instance, .. } => Some(instance),
+            PortKey::Enclosure(_) => None,
+        }
+    }
 }
 
 /// A resolved include: its world centre, the child instance it places, and
@@ -46,6 +56,29 @@ pub(super) struct Grid(f64);
 impl Grid {
     pub(super) fn new(step: f64) -> Self {
         Self(step)
+    }
+
+    /// The grid `view` asks for (`DEFAULT_GRID` when it names none),
+    /// validated: ports sit two steps apart, so that pitch must clear a
+    /// port label or adjacent labels would overlap.
+    pub(super) fn of_view(view: &View) -> Result<Self> {
+        let step = view.grid.unwrap_or(DEFAULT_GRID);
+        if step <= 0.0 {
+            return Err(Error::NonPositiveGrid { grid: step });
+        }
+        let min_step = MIN_PORT_PITCH / 2.0;
+        if step < min_step {
+            return Err(Error::GridTooSmall {
+                grid: step,
+                minimum: min_step,
+            });
+        }
+        Ok(Self::new(step))
+    }
+
+    /// One grid step in world units — also the router's clearance.
+    pub(super) fn step(self) -> f64 {
+        self.0
     }
 
     fn to_world(self, units: f64) -> f64 {
@@ -95,6 +128,17 @@ pub(super) struct PlacedComponent {
     port_index: HashMap<PortName, usize>,
 }
 
+impl PlacedComponent {
+    /// The component's drawn box.
+    pub(super) fn bounds(&self) -> Bounds {
+        Bounds {
+            origin: self.origin,
+            width: self.width,
+            height: self.height,
+        }
+    }
+}
+
 pub(super) struct PlacedPort {
     pub(super) port: PortName,
     pub(super) side: Side,
@@ -142,19 +186,14 @@ pub(super) struct Connection<'a> {
     pub(super) a: &'a PlacedPort,
     pub(super) b: &'a PlacedPort,
     pub(super) color: &'a WireColor,
+    /// The included instance each end (`a`, `b`) belongs to; `None` for a
+    /// port on the enclosure.
+    pub(super) owners: [Option<&'a InstanceName>; 2],
 }
 
 pub(super) struct ViewBox {
     pub(super) x: f64,
     pub(super) y: f64,
-    pub(super) width: f64,
-    pub(super) height: f64,
-}
-
-/// A component's axis-aligned box in world coordinates — the geometry the
-/// router needs, without the rest of a `PlacedComponent`.
-pub(super) struct Bounds {
-    pub(super) origin: Point,
     pub(super) width: f64,
     pub(super) height: f64,
 }
@@ -433,18 +472,32 @@ impl Placement {
                     a: self.endpoint(&s.a)?,
                     b: self.endpoint(&s.b)?,
                     color: &s.color,
+                    owners: [s.a.owner(), s.b.owner()],
                 })
             })
             .collect()
     }
 
+    /// Whether a segment the router will route (one of
+    /// [`Self::connections`]) ends on `instance`'s `port`.
+    pub(super) fn is_wired(&self, instance: &InstanceName, port: &PortName) -> bool {
+        let is_this = |end: &PortKey| match end {
+            PortKey::Child {
+                instance: i,
+                port: p,
+            } => i == instance && p == port,
+            PortKey::Enclosure(_) => false,
+        };
+        self.connections.iter().any(|s| {
+            (is_this(&s.a) || is_this(&s.b))
+                && self.endpoint(&s.a).is_some()
+                && self.endpoint(&s.b).is_some()
+        })
+    }
+
     /// The bounding box of every placed component, in include order.
     pub(super) fn component_bounds(&self) -> impl Iterator<Item = Bounds> + '_ {
-        self.components.values().map(|pc| Bounds {
-            origin: pc.origin,
-            width: pc.width,
-            height: pc.height,
-        })
+        self.components.values().map(PlacedComponent::bounds)
     }
 
     /// The subject's boundary box, if the view authors an `enclosure { }`.
@@ -456,11 +509,7 @@ impl Placement {
     /// soft guide to avoid overlapping the dashed enclosure, not as an
     /// obstacle: wires may still attach to enclosure ports.
     pub(super) fn enclosure_bounds(&self) -> Option<Bounds> {
-        self.enclosure.as_ref().map(|pc| Bounds {
-            origin: pc.origin,
-            width: pc.width,
-            height: pc.height,
-        })
+        self.enclosure.as_ref().map(PlacedComponent::bounds)
     }
 
     /// Every placed port the router must reach: child ports, then the
