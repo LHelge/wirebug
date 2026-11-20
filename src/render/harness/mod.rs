@@ -212,7 +212,7 @@ impl HarnessRenderer {
                 segment: c.segment,
                 wire: c.wire,
                 ends: c.ends.each_ref().map(|end| end.end),
-                connectors: c.ends.each_ref().map(|end| end.include_target()),
+                targets: c.ends.each_ref().map(|end| end.target()),
             })
             .collect()
     }

@@ -9,11 +9,15 @@
 //! `pipeline::check_project` runs them after the DSL stages.
 
 use std::collections::HashSet;
+use std::fmt;
 
 use indexmap::IndexMap;
 
 use crate::dsl::diagnostics::Problem;
-use crate::dsl::ir::{Design, Instance, PortName, TypeName, View, ViewKind, Wire, WireEnd};
+use crate::dsl::ir::{
+    ConnectorName, Design, Half, InlineMeta, Instance, InstanceName, PortName, TypeName, View,
+    ViewKind, Wire, WireEnd,
+};
 use crate::dsl::project::Project;
 use crate::render::GridFault;
 use crate::render::geometry::Bounds;
@@ -67,9 +71,72 @@ pub(super) struct Conductor<'d> {
     pub(super) wire: &'d Wire,
     /// The segment's two endpoints, in wire order.
     pub(super) ends: [&'d WireEnd; 2],
-    /// What a harness include names to draw each end's connector,
-    /// backticked.
-    pub(super) connectors: [String; 2],
+    /// How a harness view can include each end's connector.
+    pub(super) targets: [EndTarget<'d>; 2],
+}
+
+/// How a harness view can include the connector at one end of a conductor.
+pub(super) enum EndTarget<'d> {
+    /// An include that draws it.
+    Include(IncludeTarget<'d>),
+    /// An inline connector that declares no housing half: no harness
+    /// include can name it until it declares one.
+    HalflessInline(&'d InstanceName),
+}
+
+/// A harness include target that resolves: `inst.connector`, or an inline
+/// connector through one of the halves it declares.
+pub(super) enum IncludeTarget<'d> {
+    Connector {
+        instance: &'d InstanceName,
+        connector: &'d ConnectorName,
+    },
+    Inline {
+        instance: &'d InstanceName,
+        halves: DeclaredHalves,
+    },
+}
+
+/// The housing halves an inline connector declares, when it declares any.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DeclaredHalves {
+    Male,
+    Female,
+    Both,
+}
+
+impl DeclaredHalves {
+    /// The halves `inline` declares; `None` when it declares neither.
+    pub(super) fn of(inline: &InlineMeta) -> Option<Self> {
+        match (inline.male.is_some(), inline.female.is_some()) {
+            (true, false) => Some(Self::Male),
+            (false, true) => Some(Self::Female),
+            (true, true) => Some(Self::Both),
+            (false, false) => None,
+        }
+    }
+}
+
+/// Backticked, as the help names it: `` `a.j` ``, `` `ic.male` ``, or
+/// `` `ic.male` (or `ic.female`) `` when either half draws it.
+impl fmt::Display for IncludeTarget<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (instance, halves) = match self {
+            Self::Connector {
+                instance,
+                connector,
+            } => return write!(f, "`{instance}.{connector}`"),
+            Self::Inline { instance, halves } => (instance, halves),
+        };
+        let half = |h: Half| format!("`{instance}.{}`", h.as_str());
+        match halves {
+            DeclaredHalves::Male => f.write_str(&half(Half::Male)),
+            DeclaredHalves::Female => f.write_str(&half(Half::Female)),
+            DeclaredHalves::Both => {
+                write!(f, "{} (or {})", half(Half::Male), half(Half::Female))
+            }
+        }
+    }
 }
 
 /// What a renderer's layout reports about one view, for checking.
@@ -125,6 +192,35 @@ impl<'d> HarnessCoverage<'d> {
 }
 
 impl Conductor<'_> {
+    /// What to change so a harness view of `component` draws this
+    /// conductor: the two includes, or first a half for each inline
+    /// connector that declares none (an include of an undeclared half is
+    /// itself an error).
+    fn advice(&self, component: &TypeName) -> String {
+        const DRAWS: &str =
+            "a harness view draws a conductor only when it includes the connectors at both ends";
+        if let [EndTarget::Include(a), EndTarget::Include(b)] = &self.targets {
+            return format!("{DRAWS}; include {a} and {b} in one harness view of `{component}`");
+        }
+        let halfless: Vec<String> = self
+            .targets
+            .iter()
+            .filter_map(|t| match t {
+                EndTarget::HalflessInline(instance) => Some(format!("`{instance}`")),
+                EndTarget::Include(_) => None,
+            })
+            .collect();
+        match halfless.as_slice() {
+            [one] => format!(
+                "{DRAWS}, and inline connector {one} must declare a `male` or `female` half before a harness view can include it"
+            ),
+            many => format!(
+                "{DRAWS}, and inline connectors {} must each declare a `male` or `female` half before a harness view can include them",
+                many.join(" and ")
+            ),
+        }
+    }
+
     /// The warning that no harness view of `component` draws this conductor.
     fn undrawn(&self, component: &TypeName, project: &Project) -> Problem {
         let wire = self.wire;
@@ -136,13 +232,12 @@ impl Conductor<'_> {
             conductor.push_str(&format!(" \"{label}\""));
         }
         let [from, to] = self.ends;
-        let [a, b] = &self.connectors;
         Problem::UndrawnConductor {
             conductor,
             from: from.to_string(),
             to: to.to_string(),
             component: component.to_string(),
-            connectors: format!("{a} and {b}"),
+            advice: self.advice(component),
             src: project.source(wire.span.file),
             at: wire.span.into(),
         }
@@ -888,6 +983,42 @@ component Sys {
                 "include `ic.male` (or `ic.female`) and `b.j` in one harness view of `Sys`"
             ),
             "{help}"
+        );
+    }
+
+    /// The help for a conductor of `INLINE` with the inline's `halves`
+    /// lines replaced by `halves`, under a view of `a.j` and `b.j` only.
+    fn inline_help(halves: &str) -> String {
+        let src = INLINE.replace("        male: Plug;\n        female: Socket;\n", halves);
+        let src = format!("{src}{}", harness("Ends", &["a.j", "b.j"]));
+        let (project, design) = load(&src);
+        let problems = layout_problems(&design, &project);
+        let [problem, _] = problems.as_slice() else {
+            panic!("both conductors are undrawn: {problems:?}");
+        };
+        problem.help().expect("help").to_string()
+    }
+
+    #[test]
+    fn the_help_names_only_the_halves_an_inline_declares() {
+        assert!(
+            inline_help("        female: Socket;\n")
+                .ends_with("include `a.j` and `ic.female` in one harness view of `Sys`")
+        );
+        assert!(
+            inline_help("        male: Plug;\n")
+                .ends_with("include `a.j` and `ic.male` in one harness view of `Sys`")
+        );
+    }
+
+    /// Including an undeclared half is itself an error, so the help must
+    /// not suggest one.
+    #[test]
+    fn an_inline_without_halves_must_declare_one_before_it_is_included() {
+        let help = inline_help("");
+        assert_eq!(
+            help,
+            "a harness view draws a conductor only when it includes the connectors at both ends, and inline connector `ic` must declare a `male` or `female` half before a harness view can include it"
         );
     }
 

@@ -432,7 +432,9 @@ so one run reports many. Errors fail the run; warnings fail only under
   with at least one harness view that none of those views draws
   (`undrawn_conductor`, labelled on the conductor's `ir::Wire.span`, which
   may sit in another file than the views; the help names the includes that
-  would draw it). Each harness view's `ViewLayout.drawn` is the
+  would draw it, as `lint::EndTarget`s — an inline connector only through
+  the halves it declares, and one that declares none is told to declare a
+  half first, since an include of an undeclared half is an error). Each harness view's `ViewLayout.drawn` is the
   `HarnessLayout.drawn` it renders; `lint::HarnessCoverage` unions them per
   subject type, and every `HarnessRenderer::conductors` entry (the same
   `HarnessConductor::all` candidates) outside the union is reported. So a
