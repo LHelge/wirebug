@@ -553,6 +553,9 @@ pub struct Wire {
     /// cable in source order. Wires of one cable sharing an index are
     /// twisted together; the harness renderer braids two-conductor groups.
     pub twisted_group: Option<u32>,
+    /// The authored `wire` statement (inside its cable, for a conductor),
+    /// so a check over the drawings can point back at the source.
+    pub span: Span,
 }
 
 /// A resolved wire endpoint.

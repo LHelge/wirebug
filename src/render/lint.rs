@@ -8,10 +8,12 @@
 //! `Problem` diagnostics pointing at the includes in the source.
 //! `pipeline::check_project` runs them after the DSL stages.
 
+use std::collections::HashSet;
+
 use indexmap::IndexMap;
 
 use crate::dsl::diagnostics::Problem;
-use crate::dsl::ir::{Design, PortName, View, ViewKind};
+use crate::dsl::ir::{Design, Instance, PortName, TypeName, View, ViewKind, Wire, WireEnd};
 use crate::dsl::project::Project;
 use crate::render::geometry::Bounds;
 use crate::render::harness::HarnessRenderer;
@@ -49,6 +51,26 @@ pub(super) struct UnroutableWire {
     pub(super) ends: [WireEndAt; 2],
 }
 
+/// One chain segment of a subject wire: the pair `endpoints[index]`,
+/// `endpoints[index + 1]` of `subject.wires[wire]`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) struct Segment {
+    pub(super) wire: usize,
+    pub(super) index: usize,
+}
+
+/// A conductor a harness view of its component can draw: a segment between
+/// connectors of two different children of the subject.
+pub(super) struct Conductor<'d> {
+    pub(super) segment: Segment,
+    pub(super) wire: &'d Wire,
+    /// The segment's two endpoints, in wire order.
+    pub(super) ends: [&'d WireEnd; 2],
+    /// What a harness include names to draw each end's connector,
+    /// backticked.
+    pub(super) connectors: [String; 2],
+}
+
 /// What a renderer's layout reports about one view, for checking.
 #[derive(Default)]
 pub(super) struct ViewLayout {
@@ -57,20 +79,87 @@ pub(super) struct ViewLayout {
     /// is `unroutable`.
     pub(super) crowded: Vec<CrowdedPort>,
     pub(super) unroutable: Vec<UnroutableWire>,
+    /// The conductors a harness view draws; empty for other kinds.
+    pub(super) drawn: Vec<Segment>,
+}
+
+/// The conductors each component's harness views draw between them, keyed
+/// by component in the order its first harness view appears. A conductor
+/// is covered when any one of them draws it.
+#[derive(Default)]
+struct HarnessCoverage<'d> {
+    components: IndexMap<&'d TypeName, (&'d Instance, HashSet<Segment>)>,
+}
+
+impl<'d> HarnessCoverage<'d> {
+    /// Count `drawn` as covered for `view`'s component, whose views all
+    /// render against `subject`.
+    fn add(&mut self, view: &'d View, subject: &'d Instance, drawn: Vec<Segment>) {
+        self.components
+            .entry(&view.subject)
+            .or_insert_with(|| (subject, HashSet::new()))
+            .1
+            .extend(drawn);
+    }
+
+    /// One `undrawn_conductor` warning per conductor of a component with
+    /// harness views that none of them draws, in component then wire order.
+    /// A component with no harness view is not built from drawings yet, so
+    /// is never reported.
+    fn problems(&self, design: &'d Design, project: &Project) -> Vec<Problem> {
+        self.components
+            .iter()
+            .flat_map(|(component, (subject, drawn))| {
+                HarnessRenderer
+                    .conductors(design, subject)
+                    .into_iter()
+                    .filter(|c| !drawn.contains(&c.segment))
+                    .map(|c| c.undrawn(component, project))
+            })
+            .collect()
+    }
+}
+
+impl Conductor<'_> {
+    /// The warning that no harness view of `component` draws this conductor.
+    fn undrawn(&self, component: &TypeName, project: &Project) -> Problem {
+        let wire = self.wire;
+        let mut conductor = match &wire.cable {
+            Some(cable) => format!("cable `{cable}` conductor"),
+            None => "wire".to_string(),
+        };
+        if let Some(label) = &wire.label {
+            conductor.push_str(&format!(" \"{label}\""));
+        }
+        let [from, to] = self.ends;
+        let [a, b] = &self.connectors;
+        Problem::UndrawnConductor {
+            conductor,
+            from: from.to_string(),
+            to: to.to_string(),
+            component: component.to_string(),
+            connectors: format!("{a} and {b}"),
+            src: project.source(wire.span.file),
+            at: wire.span.into(),
+        }
+    }
 }
 
 /// Lay out every view of `design` as the renderers would and report what
 /// the layout shows to be wrong: includes whose boxes overlap
 /// (`overlapping_includes`), schematic includes too close for a wire to
-/// leave a port (`include_too_close`), and schematic wires walled in by
-/// boxes all around (`unroutable_wire`). `project` supplies the sources the
-/// include spans point into.
+/// leave a port (`include_too_close`), schematic wires walled in by boxes
+/// all around (`unroutable_wire`), and, after every view's problems,
+/// conductors that no harness view of their component draws
+/// (`undrawn_conductor`). `project` supplies the sources the spans point
+/// into.
 ///
 /// A view the renderers cannot lay out at all (no subject instance, a bad
 /// grid, an unknown kind) is skipped: rendering reports those itself.
 #[must_use]
 pub fn layout_problems(design: &Design, project: &Project) -> Vec<Problem> {
     let mut problems = Vec::new();
+    let mut coverage = HarnessCoverage::default();
     for view in &design.views {
         let Ok(subject) = super::subject_instance(design, view) else {
             continue;
@@ -82,7 +171,11 @@ pub fn layout_problems(design: &Design, project: &Project) -> Vec<Problem> {
             ViewKind::Other(_) => continue,
         };
         problems.extend(layout.problems(view, project));
+        if view.kind == ViewKind::Harness {
+            coverage.add(view, subject, layout.drawn);
+        }
     }
+    problems.extend(coverage.problems(design, project));
     problems
 }
 
@@ -435,6 +528,234 @@ view harness "H" {
         assert_eq!(
             summary(src),
             [code("overlapping_includes", &["r.j", "l.j"])]
+        );
+    }
+
+    /// `a`, `b` and `c` each carry connector `j` (pins `sig`, `ret`) and a
+    /// connectorless `bare` port; `body` holds the wires and `views` the
+    /// views.
+    fn harnessed(body: &str, views: &str) -> String {
+        format!(
+            r#"
+component Sys {{
+    a: Node;
+    b: Node;
+    c: Node;
+    pub port out "OUT";
+{body}
+    component Node {{
+        connector j "J 2p" {{
+            pub port sig "SIG" pin 1;
+            pub port ret "RET" pin 2;
+        }}
+        pub port bare "BARE";
+    }}
+}}
+{views}
+"#
+        )
+    }
+
+    /// A harness view of `Sys` titled `title`, including `targets` in a row.
+    fn harness(title: &str, targets: &[&str]) -> String {
+        let includes: String = targets
+            .iter()
+            .enumerate()
+            .map(|(k, t)| format!("    include {t} at ({}, 0);\n", k * 20))
+            .collect();
+        format!("view harness \"{title}\" {{\n    grid: 20;\n{includes}}}\n")
+    }
+
+    #[test]
+    fn a_conductor_no_harness_view_draws_is_reported_on_its_wire() {
+        let src = harnessed(
+            r#"    wire red 1 "SIG" [a.sig, b.sig];
+    wire black 1 [a.ret, c.ret];"#,
+            &harness("AB", &["a.j", "b.j"]),
+        );
+        assert_eq!(
+            summary(&src),
+            [code("undrawn_conductor", &["wire black 1 [a.ret, c.ret];"])]
+        );
+        let (project, design) = load(&src);
+        let [problem] = layout_problems(&design, &project)
+            .try_into()
+            .expect("one problem");
+        assert_eq!(
+            problem.to_string(),
+            "wire from `a.ret` to `c.ret` is in no harness view of `Sys`"
+        );
+        assert_eq!(problem.severity(), Some(miette::Severity::Warning));
+        assert_eq!(
+            problem.help().map(|h| h.to_string()).as_deref(),
+            Some(
+                "a harness view draws a conductor only when it includes the connectors at both ends; include `a.j` and `c.j` in one harness view of `Sys`"
+            )
+        );
+    }
+
+    #[test]
+    fn a_cable_conductor_is_named_by_its_cable_and_label() {
+        let src = harnessed(
+            r#"    cable w1 "Loom" {
+        wire red 1 "SIG" [a.sig, c.sig];
+    }"#,
+            &harness("AB", &["a.j", "b.j"]),
+        );
+        let (project, design) = load(&src);
+        let [problem] = layout_problems(&design, &project)
+            .try_into()
+            .expect("one problem");
+        assert_eq!(
+            problem.to_string(),
+            "cable `w1` conductor \"SIG\" from `a.sig` to `c.sig` is in no harness view of `Sys`"
+        );
+        assert_eq!(
+            summary(&src),
+            [code(
+                "undrawn_conductor",
+                &[r#"wire red 1 "SIG" [a.sig, c.sig];"#]
+            )]
+        );
+    }
+
+    #[test]
+    fn a_conductor_drawn_by_any_harness_view_of_its_component_is_covered() {
+        let src = harnessed(
+            r#"    wire red 1 [a.sig, b.sig];
+    wire black 1 [a.ret, c.ret];"#,
+            &format!(
+                "{}{}",
+                harness("AB", &["a.j", "b.j"]),
+                harness("AC", &["a.j", "c.j"])
+            ),
+        );
+        assert!(summary(&src).is_empty());
+    }
+
+    #[test]
+    fn components_without_a_harness_view_are_not_reported() {
+        let src = harnessed(
+            "    wire red 1 [a.sig, b.sig];",
+            "view schematic \"S\" {\n    grid: 20;\n    include a at (0, 0);\n}\n",
+        );
+        assert!(summary(&src).is_empty());
+    }
+
+    #[test]
+    fn a_rail_is_judged_per_chain_segment() {
+        // `a–b` is drawn, `b–c` is not.
+        let src = harnessed(
+            "    wire black 1 [a.ret, b.ret, c.ret];",
+            &harness("AB", &["a.j", "b.j"]),
+        );
+        let (project, design) = load(&src);
+        let messages: Vec<String> = layout_problems(&design, &project)
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(
+            messages,
+            ["wire from `b.ret` to `c.ret` is in no harness view of `Sys`"]
+        );
+    }
+
+    #[test]
+    fn segments_off_a_connector_or_within_one_are_not_conductors() {
+        // An own port, a connectorless port, and a jumper inside `c.j`:
+        // no harness view can draw any of them.
+        let src = harnessed(
+            r#"    wire red 1 [out, c.sig];
+    wire red 1 [a.bare, c.sig];
+    wire red 1 [c.sig, c.ret];"#,
+            &harness("AB", &["a.j", "b.j"]),
+        );
+        assert!(summary(&src).is_empty());
+    }
+
+    #[test]
+    fn two_drawn_conductors_on_one_pin_are_fine() {
+        // A double crimp on `a.sig`: both conductors are drawn.
+        let src = harnessed(
+            r#"    wire red 1 [a.sig, b.sig];
+    wire red 1 [a.sig, c.sig];"#,
+            &harness("ABC", &["a.j", "b.j", "c.j"]),
+        );
+        assert!(summary(&src).is_empty());
+    }
+
+    #[test]
+    fn a_harness_view_with_a_bad_grid_still_covers_its_conductors() {
+        // Rendering reports the grid; the lint does not pile on.
+        let src = harnessed(
+            "    wire red 1 [a.sig, b.sig];",
+            &harness("AB", &["a.j", "b.j"]).replace("grid: 20;", "grid: 0;"),
+        );
+        assert!(summary(&src).is_empty());
+    }
+
+    /// `ic` is mated mid-harness: `a` plugs into its female half, `b` into
+    /// its male half.
+    const INLINE: &str = r#"
+connector_type Plug "Plug 1p" {
+    part: "P1";
+}
+
+connector_type Socket "Socket 1p" {
+    part: "S1";
+}
+
+component Sys {
+    a: Node;
+    b: Node;
+
+    inline ic "Branch" {
+        male: Plug;
+        female: Socket;
+        port sig "SIG" pin 1;
+    }
+
+    cable main "Main" {
+        wire red 1 "SIG" [a.sig, ic.sig];
+    }
+    cable branch "Branch" {
+        wire red 1 "SIG" [ic.sig, b.sig];
+    }
+
+    component Node {
+        connector j "J 1p" {
+            pub port sig "SIG" pin 1;
+        }
+    }
+}
+"#;
+
+    #[test]
+    fn an_inline_connector_covers_through_either_half() {
+        let views = format!(
+            "{}{}",
+            harness("Main", &["a.j", "ic.female"]),
+            harness("Branch", &["ic.male", "b.j"])
+        );
+        assert!(summary(&format!("{INLINE}{views}")).is_empty());
+
+        // Without the branch loom's view, its conductor is reported, and
+        // the help names both halves.
+        let src = format!("{INLINE}{}", harness("Main", &["a.j", "ic.female"]));
+        let (project, design) = load(&src);
+        let [problem] = layout_problems(&design, &project)
+            .try_into()
+            .expect("one problem");
+        assert_eq!(
+            problem.to_string(),
+            "cable `branch` conductor \"SIG\" from `ic.sig` to `b.sig` is in no harness view of `Sys`"
+        );
+        let help = problem.help().expect("help").to_string();
+        assert!(
+            help.ends_with(
+                "include `ic.male` (or `ic.female`) and `b.j` in one harness view of `Sys`"
+            ),
+            "{help}"
         );
     }
 

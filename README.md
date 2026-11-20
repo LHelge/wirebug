@@ -187,6 +187,8 @@ date        = "2026-05-28"    # optional; ISO date
 
 Boxes may touch but not overlap (`overlapping_includes`). A wire leaves its port by one grid step and keeps one grid step clear of every other box, so a wired port needs two grid steps of space in front of it (`include_too_close`), and boxes less than two steps apart close the gap between them — a wire walled in on every side is `unroutable_wire`. `check` lays each view out to find these, so a project that passes `check` does not fail to route in `render`.
 
+A harness view draws a conductor only when it includes the connectors at both of its ends. Once a component has a harness view, `check` warns about each conductor between connectors of two of its children that none of its harness views draws (`undrawn_conductor`, fatal under `--strict`), so a wire cannot go missing from every build drawing unnoticed. Each segment of a multi-endpoint rail counts on its own; an inline connector is covered through either half.
+
 If a view still fails to render, `render` names it (`error: view "Fine Grid": …`), writes every other view, and exits non-zero. The HTML index (and `serve`'s page) shows the error where that view's drawing would be; `--embed`'s `manifest.json` lists only the views written, and `--pdf` pages only those.
 
 The view authors each port's side and order directly in its `ports` block, and that listing is also the scope: a box shows exactly the ports it lists, and a wire draws only where both ends are listed. Place a port on the side facing the box it connects to.

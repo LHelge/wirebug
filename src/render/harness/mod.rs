@@ -24,10 +24,10 @@ use svg::node::element::{Group, Style, Text};
 use crate::dsl::ir::{Design, Instance, View};
 use crate::error::{ViewErrorKind, ViewResult};
 use crate::render::SvgMode;
-use crate::render::lint::{IncludeBox, ViewLayout};
+use crate::render::lint::{Conductor, IncludeBox, ViewLayout};
 use crate::render::stamp::{STAMP_HEIGHT, STAMP_INSET, stamp_element};
 
-use layout::HarnessLayout;
+use layout::{HarnessConductor, HarnessLayout};
 
 /// Grid step (world units) used when a harness view omits one.
 pub(super) const DEFAULT_GRID: f64 = 20.0;
@@ -175,25 +175,47 @@ impl HarnessRenderer {
         Ok(doc.to_string())
     }
 
-    /// Each include's pin-table box, from the same layout [`Self::render`]
-    /// draws. Empty for a non-positive grid: rendering reports that itself.
+    /// Each include's pin-table box and the conductors drawn, from the same
+    /// layout [`Self::render`] draws. No boxes for a non-positive grid:
+    /// rendering reports that itself. Which conductors a view draws does
+    /// not depend on its grid, so they are still counted.
     pub(super) fn layout(&self, design: &Design, subject: &Instance, view: &View) -> ViewLayout {
         let step = view.grid.unwrap_or(DEFAULT_GRID);
-        if step <= 0.0 {
-            return ViewLayout::default();
-        }
-        let boxes = HarnessLayout::compute(design, subject, view, step)
-            .nodes
-            .iter()
-            .map(|node| IncludeBox {
-                include: node.include,
-                bounds: node.bounds(),
-            })
-            .collect();
+        let layout = HarnessLayout::compute(design, subject, view, step);
+        let boxes = if step > 0.0 {
+            layout
+                .nodes
+                .iter()
+                .map(|node| IncludeBox {
+                    include: node.include,
+                    bounds: node.bounds(),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         ViewLayout {
             boxes,
+            drawn: layout.drawn,
             ..ViewLayout::default()
         }
+    }
+
+    /// Every conductor a harness view of `subject` can draw, in wire order:
+    /// the set the views' [`ViewLayout::drawn`] segments are checked against.
+    pub(super) fn conductors<'d>(
+        &self,
+        design: &'d Design,
+        subject: &'d Instance,
+    ) -> Vec<Conductor<'d>> {
+        HarnessConductor::all(design, subject)
+            .map(|c| Conductor {
+                segment: c.segment,
+                wire: c.wire,
+                ends: c.ends.each_ref().map(|end| end.end),
+                connectors: c.ends.each_ref().map(|end| end.include_target()),
+            })
+            .collect()
     }
 }
 
@@ -658,6 +680,41 @@ component sys {
         let view = harness_view("sys", &[("a", "hv", 0.0, 0.0)]);
         let svg = render(&design, &view);
         assert!(!svg.contains("class=\"cable-wire\""));
+    }
+
+    /// What `check` counts as drawn is exactly what the drawing carries:
+    /// one segment per loose wire and cable strand, none for a wire whose
+    /// far end is not included.
+    #[test]
+    fn drawn_segments_are_the_conductors_the_view_draws() {
+        use crate::render::lint::Segment;
+        let design = design_from(
+            r#"
+component sys {
+    a: src;
+    b: src;
+    c: src;
+    cable feed "Feed" {
+        wire orange 50 [a.pos, b.pos];
+    }
+    wire black 50 [a.neg, b.neg, c.neg];
+    component src {
+        connector hv "HV 2p" {
+            pub port pos "V+" pin 1;
+            pub port neg "V-" pin 2;
+        }
+    }
+}
+"#,
+        );
+        let view = harness_view("sys", &[("a", "hv", 0.0, 0.0), ("b", "hv", 16.0, 0.0)]);
+        let layout = compute(&design, &view);
+        assert_eq!(
+            layout.drawn,
+            [Segment { wire: 0, index: 0 }, Segment { wire: 1, index: 0 }]
+        );
+        let strands: usize = layout.cable_boxes.iter().map(|b| b.strands.len()).sum();
+        assert_eq!(strands + layout.loose.len(), layout.drawn.len());
     }
 
     #[test]

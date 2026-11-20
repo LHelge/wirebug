@@ -433,6 +433,7 @@ fn rewrite_wire(w: &ast::Wire, cable: Option<CableName>, twisted_group: Option<u
         endpoints: w.endpoints.iter().map(WireEnd::from).collect(),
         cable,
         twisted_group,
+        span: w.span,
     }
 }
 
