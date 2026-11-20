@@ -1,0 +1,32 @@
+---
+id: nmj
+title: "`wirebug export` command (CSV / JSON)"
+status: open
+priority: P1
+created: "2026-11-20T21:40:32.035927570Z"
+updated: "2026-11-20T21:40:32.035927570Z"
+tags:
+  - export
+  - cli
+depends_on:
+  - "4jm"
+  - ssw
+parent: "96q"
+---
+
+## Summary
+Expose the tables on the CLI.
+
+## Acceptance Criteria
+- [ ] `wirebug export wires` and `wirebug export connectors` write CSV to stdout or `--out <file>`
+- [ ] `--format json` for tooling
+- [ ] Runs `check_project` first and refuses on errors, like `render`
+- [ ] `render --embed`'s `manifest.json` references or embeds the same data
+
+## Implementation Notes
+- `src/cli.rs`, `src/main.rs`; CLI tests with `assert_cmd`, help snapshot with `insta`
+- CSV: add the `csv` crate via `cargo add` (justify in the commit) or hand-write with proper quoting — labels contain commas and quotes
+
+## Testing
+- Unit tests beside the code; end-to-end coverage via `tests/fixtures/` (never `examples/`).
+- `cargo fmt && cargo clippy -- -D warnings && cargo test` pass.

@@ -1,0 +1,30 @@
+---
+id: "4jm"
+title: "Derive a wire-list model from `ir::Design`"
+status: open
+priority: P1
+created: "2026-11-20T21:40:32.029027161Z"
+updated: "2026-11-20T21:40:32.029027161Z"
+tags:
+  - export
+parent: "96q"
+---
+
+## Summary
+One row per physical conductor: cable, label, colour (IEC code), gauge, from `instance / connector / pin`, to `instance / connector / pin`, length.
+
+## Acceptance Criteria
+- [ ] A typed `WireList` built from `ir::Design` (no rendering involved)
+- [ ] Multi-endpoint rails are chain-decomposed exactly as the renderers do
+- [ ] Two conductors sharing one cavity (double crimp) appear as two ordinary rows
+- [ ] Ends on connectorless ports are kept, with empty connector/pin
+- [ ] Stable, source-ordered output
+
+## Implementation Notes
+- New module (e.g. `src/export/`), methods on the model types rather than free functions
+- Cable `length` applies to each conductor until per-wire length exists
+- Scope: the root's wires plus every nested instance's — decide whether rows carry the owning instance path
+
+## Testing
+- Unit tests beside the code; end-to-end coverage via `tests/fixtures/` (never `examples/`).
+- `cargo fmt && cargo clippy -- -D warnings && cargo test` pass.
