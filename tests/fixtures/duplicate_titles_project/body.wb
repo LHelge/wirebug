@@ -1,0 +1,21 @@
+// A `Vehicle` fragment whose view repeats the title of the view in main.wb.
+use Lamp from "components/lamp.wb";
+
+extend Vehicle {
+    rear: Lamp "Rear lamp";
+
+    wire red 1 [front.pwr, rear.pwr];
+    wire black 1 [front.gnd, rear.gnd];
+}
+
+view schematic "Overview" {
+    grid: 20;
+
+    include front at (4, 4) ports {
+        east: pwr, gnd;
+    }
+
+    include rear at (20, 4) ports {
+        west: pwr, gnd;
+    }
+}

@@ -635,6 +635,26 @@ pub enum Problem {
         first: SourceSpan,
     },
 
+    /// Two views in the project share a title. Both still render (the
+    /// repeat to a suffixed file), but the index shows two identically named
+    /// sections. The first view is a related note, since it may sit in
+    /// another file than the repeat.
+    #[error("duplicate view title \"{title}\"")]
+    #[diagnostic(
+        severity(Warning),
+        code(wirebug::duplicate_view_title),
+        help("give each view its own title; the repeat otherwise renders to a `_2`-suffixed file")
+    )]
+    DuplicateViewTitle {
+        title: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("titled again here")]
+        at: SourceSpan,
+        #[related]
+        first: [FirstViewTitle; 1],
+    },
+
     /// Text boxes are currently schematic-only.
     #[error("text boxes are not supported in `{kind}` views")]
     #[diagnostic(
@@ -762,6 +782,20 @@ pub enum Problem {
         #[label("not an IEC 60757 color name")]
         at: SourceSpan,
     },
+}
+
+/// The first view to use a title, attached to [`Problem::DuplicateViewTitle`]
+/// as a related note: a miette diagnostic carries one source file, and the
+/// two views may be in different files.
+#[derive(Debug, Error, Diagnostic)]
+#[error("first view titled \"{title}\"")]
+#[diagnostic(severity(Advice))]
+pub struct FirstViewTitle {
+    pub title: String,
+    #[source_code]
+    pub src: NamedSource<String>,
+    #[label("first titled here")]
+    pub at: SourceSpan,
 }
 
 impl Problem {
