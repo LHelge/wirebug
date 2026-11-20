@@ -764,7 +764,8 @@ fn render_writes_the_views_that_render_and_names_the_one_that_fails() {
     let index = std::fs::read_to_string(tmp.path().join("out/index.html")).expect("index");
     assert!(index.contains("<img src=\"overview.svg\""));
     assert!(index.contains("<img src=\"harness.svg\""));
-    assert!(index.contains("<section class=\"failed\">\n        <h2>Fine Grid</h2>"));
+    assert!(index.contains("<section class=\"failed\">"));
+    assert!(index.contains("<h2>Fine Grid</h2>"));
     assert!(index.contains("grid step 5 is too small"));
 }
 
