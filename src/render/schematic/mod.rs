@@ -236,6 +236,7 @@ impl SchematicRenderer {
             boxes,
             crowded,
             unroutable,
+            ..ViewLayout::default()
         }
     }
 }

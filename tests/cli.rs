@@ -521,6 +521,92 @@ fn check_strict_fails_on_a_duplicate_view_title() {
         ));
 }
 
+const UNDRAWN_CONDUCTORS_ROOT: &str = "tests/fixtures/undrawn_conductors_project";
+
+#[test]
+fn check_warns_on_conductors_no_harness_view_draws() {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--format", "json", UNDRAWN_CONDUCTORS_ROOT])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+    let read = |name: &str| {
+        std::fs::read_to_string(format!("{UNDRAWN_CONDUCTORS_ROOT}/{name}")).expect("fixture file")
+    };
+    let (main, horn) = (read("main.wb"), read("horn.wb"));
+
+    // A problem as (code, severity, file name, message, the text of every
+    // label).
+    let found: Vec<(&str, &str, &str, &str, Vec<&str>)> = problems
+        .iter()
+        .map(|p| {
+            let file = p["filename"].as_str().expect("filename");
+            let src = if file.ends_with("horn.wb") {
+                &horn
+            } else {
+                &main
+            };
+            let labels = p["labels"]
+                .as_array()
+                .expect("labels")
+                .iter()
+                .map(|l| {
+                    let offset = l["span"]["offset"].as_u64().expect("offset") as usize;
+                    let length = l["span"]["length"].as_u64().expect("length") as usize;
+                    &src[offset..offset + length]
+                })
+                .collect();
+            (
+                p["code"].as_str().expect("code"),
+                p["severity"].as_str().expect("severity"),
+                file.rsplit('/').next().expect("file name"),
+                p["message"].as_str().expect("message"),
+                labels,
+            )
+        })
+        .collect();
+
+    // The rail's undrawn segment and the cable conductor in the other file,
+    // each on its own wire; the drawn segment, the drawn loose wire and the
+    // wire of `Dash` (no harness view) are not reported.
+    assert_eq!(
+        found,
+        vec![
+            (
+                "wirebug::undrawn_conductor",
+                "warning",
+                "main.wb",
+                "wire from `lamp.gnd` to `horn.gnd` is in no harness view of `Car`",
+                vec!["wire black 1 [ecu.gnd, lamp.gnd, horn.gnd];"]
+            ),
+            (
+                "wirebug::undrawn_conductor",
+                "warning",
+                "horn.wb",
+                "cable `horn_feed` conductor \"HORN\" from `ecu.horn` to `horn.sig` is in no harness view of `Car`",
+                vec!["wire red 1 \"HORN\" [ecu.horn, horn.sig];"]
+            ),
+        ]
+    );
+}
+
+#[test]
+fn check_strict_fails_on_an_undrawn_conductor() {
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--strict", UNDRAWN_CONDUCTORS_ROOT])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "include `lamp.x1` and `horn.x1` in one harness view of `Car`",
+        ));
+}
+
 const CROWDED_VIEWS_ROOT: &str = "tests/fixtures/crowded_views_project";
 
 #[test]

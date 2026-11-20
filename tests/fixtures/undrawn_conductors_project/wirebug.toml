@@ -1,0 +1,4 @@
+[project]
+name = "undrawn-conductors-project"
+version = "0.1.0"
+description = "Fixture with conductors that no harness view draws"

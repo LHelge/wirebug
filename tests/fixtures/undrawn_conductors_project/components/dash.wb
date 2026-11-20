@@ -1,0 +1,16 @@
+// Dash has no harness view, so its unharnessed wire is not reported.
+use Node from "node.wb";
+
+component Dash {
+    left:  Node;
+    right: Node;
+
+    wire red 1 [left.sig, right.sig];
+}
+
+view schematic "Dash" {
+    grid: 20;
+
+    include left  at (0, 0);
+    include right at (20, 0);
+}

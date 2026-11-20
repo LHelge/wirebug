@@ -1,0 +1,7 @@
+component Node {
+    connector x1 "X1 3p" {
+        pub port sig  "SIG"  pin 1;
+        pub port gnd  "GND"  pin 2;
+        pub port horn "HORN" pin 3;
+    }
+}

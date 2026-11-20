@@ -1,0 +1,24 @@
+// Conductors that no harness view draws. `check` warns on each (and
+// `--strict` fails); everything else here is clean.
+use Node from "components/node.wb";
+use Dash from "components/dash.wb";
+use Car from "horn.wb";
+
+component Car {
+    ecu:  Node "ECU";
+    lamp: Node "Lamp";
+    horn: Node "Horn";
+    dash: Dash "Dash";
+
+    // A ground rail: the loom below draws `ecu.gnd`–`lamp.gnd`, but no
+    // harness view includes `horn.x1`, so `lamp.gnd`–`horn.gnd` is missed.
+    wire black 1 [ecu.gnd, lamp.gnd, horn.gnd];
+    wire red 1 "LAMP" [ecu.sig, lamp.sig];
+}
+
+view harness "Lamp loom" {
+    grid: 20;
+
+    include ecu.x1  at (0, 0);
+    include lamp.x1 at (20, 0);
+}

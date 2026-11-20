@@ -524,6 +524,8 @@ view harness "Main HV harness" {
 
 **Cables are derived, like schematic wires.** A wire renders as a cable strand only when *both* of its endpoints land on *included* connectors; ends on connectorless ports, excluded connectors, or the parent's own ports drop silently. So connectorize the external `pub port`s you want to see in a harness (wrap them in a named `connector` block).
 
+**Every conductor belongs in some harness view.** Once a component has at least one harness view, `check` warns about each wire segment between connectors of two of its children that none of its harness views draws (`undrawn_conductor`, fatal under `--strict`) — the conductor would be missing from every build drawing. A multi-endpoint rail is judged per chain segment (`[a, b, c]` → `a–b`, `b–c`); an inline connector is covered when a view includes either half; segments with an end on the parent's own port or a connectorless port, and jumpers within one connector, are not harness conductors. A component with no harness view is never reported. Fix it by adding the missing connectors to a loom's view, or a view for the missing loom.
+
 A wire that belongs to a declared `cable` (see Cables) draws WireViz-style: a labelled cable box sits between the two connectors it spans, titled with the cable's label and its `type · length`, one coloured strand per conductor. Loose wires between the same connector pair instead bundle into a plain strand group, each strand drawn in its `color` and annotated with its `label` and gauge.
 
 ### Pinout views

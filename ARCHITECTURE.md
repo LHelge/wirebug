@@ -15,7 +15,8 @@ Four CLI commands share it:
 - **`check` (`src/dsl/`, then `src/render/lint.rs`)** — lex → parse →
   load project → resolve → elaborate → validate, then the **layout
   checks**: every view laid out by its renderer's own layout code, to find
-  includes that collide (see DSL validation). Turns a multi-file `.wb`
+  includes that collide and conductors no harness view draws (see DSL
+  validation). Turns a multi-file `.wb`
   project into an elaborated IR (`ir::Design`) and reports problems via
   miette. The entry every command calls is `pipeline::check_project`
   (re-exported as `wirebug::check_project`; the LSP runs the same stages
@@ -167,7 +168,9 @@ Distinct from clap's `--version`, which prints the wirebug app version.
   `Instance.wires` tagged with `Wire.cable = Some(name)`; loose wires are
   `None`. A conductor inside a `twisted { }` group also carries
   `Wire.twisted_group = Some(i)` (numbered per cable in source order), so
-  grouping survives flattening. So the schematic renderer ignores cables
+  grouping survives flattening. Every `Wire` keeps its authored `span`
+  (the `wire` statement, inside its cable for a conductor), so a check over
+  the drawings can point back at it. So the schematic renderer ignores cables
   for free, and only the harness renderer reads the tags. Cable
   conductors are 2-endpoint by rule; shared rails stay loose
   multi-endpoint wires.
@@ -274,7 +277,13 @@ pin the short way rather than forcing the whole table to one side; `ConnectorNod
 is kept as the node's dominant pin side. Connections are the *same* chain-decomposed subject wires, kept
 only when both ends land on *included* connectors — a port's connector is found
 via `ir::ConnectorRef.name`, so a connectorless / excluded / `Own` end drops
-silently (like an unlisted port in a schematic).
+silently (like an unlisted port in a schematic). The candidates are the
+subject's `layout::HarnessConductor`s (`HarnessConductor::all`: each chain
+segment between connectors of two *different* children — one within a
+single connector is a jumper, never drawn); `HarnessLayout::compute` keeps
+those whose two connectors are included and records them as
+`HarnessLayout.drawn` (`lint::Segment`, wire and pair index), which is what
+`check`'s `undrawn_conductor` reads.
 
 Kept conductors split by `Wire.cable`. A **declared cable** draws as a
 **cable box** (`CableBox`/`render_cable_box`) on the spine: a titled table
@@ -402,6 +411,20 @@ so one run reports many. Errors fail the run; warnings fail only under
   conditions under which `route_all` returns `RouteFailed`, so a project
   that passes `check` does not fail to route. A later layout-derived check
   adds a field to `ViewLayout` and a mapping in `ViewLayout::problems`.
+  As a warning, after every view's problems: a conductor of a component
+  with at least one harness view that none of those views draws
+  (`undrawn_conductor`, labelled on the conductor's `ir::Wire.span`, which
+  may sit in another file than the views; the help names the includes that
+  would draw it). Each harness view's `ViewLayout.drawn` is the
+  `HarnessLayout.drawn` it renders; `lint::HarnessCoverage` unions them per
+  subject type, and every `HarnessRenderer::conductors` entry (the same
+  `HarnessConductor::all` candidates) outside the union is reported. So a
+  multi-endpoint rail is judged per chain segment, an inline connector is
+  covered through either half (an include of either normalizes to the
+  designator), a double crimp is two conductors and never a problem, and
+  a component with no harness view is not built from drawings yet, so is
+  never reported. A harness view with a bad `grid:` still counts its
+  conductors (they do not depend on the grid; render reports the grid).
 
 Not done on purpose: **unconnected-port** detection. It needs per-instance
 tree analysis and floods intentional unused-pin warnings on a real
@@ -498,7 +521,8 @@ src/
 │   │                #   + embed_manifest (manifest.json sidecar for --embed)
 │   ├── geometry.rs  # Point, Bounds (+ overlap test); re-exports ir::Side
 │   ├── lint.rs      # layout checks for `check`: overlaps, crowded ports,
-│   │                #   unroutable wires, from each renderer's `layout`
+│   │                #   unroutable wires, undrawn harness conductors,
+│   │                #   from each renderer's `layout`
 │   ├── png.rs       # SVG → PNG rasterisation for --png (resvg/usvg/tiny_skia)
 │   ├── stamp.rs     # project-identity stamp text/element (corner of every SVG)
 │   ├── schematic/   # rectangle-based SVG renderer (kind: schematic)
@@ -519,8 +543,9 @@ src/
 │   │           └── vpsc.rs      # separation-constraint solver
 │   ├── harness/     # WireViz-style trunk-and-bezier renderer (kind: harness)
 │   │   ├── mod.rs       # HarnessRenderer; render orchestration + STYLE
-│   │   ├── layout.rs    # pin-table nodes, spine + facing, cable boxes
-│   │   │                #   (centroid placement + de-overlap), loose wires
+│   │   ├── layout.rs    # conductors (HarnessConductor), pin-table nodes,
+│   │   │                #   spine + facing, cable boxes (centroid placement
+│   │   │                #   + de-overlap), loose wires
 │   │   ├── bezier.rs    # horizontally-flexed cubic bezier math (FLEX)
 │   │   └── draw.rs      # SVG emission: pin tables, cable boxes, bezier wires
 │   └── pinout/      # connector-face + pin-table renderer (kind: pinout)

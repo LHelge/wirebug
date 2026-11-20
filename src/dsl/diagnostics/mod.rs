@@ -395,6 +395,33 @@ pub enum Problem {
         other: Option<SourceSpan>,
     },
 
+    /// A conductor between connectors of two of a component's children that
+    /// none of the component's harness views draws: no view includes both
+    /// ends' connectors, so the build drawings miss it. A warning: the
+    /// design is sound, its drawings incomplete.
+    #[error("{conductor} from `{from}` to `{to}` is in no harness view of `{component}`")]
+    #[diagnostic(
+        severity(Warning),
+        code(wirebug::undrawn_conductor),
+        help(
+            "a harness view draws a conductor only when it includes the connectors at both ends; include {connectors} in one harness view of `{component}`"
+        )
+    )]
+    UndrawnConductor {
+        /// `wire` or ``cable `<name>` conductor``, with its quoted label
+        /// when it has one.
+        conductor: String,
+        from: String,
+        to: String,
+        component: String,
+        /// The includes that would draw it, as backticked targets.
+        connectors: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("drawn in no harness view")]
+        at: SourceSpan,
+    },
+
     /// Two connectors in one component share a designator.
     #[error("duplicate connector designator `{name}`")]
     #[diagnostic(
