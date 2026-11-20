@@ -31,7 +31,7 @@ use crate::dsl::ir::{
     InstanceName, Pin, PortName, Wire, WireColor, WireEnd,
 };
 use crate::render::geometry::{Bounds, Point, Side};
-use crate::render::lint::Segment;
+use crate::render::lint::{DeclaredHalves, EndTarget, IncludeTarget, Segment};
 
 /// A node's identity within a harness view: which instance, which connector.
 type NodeKey<'d> = (&'d InstanceName, &'d ConnectorName);
@@ -193,18 +193,22 @@ impl<'d> ConnectorEnd<'d> {
         (self.instance, self.connector)
     }
 
-    /// What a harness include names to draw this end's connector,
-    /// backticked. An inline connector is named by its halves: including
-    /// either one draws it.
-    pub(super) fn include_target(&self) -> String {
+    /// How a harness view can include this end's connector. An inline
+    /// connector is included through a half it declares, either one
+    /// drawing it; one that declares no half cannot be included at all.
+    pub(super) fn target(&self) -> EndTarget<'d> {
         let Some(inline) = &self.child.inline else {
-            return format!("`{}.{}`", self.instance, self.connector);
+            return EndTarget::Include(IncludeTarget::Connector {
+                instance: self.instance,
+                connector: self.connector,
+            });
         };
-        let target = |half: Half| format!("`{}.{}`", self.instance, half.as_str());
-        match (inline.male.is_some(), inline.female.is_some()) {
-            (true, false) => target(Half::Male),
-            (false, true) => target(Half::Female),
-            _ => format!("{} (or {})", target(Half::Male), target(Half::Female)),
+        match DeclaredHalves::of(inline) {
+            Some(halves) => EndTarget::Include(IncludeTarget::Inline {
+                instance: self.instance,
+                halves,
+            }),
+            None => EndTarget::HalflessInline(self.instance),
         }
     }
 }

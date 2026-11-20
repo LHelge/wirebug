@@ -440,13 +440,7 @@ pub enum Problem {
     /// ends' connectors, so the build drawings miss it. A warning: the
     /// design is sound, its drawings incomplete.
     #[error("{conductor} from `{from}` to `{to}` is in no harness view of `{component}`")]
-    #[diagnostic(
-        severity(Warning),
-        code(wirebug::undrawn_conductor),
-        help(
-            "a harness view draws a conductor only when it includes the connectors at both ends; include {connectors} in one harness view of `{component}`"
-        )
-    )]
+    #[diagnostic(severity(Warning), code(wirebug::undrawn_conductor))]
     UndrawnConductor {
         /// `wire` or ``cable `<name>` conductor``, with its quoted label
         /// when it has one.
@@ -454,8 +448,10 @@ pub enum Problem {
         from: String,
         to: String,
         component: String,
-        /// The includes that would draw it, as backticked targets.
-        connectors: String,
+        /// The includes that would draw it, or, for an inline connector
+        /// that declares no half, that it must declare one first.
+        #[help]
+        advice: String,
         #[source_code]
         src: NamedSource<String>,
         #[label("drawn in no harness view")]
