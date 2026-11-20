@@ -467,6 +467,8 @@ A cable's wires are still ordinary connections: they show in schematic views lik
 
 A view declares a rendering target — what to render, at what positions, with what grid scale. There are three kinds: **`schematic`** (component boxes with ports on authored sides), **`harness`** (WireViz-style connector pin tables with cable bundles), and **`pinout`** (physical connector faces plus pin tables). They differ in what an `include` selects.
 
+A view documents its file's single top-level component, and is drawn against an instance of it: a view of a component the design never instantiates (say, in a library file used only for its connector types) is the `uninstantiated_view_subject` error.
+
 ### Schematic views
 
 Each `schematic` include also says which of that component's ports to show, on which side, and in what order.

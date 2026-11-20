@@ -925,3 +925,65 @@ view harness "H" { include ic.female at (0, 0); }
         .failure()
         .stderr(predicate::str::contains("undeclared_inline_half"));
 }
+
+/// A view in `parts.wb` of a component the design never instantiates; only
+/// the file's connector type is used, so nothing else flags it.
+const UNINSTANTIATED_SUBJECT_ROOT: &str = "tests/fixtures/uninstantiated_subject_project";
+
+#[test]
+fn check_rejects_a_view_of_a_component_the_design_never_instantiates() {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args([
+            "check",
+            "--strict",
+            "--format",
+            "json",
+            UNINSTANTIATED_SUBJECT_ROOT,
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+    let parts = std::fs::read_to_string(format!("{UNINSTANTIATED_SUBJECT_ROOT}/parts.wb"))
+        .expect("fixture parts.wb");
+    let [problem] = problems.as_slice() else {
+        panic!("expected one problem, got {problems:?}");
+    };
+    let span = &problem["labels"][0]["span"];
+    let offset = span["offset"].as_u64().expect("offset") as usize;
+    let length = span["length"].as_u64().expect("length") as usize;
+    assert_eq!(problem["code"], "wirebug::uninstantiated_view_subject");
+    assert_eq!(problem["severity"], "error");
+    assert!(
+        problem["filename"]
+            .as_str()
+            .expect("filename")
+            .ends_with("parts.wb")
+    );
+    assert_eq!(&parts[offset..offset + length], "\"Spare Detail\"");
+}
+
+#[test]
+fn render_stops_at_check_instead_of_failing_on_an_uninstantiated_subject() {
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("out");
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args([
+            "render",
+            UNINSTANTIATED_SUBJECT_ROOT,
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("uninstantiated_view_subject"))
+        .stderr(predicate::str::contains("not rendering"))
+        .stderr(predicate::str::contains("has no instance in the design").not());
+    assert!(!out.exists(), "nothing is written");
+}

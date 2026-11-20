@@ -163,7 +163,9 @@ impl Conductor<'_> {
 /// can draw ports on (`grid_too_fine`), labelled on the number.
 ///
 /// A view the renderers cannot lay out at all (no subject instance, an
-/// unknown kind) is skipped: rendering reports those itself.
+/// unknown kind) is skipped: earlier phases report those
+/// (`uninstantiated_view_subject`, `unknown_view_kind`), and these checks
+/// run only on a design without errors.
 #[must_use]
 pub fn layout_problems(design: &Design, project: &Project) -> Vec<Problem> {
     let mut problems = Vec::new();

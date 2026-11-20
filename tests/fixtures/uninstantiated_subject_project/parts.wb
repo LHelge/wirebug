@@ -1,0 +1,17 @@
+connector_type Plug "Plug 1p" {
+    part: "P1";
+}
+
+component Spare {
+    fuse: Fuse;
+
+    component Fuse {
+        pub port a "A";
+    }
+}
+
+view schematic "Spare Detail" {
+    grid: 20;
+
+    include fuse at (0, 0);
+}
