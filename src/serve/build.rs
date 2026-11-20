@@ -10,6 +10,7 @@ use miette::{GraphicalReportHandler, GraphicalTheme};
 use super::livereload::ERROR_PAGE_SCRIPT;
 use super::state::Site;
 use crate::dsl::CheckReport;
+use crate::dsl::ir::Design;
 use crate::error::ViewError;
 use crate::render::{SvgMode, index_html, render_views};
 
@@ -88,37 +89,46 @@ pub(crate) fn build_site(target: Option<&Path>) -> Build {
         };
     };
 
-    // `serve` always emits self-contained SVGs (built-in style + identity
-    // stamp); embed-mode is for static export, not the live browser.
-    let views = render_views(design, SvgMode::Standalone);
-    let index_html = match index_html(&views, design.manifest.as_ref(), true) {
-        Ok(html) => html,
-        // An index failure is a build error in its own right; show it on
-        // the page and count it so the console summary reflects it.
-        Err(e) => {
-            return Build {
-                site: message_site(&format!("HTML index failed: {e}")),
-                errors: 1,
-                warnings: counts.warnings,
-                failed_views: Vec::new(),
-            };
-        }
-    };
-    let mut svgs = IndexMap::new();
-    let mut failed_views = Vec::new();
-    for view in views {
-        match view {
-            Ok(view) => {
-                svgs.insert(view.filename, view.svg);
+    Build::rendered(design, counts.warnings)
+}
+
+impl Build {
+    /// Render `design`'s views into a site: a view that fails to render
+    /// shows its error in its place on the index, and the others are
+    /// served. `warnings` is what `check` reported for the design.
+    fn rendered(design: &Design, warnings: usize) -> Build {
+        // `serve` always emits self-contained SVGs (built-in style + identity
+        // stamp); embed-mode is for static export, not the live browser.
+        let views = render_views(design, SvgMode::Standalone);
+        let index_html = match index_html(&views, design.manifest.as_ref(), true) {
+            Ok(html) => html,
+            // An index failure is a build error in its own right; show it on
+            // the page and count it so the console summary reflects it.
+            Err(e) => {
+                return Build {
+                    site: message_site(&format!("HTML index failed: {e}")),
+                    errors: 1,
+                    warnings,
+                    failed_views: Vec::new(),
+                };
             }
-            Err(failure) => failed_views.push(failure),
+        };
+        let mut svgs = IndexMap::new();
+        let mut failed_views = Vec::new();
+        for view in views {
+            match view {
+                Ok(view) => {
+                    svgs.insert(view.filename, view.svg);
+                }
+                Err(failure) => failed_views.push(failure),
+            }
         }
-    }
-    Build {
-        site: Site { index_html, svgs },
-        errors: counts.errors,
-        warnings: counts.warnings,
-        failed_views,
+        Build {
+            site: Site { index_html, svgs },
+            errors: 0,
+            warnings,
+            failed_views,
+        }
     }
 }
 
@@ -167,6 +177,7 @@ fn escape_html(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::render::tests::design_with_views;
     use std::path::PathBuf;
 
     fn fixture_main() -> PathBuf {
@@ -197,24 +208,24 @@ mod tests {
 
     #[test]
     fn a_view_that_fails_to_render_shows_its_error_and_the_others_stay() {
-        // The fixture's "Fine Grid" view passes `check` but not `render`.
-        let main = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/render_failure_project/main.wb");
-        let build = build_site(Some(&main));
-        assert_eq!(build.errors, 0, "the project checks clean");
+        // A design that passes `check` renders every view, so the failing
+        // one ("Lost", a subject with no instance) is built by hand.
+        let design = design_with_views(&["Overview", "Lost", "Detail"]);
+        let build = Build::rendered(&design, 0);
+        assert_eq!(build.errors, 0);
         let [failure] = build.failed_views.as_slice() else {
             panic!("one failed view: {:?}", build.failed_views);
         };
-        assert_eq!(failure.title, "Fine Grid");
+        assert_eq!(failure.title, "Lost");
         // The other views are served and shown; the failure takes its
         // view's place on the page, which still live-reloads.
         let served: Vec<&str> = build.site.svgs.keys().map(String::as_str).collect();
-        assert_eq!(served, ["overview.svg", "harness.svg"]);
+        assert_eq!(served, ["overview.svg", "detail.svg"]);
         let html = &build.site.index_html;
         assert!(html.contains("<img src=\"overview.svg\""));
-        assert!(html.contains("<img src=\"harness.svg\""));
-        assert!(html.contains("<h2>Fine Grid</h2>"));
-        assert!(html.contains("grid step 5 is too small"));
+        assert!(html.contains("<img src=\"detail.svg\""));
+        assert!(html.contains("<h2>Lost</h2>"));
+        assert!(html.contains("has no instance in the design"));
         assert!(html.contains("new WebSocket"));
     }
 

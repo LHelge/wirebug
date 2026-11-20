@@ -5,7 +5,7 @@
 //! rendering stage. A failure while rendering one view is a [`ViewError`]
 //! — the view's title and kind plus a [`ViewErrorKind`] saying why — so
 //! the other views still render; [`Error`] is what stops a whole render:
-//! disk IO and the HTML index.
+//! disk IO, the HTML index and the embed manifest.
 
 use std::path::PathBuf;
 
@@ -27,6 +27,10 @@ pub enum Error {
     /// Rendering the HTML index template failed.
     #[error("failed to render HTML index: {0}")]
     Template(#[from] askama::Error),
+
+    /// Serializing the `--embed` manifest sidecar failed.
+    #[error("failed to serialize the embed manifest: {0}")]
+    EmbedManifest(#[from] serde_json::Error),
 }
 
 /// Convenience alias used throughout the crate.
