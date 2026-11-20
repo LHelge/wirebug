@@ -22,7 +22,7 @@ Every schematic wire is black; colour is only a tiny two-letter code, unreadable
 
 ## Implementation Notes
 - `src/render/schematic/draw.rs`; share the casing/tracer drawing with `render/harness/draw.rs` instead of copying it
-- CLAUDE.md lists "theming, colour" as out of scope: this is wire identity, not theming — update that note
+- AGENTS.md lists "theming, colour" as out of scope: this is wire identity, not theming — update that note
 
 ## Testing
 - Unit tests beside the code; end-to-end coverage via `tests/fixtures/` (never `examples/`).

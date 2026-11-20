@@ -17,7 +17,7 @@ The IR has no shield flag, so shielded CAN, resolver and HV cables cannot record
 ## Acceptance Criteria
 - [ ] Design the syntax (e.g. `shield [a.pin, b.pin];` inside a cable or a `twisted` group) and the harness drawing
 
-Listed as future work in CLAUDE.md — redesign when it lands.
+Listed as future work in ARCHITECTURE.md — redesign when it lands.
 
 ## Testing
 - Unit tests beside the code; end-to-end coverage via `tests/fixtures/` (never `examples/`).

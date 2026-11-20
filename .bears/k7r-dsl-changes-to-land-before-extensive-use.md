@@ -9,7 +9,7 @@ updated: "2026-11-20T21:40:31.987862998Z"
 ---
 
 ## Scope
-Syntax additions and breaks that get more expensive with every `.wb` file written. Each task updates the parser, the docs (both skill mirrors, README), the TextMate grammar, LSP completion, and `examples/`.
+Syntax additions and breaks that get more expensive with every `.wb` file written. Each task updates the parser, the docs (the `wirebug-dsl` skill, README), the TextMate grammar, LSP completion, and `examples/`.
 
 ## Acceptance Criteria
 - [ ] Wires can carry properties

@@ -19,7 +19,7 @@ Only `connector_type` has `part:`. Components (contactor, fuse, sensor) have now
 - [ ] `extend` fragments cannot redeclare a property set on the root
 
 ## Implementation Notes
-- Settle the key set with the BOM task; keep it closed (no free-form map) per the type-system rules in CLAUDE.md
+- Settle the key set with the BOM task; keep it closed (no free-form map) per the type-system rules in AGENTS.md
 
 ## Testing
 - Unit tests beside the code; end-to-end coverage via `tests/fixtures/` (never `examples/`).

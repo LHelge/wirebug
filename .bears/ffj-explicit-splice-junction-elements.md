@@ -17,7 +17,7 @@ Shared rails are loose multi-endpoint wires, so a physical splice has no locatio
 ## Acceptance Criteria
 - [ ] Design a `splice` member that conductors can end on, and how it draws in a harness
 
-Listed as out-of-scope for the MVP in CLAUDE.md — redesign when it lands.
+Listed as out-of-scope for the MVP in AGENTS.md — redesign when it lands.
 
 ## Testing
 - Unit tests beside the code; end-to-end coverage via `tests/fixtures/` (never `examples/`).

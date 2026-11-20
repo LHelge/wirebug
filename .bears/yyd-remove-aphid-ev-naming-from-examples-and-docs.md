@@ -18,7 +18,7 @@ The Aphid EV project moved to its own repo, but `examples/` and the docs still c
 - [ ] `examples/wirebug.toml` has a generic name, description and authors — decided 2026-11-20: name `ev-conversion-example`, description "Example EV conversion — vehicle wiring"
 - [ ] Header comments in `examples/**/*.wb` no longer mention Aphid
 - [ ] README manifest sample updated to match
-- [ ] Skill description and intro in `.claude/skills/wirebug-dsl/SKILL.md` and `.agents/skills/wirebug-dsl/SKILL.md` describe wirebug generically (keep the two in sync)
+- [ ] Skill description and intro in `.claude/skills/wirebug-dsl/SKILL.md` describe wirebug generically
 - [ ] Test data in `src/render/mod.rs` that uses the Aphid name is renamed too
 - [ ] `grep -ri aphid` over the repo (excluding `.bears/` and git history) returns nothing
 

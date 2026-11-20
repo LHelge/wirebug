@@ -15,7 +15,7 @@ parent: g2e
 A formatter for `.wb` (column-aligned ports and wire endpoint lists, as `examples/` does by hand).
 
 ## Implementation Notes
-- The lexer already keeps trivia; swap `lex::significant()` for a trivia collector as CLAUDE.md anticipates
+- The lexer already keeps trivia; swap `lex::significant()` for a trivia collector as ARCHITECTURE.md anticipates
 - LSP formatting follows from it
 
 ## Testing
