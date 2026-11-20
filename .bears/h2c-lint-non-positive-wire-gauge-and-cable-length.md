@@ -1,13 +1,14 @@
 ---
 id: h2c
 title: Lint non-positive wire gauge and cable length
-status: open
+status: done
 priority: P1
 created: "2026-11-20T21:40:31.968700101Z"
-updated: "2026-11-20T21:40:31.968700101Z"
+updated: "2026-11-20T22:13:35.528815544Z"
 tags:
   - check
 parent: kss
+attempts: 1
 ---
 
 ## Summary
