@@ -392,7 +392,7 @@ so one run reports many. Errors fail the run; warnings fail only under
   routing stub (one clearance out) lands strictly inside another box's
   clearance-inflated keepout, so the visibility graph has no node there
   (`include_too_close`, one per pair of includes, naming every blocked
-  port — `route::blocked_stubs`, the router's own precondition); and a
+  port — `Router::blocked_stubs`, the router's own precondition); and a
   schematic wire whose two stubs the visibility graph does not connect —
   walled in by keepouts that meet (`unroutable_wire`, `Router::connects`,
   a breadth-first search over the same graph: A\* only weighs bends and

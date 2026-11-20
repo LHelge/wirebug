@@ -208,7 +208,9 @@ impl SchematicRenderer {
                 })
             })
             .collect();
-        let crowded = route::blocked_stubs(&placement, grid.step())
+        let router = Router::build(&placement, grid.step());
+        let crowded = router
+            .blocked_stubs(&placement)
             .into_iter()
             .filter_map(|blocked| {
                 Some(CrowdedPort {
@@ -218,7 +220,6 @@ impl SchematicRenderer {
                 })
             })
             .collect();
-        let router = Router::build(&placement, grid.step());
         let end = |owner: Option<&InstanceName>, port: &PlacedPort| WireEndAt {
             include: owner.and_then(include_named),
             port: port.port.clone(),

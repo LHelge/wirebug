@@ -60,7 +60,10 @@ pub(super) struct Router {
 
 impl Router {
     pub(super) fn build(placement: &Placement, clearance: f64) -> Self {
-        let obstacles = keepouts(placement, clearance);
+        let obstacles: Vec<Rect> = placement
+            .component_bounds()
+            .map(|b| Rect::from(b).inflated(clearance))
+            .collect();
 
         // Each port contributes its connection point and its stub (one
         // clearance out along the normal) as interesting points, so the
@@ -83,6 +86,37 @@ impl Router {
             soft_avoid,
             clearance,
         }
+    }
+
+    /// Every wired child port of `placement` whose stub falls inside
+    /// another component's keepout — the router's own precondition for
+    /// attaching a port, read from the obstacles [`Self::route_all`] routes
+    /// around. Enclosure ports are not checked: the enclosure stands four
+    /// grid steps off the child boxes, so their inward stubs always clear
+    /// every keepout.
+    pub(super) fn blocked_stubs<'p>(&self, placement: &'p Placement) -> Vec<BlockedStub<'p>> {
+        let mut blocked = Vec::new();
+        for (owner, (name, component)) in placement.components.iter().enumerate() {
+            for port in &component.ports {
+                if !placement.is_wired(name, &port.port) {
+                    continue;
+                }
+                let at = stub(port, self.clearance);
+                let swallowed = self
+                    .obstacles
+                    .iter()
+                    .enumerate()
+                    .find(|&(i, keepout)| i != owner && keepout.contains_point(at));
+                if let Some((blocker, _)) = swallowed {
+                    blocked.push(BlockedStub {
+                        owner,
+                        port,
+                        blocker,
+                    });
+                }
+            }
+        }
+        blocked
     }
 
     /// Whether [`Self::route_all`] finds a route between `a` and `b`: both
@@ -176,15 +210,6 @@ pub(super) struct Unrouted {
     pub(super) pair: usize,
 }
 
-/// Every component box grown by `clearance`: the regions routes must stay
-/// out of, in [`Placement::component_bounds`] order.
-fn keepouts(placement: &Placement, clearance: f64) -> Vec<Rect> {
-    placement
-        .component_bounds()
-        .map(|b| Rect::from(b).inflated(clearance))
-        .collect()
-}
-
 /// A wired port whose wire cannot leave it: its stub lies strictly inside
 /// another component's keepout, so the visibility graph has no node there
 /// and [`Router::route_all`] would fail with [`Unrouted`].
@@ -194,36 +219,6 @@ pub(super) struct BlockedStub<'p> {
     pub(super) port: &'p PlacedPort,
     /// Index of the component whose keepout swallows the stub.
     pub(super) blocker: usize,
-}
-
-/// Every wired child port whose stub falls inside another component's
-/// keepout — the router's own precondition for attaching a port, checked
-/// without building the graph. Enclosure ports are not checked: the
-/// enclosure stands four grid steps off the child boxes, so their inward
-/// stubs always clear every keepout.
-pub(super) fn blocked_stubs(placement: &Placement, clearance: f64) -> Vec<BlockedStub<'_>> {
-    let keepouts = keepouts(placement, clearance);
-    let mut blocked = Vec::new();
-    for (owner, (name, component)) in placement.components.iter().enumerate() {
-        for port in &component.ports {
-            if !placement.is_wired(name, &port.port) {
-                continue;
-            }
-            let at = stub(port, clearance);
-            let swallowed = keepouts
-                .iter()
-                .enumerate()
-                .find(|&(i, keepout)| i != owner && keepout.contains_point(at));
-            if let Some((blocker, _)) = swallowed {
-                blocked.push(BlockedStub {
-                    owner,
-                    port,
-                    blocker,
-                });
-            }
-        }
-    }
-    blocked
 }
 
 fn outline(r: Rect) -> Vec<Point> {
