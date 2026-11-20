@@ -1,0 +1,5 @@
+[project]
+name = "invalid-values-project"
+version = "0.1.0"
+description = "Check fixture: a project that parses and resolves but carries nonsense values"
+revision = "fixture"

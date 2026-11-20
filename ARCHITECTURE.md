@@ -337,11 +337,13 @@ so one run reports many. Errors fail the run; warnings fail only under
   arity (a cable conductor that isn't exactly two endpoints,
   `cable_wire_arity`); cable property checks (`unknown_cable_property`,
   `duplicate_cable_property`, `cable_property_type` — `type` wants a string,
-  `length` a number); unused import, bare-port pin, and non-IEC 60757
+  `length` a number); non-positive values (`invalid_gauge` on a wire or
+  cable conductor's gauge, `invalid_length` on a cable `length`, both
+  labelled on the number); unused import, bare-port pin, and non-IEC 60757
   wire color (`unknown_wire_color` — the `ir::ColorName::Other` escape
   hatch still renders verbatim) as warnings. Cable
-  property/arity checks live here (not elaborate) so a type instantiated
-  many times reports each once.
+  property/arity/value checks live here (not elaborate) so a type
+  instantiated many times reports each once.
 
 Not done on purpose: **unconnected-port** detection. It needs per-instance
 tree analysis and floods intentional unused-pin warnings on a real
@@ -391,7 +393,7 @@ src/
 │   │   └── views.rs     # view subject binding + include/enclosure checks
 │   ├── elaborate/mod.rs # AST/registry → ir::Design; containment-cycle guard
 │   ├── ir/mod.rs        # id newtypes + elaborated Design/Instance/Port/Wire/View
-│   ├── validate/mod.rs  # wire arity (error) + --strict warnings
+│   ├── validate/mod.rs  # wire arity, pin/gauge/length values (errors) + --strict warnings
 │   └── diagnostics/mod.rs # miette `Problem` enum (one variant per failure class)
 │
 │  # ── ir::Design → SVG renderer ──

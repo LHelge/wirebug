@@ -6,6 +6,7 @@
 //!
 //! - wire arity (a wire needs at least two endpoints) — an error;
 //! - pin number range (pins are positive integers) — an error;
+//! - wire gauge and cable `length` (both must be positive) — errors;
 //! - unused imports and pin assignments outside a connector — warnings,
 //!   which only fail the run under `--strict`.
 //!
@@ -19,7 +20,7 @@ use crate::dsl::ast::{CablePropertyValue, Member, Port, Wire};
 use crate::dsl::diagnostics::Problem;
 use crate::dsl::ir::ColorName;
 use crate::dsl::resolve::Resolved;
-use crate::dsl::span::{FileId, Span};
+use crate::dsl::span::{FileId, Span, Spanned};
 
 /// Validate the resolved registry, returning any problems.
 pub fn validate(resolved: &Resolved) -> Vec<Problem> {
@@ -38,6 +39,7 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
                         });
                     }
                     validate_wire_colors(wire, def.file, resolved, &mut problems);
+                    validate_gauge(wire, def.file, resolved, &mut problems);
                 }
                 Member::Port(port) if !port.pins.is_empty() => {
                     validate_pin_numbers(port, def.file, resolved, &mut problems);
@@ -68,6 +70,7 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
                             });
                         }
                         validate_wire_colors(wire, def.file, resolved, &mut problems);
+                        validate_gauge(wire, def.file, resolved, &mut problems);
                     }
                     let mut seen: HashMap<&str, Span> = HashMap::new();
                     for p in &cable.properties {
@@ -92,10 +95,13 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
                             "type" if !matches!(p.value, CablePropertyValue::Str(_)) => {
                                 problems.push(wrong("a string"));
                             }
-                            "length" if !matches!(p.value, CablePropertyValue::Number(_)) => {
-                                problems.push(wrong("a number"));
-                            }
-                            "type" | "length" => {}
+                            "length" => match &p.value {
+                                CablePropertyValue::Number(length) => {
+                                    validate_length(length, def.file, resolved, &mut problems);
+                                }
+                                _ => problems.push(wrong("a number")),
+                            },
+                            "type" => {}
                             _ => problems.push(Problem::UnknownCableProperty {
                                 key: key.to_string(),
                                 src: src(),
@@ -167,6 +173,34 @@ fn validate_wire_colors(
                 at: color.span.into(),
             });
         }
+    }
+}
+
+/// A gauge is a conductor cross-section: zero or negative is nonsense.
+fn validate_gauge(wire: &Wire, file: FileId, resolved: &Resolved, problems: &mut Vec<Problem>) {
+    if wire.gauge.node <= 0.0 {
+        problems.push(Problem::InvalidGauge {
+            value: wire.gauge.node,
+            src: resolved.project.source(file),
+            at: wire.gauge.span.into(),
+        });
+    }
+}
+
+/// A physical length in metres must be positive. Takes the spanned number
+/// itself, not its owner, so any `length` value can be checked the same way.
+fn validate_length(
+    length: &Spanned<f64>,
+    file: FileId,
+    resolved: &Resolved,
+    problems: &mut Vec<Problem>,
+) {
+    if length.node <= 0.0 {
+        problems.push(Problem::InvalidLength {
+            value: length.node,
+            src: resolved.project.source(file),
+            at: length.span.into(),
+        });
     }
 }
 
@@ -278,6 +312,95 @@ mod tests {
             codes.iter().any(|c| c == "wirebug::cable_property_type"),
             "{codes:?}"
         );
+    }
+
+    #[test]
+    fn zero_and_negative_cable_length_error() {
+        for length in ["0", "-2", "-0.5"] {
+            let codes = cable(&format!("length: {length}; wire red 1 [a, b];"));
+            assert_eq!(codes, ["wirebug::invalid_length"], "length {length}");
+        }
+    }
+
+    #[test]
+    fn fractional_cable_length_is_clean() {
+        let codes = cable("length: 0.1; wire red 1 [a, b];");
+        assert!(codes.is_empty(), "{codes:?}");
+    }
+
+    #[test]
+    fn string_cable_length_is_a_type_error_not_a_length_error() {
+        let codes = cable("length: \"-2\"; wire red 1 [a, b];");
+        assert_eq!(codes, ["wirebug::cable_property_type"]);
+    }
+
+    #[test]
+    fn zero_and_negative_loose_wire_gauge_error() {
+        for gauge in ["0", "-1", "-0.25"] {
+            let codes = validate_files(&[(
+                "main.wb",
+                &format!(
+                    "component m {{ pub port a \"A\"; pub port b \"B\"; wire black {gauge} [a, b]; }}\n"
+                ),
+            )]);
+            assert_eq!(codes, ["wirebug::invalid_gauge"], "gauge {gauge}");
+        }
+    }
+
+    #[test]
+    fn non_positive_cable_conductor_gauge_errors() {
+        let codes = cable("wire red 0 [a, b]; twisted { wire red -1 [a, b]; wire blue 1 [a, c]; }");
+        assert_eq!(codes, ["wirebug::invalid_gauge", "wirebug::invalid_gauge"]);
+    }
+
+    #[test]
+    fn fractional_gauge_is_clean() {
+        let codes = validate_files(&[(
+            "main.wb",
+            "component m { pub port a \"A\"; pub port b \"B\"; wire black 0.25 [a, b]; }\n",
+        )]);
+        assert!(codes.is_empty(), "{codes:?}");
+    }
+
+    /// The source text that each label of each problem in a single-file
+    /// project points at.
+    fn labelled_text(src: &str) -> Vec<String> {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("main.wb"), src).expect("write");
+        let (project, _) = load(&dir.path().join("main.wb"));
+        let project = project.expect("loads");
+        let resolved = resolve(&project);
+        validate(&resolved)
+            .iter()
+            .flat_map(|p| p.labels().into_iter().flatten())
+            .map(|l| src[l.offset()..l.offset() + l.len()].to_string())
+            .collect()
+    }
+
+    #[test]
+    fn invalid_gauge_points_at_the_number() {
+        let labels = labelled_text(
+            "component m { pub port a \"A\"; pub port b \"B\"; wire black -1 [a, b]; }\n",
+        );
+        assert_eq!(labels, ["-1"]);
+    }
+
+    #[test]
+    fn invalid_length_points_at_the_number() {
+        let labels = labelled_text(
+            "component m { pub port a \"A\"; pub port b \"B\"; cable w { length: -2; wire red 1 [a, b]; } }\n",
+        );
+        assert_eq!(labels, ["-2"]);
+    }
+
+    #[test]
+    fn invalid_length_in_a_type_instantiated_twice_reports_once() {
+        let codes = validate_files(&[(
+            "main.wb",
+            "component leaf { pub port a \"A\"; pub port b \"B\"; cable w { length: 0; wire red 1 [a, b]; } }\n\
+             component m { l1: leaf; l2: leaf; }\n",
+        )]);
+        assert_eq!(codes, ["wirebug::invalid_length"]);
     }
 
     #[test]
