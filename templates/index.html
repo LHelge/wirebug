@@ -47,15 +47,15 @@
 {% else %}
   <div class="tabs">
 {% for panel in panels %}
-    <input type="radio" name="tab" id="tab-{{ panel.id }}"{% if loop.first %} checked{% endif %}>
+    <input type="radio" name="tab" id="tab-{{ panel.id() }}"{% if loop.first %} checked{% endif %}>
 {% endfor %}
     <div class="tabbar">
 {% for panel in panels %}
-      <label for="tab-{{ panel.id }}">{{ panel.label }}</label>
+      <label for="tab-{{ panel.id() }}">{{ panel.label }}</label>
 {% endfor %}
     </div>
 {% for panel in panels %}
-    <div class="panel panel-{{ panel.id }}">
+    <div class="panel panel-{{ panel.id() }}">
 {% for view in panel.views %}
 {% match view %}
 {% when Ok(view) %}
