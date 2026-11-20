@@ -19,7 +19,8 @@ use super::{
 use crate::dsl::ir::{
     Design, Instance, InstanceName, Pin, Port, PortName, View, WireColor, WireEnd,
 };
-use crate::error::{ViewErrorKind, ViewResult};
+use crate::error::ViewResult;
+use crate::render::GridFault;
 use crate::render::geometry::{Bounds, Point, Side};
 
 /// A port's identity within a view: a port on an included child instance, or
@@ -63,16 +64,13 @@ impl Grid {
     /// The grid `view` asks for (`DEFAULT_GRID` when it names none),
     /// validated: ports sit two steps apart, so that pitch must clear a
     /// port label or adjacent labels would overlap.
-    pub(super) fn of_view(view: &View) -> ViewResult<Self> {
-        let step = view.grid.unwrap_or(DEFAULT_GRID);
-        if step <= 0.0 {
-            return Err(ViewErrorKind::NonPositiveGrid { grid: step });
-        }
-        let min_step = MIN_PORT_PITCH / 2.0;
-        if step < min_step {
-            return Err(ViewErrorKind::GridTooSmall {
+    pub(super) fn of_view(view: &View) -> Result<Self, GridFault> {
+        let step = GridFault::positive_step(view, DEFAULT_GRID)?;
+        let minimum = MIN_PORT_PITCH / 2.0;
+        if step < minimum {
+            return Err(GridFault::TooFine {
                 grid: step,
-                minimum: min_step,
+                minimum,
             });
         }
         Ok(Self::new(step))

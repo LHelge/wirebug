@@ -15,6 +15,7 @@ use indexmap::IndexMap;
 use crate::dsl::diagnostics::Problem;
 use crate::dsl::ir::{Design, Instance, PortName, TypeName, View, ViewKind, Wire, WireEnd};
 use crate::dsl::project::Project;
+use crate::render::GridFault;
 use crate::render::geometry::Bounds;
 use crate::render::harness::HarnessRenderer;
 use crate::render::pinout::PinoutRenderer;
@@ -81,6 +82,9 @@ pub(super) struct ViewLayout {
     pub(super) unroutable: Vec<UnroutableWire>,
     /// The conductors a harness view draws; empty for other kinds.
     pub(super) drawn: Vec<Segment>,
+    /// Why the renderer rejects the view's `grid:`, when it does; nothing
+    /// is laid out on such a grid, so no box or wire is reported.
+    pub(super) grid: Option<GridFault>,
 }
 
 /// The conductors each component's harness views draw between them, keyed
@@ -154,8 +158,12 @@ impl Conductor<'_> {
 /// (`undrawn_conductor`). `project` supplies the sources the spans point
 /// into.
 ///
-/// A view the renderers cannot lay out at all (no subject instance, a bad
-/// grid, an unknown kind) is skipped: rendering reports those itself.
+/// A view whose `grid:` its renderer rejects reports that alone: a step
+/// that is not positive (`invalid_grid`), or one finer than the renderer
+/// can draw ports on (`grid_too_fine`), labelled on the number.
+///
+/// A view the renderers cannot lay out at all (no subject instance, an
+/// unknown kind) is skipped: rendering reports those itself.
 #[must_use]
 pub fn layout_problems(design: &Design, project: &Project) -> Vec<Problem> {
     let mut problems = Vec::new();
@@ -180,12 +188,48 @@ pub fn layout_problems(design: &Design, project: &Project) -> Vec<Problem> {
 }
 
 impl ViewLayout {
-    /// Overlapping pairs first, then crowded pairs, each in include order,
-    /// then unroutable wires in wire order. A pair that overlaps is not
-    /// also reported as too close, and unroutable wires are reported only
-    /// in a view with neither: colliding boxes are the cause to fix first,
-    /// and a port without room to leave never routes anyway.
+    /// The layout of a view whose grid the renderer rejects: only the fault.
+    pub(super) fn bad_grid(fault: GridFault) -> Self {
+        Self {
+            grid: Some(fault),
+            ..Self::default()
+        }
+    }
+
+    /// A rejected grid alone, when there is one. Otherwise overlapping
+    /// pairs first, then crowded pairs, each in include order, then
+    /// unroutable wires in wire order. A pair that overlaps is not also
+    /// reported as too close, and unroutable wires are reported only in a
+    /// view with neither: colliding boxes are the cause to fix first, and a
+    /// port without room to leave never routes anyway.
     fn problems(&self, view: &View, project: &Project) -> Vec<Problem> {
+        if let Some(fault) = self.grid {
+            // A renderer's default grid is always valid, so a rejected grid
+            // is an authored one, with a number to point at.
+            return view
+                .grid
+                .map(|grid| {
+                    let src = project.source(grid.span.file);
+                    let at = grid.span.into();
+                    match fault {
+                        GridFault::NonPositive { grid } => Problem::InvalidGrid {
+                            value: grid,
+                            src,
+                            at,
+                        },
+                        GridFault::TooFine { grid, minimum } => Problem::GridTooFine {
+                            value: grid,
+                            minimum,
+                            kind: view.kind.to_string(),
+                            src,
+                            at,
+                        },
+                    }
+                })
+                .into_iter()
+                .collect();
+        }
+
         let mut overlapping = Vec::new();
         for (k, later) in self.boxes.iter().enumerate() {
             for earlier in &self.boxes[..k] {
@@ -686,12 +730,98 @@ component Sys {{
 
     #[test]
     fn a_harness_view_with_a_bad_grid_still_covers_its_conductors() {
-        // Rendering reports the grid; the lint does not pile on.
+        // The grid is reported; its conductors are not piled on.
         let src = harnessed(
             "    wire red 1 [a.sig, b.sig];",
             &harness("AB", &["a.j", "b.j"]).replace("grid: 20;", "grid: 0;"),
         );
-        assert!(summary(&src).is_empty());
+        assert_eq!(summary(&src), [code("invalid_grid", &["0"])]);
+    }
+
+    #[test]
+    fn a_non_positive_grid_is_an_error_on_its_number() {
+        let src = two_nodes((16, 0), "east", "west").replace("grid: 20;", "grid: -5;");
+        assert_eq!(summary(&src), [code("invalid_grid", &["-5"])]);
+        let (project, design) = load(&src);
+        let [problem] = layout_problems(&design, &project)
+            .try_into()
+            .expect("one problem");
+        assert_eq!(problem.to_string(), "grid step must be positive, got -5");
+        assert!(problem.is_error());
+    }
+
+    #[test]
+    fn a_schematic_grid_too_fine_for_a_port_label_names_the_minimum() {
+        // Ports sit two steps apart and need `MIN_PORT_PITCH` (15) each.
+        let src = two_nodes((16, 0), "east", "west").replace("grid: 20;", "grid: 5;");
+        assert_eq!(summary(&src), [code("grid_too_fine", &["5"])]);
+        let (project, design) = load(&src);
+        let [problem] = layout_problems(&design, &project)
+            .try_into()
+            .expect("one problem");
+        assert_eq!(
+            problem.to_string(),
+            "grid step 5 is too fine for a schematic view; ports need at least 7.5 per step"
+        );
+        assert!(problem.is_error());
+        assert!(
+            problem
+                .help()
+                .expect("help")
+                .to_string()
+                .contains("use `grid: 7.5;` or coarser")
+        );
+    }
+
+    /// The lint asks each renderer's own grid validation, so for every view
+    /// kind a grid is reported exactly when rendering rejects it — and only
+    /// a schematic has a minimum.
+    #[test]
+    fn a_grid_is_reported_exactly_when_its_renderer_rejects_it() {
+        let pinout = r#"
+component Sys {
+    connector x1 "X1 1p" {
+        pub port a "A" pin 1;
+    }
+}
+
+view pinout "P" {
+    grid: 20;
+    include x1 at (0, 0);
+}
+"#;
+        let sources = [
+            ("schematic", two_nodes((30, 0), "east", "west")),
+            (
+                "harness",
+                harnessed(
+                    "    wire red 1 [a.sig, b.sig];",
+                    &harness("AB", &["a.j", "b.j"]),
+                ),
+            ),
+            ("pinout", pinout.to_string()),
+        ];
+        for (kind, src) in &sources {
+            for grid in ["-5", "0", "0.5", "5", "7", "7.5", "20"] {
+                let src = src.replace("grid: 20;", &format!("grid: {grid};"));
+                let (project, design) = load(&src);
+                let grid_problems: Vec<_> = layout_problems(&design, &project)
+                    .into_iter()
+                    .filter(|p| {
+                        matches!(p, Problem::InvalidGrid { .. } | Problem::GridTooFine { .. })
+                    })
+                    .collect();
+                assert_eq!(
+                    grid_problems.is_empty(),
+                    renders(&design),
+                    "{kind} view on grid {grid}: {grid_problems:?}"
+                );
+                let step: f64 = grid.parse().expect("a number");
+                let minimum = crate::render::schematic::MIN_PORT_PITCH / 2.0;
+                let rejected = step <= 0.0 || (*kind == "schematic" && step < minimum);
+                assert_eq!(!grid_problems.is_empty(), rejected, "{kind} on {grid}");
+            }
+        }
     }
 
     /// `ic` is mated mid-harness: `a` plugs into its female half, `b` into

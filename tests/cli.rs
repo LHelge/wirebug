@@ -720,122 +720,71 @@ fn render_stops_at_check_instead_of_failing_to_route() {
     assert!(!out.exists(), "nothing is written");
 }
 
-/// A project that passes `check` but has one view `render` cannot draw
-/// ("Fine Grid"), between a schematic and a harness view that render. Its
-/// failure is a too-fine `grid:`, which only the renderer rejects today;
-/// when `check` learns to, the fixture swaps in another failure `check`
-/// does not catch, and these tests keep their meaning.
-const RENDER_FAILURE_ROOT: &str = "tests/fixtures/render_failure_project";
+/// Views whose `grid:` their renderer cannot draw: too fine for a
+/// schematic's port labels, zero for a harness, negative for a pinout. A
+/// project that passes `check` renders every view, so how `render` writes
+/// around a view that fails is tested on hand-built designs
+/// (`render::output`, `serve::build`).
+const INVALID_GRIDS_ROOT: &str = "tests/fixtures/invalid_grids_project";
 
-/// `render` the render-failure fixture with `flags`, asserting it fails
-/// naming the failed view, and return the output directory's file names.
-fn render_with_a_failing_view(flags: &[&str]) -> (tempfile::TempDir, Vec<String>) {
-    let tmp = tempdir().expect("tempdir");
-    let out = tmp.path().join("out");
-    Command::cargo_bin("wirebug")
+#[test]
+fn check_rejects_a_grid_its_renderer_cannot_draw() {
+    let output = Command::cargo_bin("wirebug")
         .expect("binary present")
-        .args([
-            "render",
-            RENDER_FAILURE_ROOT,
-            "--out",
-            out.to_str().unwrap(),
-        ])
-        .args(flags)
+        .args(["check", "--format", "json", INVALID_GRIDS_ROOT])
         .assert()
         .failure()
-        .stderr(predicate::str::contains(
-            "error: view \"Fine Grid\": grid step 5 is too small",
-        ))
-        .stderr(predicate::str::contains("rendered 2 of 3 view(s)"));
-    let mut entries: Vec<String> = std::fs::read_dir(&out)
-        .expect("out dir")
-        .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+    let main =
+        std::fs::read_to_string(format!("{INVALID_GRIDS_ROOT}/main.wb")).expect("fixture main.wb");
+
+    // Each is an error labelled on the grid's number; the valid view
+    // reports nothing.
+    let found: Vec<(&str, &str, &str)> = problems
+        .iter()
+        .map(|p| {
+            let span = &p["labels"][0]["span"];
+            let offset = span["offset"].as_u64().expect("offset") as usize;
+            let length = span["length"].as_u64().expect("length") as usize;
+            (
+                p["code"].as_str().expect("code"),
+                p["severity"].as_str().expect("severity"),
+                &main[offset..offset + length],
+            )
+        })
         .collect();
-    entries.sort();
-    (tmp, entries)
-}
-
-#[test]
-fn render_writes_the_views_that_render_and_names_the_one_that_fails() {
-    let (tmp, entries) = render_with_a_failing_view(&[]);
-    assert_eq!(entries, ["harness.svg", "index.html", "overview.svg"]);
-
-    // The index shows the failure where the drawing would be.
-    let index = std::fs::read_to_string(tmp.path().join("out/index.html")).expect("index");
-    assert!(index.contains("<img src=\"overview.svg\""));
-    assert!(index.contains("<img src=\"harness.svg\""));
-    assert!(index.contains("<section class=\"failed\">"));
-    assert!(index.contains("<h2>Fine Grid</h2>"));
-    assert!(index.contains("grid step 5 is too small"));
-}
-
-#[test]
-fn render_png_rasterises_the_views_that_render() {
-    let (_tmp, entries) = render_with_a_failing_view(&["--png"]);
-    assert_eq!(entries, ["harness.png", "index.html", "overview.png"]);
-}
-
-#[test]
-fn render_pdf_pages_only_the_views_that_render() {
-    let (tmp, entries) = render_with_a_failing_view(&["--pdf"]);
-    assert_eq!(entries, ["render_failure_project.pdf"]);
-    let pdf = std::fs::read(tmp.path().join("out/render_failure_project.pdf")).expect("pdf");
-    assert!(pdf.windows(8).any(|w| w == b"/Count 2"), "two pages");
-    assert!(pdf.windows(7).any(|w| w == b"(2 / 2)"), "numbered of two");
-}
-
-/// Like [`RENDER_FAILURE_ROOT`], but its only view fails; the same note
-/// about its too-fine `grid:` trigger applies.
-const RENDER_NOTHING_ROOT: &str = "tests/fixtures/render_nothing_project";
-
-#[test]
-fn render_pdf_writes_no_pdf_when_every_view_fails() {
-    let tmp = tempdir().expect("tempdir");
-    let out = tmp.path().join("out");
-    Command::cargo_bin("wirebug")
-        .expect("binary present")
-        .args([
-            "render",
-            RENDER_NOTHING_ROOT,
-            "--out",
-            out.to_str().unwrap(),
-        ])
-        .arg("--pdf")
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "error: view \"Fine Grid\": grid step 5 is too small",
-        ))
-        .stderr(predicate::str::contains(
-            "no view rendered — render_nothing_project.pdf not written",
-        ));
-    let entries = std::fs::read_dir(&out).expect("out dir").count();
-    assert_eq!(entries, 0, "nothing is written");
-}
-
-#[test]
-fn render_embed_lists_only_the_views_it_wrote() {
-    let (tmp, entries) = render_with_a_failing_view(&["--embed"]);
     assert_eq!(
-        entries,
+        found,
         [
-            "harness.svg",
-            "manifest.json",
-            "overview.svg",
-            "wirebug.css"
+            ("wirebug::grid_too_fine", "error", "5"),
+            ("wirebug::invalid_grid", "error", "0"),
+            ("wirebug::invalid_grid", "error", "-10"),
         ]
     );
-    let manifest: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(tmp.path().join("out/manifest.json")).expect("manifest"),
-    )
-    .expect("json");
-    let titles: Vec<&str> = manifest["views"]
-        .as_array()
-        .expect("views")
-        .iter()
-        .map(|v| v["title"].as_str().expect("title"))
-        .collect();
-    assert_eq!(titles, ["Overview", "Harness"]);
+    assert_eq!(
+        problems[0]["message"],
+        "grid step 5 is too fine for a schematic view; ports need at least 7.5 per step"
+    );
+}
+
+#[test]
+fn render_stops_at_check_instead_of_failing_on_a_grid() {
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("out");
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["render", INVALID_GRIDS_ROOT, "--out", out.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("grid_too_fine"))
+        .stderr(predicate::str::contains("not rendering"))
+        .stderr(predicate::str::contains("error: view").not());
+    assert!(!out.exists(), "nothing is written");
 }
 
 #[test]

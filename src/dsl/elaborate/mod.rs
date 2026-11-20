@@ -13,7 +13,7 @@ use crate::dsl::ir::{
     CableMeta, CableName, Connector, ConnectorCavity, ConnectorFaceLayout, ConnectorGridLayout,
     ConnectorLayout, ConnectorName, ConnectorPin, ConnectorRef, ConnectorTypeName, Design,
     EnclosurePort, Half, Include, InlineHalfMeta, InlineMeta, Instance, InstanceName, InstancePath,
-    Port, PortName, Side, TypeName, View, Visibility, Wire, WireColor, WireEnd,
+    Port, PortName, Side, TypeName, View, ViewGrid, Visibility, Wire, WireColor, WireEnd,
 };
 use crate::dsl::resolve::{DefId, Resolved};
 
@@ -312,7 +312,10 @@ impl Elaborator<'_> {
                 Some(View {
                     kind,
                     title: v.title.node.clone(),
-                    grid: v.grid.as_ref().map(|g| g.node),
+                    grid: v.grid.as_ref().map(|g| ViewGrid {
+                        step: g.node,
+                        span: g.span,
+                    }),
                     subject: TypeName::from(self.resolved.defs[subject].name),
                     has_enclosure: v.has_enclosure,
                     // Anchors whose shape resolve already rejected drop here.

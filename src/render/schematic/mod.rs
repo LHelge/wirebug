@@ -182,11 +182,12 @@ impl SchematicRenderer {
     /// What `check` needs from `view`'s layout: each include's box, every
     /// wired port whose wire [`Self::render`] could not route because
     /// another box sits inside its clearance, and every wire the router
-    /// finds no path for. Empty when the grid is invalid: rendering reports
-    /// that itself.
+    /// finds no path for. Nothing but the fault when the grid is invalid:
+    /// no box can be laid out on it.
     pub(super) fn layout(&self, design: &Design, subject: &Instance, view: &View) -> ViewLayout {
-        let Ok(grid) = Grid::of_view(view) else {
-            return ViewLayout::default();
+        let grid = match Grid::of_view(view) {
+            Ok(grid) => grid,
+            Err(fault) => return ViewLayout::bad_grid(fault),
         };
         let Ok(placement) = Placement::compute(design, subject, view, grid) else {
             return ViewLayout::default();
@@ -244,7 +245,9 @@ impl SchematicRenderer {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::dsl::ir::{Include, InstanceName, PortName, Side, TextBox, TypeName, ViewKind};
+    use crate::dsl::ir::{
+        Include, InstanceName, PortName, Side, TextBox, TypeName, ViewGrid, ViewKind,
+    };
     use crate::dsl::span::{FileId, Span};
     use crate::error::ViewErrorKind;
 
@@ -422,7 +425,10 @@ component sys {
         let design = two_box_design();
         // Pitch is 2 steps, so a step of 5 gives pitch 10 < MIN_PORT_PITCH.
         let mut view = view_of("sys", &[("a", 0.0, 0.0, &[("p", Side::East)])]);
-        view.grid = Some(5.0);
+        view.grid = Some(ViewGrid {
+            step: 5.0,
+            span: Span::new(FileId(0), 0, 0),
+        });
         assert!(matches!(
             render(&design, &view),
             Err(ViewErrorKind::GridTooSmall { .. })

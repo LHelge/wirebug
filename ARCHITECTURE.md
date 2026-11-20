@@ -15,8 +15,8 @@ Four CLI commands share it:
 - **`check` (`src/dsl/`, then `src/render/lint.rs`)** — lex → parse →
   load project → resolve → elaborate → validate, then the **layout
   checks**: every view laid out by its renderer's own layout code, to find
-  includes that collide and conductors no harness view draws (see DSL
-  validation). Turns a multi-file `.wb`
+  grids a renderer rejects, includes that collide and conductors no harness
+  view draws (see DSL validation). Turns a multi-file `.wb`
   project into an elaborated IR (`ir::Design`) and reports problems via
   miette. The entry every command calls is `pipeline::check_project`
   (re-exported as `wirebug::check_project`; the LSP runs the same stages
@@ -253,7 +253,8 @@ otherwise sees only world geometry. (Matching the keepout to the pitch was
 tried and reverted: at two steps the inflated box rects overlap on tightly
 packed views and close off the only corridor, so routing fails.)
 Because the pitch is two steps, the grid must be at least
-`MIN_PORT_PITCH / 2`; a finer grid errors. The keepout is why boxes need
+`MIN_PORT_PITCH / 2` (`Grid::of_view`); `check` rejects a finer one
+(`grid_too_fine`). The keepout is why boxes need
 room: a wired port needs two steps clear in front of it, and boxes closer
 than two steps to each other close the corridor between them. `check`'s
 Layout phase finds both, from the same `Placement` and router geometry.
@@ -392,9 +393,20 @@ so one run reports many. Errors fail the run; warnings fail only under
   laid out by its renderer (`SchematicRenderer::layout`,
   `HarnessRenderer::layout`, `PinoutRenderer::layout`, each returning a
   `lint::ViewLayout` built from the very layout `render` draws), so the
-  check and the drawing cannot disagree. Errors, each labelled on the
-  includes involved (`ir::Include.span`, the `inst`/`inst.connector` the
-  include names; a view sits in one file, so plain two-label diagnostics):
+  check and the drawing cannot disagree. First the grid: each renderer
+  validates its view's `grid:` with the function its `render` calls
+  (`Grid::of_view` for a schematic, `GridFault::positive_step` for the
+  others), and a rejected grid lands in `ViewLayout.grid` as a
+  `render::GridFault` — the same value `render` turns into its
+  `ViewErrorKind`. It is an error labelled on the grid's number
+  (`ir::View.grid`, an `ir::ViewGrid` with the step and its span): a step
+  that is not positive (`invalid_grid`, every view kind) or, for a
+  schematic only, one under `MIN_PORT_PITCH / 2` (`grid_too_fine`, naming
+  that minimum; harness and pinout views have none). A view on a rejected
+  grid lays out nothing, so it reports the grid alone. Then errors, each
+  labelled on the includes involved (`ir::Include.span`, the
+  `inst`/`inst.connector` the include names; a view sits in one file, so
+  plain two-label diagnostics):
   two includes whose boxes overlap (`overlapping_includes`, every view
   kind; boxes that only touch are fine, and the enclosure, text boxes and
   harness cable boxes are not includes); a wired schematic port whose
@@ -423,8 +435,10 @@ so one run reports many. Errors fail the run; warnings fail only under
   covered through either half (an include of either normalizes to the
   designator), a double crimp is two conductors and never a problem, and
   a component with no harness view is not built from drawings yet, so is
-  never reported. A harness view with a bad `grid:` still counts its
-  conductors (they do not depend on the grid; render reports the grid).
+  never reported. A harness view with a rejected `grid:` still counts its
+  conductors (laid out on the default grid: which conductors a view draws
+  does not depend on its grid), so the grid is reported alone rather than
+  with a warning for every conductor the view draws.
 
 Not done on purpose: **unconnected-port** detection. It needs per-instance
 tree analysis and floods intentional unused-pin warnings on a real
@@ -456,7 +470,10 @@ phases above). Render adds only geometry/dispatch errors, in `src/error.rs`
     (`layout::Connection::ends`);
   - a view subject type with no instance in the design; a pinout include
     naming a connector its subject lacks;
-  - a non-positive `grid:`, or a `grid:` finer than a port label needs;
+  - a non-positive `grid:`, or a schematic `grid:` finer than a port label
+    needs (`NonPositiveGrid`, `GridTooSmall`, from the renderer's
+    `GridFault`) — caught earlier by the Layout phase (`invalid_grid`,
+    `grid_too_fine`), so a backstop for hand-built designs;
   - our own SVG failing to parse or convert for `--png` / `--pdf`.
 - **`error::Error`** — what stops the whole render: file IO when writing
   output (`Write`), the HTML index template (`Template`) and serializing

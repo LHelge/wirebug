@@ -1,12 +1,12 @@
-// One view that `check` passes but `render` cannot draw, between views
-// that render fine: `render` writes the others and reports the one.
-//
-// The failure is the "Fine Grid" view's `grid:` — finer than a port label
-// needs, which only the renderer rejects today. When `check` learns to
-// reject it, swap in another failure `check` does not catch.
+// Views whose `grid:` their renderer cannot draw, beside one it can:
+// `check` rejects each on its number, so `render` never gets to fail.
 component Vehicle {
     left:  Module "Left";
     right: Module "Right";
+
+    connector x9 "Service 1p" {
+        pub port svc "SVC" pin 1;
+    }
 
     wire red 1 [left.sig, right.sig];
 
@@ -29,6 +29,7 @@ view schematic "Overview" {
     }
 }
 
+// Ports sit two steps apart; a 5-unit step leaves their labels no room.
 view schematic "Fine Grid" {
     grid: 5;
 
@@ -42,8 +43,14 @@ view schematic "Fine Grid" {
 }
 
 view harness "Harness" {
-    grid: 20;
+    grid: 0;
 
     include left.x1  at (0, 0);
     include right.x1 at (20, 0);
+}
+
+view pinout "Service" {
+    grid: -10;
+
+    include x9 at (0, 0);
 }

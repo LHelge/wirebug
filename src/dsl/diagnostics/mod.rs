@@ -395,6 +395,46 @@ pub enum Problem {
         other: Option<SourceSpan>,
     },
 
+    /// A view's `grid:` step is zero or negative, so no renderer can draw
+    /// it. Found by asking the view's renderer (`render::lint`), like the
+    /// other layout problems.
+    #[error("grid step must be positive, got {value}")]
+    #[diagnostic(
+        code(wirebug::invalid_grid),
+        help(
+            "the grid step is drawing units per grid cell, e.g. `grid: 20;`; omit `grid:` for the default"
+        )
+    )]
+    InvalidGrid {
+        value: f64,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("not a positive step")]
+        at: SourceSpan,
+    },
+
+    /// A view's `grid:` step is finer than its renderer can draw: ports sit
+    /// two steps apart, and that pitch must clear a port label. The
+    /// `minimum` is the renderer's own (`render::lint` asks it).
+    #[error(
+        "grid step {value} is too fine for a {kind} view; ports need at least {minimum} per step"
+    )]
+    #[diagnostic(
+        code(wirebug::grid_too_fine),
+        help(
+            "ports sit two grid steps apart, so a finer grid overlaps their labels; use `grid: {minimum};` or coarser, or omit `grid:` for the default"
+        )
+    )]
+    GridTooFine {
+        value: f64,
+        minimum: f64,
+        kind: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("finer than {minimum}")]
+        at: SourceSpan,
+    },
+
     /// A conductor between connectors of two of a component's children that
     /// none of the component's harness views draws: no view includes both
     /// ends' connectors, so the build drawings miss it. A warning: the
