@@ -500,6 +500,34 @@ pub enum Problem {
         at: SourceSpan,
     },
 
+    /// A wire's gauge (its cross-section in mm²) is zero or negative.
+    #[error("wire gauge must be positive, got {value}")]
+    #[diagnostic(
+        code(wirebug::invalid_gauge),
+        help("the gauge is the conductor cross-section in mm², e.g. `0.5` or `4`")
+    )]
+    InvalidGauge {
+        value: f64,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("not a positive cross-section")]
+        at: SourceSpan,
+    },
+
+    /// A `length` (in metres) is zero or negative.
+    #[error("length must be positive, got {value}")]
+    #[diagnostic(
+        code(wirebug::invalid_length),
+        help("a length is in metres, e.g. `length: 2.5;`")
+    )]
+    InvalidLength {
+        value: f64,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("not a positive length")]
+        at: SourceSpan,
+    },
+
     /// A harness include names a connector designator that the included
     /// instance's type doesn't declare.
     #[error("unknown connector `{name}`{on}")]

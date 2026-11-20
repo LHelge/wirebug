@@ -1,0 +1,21 @@
+// Every reference here resolves; only the values are nonsense. `check`
+// must reject the negative and zero gauges and the negative cable length.
+
+use Device from "components/device.wb";
+
+component Vehicle {
+    ecu: Device "ECU";
+    pump: Device "Pump";
+
+    wire black -1 [ecu.gnd, pump.gnd];
+
+    cable w1 "Supply" {
+        length: -2;
+        wire red 0 [ecu.pwr, pump.pwr];
+    }
+}
+
+view harness "Loom" {
+    include ecu.j1 at (0, 0);
+    include pump.j1 at (4, 0);
+}

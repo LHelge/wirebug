@@ -320,6 +320,64 @@ fn check_accepts_the_fixture_project() {
         .success();
 }
 
+const INVALID_VALUES_ROOT: &str = "tests/fixtures/invalid_values_project";
+
+#[test]
+fn check_rejects_non_positive_gauges_and_cable_length() {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--format", "json", INVALID_VALUES_ROOT])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+    let main =
+        std::fs::read_to_string(format!("{INVALID_VALUES_ROOT}/main.wb")).expect("fixture main.wb");
+
+    // Each problem is an error labelled on the offending number itself.
+    let found: Vec<(&str, &str)> = problems
+        .iter()
+        .map(|p| {
+            assert_eq!(p["severity"], "error", "{p}");
+            let span = &p["labels"][0]["span"];
+            let offset = span["offset"].as_u64().expect("offset") as usize;
+            let length = span["length"].as_u64().expect("length") as usize;
+            (
+                p["code"].as_str().expect("code"),
+                &main[offset..offset + length],
+            )
+        })
+        .collect();
+    assert_eq!(
+        found,
+        [
+            ("wirebug::invalid_gauge", "-1"),
+            ("wirebug::invalid_gauge", "0"),
+            ("wirebug::invalid_length", "-2"),
+        ]
+    );
+}
+
+#[test]
+fn render_refuses_a_non_positive_cable_length() {
+    let tmp = tempdir().expect("tempdir");
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args([
+            "render",
+            INVALID_VALUES_ROOT,
+            "--out",
+            tmp.path().to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("length must be positive, got -2"))
+        .stderr(predicate::str::contains("not rendering"));
+}
+
 #[test]
 fn check_accepts_a_manifest_target() {
     Command::cargo_bin("wirebug")
