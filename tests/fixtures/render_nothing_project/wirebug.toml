@@ -1,0 +1,4 @@
+[project]
+name = "render-nothing-project"
+version = "0.1.0"
+description = "Fixture whose only view passes check but fails to render"

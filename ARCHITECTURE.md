@@ -440,8 +440,9 @@ phases above). Render adds only geometry/dispatch errors, in `src/error.rs`
   (so the index places the failure in the right tab), and a boxed
   `cause: ViewErrorKind`. It prints `view "<title>": <cause>`. Renderers
   and converters return `ViewResult<T>` (`Result<T, ViewErrorKind>`);
-  `render_views` (and the PNG/PDF steps in `main`, via
-  `RenderedView::failed`) attach the view, so no per-view error exists
+  `render_views`, the PNG step in `main` and `PdfExporter::to_pdf` (the
+  last two via `RenderedView::failed`) attach the view, so no per-view
+  error exists
   without the view it happened in. The kinds:
   - an unknown view `kind:` (`schematic`, `harness`, and `pinout` render
     today) — normally caught earlier by resolve's `unknown_view_kind`;
@@ -469,9 +470,12 @@ file. What each output mode does with a failure:
 - **`--embed`** — the views that rendered are written, and `manifest.json`
   lists only those (its schema is unchanged: a host never sees a view whose
   file is missing). The failures are on stderr only.
-- **`--pdf`** — one page per view that rendered and converted, numbered
-  `n / total` among themselves. When every view of a design with views
-  fails, no PDF is written.
+- **`--pdf`** — `PdfExporter::to_pdf` takes `render_views`' results and
+  makes one page per view that rendered and converted, numbered
+  `n / total` among themselves; `PdfExport::failures` names the rest, in
+  view order. `PdfExport::document()` is the only way to the bytes and
+  returns `None` when every view of a design with views failed, so no
+  PDF is written then.
 
 In every mode `render` prints `error: view "<title>": <cause>` per failure,
 reports `rendered <n> of <total> view(s)`, and exits non-zero. A file left

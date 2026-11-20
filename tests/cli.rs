@@ -783,6 +783,35 @@ fn render_pdf_pages_only_the_views_that_render() {
     assert!(pdf.windows(7).any(|w| w == b"(2 / 2)"), "numbered of two");
 }
 
+/// Like [`RENDER_FAILURE_ROOT`], but its only view fails; the same note
+/// about its too-fine `grid:` trigger applies.
+const RENDER_NOTHING_ROOT: &str = "tests/fixtures/render_nothing_project";
+
+#[test]
+fn render_pdf_writes_no_pdf_when_every_view_fails() {
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("out");
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args([
+            "render",
+            RENDER_NOTHING_ROOT,
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .arg("--pdf")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "error: view \"Fine Grid\": grid step 5 is too small",
+        ))
+        .stderr(predicate::str::contains(
+            "no view rendered — render_nothing_project.pdf not written",
+        ));
+    let entries = std::fs::read_dir(&out).expect("out dir").count();
+    assert_eq!(entries, 0, "nothing is written");
+}
+
 #[test]
 fn render_embed_lists_only_the_views_it_wrote() {
     let (tmp, entries) = render_with_a_failing_view(&["--embed"]);
