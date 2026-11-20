@@ -8,6 +8,7 @@ use std::fmt;
 
 use indexmap::IndexMap;
 
+use crate::dsl::ast;
 use crate::dsl::manifest::Manifest;
 
 macro_rules! name_newtype {
@@ -554,7 +555,7 @@ pub struct Wire {
 }
 
 /// A resolved wire endpoint.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum WireEnd {
     /// The enclosing component's own port.
     Own(PortName),
@@ -563,6 +564,33 @@ pub enum WireEnd {
         instance: InstanceName,
         port: PortName,
     },
+}
+
+/// The endpoint an authored reference names in the enclosing component's
+/// flat namespace: a bare `port` is the component's own, `inst.port` a
+/// child's. Elaboration and validation share this mapping, so both agree on
+/// which references are the same endpoint.
+impl From<&ast::Endpoint> for WireEnd {
+    fn from(ep: &ast::Endpoint) -> Self {
+        let port = PortName::from(ep.port.node.as_str());
+        match &ep.instance {
+            None => Self::Own(port),
+            Some(inst) => Self::Child {
+                instance: InstanceName::from(inst.node.as_str()),
+                port,
+            },
+        }
+    }
+}
+
+/// The endpoint as authored: `port` or `inst.port`.
+impl fmt::Display for WireEnd {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Own(port) => write!(f, "{port}"),
+            Self::Child { instance, port } => write!(f, "{instance}.{port}"),
+        }
+    }
 }
 
 /// A dotted instance path, e.g. `vehicle.front.module_1.pack`.

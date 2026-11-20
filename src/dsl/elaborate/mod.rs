@@ -425,17 +425,7 @@ fn rewrite_wire(w: &ast::Wire, cable: Option<CableName>, twisted_group: Option<u
         ),
         gauge: w.gauge.node,
         label: w.label.as_ref().map(|l| l.node.clone()),
-        endpoints: w
-            .endpoints
-            .iter()
-            .map(|ep| match &ep.instance {
-                None => WireEnd::Own(PortName::from(ep.port.node.as_str())),
-                Some(inst) => WireEnd::Child {
-                    instance: InstanceName::from(inst.node.as_str()),
-                    port: PortName::from(ep.port.node.as_str()),
-                },
-            })
-            .collect(),
+        endpoints: w.endpoints.iter().map(WireEnd::from).collect(),
         cable,
         twisted_group,
     }

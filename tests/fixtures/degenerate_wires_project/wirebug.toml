@@ -1,0 +1,5 @@
+[project]
+name = "degenerate-wires-project"
+version = "0.1.0"
+description = "Check fixture: a project that resolves but has a wire looping back on itself and an empty cable"
+revision = "fixture"

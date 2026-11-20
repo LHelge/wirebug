@@ -339,11 +339,16 @@ so one run reports many. Errors fail the run; warnings fail only under
   `duplicate_cable_property`, `cable_property_type` — `type` wants a string,
   `length` a number); non-positive values (`invalid_gauge` on a wire or
   cable conductor's gauge, `invalid_length` on a cable `length`, both
-  labelled on the number); unused import, bare-port pin, and non-IEC 60757
-  wire color (`unknown_wire_color` — the `ir::ColorName::Other` escape
-  hatch still renders verbatim) as warnings. Cable
-  property/arity/value checks live here (not elaborate) so a type
-  instantiated many times reports each once.
+  labelled on the number); an endpoint listed twice in one wire or cable
+  conductor (`duplicate_endpoint`, labelled on both occurrences — compared
+  as resolved `ir::WireEnd`s, so own port `gnd` and `ecu.gnd` never alias;
+  two *different* wires on one port are a deliberate double crimp and are
+  not compared). As warnings: a cable with no conductors (`empty_cable`),
+  unused import, bare-port pin, and non-IEC 60757 wire color
+  (`unknown_wire_color` — the `ir::ColorName::Other` escape hatch still
+  renders verbatim). Cable property/arity/value checks and the endpoint
+  check live here (not elaborate) so a type instantiated many times
+  reports each once.
 
 Not done on purpose: **unconnected-port** detection. It needs per-instance
 tree analysis and floods intentional unused-pin warnings on a real

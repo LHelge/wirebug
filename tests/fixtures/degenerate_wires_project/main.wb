@@ -1,0 +1,25 @@
+// Every reference here resolves. `check` must reject the wire that lists
+// `ecu.gnd` twice, and warn on the cable with no conductors. The two wires
+// sharing `pump.gnd` are a deliberate double crimp and must stay quiet.
+
+use Device from "components/device.wb";
+
+component Vehicle {
+    ecu: Device "ECU";
+    pump: Device "Pump";
+
+    wire black 1 [ecu.gnd, ecu.gnd];
+
+    wire black 1 [ecu.gnd, pump.gnd];
+    wire black 1 [pump.gnd, pump.pwr];
+
+    cable spare "Spare" {
+        type: "2-core";
+        length: 1.5;
+    }
+}
+
+view harness "Loom" {
+    include ecu.j1 at (0, 0);
+    include pump.j1 at (4, 0);
+}
