@@ -42,7 +42,8 @@ impl Build {
             );
         } else if !self.failed_views.is_empty() {
             tracing::error!(
-                "built{timing}, but {} view(s) failed to render",
+                "built{timing} with {} warning(s), but {} view(s) failed to render",
+                self.warnings,
                 self.failed_views.len(),
             );
             for failure in &self.failed_views {
