@@ -1,14 +1,15 @@
 ---
 id: wqe
 title: "Diagnose an invalid view `grid:` in `check`"
-status: open
+status: done
 priority: P1
 created: "2026-11-20T22:44:25.794880702Z"
-updated: "2026-11-20T22:44:25.794880702Z"
+updated: "2026-11-20T23:25:35.847058555Z"
 tags:
   - check
   - render
 parent: kss
+attempts: 1
 ---
 
 ## Summary
