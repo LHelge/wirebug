@@ -229,9 +229,9 @@ struct IndexTemplate<'a> {
 
 /// One tab of the HTML index: the views of one kind, rendered or failed.
 struct IndexPanel<'a> {
-    /// The kind's name, as `ViewKind::as_str` spells it; keys the tab's
-    /// element ids and CSS.
-    id: &'static str,
+    /// The tab's kind; its name (`ViewKind::as_str`) keys the tab's element
+    /// ids and CSS.
+    kind: ViewKind,
     label: &'static str,
     views: Vec<&'a ViewOutcome>,
 }
@@ -239,11 +239,16 @@ struct IndexPanel<'a> {
 impl IndexPanel<'_> {
     /// The kinds that get a tab, with their labels. A view of any other
     /// kind never renders, and `check` rejects it before render runs.
-    const TABS: [(&'static str, &'static str); 3] = [
-        ("schematic", "Schematics"),
-        ("harness", "Harnesses"),
-        ("pinout", "Pinouts"),
+    const TABS: [(ViewKind, &'static str); 3] = [
+        (ViewKind::Schematic, "Schematics"),
+        (ViewKind::Harness, "Harnesses"),
+        (ViewKind::Pinout, "Pinouts"),
     ];
+
+    /// The tab's name in element ids and CSS classes.
+    fn id(&self) -> &str {
+        self.kind.as_str()
+    }
 }
 
 /// Render the HTML index for `views` (as [`render_views`] returns them).
@@ -259,19 +264,16 @@ pub fn index_html(
     manifest: Option<&crate::dsl::manifest::Manifest>,
     live_reload: bool,
 ) -> Result<String> {
-    let of_kind = |id: &str, view: &ViewOutcome| {
-        let kind = match view {
-            Ok(view) => &view.kind,
-            Err(failure) => &failure.view_kind,
-        };
-        kind.as_str() == id
+    let of_kind = |kind: &ViewKind, view: &ViewOutcome| match view {
+        Ok(view) => &view.kind == kind,
+        Err(failure) => &failure.view_kind == kind,
     };
     let panels = IndexPanel::TABS
         .into_iter()
-        .map(|(id, label)| IndexPanel {
-            id,
+        .map(|(kind, label)| IndexPanel {
+            views: views.iter().filter(|view| of_kind(&kind, view)).collect(),
+            kind,
             label,
-            views: views.iter().filter(|view| of_kind(id, view)).collect(),
         })
         .filter(|panel| !panel.views.is_empty())
         .collect();
