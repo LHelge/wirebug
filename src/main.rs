@@ -228,30 +228,27 @@ fn render_command(
 
     // PDF is one artifact for the whole design, not per-view files plus a
     // sidecar, so it exits before the per-view format machinery. Its pages
-    // are the views that rendered; with views but none rendered, no PDF is
-    // written at all.
+    // are the views that rendered; the export decides whether that leaves
+    // a document to write.
     if pdf {
         let total = views.len();
-        let (rendered, failed): (Vec<_>, Vec<_>) = views.into_iter().partition(Result::is_ok);
-        let rendered: Vec<RenderedView> = rendered.into_iter().flatten().collect();
-        let mut failures: Vec<ViewError> = failed.into_iter().filter_map(Result::err).collect();
         let export =
-            wirebug::render::pdf::PdfExporter::new().to_pdf(&rendered, design.manifest.as_ref());
-        failures.extend(export.failures);
-        report_failures(&failures);
+            wirebug::render::pdf::PdfExporter::new().to_pdf(views, design.manifest.as_ref());
+        report_failures(&export.failures);
         let filename = wirebug::render::pdf_filename(design.manifest.as_ref());
-        if export.pages == 0 && !failures.is_empty() {
-            eprintln!("no view rendered — {filename} not written");
-        } else {
-            write_file(out_dir, &filename, &export.bytes)?;
-            eprintln!(
-                "rendered {} as pdf to {} ({})",
-                rendered_count(export.pages, total),
-                out_dir.display(),
-                out_dir.join(&filename).display(),
-            );
+        match export.document() {
+            Some(bytes) => {
+                write_file(out_dir, &filename, bytes)?;
+                eprintln!(
+                    "rendered {} as pdf to {} ({})",
+                    rendered_count(export.pages, total),
+                    out_dir.display(),
+                    out_dir.join(&filename).display(),
+                );
+            }
+            None => eprintln!("no view rendered — {filename} not written"),
         }
-        return Ok(exit_code_for(&failures));
+        return Ok(exit_code_for(&export.failures));
     }
 
     let total = views.len();

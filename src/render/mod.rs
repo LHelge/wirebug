@@ -573,6 +573,35 @@ component sys {
     }
 
     #[test]
+    fn a_pdf_is_written_unless_every_view_failed() {
+        let exporter = pdf::PdfExporter::new();
+        let export = |titles: &[&str]| {
+            let design = design_with_views(titles);
+            exporter.to_pdf(render_views(&design, SvgMode::Plain), None)
+        };
+
+        let none_rendered = export(&["Lost", "Lost Too"]);
+        assert_eq!(none_rendered.pages, 0);
+        let failed: Vec<&str> = none_rendered
+            .failures
+            .iter()
+            .map(|f| f.title.as_str())
+            .collect();
+        assert_eq!(failed, ["Lost", "Lost Too"]);
+        assert!(none_rendered.document().is_none(), "nothing to write");
+
+        let some_rendered = export(&["Lost", "Overview"]);
+        assert_eq!(some_rendered.pages, 1);
+        assert_eq!(some_rendered.failures.len(), 1);
+        let document = some_rendered.document().expect("the rendered page");
+        assert!(document.starts_with(b"%PDF-"));
+
+        // A design without views has nothing that failed: its empty
+        // document is still written, as before.
+        assert!(export(&[]).document().is_some());
+    }
+
+    #[test]
     fn index_notes_a_design_with_no_views() {
         assert!(index_html(&[], None, false).unwrap().contains("no views"));
     }
