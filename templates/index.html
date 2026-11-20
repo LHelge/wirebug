@@ -14,6 +14,8 @@
     img { max-width: 100%; height: auto; }
     section img { cursor: zoom-in; }
     p.empty { color: #777; }
+    section.failed { border-color: #d8a0a0; background: #fff6f6; }
+    .render-error { margin: 0; color: #9b1c1c; font-family: ui-monospace, monospace; white-space: pre-wrap; }
     /* Pure-CSS lightbox: a :target overlay shows the SVG full width.
        Hash-driven, so a websocket reload preserves the open state. */
     .lightbox { display: none; position: fixed; inset: 0; z-index: 100; padding: 1.5rem; background: rgba(0,0,0,.85); overflow: auto; }
@@ -40,69 +42,37 @@
 {% if let Some(description) = project_description %}
   <p class="project-description">{{ description }}</p>
 {% endif %}
-{% if views.is_empty() %}
+{% if no_views %}
   <p class="empty">This design has no views.</p>
 {% else %}
   <div class="tabs">
-{% if has_schematic %}
-    <input type="radio" name="tab" id="tab-schematic" checked>
-{% endif %}
-{% if has_harness %}
-    <input type="radio" name="tab" id="tab-harness"{% if !has_schematic %} checked{% endif %}>
-{% endif %}
-{% if has_pinout %}
-    <input type="radio" name="tab" id="tab-pinout"{% if !has_schematic && !has_harness %} checked{% endif %}>
-{% endif %}
+{% for panel in panels %}
+    <input type="radio" name="tab" id="tab-{{ panel.id }}"{% if loop.first %} checked{% endif %}>
+{% endfor %}
     <div class="tabbar">
-{% if has_schematic %}
-      <label for="tab-schematic">Schematics</label>
-{% endif %}
-{% if has_harness %}
-      <label for="tab-harness">Harnesses</label>
-{% endif %}
-{% if has_pinout %}
-      <label for="tab-pinout">Pinouts</label>
-{% endif %}
+{% for panel in panels %}
+      <label for="tab-{{ panel.id }}">{{ panel.label }}</label>
+{% endfor %}
     </div>
-{% if has_schematic %}
-    <div class="panel panel-schematic">
-{% for view in views %}
-{% if view.is_schematic() %}
+{% for panel in panels %}
+    <div class="panel panel-{{ panel.id }}">
+{% for view in panel.views %}
+{% match view %}
+{% when Ok(view) %}
       <section>
         <h2>{{ view.title }}</h2>
         <a href="#lb-{{ view.filename }}"><img src="{{ view.filename }}" alt="{{ view.title }}"></a>
       </section>
       <a href="#" class="lightbox" id="lb-{{ view.filename }}"><img src="{{ view.filename }}" alt="{{ view.title }}"></a>
-{% endif %}
-{% endfor %}
-    </div>
-{% endif %}
-{% if has_harness %}
-    <div class="panel panel-harness">
-{% for view in views %}
-{% if view.is_harness() %}
-      <section>
-        <h2>{{ view.title }}</h2>
-        <a href="#lb-{{ view.filename }}"><img src="{{ view.filename }}" alt="{{ view.title }}"></a>
+{% when Err(failure) %}
+      <section class="failed">
+        <h2>{{ failure.title }}</h2>
+        <p class="render-error">{{ failure.cause }}</p>
       </section>
-      <a href="#" class="lightbox" id="lb-{{ view.filename }}"><img src="{{ view.filename }}" alt="{{ view.title }}"></a>
-{% endif %}
+{% endmatch %}
 {% endfor %}
     </div>
-{% endif %}
-{% if has_pinout %}
-    <div class="panel panel-pinout">
-{% for view in views %}
-{% if view.is_pinout() %}
-      <section>
-        <h2>{{ view.title }}</h2>
-        <a href="#lb-{{ view.filename }}"><img src="{{ view.filename }}" alt="{{ view.title }}"></a>
-      </section>
-      <a href="#" class="lightbox" id="lb-{{ view.filename }}"><img src="{{ view.filename }}" alt="{{ view.title }}"></a>
-{% endif %}
 {% endfor %}
-    </div>
-{% endif %}
   </div>
 {% endif %}
 {% if live_reload %}

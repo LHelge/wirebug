@@ -183,6 +183,13 @@ mod tests {
 
     use crate::render::{SvgMode, render_views};
 
+    /// Whether every view of `design` renders.
+    fn renders(design: &Design) -> bool {
+        render_views(design, SvgMode::Standalone)
+            .iter()
+            .all(Result::is_ok)
+    }
+
     /// A loaded single-file project and its elaborated design. The temp
     /// directory is dropped once loaded: sources live in the `Project`.
     fn load(src: &str) -> (Project, Design) {
@@ -314,7 +321,7 @@ view schematic "V" {{
                     }
                     assert_eq!(
                         problems.is_empty(),
-                        render_views(&design, SvgMode::Standalone).is_ok(),
+                        renders(&design),
                         "b at ({x}, {y}), {a_side}/{b_side}: {problems:?}"
                     );
                 }
@@ -351,8 +358,16 @@ view schematic "V" {
     #[test]
     fn a_walled_in_wire_is_unroutable() {
         assert_eq!(summary(WALLED_IN), [code("unroutable_wire", &["a", "far"])]);
+        // Rendering anyway fails the view, naming it and both wire ends.
         let (_, design) = load(WALLED_IN);
-        assert!(render_views(&design, SvgMode::Standalone).is_err());
+        let views = render_views(&design, SvgMode::Standalone);
+        let [Err(failure)] = views.as_slice() else {
+            panic!("the one view fails: {views:?}");
+        };
+        assert_eq!(
+            failure.to_string(),
+            "view \"V\": failed to route schematic wire between `a.sig` and `far.sig`"
+        );
     }
 
     #[test]
@@ -360,7 +375,7 @@ view schematic "V" {
         let open = WALLED_IN.replace("include e at (16, 0)", "include e at (18, 0)");
         assert!(summary(&open).is_empty());
         let (_, design) = load(&open);
-        assert!(render_views(&design, SvgMode::Standalone).is_ok());
+        assert!(renders(&design));
     }
 
     #[test]
@@ -391,7 +406,7 @@ view schematic "V" {
 "#;
         assert!(summary(src).is_empty());
         let (_, design) = load(src);
-        assert!(render_views(&design, SvgMode::Standalone).is_ok());
+        assert!(renders(&design));
     }
 
     #[test]

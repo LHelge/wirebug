@@ -42,6 +42,9 @@ Four CLI commands share it:
   and a `wirebug.css` starter stylesheet (`render::embed_stylesheet` —
   the built-in styles re-scoped under `.wirebug-{kind}`, referenced from
   the manifest's `stylesheet` field; hosts copy and theme it).
+  Each view renders or fails on its own (see Render-time errors): `render`
+  writes every view that rendered, prints each failure naming its view,
+  and exits non-zero.
   The legacy YAML model/view loader has been removed; `ir::Design` is the
   only thing the renderer consumes.
 - **`serve` (`src/serve/`)** — a live-reloading dev server. Renders the
@@ -49,7 +52,10 @@ Four CLI commands share it:
   `live_reload` on), serves it over axum, and watches the project tree for
   `.wb` and `wirebug.toml` changes; each save re-renders and pushes a
   websocket reload. Nothing hits disk. A failing `check` serves a diagnostics
-  page that still live-reloads, so it recovers once fixed. `serve` is the
+  page that still live-reloads, so it recovers once fixed. A view that passes
+  `check` but fails to render shows its error in its place on the index (the
+  same template `render` writes), the other views stay visible, and the
+  console logs each failure. `serve` is the
   only async command: `main` stays synchronous and spins a Tokio runtime just
   for this arm.
 - **`lsp` (`src/lsp/`)** — a Language Server Protocol server over stdio,
@@ -80,8 +86,10 @@ Four CLI commands share it:
   deliberately later.
 
 The `index.html` is an [`askama`] compile-time template (`templates/`),
-rendered by `render::index_html(views, live_reload)` — shared by `render`
-(static, `false`) and `serve` (`true`, injects the reload script).
+rendered by `render::index_html(views, manifest, live_reload)` — shared by
+`render` (static, `false`) and `serve` (`true`, injects the reload script).
+It takes `render_views`' per-view results, so a failed view keeps its
+place in its kind's tab and shows its error instead of a drawing.
 
 ## Project manifest
 
@@ -402,17 +410,49 @@ component library — a separate, opt-in concern. See `dsl/validate/mod.rs`.
 ## Render-time errors
 
 Reference and structural checks happen in `check` (the Resolve/Validate
-phases above). Render adds only geometry/dispatch errors, in the slim
-`error::Error` enum (`src/error.rs` — render-path only; DSL problems are
-miette `Diagnostic`s):
+phases above). Render adds only geometry/dispatch errors, in `src/error.rs`
+(render-path only; DSL problems are miette `Diagnostic`s). Two levels:
 
-- an unknown view `kind:` (`schematic`, `harness`, and `pinout` render
-  today) — normally caught earlier by resolve's `unknown_view_kind`;
-- a schematic wire the router cannot route (`RouteFailed`) — caught
-  earlier by the Layout phase above, so a backstop for hand-built designs;
-- a view subject type with no instance in the design;
-- a non-positive `grid:`, or a `grid:` finer than a port label needs;
-- file IO when writing the SVGs.
+- **`error::ViewError`** — one view failed: its `title`, its `view_kind`
+  (so the index places the failure in the right tab), and a boxed
+  `cause: ViewErrorKind`. It prints `view "<title>": <cause>`. Renderers
+  and converters return `ViewResult<T>` (`Result<T, ViewErrorKind>`);
+  `render_views` (and the PNG/PDF steps in `main`, via
+  `RenderedView::failed`) attach the view, so no per-view error exists
+  without the view it happened in. The kinds:
+  - an unknown view `kind:` (`schematic`, `harness`, and `pinout` render
+    today) — normally caught earlier by resolve's `unknown_view_kind`;
+  - a schematic wire the router cannot route (`RouteFailed`, both ends as
+    `ir::WireEnd` — `instance.port`, or a bare `port` for the subject's own
+    port on the enclosure) — caught earlier by the Layout phase above, so a
+    backstop for hand-built designs. The router itself only sees placed
+    ports: `Router::route_all` fails with `route::Unrouted { pair }`, and
+    the schematic renderer names that pair's wire ends
+    (`layout::Connection::ends`);
+  - a view subject type with no instance in the design; a pinout include
+    naming a connector its subject lacks;
+  - a non-positive `grid:`, or a `grid:` finer than a port label needs;
+  - our own SVG failing to parse or convert for `--png` / `--pdf`.
+- **`error::Error`** — what stops the whole render: file IO when writing
+  output (`Write`) and the HTML index template (`Template`).
+
+`render_views` returns one `Result<RenderedView, ViewError>` per view, in
+declaration order; a failure never stops the others, and file names are
+allocated to failed views too, so a failure never renames another view's
+file. What each output mode does with a failure:
+
+- **SVG / `--png`** — the views that rendered (and rasterised) are written;
+  `index.html` shows each failure, titled, where its drawing would be.
+- **`--embed`** — the views that rendered are written, and `manifest.json`
+  lists only those (its schema is unchanged: a host never sees a view whose
+  file is missing). The failures are on stderr only.
+- **`--pdf`** — one page per view that rendered and converted, numbered
+  `n / total` among themselves. When every view of a design with views
+  fails, no PDF is written.
+
+In every mode `render` prints `error: view "<title>": <cause>` per failure,
+reports `rendered <n> of <total> view(s)`, and exits non-zero. A file left
+in `--out` by an earlier run of a now-failing view is not removed.
 
 `render` runs `check_project` first and refuses to render a project that
 has errors (or, under `--strict`, warnings).
@@ -452,7 +492,8 @@ src/
 │
 │  # ── ir::Design → SVG renderer ──
 ├── render/
-│   ├── mod.rs       # render_views: subject lookup + per-view dispatch + slug;
+│   ├── mod.rs       # render_views: subject lookup + per-view dispatch + slug,
+│   │                #   one Result<RenderedView, ViewError> per view;
 │   │                #   RenderedView{title,filename,kind,svg} + index_html (tabs)
 │   │                #   + embed_manifest (manifest.json sidecar for --embed)
 │   ├── geometry.rs  # Point, Bounds (+ overlap test); re-exports ir::Side
@@ -504,7 +545,7 @@ src/
 │   ├── complete.rs   # CompletionIndex (owned Resolved snapshot, per-file
 │   │                 #   last-good) + token-stack cursor contexts + auto-import
 │   └── definition.rs # go-to-definition: fresh resolve per request, span walk
-└── error.rs         # thiserror types (render path; incl. askama Template)
+└── error.rs         # thiserror types (render path): ViewError per view, Error for IO/index
 ```
 
 The VSCode extension lives at `editors/vscode/`: a TextMate grammar +

@@ -22,7 +22,7 @@ use svg::Document;
 use svg::node::element::{Group, Style, Text};
 
 use crate::dsl::ir::{Design, Instance, View};
-use crate::error::{Error, Result};
+use crate::error::{ViewErrorKind, ViewResult};
 use crate::render::SvgMode;
 use crate::render::lint::{IncludeBox, ViewLayout};
 use crate::render::stamp::{STAMP_HEIGHT, STAMP_INSET, stamp_element};
@@ -112,10 +112,10 @@ impl HarnessRenderer {
         subject: &Instance,
         view: &View,
         mode: SvgMode,
-    ) -> Result<String> {
+    ) -> ViewResult<String> {
         let step = view.grid.unwrap_or(DEFAULT_GRID);
         if step <= 0.0 {
-            return Err(Error::NonPositiveGrid { grid: step });
+            return Err(ViewErrorKind::NonPositiveGrid { grid: step });
         }
 
         let layout = HarnessLayout::compute(design, subject, view, step);

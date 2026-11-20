@@ -10,7 +10,7 @@
 //! (the load is slow, so it's amortised across every view) and resolves our
 //! `sans-serif` labels through fontdb's generic-family fallback.
 
-use crate::error::{Error, Result};
+use crate::error::{ViewErrorKind, ViewResult};
 
 /// Rasterises SVGs to PNG, holding a font database loaded once up front.
 pub struct PngRasterizer {
@@ -53,14 +53,15 @@ impl PngRasterizer {
     }
 
     /// Rasterise `svg` to a PNG byte stream at `scale` × intrinsic size.
-    pub fn to_png(&self, svg: &str, scale: f32) -> Result<Vec<u8>> {
+    pub fn to_png(&self, svg: &str, scale: f32) -> ViewResult<Vec<u8>> {
         let tree = resvg::usvg::Tree::from_str(svg, &self.options)
-            .map_err(|e| Error::SvgParse(e.to_string()))?;
+            .map_err(|e| ViewErrorKind::SvgParse(e.to_string()))?;
         let size = tree.size();
         let w = (size.width() * scale).round().max(1.0) as u32;
         let h = (size.height() * scale).round().max(1.0) as u32;
-        let mut pixmap = resvg::tiny_skia::Pixmap::new(w, h)
-            .ok_or_else(|| Error::PngEncode(format!("pixmap allocation failed for {w}x{h}")))?;
+        let mut pixmap = resvg::tiny_skia::Pixmap::new(w, h).ok_or_else(|| {
+            ViewErrorKind::PngEncode(format!("pixmap allocation failed for {w}x{h}"))
+        })?;
         resvg::render(
             &tree,
             resvg::tiny_skia::Transform::from_scale(scale, scale),
@@ -68,7 +69,7 @@ impl PngRasterizer {
         );
         pixmap
             .encode_png()
-            .map_err(|e| Error::PngEncode(e.to_string()))
+            .map_err(|e| ViewErrorKind::PngEncode(e.to_string()))
     }
 }
 
@@ -121,7 +122,7 @@ mod tests {
     fn to_png_rejects_malformed_input() {
         assert!(matches!(
             PngRasterizer::new().to_png("not svg at all", 2.0),
-            Err(Error::SvgParse(_))
+            Err(ViewErrorKind::SvgParse(_))
         ));
     }
 }

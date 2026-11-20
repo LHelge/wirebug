@@ -1,0 +1,49 @@
+// One view that `check` passes but `render` cannot draw, between views
+// that render fine: `render` writes the others and reports the one.
+//
+// The failure is the "Fine Grid" view's `grid:` — finer than a port label
+// needs, which only the renderer rejects today. When `check` learns to
+// reject it, swap in another failure `check` does not catch.
+component Vehicle {
+    left:  Module "Left";
+    right: Module "Right";
+
+    wire red 1 [left.sig, right.sig];
+
+    component Module {
+        connector x1 "Signal 1p" {
+            pub port sig "SIG" pin 1;
+        }
+    }
+}
+
+view schematic "Overview" {
+    grid: 20;
+
+    include left at (0, 0) ports {
+        east: sig;
+    }
+
+    include right at (16, 0) ports {
+        west: sig;
+    }
+}
+
+view schematic "Fine Grid" {
+    grid: 5;
+
+    include left at (0, 0) ports {
+        east: sig;
+    }
+
+    include right at (64, 0) ports {
+        west: sig;
+    }
+}
+
+view harness "Harness" {
+    grid: 20;
+
+    include left.x1  at (0, 0);
+    include right.x1 at (20, 0);
+}

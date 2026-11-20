@@ -11,7 +11,7 @@ use svg::node::element::{Group, Line, Rectangle, Style, Text};
 use crate::dsl::ir::{
     Connector, ConnectorLayout, ConnectorName, Design, Include, Instance, Pin, PortName, View,
 };
-use crate::error::{Error, Result};
+use crate::error::{ViewErrorKind, ViewResult};
 use crate::render::SvgMode;
 use crate::render::geometry::{Bounds, Point};
 use crate::render::lint::{IncludeBox, ViewLayout};
@@ -56,10 +56,10 @@ impl PinoutRenderer {
         subject: &Instance,
         view: &View,
         mode: SvgMode,
-    ) -> Result<String> {
+    ) -> ViewResult<String> {
         let step = view.grid.unwrap_or(DEFAULT_GRID);
         if step <= 0.0 {
-            return Err(Error::NonPositiveGrid { grid: step });
+            return Err(ViewErrorKind::NonPositiveGrid { grid: step });
         }
 
         let mut tables = Vec::new();
@@ -68,7 +68,7 @@ impl PinoutRenderer {
             let connector = subject
                 .connectors
                 .get(&ConnectorName::from(name))
-                .ok_or_else(|| Error::UnknownConnector {
+                .ok_or_else(|| ViewErrorKind::UnknownConnector {
                     subject: subject.type_name.to_string(),
                     connector: name.to_string(),
                 })?;
@@ -922,6 +922,6 @@ component m {
                 SvgMode::Standalone,
             )
             .expect_err("unknown connector");
-        assert!(matches!(err, Error::UnknownConnector { .. }));
+        assert!(matches!(err, ViewErrorKind::UnknownConnector { .. }));
     }
 }

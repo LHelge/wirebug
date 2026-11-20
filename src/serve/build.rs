@@ -10,15 +10,20 @@ use miette::{GraphicalReportHandler, GraphicalTheme};
 use super::livereload::ERROR_PAGE_SCRIPT;
 use super::state::Site;
 use crate::dsl::CheckReport;
+use crate::error::ViewError;
 use crate::render::{SvgMode, index_html, render_views};
 
-/// The outcome of one build: the servable site plus a count of what `check`
-/// reported, so the watcher can log a summary to the console. The browser
-/// always gets the full detail; these counts keep the terminal honest.
+/// The outcome of one build: the servable site plus what `check` reported
+/// and which views failed to render, so the watcher can log a summary to
+/// the console. The browser always gets the full detail; these keep the
+/// terminal honest.
 pub(crate) struct Build {
     pub(crate) site: Site,
     pub(crate) errors: usize,
     pub(crate) warnings: usize,
+    /// Views that passed `check` but failed to render; the page shows each
+    /// one's error in place of its drawing.
+    pub(crate) failed_views: Vec<ViewError>,
 }
 
 impl Build {
@@ -35,6 +40,14 @@ impl Build {
                 self.errors,
                 self.warnings,
             );
+        } else if !self.failed_views.is_empty() {
+            tracing::error!(
+                "built{timing}, but {} view(s) failed to render",
+                self.failed_views.len(),
+            );
+            for failure in &self.failed_views {
+                tracing::error!("{failure}");
+            }
         } else if self.warnings > 0 {
             tracing::warn!("built{timing} with {} warning(s)", self.warnings);
         } else {
@@ -46,9 +59,11 @@ impl Build {
 /// Run the full pipeline and produce a servable site.
 ///
 /// On a clean project this is the rendered views plus the live-reloading
-/// index. If `check` reports errors — or rendering fails — the site instead
-/// serves a diagnostics page (with the same live-reload script), so the
-/// browser shows what's wrong and recovers automatically once it's fixed.
+/// index; a view that fails to render shows its error in its place while
+/// the others stay visible. If `check` reports errors — or the index fails
+/// to render — the site instead serves a diagnostics page (with the same
+/// live-reload script), so the browser shows what's wrong and recovers
+/// automatically once it's fixed.
 pub(crate) fn build_site(target: Option<&Path>) -> Build {
     let report = crate::check_project(target);
     let counts = report.counts();
@@ -58,6 +73,7 @@ pub(crate) fn build_site(target: Option<&Path>) -> Build {
             site: error_site(&report),
             errors: counts.errors,
             warnings: counts.warnings,
+            failed_views: Vec::new(),
         };
     }
     let Some(design) = &report.design else {
@@ -67,40 +83,41 @@ pub(crate) fn build_site(target: Option<&Path>) -> Build {
             site: error_site(&report),
             errors: counts.errors.max(1),
             warnings: counts.warnings,
+            failed_views: Vec::new(),
         };
     };
 
-    // A render/index failure is a build error in its own right; show it on the
-    // page and count it so the console summary reflects the failure.
     // `serve` always emits self-contained SVGs (built-in style + identity
     // stamp); embed-mode is for static export, not the live browser.
-    let render = render_views(design, SvgMode::Standalone)
-        .map_err(|e| format!("render failed: {e}"))
-        .and_then(|views| {
-            index_html(&views, design.manifest.as_ref(), true)
-                .map_err(|e| format!("HTML index failed: {e}"))
-                .map(|html| (views, html))
-        });
-    match render {
-        Ok((views, html)) => {
-            let svgs = views
-                .into_iter()
-                .map(|view| (view.filename, view.svg))
-                .collect();
-            Build {
-                site: Site {
-                    index_html: html,
-                    svgs,
-                },
-                errors: counts.errors,
+    let views = render_views(design, SvgMode::Standalone);
+    let index_html = match index_html(&views, design.manifest.as_ref(), true) {
+        Ok(html) => html,
+        // An index failure is a build error in its own right; show it on
+        // the page and count it so the console summary reflects it.
+        Err(e) => {
+            return Build {
+                site: message_site(&format!("HTML index failed: {e}")),
+                errors: 1,
                 warnings: counts.warnings,
-            }
+                failed_views: Vec::new(),
+            };
         }
-        Err(message) => Build {
-            site: message_site(&message),
-            errors: 1,
-            warnings: counts.warnings,
-        },
+    };
+    let mut svgs = IndexMap::new();
+    let mut failed_views = Vec::new();
+    for view in views {
+        match view {
+            Ok(view) => {
+                svgs.insert(view.filename, view.svg);
+            }
+            Err(failure) => failed_views.push(failure),
+        }
+    }
+    Build {
+        site: Site { index_html, svgs },
+        errors: counts.errors,
+        warnings: counts.warnings,
+        failed_views,
     }
 }
 
@@ -175,6 +192,29 @@ mod tests {
         assert!(build.site.svgs.is_empty());
         assert!(build.site.index_html.contains("include_too_close"));
         assert!(build.site.index_html.contains("overlapping_includes"));
+    }
+
+    #[test]
+    fn a_view_that_fails_to_render_shows_its_error_and_the_others_stay() {
+        // The fixture's "Fine Grid" view passes `check` but not `render`.
+        let main = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/render_failure_project/main.wb");
+        let build = build_site(Some(&main));
+        assert_eq!(build.errors, 0, "the project checks clean");
+        let [failure] = build.failed_views.as_slice() else {
+            panic!("one failed view: {:?}", build.failed_views);
+        };
+        assert_eq!(failure.title, "Fine Grid");
+        // The other views are served and shown; the failure takes its
+        // view's place on the page, which still live-reloads.
+        let served: Vec<&str> = build.site.svgs.keys().map(String::as_str).collect();
+        assert_eq!(served, ["overview.svg", "harness.svg"]);
+        let html = &build.site.index_html;
+        assert!(html.contains("<img src=\"overview.svg\""));
+        assert!(html.contains("<img src=\"harness.svg\""));
+        assert!(html.contains("<h2>Fine Grid</h2>"));
+        assert!(html.contains("grid step 5 is too small"));
+        assert!(html.contains("new WebSocket"));
     }
 
     #[test]

@@ -2,7 +2,9 @@
 //!
 //! [`render_views`] is the entry point used by the CLI: it walks every
 //! view in the design, resolves each to its subject instance, and
-//! dispatches to the renderer named by the view's `kind`.
+//! dispatches to the renderer named by the view's `kind`. Each view
+//! renders or fails on its own: a failure is a [`ViewError`] naming the
+//! view, and the other views still render.
 
 use std::collections::{HashMap, HashSet};
 
@@ -11,7 +13,7 @@ use serde::Serialize;
 
 use crate::dsl::ir::{Design, Instance, View, ViewKind};
 use crate::dsl::manifest::Manifest;
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, ViewError, ViewErrorKind, ViewResult};
 
 pub mod geometry;
 pub mod harness;
@@ -66,51 +68,61 @@ pub struct RenderedView {
 }
 
 impl RenderedView {
-    pub fn is_schematic(&self) -> bool {
-        self.kind.is_schematic()
-    }
-
-    pub fn is_harness(&self) -> bool {
-        self.kind.is_harness()
-    }
-
-    pub fn is_pinout(&self) -> bool {
-        self.kind.is_pinout()
+    /// A failure converting this view (to PNG or PDF), named after it.
+    #[must_use]
+    pub fn failed(&self, cause: ViewErrorKind) -> ViewError {
+        cause.in_view(&self.title, &self.kind)
     }
 }
 
-/// Render every view in `design` to SVG, in declaration order.
+/// One view's entry in what [`render_views`] returns: the rendered view, or
+/// why it failed.
+pub type ViewOutcome = std::result::Result<RenderedView, ViewError>;
+
+/// Render every view in `design` to SVG, in declaration order: one entry
+/// per view, the rendered view or why it failed.
 ///
 /// Each view documents a component *type*; it is rendered against the
 /// first instance of that type in the design (the root for a top-level
-/// view). A view naming a `kind` this build can't render, or a subject
-/// type with no instance, is an error.
+/// view). A view naming a `kind` this build can't render, a subject type
+/// with no instance, an invalid grid, or a wire the router cannot route
+/// fails that view alone, as a [`ViewError`] naming it. File names are
+/// handed out to failed views too, so one failure never renames another
+/// view's file.
 ///
 /// `mode` picks the presentation each SVG carries: [`SvgMode::Standalone`]
 /// for self-contained SVGs intended to render on their own,
 /// [`SvgMode::Plain`] for the PDF export (page furniture replaces the
 /// title and stamp), or [`SvgMode::Embed`] for host-styled naked SVGs.
-pub fn render_views(design: &Design, mode: SvgMode) -> Result<Vec<RenderedView>> {
+#[must_use]
+pub fn render_views(design: &Design, mode: SvgMode) -> Vec<ViewOutcome> {
     let mut filenames = FilenameAllocator::default();
-    let mut rendered = Vec::with_capacity(design.views.len());
-    for view in &design.views {
-        let subject = subject_instance(design, view)?;
-        let svg = match &view.kind {
-            ViewKind::Schematic => {
-                schematic::SchematicRenderer.render(design, subject, view, mode)?
-            }
-            ViewKind::Harness => harness::HarnessRenderer.render(design, subject, view, mode)?,
-            ViewKind::Pinout => pinout::PinoutRenderer.render(design, subject, view, mode)?,
-            ViewKind::Other(other) => return Err(Error::UnknownViewKind(other.clone())),
-        };
-        rendered.push(RenderedView {
-            title: view.title.clone(),
-            filename: filenames.svg_filename(&view.title),
-            kind: view.kind.clone(),
-            svg,
-        });
+    design
+        .views
+        .iter()
+        .map(|view| {
+            let filename = filenames.svg_filename(&view.title);
+            render_view(design, view, mode)
+                .map(|svg| RenderedView {
+                    title: view.title.clone(),
+                    filename,
+                    kind: view.kind.clone(),
+                    svg,
+                })
+                .map_err(|cause| cause.in_view(&view.title, &view.kind))
+        })
+        .collect()
+}
+
+/// Render one view to SVG with the renderer its kind names.
+fn render_view(design: &Design, view: &View, mode: SvgMode) -> ViewResult<String> {
+    let subject = subject_instance(design, view)?;
+    match &view.kind {
+        ViewKind::Schematic => schematic::SchematicRenderer.render(design, subject, view, mode),
+        ViewKind::Harness => harness::HarnessRenderer.render(design, subject, view, mode),
+        ViewKind::Pinout => pinout::PinoutRenderer.render(design, subject, view, mode),
+        ViewKind::Other(other) => Err(ViewErrorKind::UnknownViewKind(other.clone())),
     }
-    Ok(rendered)
 }
 
 /// File name for the HTML index page written alongside the per-view SVGs.
@@ -148,8 +160,9 @@ pub fn embed_stylesheet() -> String {
 
 /// Serialized shape of [`EMBED_MANIFEST_FILENAME`]: the project's identity
 /// (or `null` for a synthetic design) plus the list of rendered views in
-/// declaration order. Borrows from the data so a host needs only to call
-/// `serde_json::to_string_pretty(&embed_manifest(...))`.
+/// declaration order — only views that rendered, so a host never looks for
+/// a file that was not written. Borrows from the data so a host needs only
+/// to call `serde_json::to_string_pretty(&embed_manifest(...))`.
 #[derive(Debug, Serialize)]
 pub struct EmbedManifest<'a> {
     pub project: Option<&'a Manifest>,
@@ -174,7 +187,7 @@ pub struct EmbedManifestView<'a> {
 /// Build the embed-mode manifest from the rendered views and the project's
 /// own manifest (when available — synthetic designs in tests pass `None`).
 pub fn embed_manifest<'a>(
-    views: &'a [RenderedView],
+    views: impl IntoIterator<Item = &'a RenderedView>,
     project: Option<&'a Manifest>,
 ) -> EmbedManifest<'a> {
     EmbedManifest {
@@ -182,7 +195,7 @@ pub fn embed_manifest<'a>(
         generator: concat!("wirebug v", env!("CARGO_PKG_VERSION")),
         stylesheet: EMBED_STYLESHEET_FILENAME,
         views: views
-            .iter()
+            .into_iter()
             .map(|v| EmbedManifestView {
                 title: &v.title,
                 filename: &v.filename,
@@ -193,49 +206,82 @@ pub fn embed_manifest<'a>(
 }
 
 /// The HTML index that embeds every rendered view, in render order, each
-/// under its title. The SVGs are referenced by their sibling file names, so
-/// the page expects to live in the same directory as them (or be served with
+/// under its title, and shows a failed view's error where its drawing
+/// would be. The SVGs are referenced by their sibling file names, so the
+/// page expects to live in the same directory as them (or be served with
 /// each SVG reachable at its file name).
 ///
 /// `live_reload` injects the `serve` websocket client script; `render` leaves
 /// it off for a self-contained static page. The template auto-escapes the
-/// author-supplied titles and the slugged file names.
+/// author-supplied titles, the error messages, and the slugged file names.
 #[derive(Template)]
 #[template(path = "index.html")]
 struct IndexTemplate<'a> {
     project_name: Option<&'a str>,
     project_version: Option<&'a str>,
     project_description: Option<&'a str>,
-    views: &'a [RenderedView],
+    /// Whether the design has no views at all.
+    no_views: bool,
+    /// One tab per view kind that has a view, in [`IndexPanel::TABS`] order.
+    panels: Vec<IndexPanel<'a>>,
     live_reload: bool,
-    /// Whether either tab has any views, so the template can hide an empty
-    /// tab and pick a sensible default selection.
-    has_schematic: bool,
-    has_harness: bool,
-    has_pinout: bool,
 }
 
-/// Render the HTML index for `views`. Shared by `render` (static, no
-/// live-reload) and `serve` (in-memory, live-reload on). Views are grouped
-/// into Schematics/Harnesses tabs by their `kind`.
+/// One tab of the HTML index: the views of one kind, rendered or failed.
+struct IndexPanel<'a> {
+    /// The kind's name, as `ViewKind::as_str` spells it; keys the tab's
+    /// element ids and CSS.
+    id: &'static str,
+    label: &'static str,
+    views: Vec<&'a ViewOutcome>,
+}
+
+impl IndexPanel<'_> {
+    /// The kinds that get a tab, with their labels. A view of any other
+    /// kind never renders, and `check` rejects it before render runs.
+    const TABS: [(&'static str, &'static str); 3] = [
+        ("schematic", "Schematics"),
+        ("harness", "Harnesses"),
+        ("pinout", "Pinouts"),
+    ];
+}
+
+/// Render the HTML index for `views` (as [`render_views`] returns them).
+/// Shared by `render` (static, no live-reload) and `serve` (in-memory,
+/// live-reload on). Views are grouped into Schematics/Harnesses/Pinouts
+/// tabs by their `kind`; a failed view keeps its place and shows its error.
 ///
 /// `manifest` supplies the project header (name, version, description); pass
 /// `None` for callers that don't have one (e.g. unit tests that build a
 /// `Design` by hand).
 pub fn index_html(
-    views: &[RenderedView],
+    views: &[ViewOutcome],
     manifest: Option<&crate::dsl::manifest::Manifest>,
     live_reload: bool,
 ) -> Result<String> {
+    let of_kind = |id: &str, view: &ViewOutcome| {
+        let kind = match view {
+            Ok(view) => &view.kind,
+            Err(failure) => &failure.view_kind,
+        };
+        kind.as_str() == id
+    };
+    let panels = IndexPanel::TABS
+        .into_iter()
+        .map(|(id, label)| IndexPanel {
+            id,
+            label,
+            views: views.iter().filter(|view| of_kind(id, view)).collect(),
+        })
+        .filter(|panel| !panel.views.is_empty())
+        .collect();
     IndexTemplate {
         project_name: manifest.map(|m| m.name.as_str()),
         project_version: manifest.map(|m| m.version.as_str()),
         project_description: manifest.and_then(|m| m.description.as_deref()),
-        views,
+        no_views: views.is_empty(),
+        panels,
         live_reload,
-        has_schematic: views.iter().any(RenderedView::is_schematic),
-        has_harness: views.iter().any(RenderedView::is_harness),
-        has_pinout: views.iter().any(RenderedView::is_pinout),
     }
     .render()
     .map_err(Error::Template)
@@ -255,12 +301,12 @@ pub fn pdf_filename(manifest: Option<&Manifest>) -> String {
 /// the view's subject. Synthetic inline-connector instances are skipped —
 /// their `type_name` is the inline's designator, which could shadow a real
 /// component type, and an inline is never a view subject.
-fn subject_instance<'d>(design: &'d Design, view: &View) -> Result<&'d Instance> {
+fn subject_instance<'d>(design: &'d Design, view: &View) -> ViewResult<&'d Instance> {
     design
         .instances
         .values()
         .find(|inst| inst.inline.is_none() && inst.type_name == view.subject)
-        .ok_or_else(|| Error::UnknownSubject {
+        .ok_or_else(|| ViewErrorKind::UnknownSubject {
             subject: view.subject.to_string(),
         })
 }
@@ -321,6 +367,7 @@ impl FilenameAllocator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::render::geometry::Side;
 
     #[test]
     fn slug_collapses_and_lowercases() {
@@ -381,8 +428,8 @@ mod tests {
     #[test]
     fn index_references_each_view_by_title_and_file() {
         let views = vec![
-            view("HV Overview", "hv_overview.svg", "schematic"),
-            view("Pack Detail", "pack_detail.svg", "schematic"),
+            Ok(view("HV Overview", "hv_overview.svg", "schematic")),
+            Ok(view("Pack Detail", "pack_detail.svg", "schematic")),
         ];
         let html = index_html(&views, None, false).unwrap();
         assert!(html.contains("<h2>HV Overview</h2>"));
@@ -393,9 +440,9 @@ mod tests {
     #[test]
     fn index_groups_views_into_kind_tabs() {
         let views = vec![
-            view("Overview", "overview.svg", "schematic"),
-            view("Main Harness", "main_harness.svg", "harness"),
-            view("X1 Pinout", "x1_pinout.svg", "pinout"),
+            Ok(view("Overview", "overview.svg", "schematic")),
+            Ok(view("Main Harness", "main_harness.svg", "harness")),
+            Ok(view("X1 Pinout", "x1_pinout.svg", "pinout")),
         ];
         let html = index_html(&views, None, false).unwrap();
         // All tab controls present when all kinds exist.
@@ -409,7 +456,7 @@ mod tests {
 
     #[test]
     fn index_omits_a_tab_with_no_views() {
-        let views = vec![view("Overview", "overview.svg", "schematic")];
+        let views = vec![Ok(view("Overview", "overview.svg", "schematic"))];
         let html = index_html(&views, None, false).unwrap();
         assert!(html.contains("id=\"tab-schematic\""));
         assert!(!html.contains("id=\"tab-harness\""));
@@ -418,12 +465,111 @@ mod tests {
 
     #[test]
     fn index_escapes_author_supplied_titles() {
-        let views = vec![view("A & B <hv>", "a_b_hv.svg", "schematic")];
+        let views = vec![Ok(view("A & B <hv>", "a_b_hv.svg", "schematic"))];
         let html = index_html(&views, None, false).unwrap();
         // Askama auto-escapes (with numeric entities); the author-supplied
         // angle brackets must not survive as a literal tag.
         assert!(!html.contains("<hv>"));
         assert!(!html.contains("A & B"));
+    }
+
+    #[test]
+    fn index_shows_a_failed_view_in_place_of_its_drawing() {
+        let failure = ViewErrorKind::UnknownSubject {
+            subject: "Gone".to_string(),
+        }
+        .in_view("Broken <view>", &ViewKind::Harness);
+        let views = vec![
+            Ok(view("Overview", "overview.svg", "schematic")),
+            Err(failure),
+            Ok(view("Main Harness", "main_harness.svg", "harness")),
+        ];
+        let html = index_html(&views, None, false).unwrap();
+        // The other views still show their drawings.
+        assert!(html.contains("<img src=\"overview.svg\""));
+        assert!(html.contains("<img src=\"main_harness.svg\""));
+        // The failure sits in its own kind's tab, before the view after it,
+        // titled and explained, escaped like any author text.
+        let harness_tab = &html[html.find("panel-harness").expect("harness tab")..];
+        let failed = harness_tab.find("class=\"failed\"").expect("failed view");
+        assert!(failed < harness_tab.find("main_harness.svg").expect("next view"));
+        assert!(harness_tab.contains("<h2>Broken &#60;view&#62;</h2>"));
+        assert!(harness_tab.contains("has no instance in the design"));
+    }
+
+    /// A design with two boxes wired together, and one view per title in
+    /// `views`; a view titled `Lost …` documents a type with no instance.
+    fn design_with_views(titles: &[&str]) -> Design {
+        let mut design = schematic::tests::design_from(
+            r#"
+component sys {
+    a: alpha;
+    b: beta;
+    wire red 1 [a.p, b.p];
+    component alpha {
+        pub port p "Out" pin 1;
+    }
+    component beta {
+        pub port p "In" pin 1;
+    }
+}
+"#,
+        );
+        design.views = titles
+            .iter()
+            .map(|title| {
+                let subject = if title.starts_with("Lost") {
+                    "gone"
+                } else {
+                    "sys"
+                };
+                let mut view = schematic::tests::view_of(
+                    subject,
+                    &[
+                        ("a", 0.0, 0.0, &[("p", Side::East)]),
+                        ("b", 16.0, 0.0, &[("p", Side::West)]),
+                    ],
+                );
+                view.title = title.to_string();
+                view
+            })
+            .collect();
+        design
+    }
+
+    #[test]
+    fn a_failing_view_leaves_the_others_rendered() {
+        let design = design_with_views(&["Overview", "Lost", "Detail"]);
+        let views = render_views(&design, SvgMode::Standalone);
+
+        let [Ok(first), Err(failure), Ok(last)] = views.as_slice() else {
+            panic!("expected rendered, failed, rendered: {views:?}");
+        };
+        assert_eq!(first.title, "Overview");
+        assert!(first.svg.contains("<svg"));
+        assert_eq!(last.title, "Detail");
+        assert!(last.svg.contains("<svg"));
+        assert_eq!(failure.title, "Lost");
+        assert_eq!(failure.view_kind, ViewKind::Schematic);
+        assert_eq!(
+            failure.to_string(),
+            "view \"Lost\": view subject \"gone\" has no instance in the design"
+        );
+    }
+
+    #[test]
+    fn a_failed_view_keeps_its_file_name_so_no_other_view_is_renamed() {
+        let mut design = design_with_views(&["Overview", "Lost", "Overview"]);
+        // One title throughout: the failing second view still takes
+        // `overview_2.svg`, so the third keeps the name it has when all
+        // three render.
+        design.views[1].title = "Overview".to_string();
+        let names: Vec<_> = render_views(&design, SvgMode::Standalone)
+            .into_iter()
+            .flatten()
+            .map(|view| view.filename)
+            .collect();
+        assert_eq!(names, ["overview.svg", "overview_3.svg"]);
     }
 
     #[test]

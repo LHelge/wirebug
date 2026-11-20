@@ -16,7 +16,7 @@ use svg::Document;
 use svg::node::element::{Group, Style, Text};
 
 use crate::dsl::ir::{Design, Instance, InstanceName, View};
-use crate::error::Result;
+use crate::error::{ViewErrorKind, ViewResult};
 use crate::render::SvgMode;
 use crate::render::geometry::Point;
 use crate::render::lint::{CrowdedPort, IncludeBox, UnroutableWire, ViewLayout, WireEndAt};
@@ -83,7 +83,7 @@ impl SchematicRenderer {
         subject: &Instance,
         view: &View,
         mode: SvgMode,
-    ) -> Result<String> {
+    ) -> ViewResult<String> {
         let grid = Grid::of_view(view)?;
         let placement = Placement::compute(design, subject, view, grid)?;
 
@@ -95,7 +95,10 @@ impl SchematicRenderer {
         // Spread parallel wires in a shared channel by the port pitch (two
         // steps), so a nudged bundle matches the spacing of the ports it
         // fans out from rather than packing twice as tight.
-        let wires = router.route_all(&pairs, grid.pitch())?;
+        let wires = router.route_all(&pairs, grid.pitch()).map_err(|unrouted| {
+            let [from, to] = connections[unrouted.pair].ends();
+            ViewErrorKind::RouteFailed { from, to }
+        })?;
 
         let mut doc = Document::new().set("xmlns", "http://www.w3.org/2000/svg");
         if mode.is_embed() {
@@ -241,7 +244,7 @@ pub(crate) mod tests {
     use super::*;
     use crate::dsl::ir::{Include, InstanceName, PortName, Side, TextBox, TypeName, ViewKind};
     use crate::dsl::span::{FileId, Span};
-    use crate::error::Error;
+    use crate::error::ViewErrorKind;
 
     /// Elaborate a single-file `.wb` source into a [`Design`]. The source
     /// must have a single top-level component (the views are built
@@ -288,7 +291,7 @@ pub(crate) mod tests {
         }
     }
 
-    fn render(design: &Design, view: &View) -> Result<String> {
+    fn render(design: &Design, view: &View) -> ViewResult<String> {
         let subject = design
             .instances
             .values()
@@ -420,7 +423,7 @@ component sys {
         view.grid = Some(5.0);
         assert!(matches!(
             render(&design, &view),
-            Err(Error::GridTooSmall { .. })
+            Err(ViewErrorKind::GridTooSmall { .. })
         ));
     }
 
@@ -433,7 +436,7 @@ component sys {
         assert!(!svg.contains("class=\"wire\""));
     }
 
-    fn render_embed(design: &Design, view: &View) -> Result<String> {
+    fn render_embed(design: &Design, view: &View) -> ViewResult<String> {
         let subject = design
             .instances
             .values()
