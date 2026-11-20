@@ -4,7 +4,7 @@ Text-defined electrical schematics and wiring harnesses.
 
 **wirebug** describes an electrical system in a small text DSL (`.wb` files) and turns it into SVG schematics, wiring harness drawings, and connector pinout drawings. One model, many views — inspired by [Structurizr](https://structurizr.com/) / [LikeC4](https://likec4.dev/) for system architecture and [WireViz](https://github.com/WireViz/WireViz) for wiring harnesses.
 
-A project is a directory rooted at a `wirebug.toml` manifest, with `main.wb` as the conventional entry file beside it. Components are *types* with `pub` ports; you instantiate them, wire the instances together, and split a system across files with `use`. The full language is documented in `.agents/skills/wirebug-dsl/` and mirrored in `.claude/skills/wirebug-dsl/`.
+A project is a directory rooted at a `wirebug.toml` manifest, with `main.wb` as the conventional entry file beside it. Components are *types* with `pub` ports; you instantiate them, wire the instances together, and split a system across files with `use`. The full language is documented in `.claude/skills/wirebug-dsl/` and mirrored in `.claude/skills/wirebug-dsl/`.
 
 ## Install
 

@@ -3,13 +3,9 @@
 User-facing intro is in `README.md`. This file is for context that helps
 future work on the codebase. Keep it short; don't restate the README.
 
-This is the Copilot-facing mirror of `CLAUDE.md`. The DSL skill lives at
-`.agents/skills/wirebug-dsl/` and should stay in sync with the Claude copy at
-`.claude/skills/wirebug-dsl/`.
-
 ## One pipeline
 
-The only input is the **`.wb` DSL** (spec: `.agents/skills/wirebug-dsl/`).
+The only input is the **`.wb` DSL** (spec: `.claude/skills/wirebug-dsl/`).
 Four CLI commands share it:
 
 - **`check` (`src/dsl/`)** — lex → parse → load project → resolve →
@@ -95,10 +91,22 @@ the field stays `None`.
 
 The parsed `Manifest` rides on `Project` → `ir::Design` (as an
 `Option<Manifest>` so synthetic test designs need not invent one).
-Renderers stamp `<name> v<version> · rev … (date)` in the SVG's
-bottom-right corner; the HTML index puts the project name in `<h1>`
-with the version and description below it; PDF pages carry the same
-stamp text in their fixed-size footer instead of in the SVG.
+Renderers stamp `<name> v<version> · rev … (date) · wirebug v<appver>`
+in the SVG's bottom-right corner — the trailing `wirebug v…`
+(`stamp::APP_VERSION`, this crate's `CARGO_PKG_VERSION`) records the
+generator and is always present; `stamp::stamp_text` is the single
+source, so the three SVG renderers and the PDF footer all carry it. The
+HTML index puts the project name in `<h1>` with the version and
+description below it; PDF pages carry the same stamp text in their
+fixed-size footer (and set the PDF `Producer` to `wirebug <appver>`).
+Embed mode suppresses the in-drawing stamp, so `manifest.json` carries a
+`generator: "wirebug v<appver>"` field instead.
+
+`wirebug manifest version` prints the manifest's version `v`-prefixed
+(`v0.1.0`) to stdout, for CI to check against a git tag. It's backed by
+`dsl::load_manifest` (discovery + `manifest::load` only, skipping the
+check pipeline), so it works even when the `.wb` sources don't compile.
+Distinct from clap's `--version`, which prints the wirebug app version.
 
 ## DSL mental model
 
@@ -136,9 +144,29 @@ stamp text in their fixed-size footer instead of in the SVG.
   A `cable` is flat too: its metadata lands in `Instance.cables`
   (`CableMeta`, keyed by designator) and each conductor stays a `Wire` in
   `Instance.wires` tagged with `Wire.cable = Some(name)`; loose wires are
-  `None`. So the schematic renderer ignores cables for free, and only the
-  harness renderer reads the tag. Cable conductors are 2-endpoint by
-  rule; shared rails stay loose multi-endpoint wires.
+  `None`. A conductor inside a `twisted { }` group also carries
+  `Wire.twisted_group = Some(i)` (numbered per cable in source order), so
+  grouping survives flattening. So the schematic renderer ignores cables
+  for free, and only the harness renderer reads the tags. Cable
+  conductors are 2-endpoint by rule; shared rails stay loose
+  multi-endpoint wires.
+- **Inline connectors (`inline`)** — a mated plug/receptacle pair
+  mid-harness (a loom's branch point): one shared port set, two optional
+  `male:`/`female:` housing halves, each a `connector_type` ref. Inlines
+  share the instance namespace (endpoints say `ic.sig`) and elaborate as a
+  **synthetic child `Instance`** marked by `Instance.inline: Option<
+  InlineMeta>` (halves' description/`part`/layout) with one
+  designator-named connector — so `rewrite_wire`, the harness layout's
+  endpoint/node keys, and the schematic renderer need no special cases.
+  A harness include selects a half (`include ic.female`); elaboration
+  normalizes the include's connector slot to the designator and records
+  `Include.half`, and the harness node renders that half's part identity
+  plus an M/F header chip. Each loom's view shows the half crimped onto
+  that loom; auto-scoping drops the other loom's conductors. Both halves
+  in one view is a `duplicate_view_include`; schematic includes of
+  inlines are `wrong_include_form`; `pub` on inline ports warns
+  (`inline_pub_port`). Per-half pinout faces and a one-sided-pin lint are
+  future work.
 
 ## Render mental model (IR → SVG)
 
@@ -168,6 +196,12 @@ adds no inference (`src/render/schematic/layout.rs`):
   a `WireEnd::Own` port *listed in the enclosure* (below). Excluded instances,
   unlisted ports, and own ports without an enclosure placement drop silently —
   a listed port whose wire lands on such an end shows as a bare stub.
+  Each drawn segment carries a `wire-code` annotation — the wire's color
+  as an IEC 60757 code (`ir::WireColor::code`; unknown names pass through
+  verbatim), haloed and centred on the longest run clear of wire
+  crossings and of codes already placed (the halo would visually cut a
+  crossed wire; longest-segment midpoint is the fallback when nothing
+  clears).
 - **Enclosure** — an optional `enclosure { }` block draws the subject itself
   as a dashed box *wrapping* the schematic, with the subject's own ports on its
   boundary as **inverted** ports (facing inward, so an `Own` end's wire routes
@@ -220,7 +254,20 @@ silently (like an unlisted port in a schematic).
 
 Kept conductors split by `Wire.cable`. A **declared cable** draws as a
 **cable box** (`CableBox`/`render_cable_box`) on the spine: a titled table
-(label + `type · length · ×count`), one coloured strand per row. Rows are
+(label + `type · length · ×count`), one coloured strand per row. A
+`twisted { }` pair (exactly two conductors, grammar-enforced —
+`ast::TwistedGroup` holds `[Wire; 2]`) draws its box run as a **symbolic
+braid** (`draw::braid_d` — chained flex cubics swapping the pair's two
+rows, an even half-twist count so each strand exits on its own row)
+confined between the pair's annotation zones: the first row's label
+anchors left, the second's right (`cable-label-start`/`-end` modifier
+classes — a bare `text-anchor` attribute would lose to the
+`.cable-label` stylesheet rule), each over the straight run where its
+wire is unambiguously on its own row. Rows sort by endpoint-y with
+groups kept adjacent (`layout::braid_partners` finds each strand's
+partner, defensively straightening any non-pair group a hand-built
+design might carry); the box is sized per-row, a pair needing label +
+braid + label (`LABEL_CHAR_WIDTH` for the 9px font). Rows are
 ordered by each conductor's endpoint-y midpoint (the 1D occupancy step), the
 box's vertical centre is its strands' centroid, and multiple boxes are pushed
 apart along the spine (`build_cable_boxes`, gap `CABLE_GAP`). **Loose wires**
@@ -231,7 +278,15 @@ Every wire segment is one horizontally-flexed cubic bezier (`bezier.rs::flex`,
 a loose wire is one curve. Control points share each endpoint's y and stay
 within the endpoints' x-span, so the curve never overshoots its bounding box
 (no viewbox padding needed). Each strand is stroked with `wire.color` (the SVG
-`stroke`) and annotated `<label> · <gauge>mm²`.
+`stroke`) over a wider black casing path (WireViz's trick, so light
+colors read on any background) and annotated
+`<label> · <gauge>mm² · <color code>` (IEC 60757 via `ir::WireColor::code`).
+A two-tone color (`green/yellow`) adds a dashed tracer overlay on the
+core and slash-joins its codes (`GN/YE`); `WireColor` carries
+`base` + optional `tracer` (each an `ir::ColorName` — the closed IEC
+60757 enum with an `Other(String)` escape hatch), split at the `/` by
+the parser. Synonyms normalise on parse (`purple` → `violet`, also in
+`data-color`); a non-IEC name warns in `check` but renders verbatim.
 
 Three deliberate departures from the schematic's no-inference rule: pin
 **facing** is derived per pin from where its conductor goes (above),
@@ -278,7 +333,9 @@ so one run reports many. Errors fail the run; warnings fail only under
   arity (a cable conductor that isn't exactly two endpoints,
   `cable_wire_arity`); cable property checks (`unknown_cable_property`,
   `duplicate_cable_property`, `cable_property_type` — `type` wants a string,
-  `length` a number); unused import and bare-port pin (warnings). Cable
+  `length` a number); unused import, bare-port pin, and non-IEC 60757
+  wire color (`unknown_wire_color` — the `ir::ColorName::Other` escape
+  hatch still renders verbatim) as warnings. Cable
   property/arity checks live here (not elaborate) so a type instantiated
   many times reports each once.
 
@@ -326,7 +383,7 @@ redesign each when it lands.
 
 ```
 src/
-├── main.rs          # clap CLI: `check`, `render`, `serve`, `lsp` (all over the .wb DSL)
+├── main.rs          # clap CLI: `check`, `render`, `serve`, `lsp`, `manifest version` (all over the .wb DSL)
 ├── lib.rs           # re-exports; dsl::check_project + render::render_views
 │
 │  # ── DSL parse-and-check pipeline (the only input: .wb) ──
@@ -340,7 +397,14 @@ src/
 │   ├── parse/mod.rs     # chumsky parser over &[(Token, Span)] → ast::File
 │   ├── manifest/        # wirebug.toml loader + git-revision auto-fill
 │   ├── project/mod.rs   # walk-up discovery + transitive `use` loading → Project
-│   ├── resolve/mod.rs   # DefId registry, scopes, flattened ports, reference checks
+│   ├── resolve/         # DefId registry + reference checks, one pass per file
+│   │   ├── mod.rs       # data model (Resolved, *Facts) + the resolve() driver
+│   │   ├── register.rs  # pass 1: AST walk → DefInfo facts, local duplicates
+│   │   ├── scopes.rs    # per-file type scopes (own defs + `use` imports)
+│   │   ├── merge.rs     # MergeGroups: `extend` canonicals, orphans, dup guards
+│   │   ├── refs.rs      # flat-namespace lookups + instance/connector/inline/
+│   │   │                #   endpoint reference binding
+│   │   └── views.rs     # view subject binding + include/enclosure checks
 │   ├── elaborate/mod.rs # AST/registry → ir::Design; containment-cycle guard
 │   ├── ir/mod.rs        # id newtypes + elaborated Design/Instance/Port/Wire/View
 │   ├── validate/mod.rs  # wire arity (error) + --strict warnings
@@ -418,6 +482,13 @@ DSL pipeline notes:
 - `chumsky` parses a `(Token, Span)` slice; our `Span` implements
   `chumsky::span::Span` (context = `FileId`), so `e.span()` yields
   file-tagged spans directly. `Rich` errors become owned `ParseError`s.
+- Every major production (`port`, `wire`, `cable`, `view`, …) is
+  **`.boxed()`** where it's defined. Chumsky combinators nest their
+  sub-parsers' full generic types, so an unboxed embedding of a large
+  sub-parser multiplies rustc's typeck cost geometrically — a bare
+  `wire.then(wire)` once took builds from seconds to OOM. Boxing erases
+  the type at each production for one dynamic dispatch per node. Keep
+  new productions boxed, and never embed an unboxed heavyweight twice.
 - Files are loaded once each (by canonical path), so a `use` cycle or a
   diamond import is harmless and never double-reports. Directory layout
   never affects logical hierarchy — only `use` paths and DSL nesting do.
@@ -628,6 +699,43 @@ cargo run -- lsp
 cd editors/vscode && npm install && npm run package
 code --install-extension wirebug-*.vsix
 ```
+
+## Releasing
+
+Releases are **tag-driven**: pushing a `vX.Y.Z` tag runs
+`.github/workflows/release.yml`, which gates on the shared
+`quality-checks.yml` (the same reusable job `ci.yml` runs on PRs, with the
+font install the render tests need), then, in order:
+
+- **build** the binary for `x86_64-unknown-linux-gnu`,
+  `x86_64-apple-darwin`, and `aarch64-apple-darwin` (no Windows);
+- **vsix** — build the VSCode extension into `wirebug-<version>.vsix`;
+- **release** — a GitHub release whose notes are generated by `git-cliff`
+  from the conventional-commit history (default config, no `cliff.toml`),
+  with the three binaries and the `.vsix` attached;
+- **homebrew** — render `Formula/wirebug.rb` into `LHelge/homebrew-tap`
+  (needs the `TAP_GITHUB_TOKEN` secret, a PAT with write access to the tap);
+- **publish** — `cargo publish` to crates.io (needs `CARGO_REGISTRY_TOKEN`).
+  This is **irreversible**: a version can only be yanked, never replaced.
+
+**Before tagging, bump the version in two places by hand to match the tag**
+(the `vX.Y.Z` tag → `X.Y.Z`, no `v`):
+
+1. `Cargo.toml` `[package] version` — this is what `cargo publish` uploads,
+   so a mismatch means the crate version differs from the tag. Verify with
+   `wirebug manifest version` (prints `vX.Y.Z`).
+2. `editors/vscode/package.json` `version`.
+
+There is **no automatic sync** between these and the tag. CI does re-stamp
+the `.vsix` from the tag (`vsce package "$VERSION"`), so the *released*
+extension always matches even if `package.json` drifts — but keep
+`package.json` correct anyway so local `npm run package` builds and the
+committed source agree with the release. Cargo.toml has no such safety net:
+its committed version is published verbatim, so it **must** be bumped.
+
+Conventional commits drive the changelog, so keep using `feat:` / `fix:` /
+etc. scopes. The commit that bumps the versions is the natural release
+commit to tag.
 
 ## Done definition for the MVP
 
