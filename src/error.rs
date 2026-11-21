@@ -86,6 +86,14 @@ pub enum ViewErrorKind {
     #[error("failed to route schematic wire between `{from}` and `{to}`")]
     RouteFailed { from: WireEnd, to: WireEnd },
 
+    /// A view's canvas is longer on a side than `render::MAX_CANVAS`, so
+    /// rasterising it would allocate more than any drawing needs. Refused
+    /// before anything is allocated for it.
+    #[error(
+        "canvas is {width} × {height} units, more than the {limit} units a view may span on a side"
+    )]
+    CanvasTooLarge { width: f64, height: f64, limit: f64 },
+
     /// Failed to parse our own rendered SVG before converting it (to PNG
     /// or PDF).
     #[error("failed to parse rendered SVG: {0}")]

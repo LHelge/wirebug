@@ -314,6 +314,45 @@ mod tests {
     }
 
     #[test]
+    fn png_output_refuses_a_view_too_large_to_rasterise_and_writes_the_others() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let out = tmp.path().join("out");
+        let mut design = design_with_views(&["Overview", "Huge", "Detail"]);
+        // A million grid steps east: a canvas of millions of units, whose
+        // pixmap would be terabytes.
+        design.views[1].includes[1].x = 1_000_000.0;
+        let png = Output::Views {
+            format: ViewFormat::Png { scale: 2.0 },
+            embed: false,
+        };
+        let written = png.write(&design, &out).expect("writes");
+        let mut entries: Vec<String> = fs::read_dir(&out)
+            .expect("out dir")
+            .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
+            .collect();
+        entries.sort();
+        assert_eq!(entries, ["detail.png", "index.html", "overview.png"]);
+        let [failure] = written.failures.as_slice() else {
+            panic!("one failure: {:?}", written.failures);
+        };
+        assert_eq!(failure.title, "Huge");
+        assert!(matches!(
+            *failure.cause,
+            crate::error::ViewErrorKind::CanvasTooLarge { .. }
+        ));
+        assert!(
+            failure
+                .to_string()
+                .ends_with("more than the 8192 units a view may span on a side"),
+            "{failure}"
+        );
+
+        // SVG output costs nothing per unit, and draws it.
+        let svg = SVG.write(&design, &tmp.path().join("svg")).expect("writes");
+        assert!(svg.failures.is_empty(), "{:?}", svg.failures);
+    }
+
+    #[test]
     fn embed_output_lists_only_the_views_it_wrote() {
         let embed = Output::Views {
             format: ViewFormat::Svg,

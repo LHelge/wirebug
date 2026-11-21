@@ -35,7 +35,7 @@ Four CLI commands share it:
   grouped into **Schematics** / **Harnesses** tabs by view kind. Three view
   kinds render today: `schematic` (`render/schematic/`), `harness`
   (`render/harness/`), and `pinout` (`render/pinout/`). `--png` rasterises each view to PNG instead
-  (`render/png.rs`, via `resvg`); `--pdf` writes one A4 PDF with one view
+  (`render/png.rs`, via `resvg`, at `png::PNG_SCALE` pixels per unit); `--pdf` writes one A4 PDF with one view
   per page (`render/pdf.rs`, via `svg2pdf` + `pdf-writer` — orientation per
   view by aspect ratio, named `<project-slug>.pdf`, replaces the per-view
   files and index; views render plain (`SvgMode::Plain`, no in-drawing
@@ -535,6 +535,15 @@ phases above). Render adds only geometry/dispatch errors, in `src/error.rs`
     needs (`NonPositiveGrid`, `GridTooSmall`, from the renderer's
     `GridFault`) — caught earlier by the Layout phase (`invalid_grid`,
     `grid_too_fine`), so a backstop for hand-built designs;
+  - a canvas too large to rasterise (`CanvasTooLarge`, the size and
+    `render::MAX_CANVAS`): `PngRasterizer::to_png` refuses a view whose
+    viewBox exceeds the limit before allocating its pixmap. The pixmap
+    itself is reserved fallibly (`try_reserve_exact`, then
+    `Pixmap::from_vec`; `Pixmap::new` would abort the process when the
+    allocator refuses), so a pixmap that still cannot be had, at a larger
+    `ViewFormat::Png` scale, is a `PngEncode` failure of that view, not an
+    abort. SVG and PDF output handle such a view (a 2,000,000-unit view
+    renders in milliseconds), so only `--png` refuses it;
   - our own SVG failing to parse or convert for `--png` / `--pdf`.
 - **`error::Error`** — what stops the whole render: file IO when writing
   output (`Write`), the HTML index template (`Template`) and serializing
