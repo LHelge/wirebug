@@ -963,7 +963,7 @@ where
     // --- Cables ---
 
     // `shield ["<label>"] [<end>, …];` — a cable's or a twisted pair's
-    // screen and the pins its drain lands on; `shield;` lands nowhere. The
+    // screen and the pins its drain lands on; `shield;` lands on no pin. The
     // number of ends is checked in validate.
     let shield = just(Token::Shield)
         .ignore_then(string.or_not())
@@ -2002,7 +2002,7 @@ inverter_control = face 47@(1, 0) large 21@(5, 0) 13@(16, 3)
                     wire red 1 [a.x, b.x];
                     shield "SHLD" [a.gnd, b.gnd];
                     shield [a.gnd,];
-                    shield "CUT";
+                    shield "GLAND";
                     shield;
                 }
             }"#,
@@ -2013,7 +2013,7 @@ inverter_control = face 47@(1, 0) large 21@(5, 0) 13@(16, 3)
         // Faithful: validate allows one shield and two ends.
         assert_eq!(
             shield_lines(&cable.shields),
-            ["SHLD: a.gnd, b.gnd", "-: a.gnd", "CUT: ", "-: "]
+            ["SHLD: a.gnd, b.gnd", "-: a.gnd", "GLAND: ", "-: "]
         );
         assert_eq!(cable.wires().count(), 1);
     }

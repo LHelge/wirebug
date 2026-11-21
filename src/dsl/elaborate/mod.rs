@@ -967,7 +967,7 @@ mod tests {
             ))))
         );
         assert_eq!(pair_shield(1), None, "an unscreened pair");
-        assert_eq!(pair_shield(2), Some(ShieldTermination::Unterminated));
+        assert_eq!(pair_shield(2), Some(ShieldTermination::NoPin));
         assert!(loom.twisted_group(3).is_none());
 
         let screened: Vec<Screened> = loom.shields().map(|(what, _)| what).collect();

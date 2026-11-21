@@ -949,7 +949,7 @@ component sys {{
         );
         assert!(screened.contains("CAN · ×2 · shielded"), "{screened}");
         assert_eq!(screened.matches("class=\"cable-shield\"").count(), 1);
-        // Terminated nowhere: the mark alone, no drain.
+        // On no pin: the mark alone, no drain.
         assert!(!screened.contains("class=\"drain\""));
 
         let plain = render(

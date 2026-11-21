@@ -244,7 +244,8 @@ Distinct from clap's `--version`, which prints the wirebug app version.
   for data of its own. Screens are typed data, never a fake `Wire`: the
   cable's overall one is `CableMeta.shield` and a pair's
   `TwistedMeta.shield`, each an `ir::Shield` (label, span and a
-  `ShieldTermination` — `Unterminated`, `Single(WireEnd)` or
+  `ShieldTermination` — `NoPin` (cut back, or bonded at a gland or
+  housing: the model does not say which), `Single(WireEnd)` or
   `Both([WireEnd; 2])`, so more than two ends cannot be represented;
   `Shield::ends()` lists them). `CableMeta::shields()` yields every screen
   with what it screens (`ir::Screened::Cable` or `Pair(i)`), which is how
@@ -446,8 +447,8 @@ overall one last, every row placed by its `row` index), drawn as a thin
 dashed `drain-wire` across the box and a flexed `drain-wire` lead from the
 nearer box edge to each pin, with an italic `drain-label` (the shield's
 label, else `Shield`/`Pair shield`), all in a `<g class="drain">`. An end
-on a connector the view leaves out is not drawn; a shield terminated
-nowhere has no row, only its outline. A shield alone never puts a cable
+on a connector the view leaves out is not drawn; a shield on no pin
+has no row, only its outline. A shield alone never puts a cable
 box in a view. Reusing the orthogonal router is a noted future
 refinement.
 

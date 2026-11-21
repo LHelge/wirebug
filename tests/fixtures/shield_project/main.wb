@@ -1,7 +1,7 @@
 // Shields: a CAN cable whose overall screen is grounded at the ECU only,
 // and a resolver cable with an individually screened pair grounded at both
-// ends, a pair whose screen is cut back at both ends, and an overall
-// screen. The ECU's ground pin also carries a wire: a drain crimped with
+// ends, a pair whose screen lands on no pin, and an overall screen that
+// lands on no pin either. The ECU's ground pin also carries a wire: a drain crimped with
 // it is fine.
 
 use Ecu      from "components/ecu.wb";

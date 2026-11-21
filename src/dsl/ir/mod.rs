@@ -526,12 +526,13 @@ impl From<&ast::Shield> for Shield {
     }
 }
 
-/// Where a shield's drain is terminated. A screen runs from one end of its
-/// cable to the other, so it lands on two pins at most.
+/// The pins a shield's drain is terminated on. A screen runs from one end
+/// of its cable to the other, so it lands on two pins at most.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShieldTermination {
-    /// Terminated nowhere: present, but cut back (floating) at both ends.
-    Unterminated,
+    /// Lands on no pin: cut back, or bonded at a gland or housing rather
+    /// than on a contact. The model does not know which.
+    NoPin,
     /// Grounded at one end, the usual termination.
     Single(WireEnd),
     /// Grounded at both ends.
@@ -542,7 +543,7 @@ impl ShieldTermination {
     /// The pins the drain lands on, in source order.
     pub fn ends(&self) -> &[WireEnd] {
         match self {
-            Self::Unterminated => &[],
+            Self::NoPin => &[],
             Self::Single(end) => std::slice::from_ref(end),
             Self::Both(ends) => ends,
         }
@@ -555,7 +556,7 @@ impl FromIterator<WireEnd> for ShieldTermination {
     fn from_iter<I: IntoIterator<Item = WireEnd>>(ends: I) -> Self {
         let mut ends = ends.into_iter();
         match (ends.next(), ends.next()) {
-            (None, _) => Self::Unterminated,
+            (None, _) => Self::NoPin,
             (Some(end), None) => Self::Single(end),
             (Some(first), Some(second)) => Self::Both([first, second]),
         }
@@ -1063,7 +1064,7 @@ mod tests {
     fn a_shield_termination_holds_at_most_two_ends() {
         let end = |port: &str| WireEnd::Own(PortName::from(port));
         let of = |ports: &[&str]| ports.iter().map(|p| end(p)).collect::<ShieldTermination>();
-        assert_eq!(of(&[]), ShieldTermination::Unterminated);
+        assert_eq!(of(&[]), ShieldTermination::NoPin);
         assert_eq!(of(&["a"]), ShieldTermination::Single(end("a")));
         assert_eq!(
             of(&["a", "b"]),
@@ -1071,7 +1072,7 @@ mod tests {
         );
         // A third end is validate's to report; the termination keeps two.
         assert_eq!(of(&["a", "b", "c"]).ends(), [end("a"), end("b")]);
-        assert!(ShieldTermination::Unterminated.ends().is_empty());
+        assert!(ShieldTermination::NoPin.ends().is_empty());
     }
 
     #[test]
