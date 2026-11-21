@@ -10,7 +10,9 @@
 //!   (known keys, each once — across a component's `extend` fragments too —
 //!   with the right kind of value) — errors;
 //! - wire gauge and any `length` (both must be positive) — errors;
-//! - an endpoint repeated within one wire — an error;
+//! - an endpoint repeated within one wire or one shield — an error;
+//! - a second shield in one cable body or one twisted pair, and a shield
+//!   terminated on more than two ends — errors;
 //! - a cable with no conductors — a warning;
 //! - unused imports and pin assignments outside a connector — warnings,
 //!   which only fail the run under `--strict`.
@@ -21,8 +23,12 @@
 
 use std::collections::HashMap;
 
-use crate::dsl::ast::{Item, Member, Port, Property, PropertyValue, Quantity, Wire};
-use crate::dsl::diagnostics::{FirstProperty, Problem, PropertyKind, PropertyOwner};
+use crate::dsl::ast::{
+    Cable, Endpoint, Item, Member, Port, Property, PropertyValue, Quantity, Shield, Wire,
+};
+use crate::dsl::diagnostics::{
+    EndpointOwner, FirstProperty, Problem, PropertyKind, PropertyOwner, ShieldOwner,
+};
 use crate::dsl::ir::{ColorName, WireEnd};
 use crate::dsl::resolve::{DefId, Resolved};
 use crate::dsl::span::{FileId, Span, Spanned};
@@ -81,6 +87,24 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
                             });
                         }
                         validate_wire(wire, def.file, resolved, &mut problems);
+                    }
+                    validate_shields(
+                        cable,
+                        ShieldOwner::Cable,
+                        &cable.shields,
+                        def.file,
+                        resolved,
+                        &mut problems,
+                    );
+                    for pair in cable.twisted_groups() {
+                        validate_shields(
+                            cable,
+                            ShieldOwner::Pair,
+                            &pair.shields,
+                            def.file,
+                            resolved,
+                            &mut problems,
+                        );
                     }
                     validate_properties(
                         PropertyOwner::Cable,
@@ -153,7 +177,13 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
 fn validate_wire(wire: &Wire, file: FileId, resolved: &Resolved, problems: &mut Vec<Problem>) {
     validate_wire_colors(wire, file, resolved, problems);
     validate_gauge(wire, file, resolved, problems);
-    validate_distinct_endpoints(wire, file, resolved, problems);
+    validate_distinct_endpoints(
+        EndpointOwner::Wire,
+        &wire.endpoints,
+        file,
+        resolved,
+        problems,
+    );
     validate_properties(
         PropertyOwner::Wire,
         &wire.properties,
@@ -161,6 +191,47 @@ fn validate_wire(wire: &Wire, file: FileId, resolved: &Resolved, problems: &mut 
         resolved,
         problems,
     );
+}
+
+/// The shields of one cable body or one twisted pair (`owner`): at most
+/// one, each terminated on at most two ends, none of them listed twice. A
+/// shield end sharing a pin with a wire is a drain crimped alongside it,
+/// and is not compared.
+fn validate_shields(
+    cable: &Cable,
+    owner: ShieldOwner,
+    shields: &[Shield],
+    file: FileId,
+    resolved: &Resolved,
+    problems: &mut Vec<Problem>,
+) {
+    if let [first, rest @ ..] = shields {
+        for again in rest {
+            problems.push(Problem::DuplicateShield {
+                owner,
+                cable: cable.name.node.as_str().to_string(),
+                src: resolved.project.source(file),
+                at: again.span.into(),
+                first: first.span.into(),
+            });
+        }
+    }
+    for shield in shields {
+        if shield.ends.len() > 2 {
+            problems.push(Problem::ShieldArity {
+                count: shield.ends.len(),
+                src: resolved.project.source(file),
+                at: shield.span.into(),
+            });
+        }
+        validate_distinct_endpoints(
+            EndpointOwner::Shield,
+            &shield.ends,
+            file,
+            resolved,
+            problems,
+        );
+    }
 }
 
 /// Check a property body against the keys its `owner` takes: an unknown
@@ -292,21 +363,23 @@ fn validate_gauge(wire: &Wire, file: FileId, resolved: &Resolved, problems: &mut
     }
 }
 
-/// A wire that lists one endpoint twice connects a port to itself. The
-/// comparison is on the resolved [`WireEnd`], so an own port `gnd` and a
-/// child's `ecu.gnd` stay distinct. Different wires sharing a port are not
-/// compared: that is a deliberate double crimp.
+/// A wire (or a shield) that lists one endpoint twice connects a port to
+/// itself. The comparison is on the resolved [`WireEnd`], so an own port
+/// `gnd` and a child's `ecu.gnd` stay distinct. Different wires sharing a
+/// port are not compared: that is a deliberate double crimp.
 fn validate_distinct_endpoints(
-    wire: &Wire,
+    owner: EndpointOwner,
+    endpoints: &[Endpoint],
     file: FileId,
     resolved: &Resolved,
     problems: &mut Vec<Problem>,
 ) {
     let mut seen: HashMap<WireEnd, Span> = HashMap::new();
-    for ep in &wire.endpoints {
+    for ep in endpoints {
         let end = WireEnd::from(ep);
         if let Some(&first) = seen.get(&end) {
             problems.push(Problem::DuplicateEndpoint {
+                owner,
                 endpoint: end.to_string(),
                 src: resolved.project.source(file),
                 at: ep.span.into(),
@@ -706,6 +779,98 @@ mod tests {
         };
         assert!(!problem.is_error());
         assert_eq!(labelled_text(src), ["spare"]);
+    }
+
+    #[test]
+    fn shields_terminated_on_none_one_or_two_ends_are_clean() {
+        for shield in ["shield;", "shield [c];", "shield \"SHLD\" [a, c];"] {
+            let codes = cable(&format!("wire red 1 [a, b]; {shield}"));
+            assert!(codes.is_empty(), "{shield}: {codes:?}");
+        }
+    }
+
+    #[test]
+    fn an_overall_shield_and_a_pair_shield_are_two_screens_not_a_repeat() {
+        let codes = cable(
+            "shield [c]; twisted { wire red 1 [a, b]; wire blue 1 [a, c]; shield [c]; } \
+             twisted { wire red 1 [b, a]; wire blue 1 [c, a]; shield; }",
+        );
+        assert!(codes.is_empty(), "{codes:?}");
+    }
+
+    #[test]
+    fn a_drain_sharing_a_pin_with_a_wire_is_not_a_problem() {
+        let codes = cable("wire black 1 [a, b]; shield [a];");
+        assert!(codes.is_empty(), "{codes:?}");
+    }
+
+    #[test]
+    fn a_second_shield_in_a_cable_or_a_pair_errors_naming_both() {
+        let src = "component m { pub port a \"A\"; pub port b \"B\"; \
+                   cable cab { wire red 1 [a, b]; shield [a]; shield \"S2\"; \
+                   twisted { wire red 1 [b, a]; wire blue 1 [a, b]; shield; shield [b]; } } }\n";
+        assert_eq!(
+            validate_files(&[("main.wb", src)]),
+            ["wirebug::duplicate_shield", "wirebug::duplicate_shield"]
+        );
+        assert_eq!(
+            labelled_text(src),
+            [r#"shield "S2";"#, "shield [a];", "shield [b];", "shield;"]
+        );
+    }
+
+    #[test]
+    fn duplicate_shield_messages_name_what_the_shield_screens() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("main.wb"),
+            "component m { pub port a \"A\"; pub port b \"B\"; cable can { \
+             wire red 1 [a, b]; shield; shield; \
+             twisted { wire red 1 [b, a]; wire blue 1 [a, b]; shield; shield; } } }\n",
+        )
+        .expect("write");
+        let (project, _) = load(&dir.path().join("main.wb"));
+        let resolved = resolve(project.as_ref().expect("loads"));
+        let messages: Vec<String> = validate(&resolved).iter().map(|p| p.to_string()).collect();
+        assert_eq!(
+            messages,
+            [
+                "cable `can` has more than one shield",
+                "a twisted pair of cable `can` has more than one shield",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_shield_with_three_ends_errors_on_the_shield() {
+        let src = "component m { pub port a \"A\"; pub port b \"B\"; pub port c \"C\"; \
+                   cable cab { wire red 1 [a, b]; shield [a, b, c]; } }\n";
+        assert_eq!(
+            validate_files(&[("main.wb", src)]),
+            ["wirebug::shield_arity"]
+        );
+        assert_eq!(labelled_text(src), ["shield [a, b, c];"]);
+    }
+
+    #[test]
+    fn a_shield_listing_an_end_twice_is_a_duplicate_endpoint() {
+        let src = "component m { pub port a \"A\"; pub port b \"B\"; \
+                   cable cab { twisted { wire red 1 [a, b]; wire blue 1 [b, a]; shield [b, b]; } } }\n";
+        assert_eq!(
+            validate_files(&[("main.wb", src)]),
+            ["wirebug::duplicate_endpoint"]
+        );
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("main.wb"), src).expect("write");
+        let (project, _) = load(&dir.path().join("main.wb"));
+        let resolved = resolve(project.as_ref().expect("loads"));
+        let problems = validate(&resolved);
+        assert_eq!(problems[0].to_string(), "shield lists endpoint `b` twice");
+    }
+
+    #[test]
+    fn a_cable_of_nothing_but_a_shield_is_still_empty() {
+        assert_eq!(cable("shield [a];"), ["wirebug::empty_cable"]);
     }
 
     #[test]

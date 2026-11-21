@@ -345,6 +345,7 @@ mod tests {
         for word in [
             "from",
             "fragment",
+            "shield",
             "for",
             "include",
             "text",

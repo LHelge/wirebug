@@ -13,7 +13,8 @@ use crate::dsl::ir::{
     CableMeta, CableName, Connector, ConnectorCavity, ConnectorFaceLayout, ConnectorGridLayout,
     ConnectorLayout, ConnectorName, ConnectorPin, ConnectorRef, ConnectorTypeName, Design,
     EnclosurePort, Half, Include, InlineHalfMeta, InlineMeta, Instance, InstanceName, InstancePath,
-    PartMeta, Port, PortName, Side, TypeName, View, ViewGrid, Visibility, Wire, WireColor, WireEnd,
+    PartMeta, Port, PortName, Shield, Side, TwistedMeta, TypeName, View, ViewGrid, Visibility,
+    Wire, WireColor, WireEnd,
 };
 use crate::dsl::resolve::{DefId, Resolved};
 
@@ -479,12 +480,20 @@ fn rewrite_wire(w: &ast::Wire, cable: Option<CableName>, twisted_group: Option<u
 }
 
 /// Map a cable's faithful AST properties to typed [`CableMeta`]. Unknown keys
-/// and wrong value types are reported in `validate`; here they are dropped.
+/// and wrong value types are reported in `validate`; here they are dropped,
+/// and so is every shield of the cable body or of one pair after the first.
 fn cable_meta(c: &ast::Cable) -> CableMeta {
     let mut meta = CableMeta {
         label: c.label.as_ref().map(|l| l.node.clone()),
         r#type: None,
         length: None,
+        shield: c.shields.first().map(Shield::from),
+        twisted: c
+            .twisted_groups()
+            .map(|pair| TwistedMeta {
+                shield: pair.shields.first().map(Shield::from),
+            })
+            .collect(),
     };
     for p in &c.properties {
         match (p.key.node.as_str(), &p.value) {
@@ -591,7 +600,7 @@ fn connector_type_layout(connector_type: &ast::ConnectorType) -> Option<Connecto
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dsl::ir::Length;
+    use crate::dsl::ir::{Length, Screened, ShieldTermination};
     use crate::dsl::project::load;
     use crate::dsl::resolve::resolve;
 
@@ -893,6 +902,82 @@ mod tests {
         assert_eq!(groups, [None, Some(0), Some(0)]);
         // Loose wires (outside any cable) are never grouped.
         assert!(root.wires.iter().all(|w| w.cable.is_some()));
+    }
+
+    #[test]
+    fn shields_land_on_the_cable_and_on_their_pair() {
+        let (design, problems) = elaborate_files(&[(
+            "main.wb",
+            "component m {
+                pub port a \"A\"; pub port b \"B\";
+                pub port c \"C\"; pub port d \"D\";
+                pub port gnd \"GND\";
+                l: leaf;
+                cable loom {
+                    shield \"SHLD\" [gnd, l.drain];
+                    twisted {
+                        wire white/blue 0.5 [a, b];
+                        wire white/red 0.5 [c, d];
+                        shield [gnd];
+                    }
+                    twisted {
+                        wire white/blue 0.5 [b, a];
+                        wire white/red 0.5 [d, c];
+                    }
+                    twisted {
+                        wire white/blue 0.5 [a, c];
+                        wire white/red 0.5 [b, d];
+                        shield;
+                    }
+                }
+                cable plain { wire red 1 [a, b]; }
+                component leaf { pub port drain \"DRAIN\"; }
+            }\n",
+        )]);
+        assert!(problems.is_empty(), "{problems:?}");
+        let m = design.unwrap();
+        let root = m.get(&m.root).unwrap();
+        let loom = &root.cables[&CableName::from("loom")];
+
+        let overall = loom.shield.as_ref().expect("an overall screen");
+        assert_eq!(overall.label.as_deref(), Some("SHLD"));
+        assert_eq!(
+            overall.termination,
+            ShieldTermination::Both([
+                WireEnd::Own(PortName::from("gnd")),
+                WireEnd::Child {
+                    instance: InstanceName::from("l"),
+                    port: PortName::from("drain"),
+                },
+            ])
+        );
+
+        // Each pair has a place, indexed by its conductors' group number.
+        let pair_shield = |group| {
+            loom.twisted_group(group)
+                .expect("the pair")
+                .shield
+                .as_ref()
+                .map(|s| s.termination.clone())
+        };
+        assert_eq!(
+            pair_shield(0),
+            Some(ShieldTermination::Single(WireEnd::Own(PortName::from(
+                "gnd"
+            ))))
+        );
+        assert_eq!(pair_shield(1), None, "an unscreened pair");
+        assert_eq!(pair_shield(2), Some(ShieldTermination::Unterminated));
+        assert!(loom.twisted_group(3).is_none());
+
+        let screened: Vec<Screened> = loom.shields().map(|(what, _)| what).collect();
+        assert_eq!(
+            screened,
+            [Screened::Cable, Screened::Pair(0), Screened::Pair(2)]
+        );
+
+        let plain = &root.cables[&CableName::from("plain")];
+        assert!(plain.shield.is_none() && plain.shields().next().is_none());
     }
 
     #[test]

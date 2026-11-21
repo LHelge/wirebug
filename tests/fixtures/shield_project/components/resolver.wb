@@ -1,0 +1,9 @@
+component Resolver {
+    connector x1 "Resolver 5p" {
+        pub port ex_p   "EX+"    pin 1;
+        pub port ex_n   "EX-"    pin 2;
+        pub port sin_p  "SIN+"   pin 3;
+        pub port sin_n  "SIN-"   pin 4;
+        pub port screen "SCREEN" pin 5;
+    }
+}

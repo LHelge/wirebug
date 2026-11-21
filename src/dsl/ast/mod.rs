@@ -361,16 +361,20 @@ pub struct Endpoint {
     pub span: Span,
 }
 
-/// `cable <name> ["<label>"] { <property>* <wire>* }` — a named bundle of
-/// point-to-point conductors carrying physical metadata (`type`, `length`).
-/// Each inner wire is a single conductor; arity (exactly two endpoints) and
-/// property keys are checked later, so the parse stays faithful.
+/// `cable <name> ["<label>"] { <property>* <wire>* <shield>* }` — a named
+/// bundle of point-to-point conductors carrying physical metadata (`type`,
+/// `length`), and its overall screen. Each inner wire is a single
+/// conductor; arity (exactly two endpoints), property keys and the number
+/// of shields (at most one) are checked later, so the parse stays faithful.
 #[derive(Debug, Clone)]
 pub struct Cable {
     pub name: Spanned<Ident>,
     pub label: Option<Spanned<String>>,
     pub properties: Vec<Property>,
     pub members: Vec<CableMember>,
+    /// The cable body's own `shield` lines (its overall screen), in source
+    /// order; a twisted pair's are in its [`TwistedGroup::shields`].
+    pub shields: Vec<Shield>,
     pub span: Span,
 }
 
@@ -384,6 +388,27 @@ impl Cable {
             CableMember::Twisted(t) => t.wires.as_slice(),
         })
     }
+
+    /// The cable's twisted pairs, in source order.
+    pub fn twisted_groups(&self) -> impl Iterator<Item = &TwistedGroup> {
+        self.members.iter().filter_map(|m| match m {
+            CableMember::Twisted(t) => Some(t),
+            _ => None,
+        })
+    }
+
+    /// Every endpoint the cable names, its conductors' and then its
+    /// shields' (the cable's own, then each twisted pair's): the
+    /// references that resolve against the enclosing component.
+    pub fn endpoints(&self) -> impl Iterator<Item = &Endpoint> {
+        let shields = self
+            .shields
+            .iter()
+            .chain(self.twisted_groups().flat_map(|t| &t.shields));
+        self.wires()
+            .flat_map(|w| &w.endpoints)
+            .chain(shields.flat_map(|s| &s.ends))
+    }
 }
 
 /// One conductor entry of a cable body: a plain wire, or a `twisted { }`
@@ -395,14 +420,30 @@ pub enum CableMember {
     Twisted(TwistedGroup),
 }
 
-/// `twisted { <wire> <wire> }` inside a cable — a twisted pair. Exactly
-/// two conductors, enforced by the grammar itself: a group of any other
-/// size is a parse error, not a representable state. (Widen to a `Vec`
-/// if twisted triples/quads ever land.) Boxed so the pair doesn't
-/// dominate [`CableMember`]'s size.
+/// `twisted { <wire> <wire> <shield>* }` inside a cable — a twisted pair,
+/// individually screened when it holds a `shield` line. Exactly two
+/// conductors, enforced by the grammar itself: a group of any other size
+/// is a parse error, not a representable state. (Widen to a `Vec` if
+/// twisted triples/quads ever land.) Boxed so the pair doesn't dominate
+/// [`CableMember`]'s size.
 #[derive(Debug, Clone)]
 pub struct TwistedGroup {
     pub wires: Box<[Wire; 2]>,
+    /// The pair's own `shield` lines, in source order; validate allows one.
+    pub shields: Vec<Shield>,
+    pub span: Span,
+}
+
+/// `shield ["<label>"] [<end>, …];`, or `shield ["<label>"];` — the screen
+/// of a cable or of a twisted pair, and the pins its drain is terminated
+/// on: none (a screen cut back at both ends), one (the usual single-ended
+/// termination) or two. It has no color and no gauge. Kept faithful: the
+/// number of ends is checked in validate.
+#[derive(Debug, Clone)]
+pub struct Shield {
+    pub label: Option<Spanned<String>>,
+    /// Empty for a shield terminated nowhere.
+    pub ends: Vec<Endpoint>,
     pub span: Span,
 }
 

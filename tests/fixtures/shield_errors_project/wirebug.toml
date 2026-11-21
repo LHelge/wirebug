@@ -1,0 +1,5 @@
+[project]
+name = "shield-errors-project"
+version = "0.1.0"
+description = "Check fixture: shields that are repeated, terminated on too many ends, on one end twice, on a port that does not exist, and alone in a cable"
+revision = "fixture"

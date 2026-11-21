@@ -14,7 +14,10 @@
 //! [`HarnessConductor`]s; a pair is kept only when both ends land on
 //! *included* connectors. Connectorless ports, `Own` ends, and ends on
 //! excluded connectors drop silently from the drawing; `check` reports a
-//! conductor that no harness view of its component keeps.
+//! conductor that no harness view of its component keeps. A drawn cable's
+//! shields draw with it: a mark on its box, and a drain row with a line to
+//! each terminating pin on an included connector (a shield alone never puts
+//! a cable box in a view).
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -28,7 +31,7 @@ use super::{
 };
 use crate::dsl::ir::{
     CableMeta, CableName, ConnectorName, ConnectorPropertyValue, Design, Half, Instance,
-    InstanceName, Pin, PortName, Wire, WireColor, WireEnd,
+    InstanceName, Pin, PortName, Screened, Shield, Wire, WireColor, WireEnd,
 };
 use crate::render::geometry::{Bounds, Point, Side};
 use crate::render::lint::{DeclaredHalves, EndTarget, IncludeTarget, Segment};
@@ -116,6 +119,23 @@ pub(super) struct CableStrand {
     /// The strand's `twisted { }` group within its cable; strands sharing
     /// an index braid together (two-strand groups only).
     pub(super) group: Option<u32>,
+    /// The box row the strand runs in, counted from the top.
+    pub(super) row: usize,
+}
+
+/// A shield's drain in a cable box: a row of its own (the screen running
+/// through the cable), led out to each pin of an included connector the
+/// drain is terminated on. A shield with no such pin has no row.
+pub(super) struct DrainRow {
+    pub(super) screened: Screened,
+    /// The shield's label, or what it screens when it has none.
+    pub(super) label: String,
+    /// The terminating pins' attach points.
+    pub(super) attaches: Vec<Point>,
+    /// The box row the drain runs in, counted from the top.
+    pub(super) row: usize,
+    /// World y of that row.
+    pub(super) row_y: f64,
 }
 
 /// A declared `cable`, drawn WireViz-style as a labelled box on the spine,
@@ -129,21 +149,52 @@ pub(super) struct CableBox {
     pub(super) width: f64,
     pub(super) height: f64,
     pub(super) strands: Vec<CableStrand>,
+    /// Whether the cable has an overall screen, marked on the box.
+    pub(super) shielded: bool,
+    /// The drawn twisted pairs that have a screen of their own, by group.
+    pub(super) shielded_pairs: Vec<u32>,
+    /// The drains of the cable's drawn shields, each in a row of its own.
+    pub(super) drains: Vec<DrainRow>,
 }
 
 impl CableBox {
-    /// Move the box so its top sits at `top`, re-flowing the strand rows.
+    /// Move the box so its top sits at `top`, re-flowing the rows.
     fn move_top_to(&mut self, top: f64) {
         self.origin.y = top;
         self.place_rows();
     }
 
-    /// Set each strand's `row_y` from the current `origin.y`.
+    /// Set each strand's and drain's `row_y` from the current `origin.y`
+    /// and its row.
     fn place_rows(&mut self) {
-        for (k, strand) in self.strands.iter_mut().enumerate() {
-            strand.row_y =
-                self.origin.y + HEADER_HEIGHT + CABLE_LABEL_PAD + (k as f64 + 0.5) * ROW_HEIGHT;
+        let first = self.origin.y + HEADER_HEIGHT + CABLE_LABEL_PAD + ROW_HEIGHT / 2.0;
+        let row_y = |row: usize| first + row as f64 * ROW_HEIGHT;
+        for strand in &mut self.strands {
+            strand.row_y = row_y(strand.row);
         }
+        for drain in &mut self.drains {
+            drain.row_y = row_y(drain.row);
+        }
+    }
+
+    /// The rows `group`'s pair runs in, its drain's included: the first
+    /// and the last. `None` when no strand of the pair is in the box.
+    pub(super) fn pair_rows(&self, group: u32) -> Option<(f64, f64)> {
+        let strands = self
+            .strands
+            .iter()
+            .filter(|s| s.group == Some(group))
+            .map(|s| s.row_y);
+        let drains = self
+            .drains
+            .iter()
+            .filter(|d| d.screened == Screened::Pair(group))
+            .map(|d| d.row_y);
+        let mut rows = strands.chain(drains);
+        let first = rows.next()?;
+        Some(rows.fold((first, first), |(top, bottom), y| {
+            (top.min(y), bottom.max(y))
+        }))
     }
 }
 
@@ -244,6 +295,25 @@ impl<'d> HarnessConductor<'d> {
     }
 }
 
+/// A shield of a cable the view draws: the cable's overall screen, or the
+/// screen of one of its pairs the view draws.
+struct DrawnShield<'d> {
+    cable: &'d CableName,
+    screened: Screened,
+    shield: &'d Shield,
+    /// The shield's ends on connectors the view includes: where its drain
+    /// is drawn to.
+    ends: Vec<ConnectorEnd<'d>>,
+}
+
+/// A drawn shield as its cable box takes it, once the pins it lands on have
+/// their attach points.
+struct ShieldMark {
+    screened: Screened,
+    label: Option<String>,
+    attaches: Vec<Point>,
+}
+
 /// A pending connection between two pin rows, before facing (and thus the
 /// attach points) is known.
 struct RawWire {
@@ -284,10 +354,45 @@ impl HarnessLayout {
             .filter(|c| c.ends.iter().all(|end| included.contains(&end.node())))
             .collect();
 
+        // The shields of the cables drawn: the overall one of each, and a
+        // pair's own when the pair is drawn. A cable none of whose
+        // conductors is drawn draws no box, and so none of its shields.
+        let drawn_cables: HashSet<&CableName> =
+            kept.iter().filter_map(|c| c.wire.cable.as_ref()).collect();
+        let drawn_pairs: HashSet<(&CableName, u32)> = kept
+            .iter()
+            .filter_map(|c| Some((c.wire.cable.as_ref()?, c.wire.twisted_group?)))
+            .collect();
+        let shields: Vec<DrawnShield> = subject
+            .cables
+            .iter()
+            .filter(|(name, _)| drawn_cables.contains(name))
+            .flat_map(|(cable, meta)| {
+                meta.shields()
+                    .map(move |(screened, shield)| (cable, screened, shield))
+            })
+            .filter(|&(cable, screened, _)| match screened {
+                Screened::Cable => true,
+                Screened::Pair(group) => drawn_pairs.contains(&(cable, group)),
+            })
+            .map(|(cable, screened, shield)| DrawnShield {
+                cable,
+                screened,
+                shield,
+                ends: shield
+                    .ends()
+                    .iter()
+                    .filter_map(|end| ConnectorEnd::of(design, subject, end))
+                    .filter(|end| included.contains(&end.node()))
+                    .collect(),
+            })
+            .collect();
+
         // Auto-scope: which ports of each included connector carry a kept
-        // conductor.
+        // conductor or a drawn shield's drain.
         let mut wired: HashMap<NodeKey, HashSet<PortName>> = HashMap::new();
-        for end in kept.iter().flat_map(|c| &c.ends) {
+        let drain_ends = shields.iter().flat_map(|s| &s.ends);
+        for end in kept.iter().flat_map(|c| &c.ends).chain(drain_ends) {
             wired
                 .entry(end.node())
                 .or_default()
@@ -343,6 +448,12 @@ impl HarnessLayout {
             drawn.push(conductor.segment);
         }
 
+        // Each drawn shield's drain pins, as (node, pin row).
+        let drain_pins: Vec<Vec<(usize, usize)>> = shields
+            .iter()
+            .map(|shield| shield.ends.iter().filter_map(&locate).collect())
+            .collect();
+
         // The spine is the vertical line midway between the connectors. Each
         // pin attaches on the edge toward the connector its conductor reaches,
         // so a node bridging both directions sends each pin the short way
@@ -350,11 +461,26 @@ impl HarnessLayout {
         let spine_x = Self::spine_x(&nodes);
         Self::face_pins(&mut nodes, &raws, spine_x);
 
+        // A drain pin carries no conductor, so it faces the spine, where
+        // its cable box is.
+        let mut marks: HashMap<&CableName, Vec<ShieldMark>> = HashMap::new();
+        for (shield, pins) in shields.iter().zip(drain_pins) {
+            let attaches = pins
+                .into_iter()
+                .map(|(n, r)| nodes[n].pins[r].attach)
+                .collect();
+            marks.entry(shield.cable).or_default().push(ShieldMark {
+                screened: shield.screened,
+                label: shield.shield.label.clone(),
+                attaches,
+            });
+        }
+
         // Declared cables draw as boxes on the spine; loose wires draw as
         // direct pin-to-pin beziers.
         let (tagged, loose_raws): (Vec<RawWire>, Vec<RawWire>) =
             raws.into_iter().partition(|r| r.cable.is_some());
-        let cable_boxes = Self::build_cable_boxes(&nodes, subject, spine_x, tagged);
+        let cable_boxes = Self::build_cable_boxes(&nodes, subject, spine_x, tagged, marks);
         let loose = loose_raws
             .into_iter()
             .map(|raw| LooseWire {
@@ -451,6 +577,7 @@ impl HarnessLayout {
         subject: &Instance,
         spine_x: f64,
         raws: Vec<RawWire>,
+        mut marks: HashMap<&CableName, Vec<ShieldMark>>,
     ) -> Vec<CableBox> {
         let mut groups: IndexMap<CableName, Vec<RawWire>> = IndexMap::new();
         for mut raw in raws {
@@ -461,7 +588,10 @@ impl HarnessLayout {
         }
         let mut boxes: Vec<CableBox> = groups
             .into_iter()
-            .map(|(name, raws)| build_cable_box(nodes, subject, &name, spine_x, raws))
+            .map(|(name, raws)| {
+                let shields = marks.remove(&name).unwrap_or_default();
+                build_cable_box(nodes, subject, &name, spine_x, raws, shields)
+            })
             .collect();
 
         // De-overlap along the spine: sort by centre y, then sweep top-down
@@ -660,13 +790,16 @@ fn build_node(
 /// centred on the spine; its vertical centre is the centroid of its strands'
 /// midpoints (the de-overlap pass in `build_cable_boxes` resolves collisions).
 /// Strands are ordered top-to-bottom by their midpoint y, so the bundle fans
-/// out monotonically and lead beziers cross as little as possible.
+/// out monotonically and lead beziers cross as little as possible. A drawn
+/// shield's drain takes a row of its own: a pair's right below the pair, the
+/// cable's overall one last.
 fn build_cable_box(
     nodes: &[ConnectorNode],
     subject: &Instance,
     name: &CableName,
     spine_x: f64,
     raws: Vec<RawWire>,
+    shields: Vec<ShieldMark>,
 ) -> CableBox {
     let meta = subject.cables.get(name);
     let title = meta
@@ -725,6 +858,53 @@ fn build_cable_box(
             .then(midpoint(a).total_cmp(&midpoint(b)))
     });
 
+    // Rows top to bottom: the strands in their order, each terminated
+    // pair's drain after the pair's last strand, the cable's drain last.
+    let shielded = shields.iter().any(|s| s.screened == Screened::Cable);
+    let shielded_pairs: Vec<u32> = shields
+        .iter()
+        .filter_map(|s| match s.screened {
+            Screened::Pair(group) => Some(group),
+            Screened::Cable => None,
+        })
+        .collect();
+    let mut pending: Vec<ShieldMark> = shields
+        .into_iter()
+        .filter(|s| !s.attaches.is_empty())
+        .collect();
+    let mut order: Vec<Row> = Vec::new();
+    for (i, strand) in strands.iter().enumerate() {
+        order.push(Row::Strand(i));
+        let pair_ends = strand
+            .group
+            .filter(|&g| strands.get(i + 1).and_then(|next| next.group) != Some(g));
+        if let Some(group) = pair_ends
+            && let Some(at) = pending
+                .iter()
+                .position(|s| s.screened == Screened::Pair(group))
+        {
+            order.push(Row::Drain(pending.remove(at)));
+        }
+    }
+    order.extend(pending.into_iter().map(Row::Drain));
+    let mut rows = vec![0; strands.len()];
+    let mut drains = Vec::new();
+    for (row, entry) in order.into_iter().enumerate() {
+        match entry {
+            Row::Strand(i) => rows[i] = row,
+            Row::Drain(mark) => drains.push(DrainRow {
+                screened: mark.screened,
+                label: mark.label.unwrap_or_else(|| match mark.screened {
+                    Screened::Cable => "Shield".to_string(),
+                    Screened::Pair(_) => "Pair shield".to_string(),
+                }),
+                attaches: mark.attaches,
+                row,
+                row_y: 0.0, // set by place_rows below
+            }),
+        }
+    }
+
     let subtitle = cable_subtitle(meta, strands.len());
     let n = strands.len().max(1) as f64;
     let cy = strands
@@ -747,6 +927,9 @@ fn build_cable_box(
     // side, so it needs room for all three; a straight row only its own
     // annotation. Take the widest requirement across rows.
     let pair_partner = braid_partners(strands.iter().map(|s| s.group));
+    let drain_widths = drains
+        .iter()
+        .map(|d| d.label.chars().count() as f64 * LABEL_CHAR_WIDTH);
     let content = strands
         .iter()
         .enumerate()
@@ -760,14 +943,17 @@ fn build_cable_box(
             }
             None => annotation_widths[i],
         })
+        .chain(drain_widths)
         .fold(0.0, f64::max);
     let width = (content.max(header) + 2.0 * NODE_PAD).max(MIN_NODE_WIDTH);
-    let height = HEADER_HEIGHT + CABLE_LABEL_PAD + strands.len() as f64 * ROW_HEIGHT;
+    let row_count = strands.len() + drains.len();
+    let height = HEADER_HEIGHT + CABLE_LABEL_PAD + row_count as f64 * ROW_HEIGHT;
     let origin = Point::new(spine_x - width / 2.0, cy - height / 2.0);
 
     let strands = strands
         .into_iter()
-        .map(|s| CableStrand {
+        .zip(rows)
+        .map(|(s, row)| CableStrand {
             left_attach: s.left,
             right_attach: s.right,
             row_y: 0.0, // set by place_rows below
@@ -775,6 +961,7 @@ fn build_cable_box(
             gauge: s.gauge,
             label: s.label,
             group: s.group,
+            row,
         })
         .collect();
 
@@ -785,9 +972,19 @@ fn build_cable_box(
         width,
         height,
         strands,
+        shielded,
+        shielded_pairs,
+        drains,
     };
     cable_box.place_rows();
     cable_box
+}
+
+/// One row of a cable box, while the rows are being ordered.
+enum Row {
+    /// A strand, by its index in the sorted strands.
+    Strand(usize),
+    Drain(ShieldMark),
 }
 
 /// For each strand (by index), the index of its braid partner: the other
@@ -816,7 +1013,8 @@ pub(super) fn braid_partners(groups: impl Iterator<Item = Option<u32>>) -> Vec<O
 }
 
 /// `<type> · <length> m · ×<count>`, omitting the type/length parts that are
-/// unset; the conductor count is always shown.
+/// unset; the conductor count is always shown, and `shielded` follows it
+/// when the cable has an overall screen.
 fn cable_subtitle(meta: Option<&CableMeta>, count: usize) -> String {
     let mut parts = Vec::new();
     if let Some(t) = meta.and_then(|m| m.r#type.as_ref()) {
@@ -826,6 +1024,9 @@ fn cable_subtitle(meta: Option<&CableMeta>, count: usize) -> String {
         parts.push(length.to_string());
     }
     parts.push(format!("×{count}"));
+    if meta.is_some_and(|m| m.shield.is_some()) {
+        parts.push("shielded".to_string());
+    }
     parts.join(" · ")
 }
 
@@ -836,15 +1037,27 @@ mod tests {
         ConnectorRef, InstancePath, Length, LengthUnit, PartMeta, Port, TypeName, Visibility,
     };
 
-    fn strand(row_y: f64) -> CableStrand {
+    fn strand(row: usize) -> CableStrand {
         CableStrand {
             left_attach: Point::ORIGIN,
             right_attach: Point::ORIGIN,
-            row_y,
+            row_y: 0.0,
             color: "black".into(),
             gauge: 1.0,
             label: None,
             group: None,
+            row,
+        }
+    }
+
+    /// A bare cable's metadata: no label, type, length or shield.
+    fn bare_meta() -> CableMeta {
+        CableMeta {
+            label: None,
+            r#type: None,
+            length: None,
+            shield: None,
+            twisted: Vec::new(),
         }
     }
 
@@ -952,27 +1165,44 @@ component Root {
     #[test]
     fn subtitle_shows_present_parts_and_always_the_count() {
         let full = CableMeta {
-            label: None,
             r#type: Some("2-core".into()),
             length: Length::new(0.8, LengthUnit::Metre),
+            ..bare_meta()
         };
         assert_eq!(cable_subtitle(Some(&full), 3), "2-core · 0.8 m · ×3");
 
         // A length authored in millimetres shows in metres, exactly.
         let jumper = CableMeta {
-            label: None,
-            r#type: None,
             length: Length::new(150.0, LengthUnit::Millimetre),
+            ..bare_meta()
         };
         assert_eq!(cable_subtitle(Some(&jumper), 2), "0.15 m · ×2");
 
-        let bare = CableMeta {
-            label: None,
-            r#type: None,
-            length: None,
-        };
-        assert_eq!(cable_subtitle(Some(&bare), 2), "×2");
+        assert_eq!(cable_subtitle(Some(&bare_meta()), 2), "×2");
         assert_eq!(cable_subtitle(None, 1), "×1");
+    }
+
+    #[test]
+    fn subtitle_says_a_cable_with_an_overall_screen_is_shielded() {
+        let screened = CableMeta {
+            r#type: Some("CAN".into()),
+            shield: Some(Shield {
+                label: None,
+                termination: crate::dsl::ir::ShieldTermination::Unterminated,
+                span: crate::dsl::span::Span::new(crate::dsl::span::FileId(0), 0, 0),
+            }),
+            ..bare_meta()
+        };
+        assert_eq!(cable_subtitle(Some(&screened), 2), "CAN · ×2 · shielded");
+
+        // A pair's own screen is marked round the pair, not in the title.
+        let pair_only = CableMeta {
+            twisted: vec![crate::dsl::ir::TwistedMeta {
+                shield: screened.shield.clone(),
+            }],
+            ..bare_meta()
+        };
+        assert_eq!(cable_subtitle(Some(&pair_only), 2), "×2");
     }
 
     #[test]
@@ -982,18 +1212,30 @@ component Root {
             subtitle: String::new(),
             origin: Point::new(0.0, 0.0),
             width: 100.0,
-            height: HEADER_HEIGHT + 2.0 * ROW_HEIGHT,
-            strands: vec![strand(0.0), strand(0.0)],
+            height: HEADER_HEIGHT + 3.0 * ROW_HEIGHT,
+            strands: vec![strand(0), strand(2)],
+            shielded: true,
+            shielded_pairs: Vec::new(),
+            drains: vec![DrainRow {
+                screened: Screened::Cable,
+                label: "Shield".into(),
+                attaches: Vec::new(),
+                row: 1,
+                row_y: 0.0,
+            }],
         };
         cb.place_rows();
         let r0 = cb.strands[0].row_y;
         let r1 = cb.strands[1].row_y;
-        assert!(r1 > r0, "rows stack downward");
+        let drain = cb.drains[0].row_y;
+        assert!(r0 < drain && drain < r1, "rows stack downward, by row");
+        assert_eq!(drain - r0, ROW_HEIGHT);
 
         cb.move_top_to(100.0);
         assert_eq!(cb.origin.y, 100.0);
         assert_eq!(cb.strands[0].row_y, r0 + 100.0);
         assert_eq!(cb.strands[1].row_y, r1 + 100.0);
+        assert_eq!(cb.drains[0].row_y, drain + 100.0);
     }
 
     #[test]

@@ -1,0 +1,12 @@
+component Ecu {
+    connector x1 "ECU 8p" {
+        pub port can_h      "CAN H"      pin 1;
+        pub port can_l      "CAN L"      pin 2;
+        pub port shield_gnd "SHIELD GND" pin 3;
+        pub port ex_p       "EX+"        pin 4;
+        pub port ex_n       "EX-"        pin 5;
+        pub port sin_p      "SIN+"       pin 6;
+        pub port sin_n      "SIN-"       pin 7;
+        pub port gnd        "GND"        pin 8;
+    }
+}

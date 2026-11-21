@@ -503,7 +503,7 @@ Every length normalises to metres (to the micrometre), so `150mm`, `15cm` and `0
 
 ## Cables
 
-A `cable` groups point-to-point wires that travel together as one physical bundle (a twisted pair, a shielded multi-core, a motor-phase loom) and carries its construction metadata. It's the WireViz "cable": connector pin tables on the sides, a labelled cable box in the middle.
+A `cable` groups point-to-point wires that travel together as one physical bundle (a twisted pair, a shielded multi-core, a motor-phase loom) and carries its construction metadata and its screen (see Shields). It's the WireViz "cable": connector pin tables on the sides, a labelled cable box in the middle.
 
 ```
 cable motor_phases "Motor phases" {
@@ -518,7 +518,7 @@ cable motor_phases "Motor phases" {
 
 Format:
 
-- `cable <name> ["<label>"] { <properties> <wires> }` — `name` is a snake_case designator (unique within the component, like a connector's); the optional quoted label is shown on the cable box (the designator is used when omitted).
+- `cable <name> ["<label>"] { <properties> <wires> [<shield>] }` — `name` is a snake_case designator (unique within the component, like a connector's); the optional quoted label is shown on the cable box (the designator is used when omitted).
 - Properties are `key: value;` lines, before the wires. Two keys are supported:
   - `type: "<string>";` — a free-text construction note (e.g. `"Twisted pair"`).
   - `length: <length>;` — the cable's length: metres when bare (`2.5`), or with a unit (`2.5m`, `80cm`, `800mm`; see Lengths). It must be positive: `check` rejects `0` or a negative length (`invalid_length`).
@@ -543,6 +543,38 @@ cable sensor_loom "Sensor loom" {
 ```
 
 A `twisted { }` group holds **exactly two** conductors — a twisted pair — and that count is grammar-enforced: any other number of wires inside the braces is a parse error. In a harness drawing the pair braids inside the cable box.
+
+### Shields
+
+A screened cable, or an individually screened twisted pair, declares its screen with a `shield` line — in the cable body for the cable's overall screen, inside the `twisted { }` group for the pair's own:
+
+```
+cable can2 "CAN2" {
+    type:   "Shielded twisted pair";
+    length: 1.6;
+
+    twisted {
+        wire white/blue 0.5 "CAN H" [rear.can_h, vcm.can_h];
+        wire white/red  0.5 "CAN L" [rear.can_l, vcm.can_l];
+        shield [vcm.shield_gnd];             // the pair's own screen
+    }
+    shield "SHLD" [vcm.shield_gnd];          // the cable's overall screen
+}
+```
+
+```
+shield ["<label>"] [<endpoint>, <endpoint>];   // grounded at both ends
+shield ["<label>"] [<endpoint>];               // grounded at one end (the usual)
+shield ["<label>"];                            // terminated nowhere: cut back at both ends
+```
+
+- A shield is **not a conductor**: no color, no gauge, and it does not count toward a pair's two wires or a cable's conductors (a cable holding only a shield still warns `empty_cable`).
+- The bracketed list names the pins its **drain** is terminated on, written like wire endpoints (`instance.port` or an own `port`) and resolved the same way (unknown or private ports are errors). Zero, one or two ends: a screen runs from one end of the cable to the other, so more than two is an error (`shield_arity`). An empty `[]` is a syntax error — write `shield;`.
+- **At most one shield** in a cable body and at most one in each `twisted { }` group; a second is an error naming both (`duplicate_shield`). A cable's overall screen and its pairs' own screens are separate, so both may be present.
+- An end listed twice is `duplicate_endpoint`. A drain sharing a pin with a wire (a drain crimped alongside a ground wire) is fine.
+- The optional label names the drain in a harness drawing; the drawing calls an unlabelled one `Shield` (or `Pair shield`).
+- In a harness view a shielded cable's box gets a dashed inner outline and `shielded` in its subtitle; a screened pair gets a dashed outline round its rows. Each shield end on a connector the view includes is drawn as a thin dashed drain line from the cable box to that pin (the pin gets a row in its table); an end on a connector the view leaves out is not drawn. A shield never puts a cable box in a view by itself: its cable is drawn only when its conductors are.
+- `shield` is a keyword only at the start of a statement in a cable body or a `twisted { }` group; anywhere else it is an ordinary name (`pub port shield "SHIELD";`, `[ecu.shield]`).
 
 A cable's wires are still ordinary connections: they show in schematic views like any other wire. The cable grouping adds the harness box and the BOM metadata.
 
@@ -654,7 +686,7 @@ view harness "Main HV harness" {
 
 **Cables are derived, like schematic wires.** A wire renders as a cable strand only when *both* of its endpoints land on *included* connectors; ends on connectorless ports, excluded connectors, or the parent's own ports drop silently. So connectorize the external `pub port`s you want to see in a harness (wrap them in a named `connector` block).
 
-**Every conductor belongs in some harness view.** Once a component has at least one harness view, `check` warns about each wire segment between connectors of two of its children that none of its harness views draws (`undrawn_conductor`, fatal under `--strict`) — the conductor would be missing from every build drawing. A multi-endpoint rail is judged per chain segment (`[a, b, c]` → `a–b`, `b–c`); an inline connector is covered when a view includes either half; segments with an end on the parent's own port or a connectorless port, and jumpers within one connector, are not harness conductors. A component with no harness view is never reported. Fix it by adding the missing connectors to a loom's view, or a view for the missing loom.
+**Every conductor belongs in some harness view.** Once a component has at least one harness view, `check` warns about each wire segment between connectors of two of its children that none of its harness views draws (`undrawn_conductor`, fatal under `--strict`) — the conductor would be missing from every build drawing. A multi-endpoint rail is judged per chain segment (`[a, b, c]` → `a–b`, `b–c`); an inline connector is covered when a view includes either half; segments with an end on the parent's own port or a connectorless port, jumpers within one connector, and shields are not harness conductors. A component with no harness view is never reported. Fix it by adding the missing connectors to a loom's view, or a view for the missing loom.
 
 A wire that belongs to a declared `cable` (see Cables) draws WireViz-style: a labelled cable box sits between the two connectors it spans, titled with the cable's label and its `type · length`, one coloured strand per conductor. Loose wires between the same connector pair instead bundle into a plain strand group, each strand drawn in its `color` and annotated with its `label` and gauge.
 
@@ -693,7 +725,7 @@ Views live in the same file as the component they primarily document — like un
 Keywords come in two kinds. Words are case-sensitive, so `Layout` or `Wire` is never a keyword.
 
 - **Reserved** — the words that declare the design: `use`, `component`, `extend`, `connector_type`, `connector`, `inline`, `port`, `pub`, `pin`, `pins`, `wire`, `cable`, `twisted`, `view`. They can never name anything; `pub port wire "W";` is an error, `'wire' is a reserved word`. Pick another name (`wire_1`, `w`).
-- **Contextual** — words that mean something only inside a view (or after its title), a `connector_type` layout, a cavity line, a `use` line or at the start of a top-level statement: `from`, `fragment`, `for`, `include`, `text`, `at`, `grid`, `enclosure`, `ports`, `layout`, `face`, `cavity`, `rows`, `cols`, `numbering`, `size`. Anywhere a name belongs they are ordinary names, so `pub port size "SIZE";`, `pub port for "FOR";`, an instance `grid: Sensor;`, `connector layout: Plug { … }`, `cable text { … }` and `include at at (1, 2);` are all valid, and so are `pub port fragment "F";` and an instance `fragment: Lamp;`.
+- **Contextual** — words that mean something only inside a view (or after its title), a `connector_type` layout, a cavity line, a `use` line, at the start of a top-level statement, or at the start of a statement in a cable body or a `twisted { }` group: `from`, `fragment`, `shield`, `for`, `include`, `text`, `at`, `grid`, `enclosure`, `ports`, `layout`, `face`, `cavity`, `rows`, `cols`, `numbering`, `size`. Anywhere a name belongs they are ordinary names, so `pub port size "SIZE";`, `pub port for "FOR";`, an instance `grid: Sensor;`, `connector layout: Plug { … }`, `cable text { … }` and `include at at (1, 2);` are all valid, and so are `pub port fragment "F";`, an instance `fragment: Lamp;`, `pub port shield "SHIELD";` and an endpoint `ecu.shield`.
 
 Other words the grammar reads in one place only (`schematic`, `harness`, `pinout`, `type`, `length`, `part`, `manufacturer`, `description`, `rating`, `male`, `female`, `north`, `east`, `south`, `west`, the wire colors, the numbering modes, `large`) are not keywords at all.
 
@@ -747,6 +779,7 @@ wire orange 50 [pack.hv_neg, inv.dc_neg, charger.hv_neg, conv.hv_neg];
 - **Do not** put a space between a length and its unit (`150mm`, not `150 mm`), or a unit on any number but a `length` (a gauge is `1.5`, not `1.5mm`).
 - **Do not** put part numbers in labels or comments when the type can carry them: write `part: "…";` (and `manufacturer`, `description`, `rating`) in the component body. Quote the value — `part: Fuse;` is an instance named `part`, not a part number.
 - **Do not** put a multi-endpoint wire inside a `cable` — cable conductors are point-to-point (exactly two endpoints). Keep fan-out rails as loose wires.
+- **Do not** model a screen as a `wire` with an invented color: write `shield [<pin>];` in the cable body (or the pair's `twisted { }`), with at most two ends and one shield per cable body or pair.
 - **Do not** name a text box (`text note at (0, 4) "…";` is the deprecated form): write the label first, `text "…" at (0, 4);`.
 - **Do not** use block comments (`/* */`). Line comments (`//`) only.
 - **Do not** mix grid coordinates with pixel coordinates. View positions are in grid cells.
