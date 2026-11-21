@@ -288,6 +288,8 @@ Each table is a subcommand and takes the project like `check` and `render` do (a
 
 **CSV** (`--format csv`, the default) follows RFC 4180: a header row, one row per record, a field quoted only when it holds a comma, a quote or a line break (a quote doubled inside it), `\n` line endings, UTF-8 without a byte-order mark. Numbers use `.` as the decimal point whatever the locale; lengths are in metres and gauges in mm², as the column names say. An empty field means the value does not apply or is not set. A list inside one field (the pins of a ganged port, the ends beyond a splice) is separated by `;`. Twisted pairs are numbered from 1 within their cable, in source order. Instances are named by their full path (`Vehicle.front.lamp`) and ends by the full path of what they land on (`Vehicle.ecu.pwr`, `Vehicle.sp_gnd`).
 
+Values are written as they are — no byte-order mark, no escaping of text that looks like a formula — so a table's CSV holds exactly what its JSON holds. Opened by double-click, Excel misreads three things: it decodes the text in the local codepage instead of UTF-8 (so `Ω`, `µ` and `å` come out garbled), it turns a part number such as `0430250400` into a number without its leading zeros, and it takes a label such as `+12V`, `=GND` or `-BATT` for a formula (`#NAME?`). Import the file instead, through **Data › From Text/CSV**, choosing UTF-8 (65001) as the file origin and the Text type for the columns that hold names, labels and part numbers.
+
 An end, in either table, is eight columns after its prefix (`from`, `to`, `far`):
 
 | Column | Holds |
@@ -306,7 +308,7 @@ An end, in either table, is eight columns after its prefix (`from`, `to`, `far`)
 |---|---|
 | `kind` | `conductor` or `shield` |
 | `owner` | the instance whose component body declares the wire |
-| `cable`, `cable_label`, `cable_type`, `cable_length_m` | the cable it runs in, empty for a loose wire |
+| `cable`, `cable_label`, `cable_type`, `cable_length_m` | the cable it runs in, empty for a loose wire; repeated on each conductor and screen row of the cable, so summing `cable_length_m` counts a cable once per row; the BOM counts each cable once |
 | `twisted_pair` | the twisted pair it is in (for a screen, the pair it screens) |
 | `screens` | for a screen: `cable` (the overall screen) or `pair` |
 | `label` | the wire's label (a screen's own label) |
@@ -330,7 +332,7 @@ A `length` on a wire with more than two ends is the length of the whole rail, so
 | `ganged_with` | the other cavities of a ganged port (a ganged port's conductor is listed in each of its cavities) |
 | `port`, `port_label` | the port on the pin |
 | `entry` | `conductor`, `drain` (a cable screen's), or `empty` |
-| `half_fit` | on an inline half: `assigned` when the harness views place the conductor in this half, `undetermined` when they place it in neither or both, so it is listed under both halves |
+| `half_fit` | on an inline half: `assigned` when the conductor is known to be in this half, `undetermined` when it is not, so it is listed under both halves. On an inline that declares one half it is always `assigned`; on one with both halves the harness views decide: `assigned` when they place the conductor in this half alone, `undetermined` when they place it in neither or both |
 | `owner` | the instance whose body declares the conductor |
 | `cable`, `twisted_pair`, `screens` | its cable and pair; for a drain, what the screen screens |
 | `label`, `color`, `color_code`, `gauge_mm2` | the conductor's (a drain's: its screen's label only) |

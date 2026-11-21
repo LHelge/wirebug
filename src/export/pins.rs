@@ -220,6 +220,7 @@ impl<'d> Housing<'d> {
 /// it: a cavity whose pin is not known yet.
 #[derive(Debug, Clone)]
 pub struct UnpinnedPort<'d> {
+    /// The port, with its name and label; its `pins` are empty.
     pub port: &'d Port,
     /// The conductors and drains landing on the port, in wire-list order.
     pub entries: Vec<CavityEntry<'d>>,
