@@ -4,20 +4,23 @@
 //! The DSL view authors each include's ports explicitly: which side a port
 //! sits on, and in what order (the `ports { }` block). A box shows exactly
 //! the ports listed for it — that list is both the layout and the scope.
-//! A wire segment is drawn only when both its ends are listed ports on
-//! included boxes; an unlisted or own end drops silently, so a listed port
-//! with no surviving wire shows as a bare labelled stub.
+//! A wire segment is drawn only when both its ends are placed ports; a
+//! listed port whose wire reaches an end the view leaves out records that
+//! end ([`PlacedPort::off_view`]) for its off-view reference.
 
 use std::collections::HashMap;
 
 use indexmap::IndexMap;
 
+use super::off_view::{FarEnd, OffView, Undrawn};
 use super::pin::{PinAnnotation, PinOrientation};
 use super::{
-    CHAR_WIDTH, DEFAULT_GRID, LABEL_INSET, MIN_HEIGHT, MIN_PORT_PITCH, MIN_WIDTH, PIN_CANVAS_PAD,
-    SVG_MARGIN, TEXT_BOX_HEIGHT, TEXT_BOX_MIN_WIDTH, TEXT_BOX_PAD_X,
+    CHAR_WIDTH, COMPONENT_TITLE_GAP, DEFAULT_GRID, LABEL_INSET, MIN_HEIGHT, MIN_PORT_PITCH,
+    MIN_WIDTH, PIN_CANVAS_PAD, SVG_MARGIN, TEXT_BOX_HEIGHT, TEXT_BOX_MIN_WIDTH, TEXT_BOX_PAD_X,
 };
-use crate::dsl::ir::{Design, Instance, InstanceName, Port, PortName, View, WireColor, WireEnd};
+use crate::dsl::ir::{
+    Design, Instance, InstanceName, NetEnd, Port, PortName, View, WireColor, WireEnd,
+};
 use crate::error::ViewResult;
 use crate::render::GridFault;
 use crate::render::geometry::{Bounds, Point, Side};
@@ -136,7 +139,27 @@ impl PlacedComponent {
             height: self.height,
         }
     }
+
+    /// The area the title above the box covers (bold 13px, centred), its
+    /// width estimated at [`TITLE_CHAR_WIDTH`] per character.
+    pub(super) fn title_extent(&self) -> Bounds {
+        let width = self.label.chars().count() as f64 * TITLE_CHAR_WIDTH;
+        Bounds {
+            origin: Point::new(
+                self.origin.x + (self.width - width) / 2.0,
+                self.origin.y - COMPONENT_TITLE_GAP - TITLE_ASCENT,
+            ),
+            width,
+            height: TITLE_ASCENT + TITLE_DESCENT,
+        }
+    }
 }
+
+/// The title's estimated advance per character, and how far its glyphs
+/// reach above and below its baseline: bold 13px sans-serif.
+const TITLE_CHAR_WIDTH: f64 = 8.5;
+const TITLE_ASCENT: f64 = 12.0;
+const TITLE_DESCENT: f64 = 3.0;
 
 pub(super) struct PlacedPort {
     pub(super) port: PortName,
@@ -149,6 +172,9 @@ pub(super) struct PlacedPort {
     /// True for an enclosure port: it sits on the boundary facing *inward*,
     /// so its wire leaves toward the schematic interior, not outward.
     pub(super) inverted: bool,
+    /// The ends its wires reach that the view does not draw, when it has
+    /// any: what its off-view reference names.
+    pub(super) off_view: Option<Undrawn>,
 }
 
 impl PlacedPort {
@@ -164,9 +190,21 @@ impl PlacedPort {
     }
 
     /// The area the pin annotation covers, if the port has one.
-    fn pin_extent(&self) -> Option<Bounds> {
+    pub(super) fn pin_extent(&self) -> Option<Bounds> {
         let pin = self.pin.as_ref()?;
         Some(pin.extent(self.label_side(), self.pos))
+    }
+
+    /// The tip of the port's routing stub: `step` out the way its wire
+    /// leaves it (inward for an inverted enclosure port).
+    pub(super) fn stub(&self, step: f64) -> Point {
+        let Point { x, y } = self.pos;
+        match self.label_side() {
+            Side::West => Point::new(x - step, y),
+            Side::East => Point::new(x + step, y),
+            Side::North => Point::new(x, y - step),
+            Side::South => Point::new(x, y + step),
+        }
     }
 }
 
@@ -438,6 +476,7 @@ impl Placement {
                         pin: pin.map(|text| PinAnnotation { text, orientation }),
                         label: port.label.clone(),
                         inverted: false,
+                        off_view: None,
                     });
                 }
             }
@@ -475,12 +514,107 @@ impl Placement {
 
         let enclosure = Self::place_enclosure(subject, view, &components, grid);
 
-        Ok(Self {
+        let mut placement = Self {
             components,
             texts,
             enclosure,
             connections,
-        })
+        };
+        for (key, undrawn) in placement.undrawn(subject) {
+            if let Some(port) = placement.endpoint_mut(&key) {
+                port.off_view = Some(undrawn);
+            }
+        }
+        Ok(placement)
+    }
+
+    /// Every placed port whose wires reach ends the view does not place,
+    /// with those ends, in wire order and then endpoint order.
+    ///
+    /// Along a wire, a placed port reaches the ends on either side of it up
+    /// to the nearest placed one: `[a, x, y, b]` with only `a` and `b`
+    /// placed gives each of them `x` and `y`, since neither segment to
+    /// them is drawn. A splice net (taken at its first conductor in wire
+    /// order) is drawn as a rail between the ports it places, so the ends
+    /// it does not place are named once, beside the first port it places,
+    /// as the splice its conductor lands on and the ends beyond it. A net
+    /// placing one port and reaching nothing else still names its splice.
+    fn undrawn(&self, subject: &Instance) -> IndexMap<PortKey, Undrawn> {
+        let placed = |end: &WireEnd| endpoint_key(end).filter(|key| self.endpoint(key).is_some());
+        let unplaced = |end: &&WireEnd| !matches!(end, WireEnd::Splice(_)) && placed(end).is_none();
+        let mut undrawn: IndexMap<PortKey, Undrawn> = IndexMap::new();
+        let mut add = |key: PortKey, far: FarEnd, color: &WireColor| {
+            let entry = undrawn.entry(key).or_insert_with(|| Undrawn {
+                far: Vec::new(),
+                color: color.clone(),
+            });
+            if !entry.far.contains(&far) {
+                entry.far.push(far);
+            }
+        };
+        let nets = subject.splice_nets();
+        let mut seen = vec![false; nets.len()];
+        for wire in &subject.wires {
+            let net = nets
+                .iter()
+                .position(|net| net.splices.iter().any(|splice| wire.ends_on(splice)));
+            if let Some(n) = net {
+                if std::mem::replace(&mut seen[n], true) {
+                    continue;
+                }
+                let net = &nets[n];
+                let mut ports: Vec<(PortKey, &NetEnd)> = Vec::new();
+                let mut beyond: Vec<WireEnd> = Vec::new();
+                for end in &net.ends {
+                    match placed(end.end) {
+                        Some(key) if !ports.iter().any(|(k, _)| k == &key) => {
+                            ports.push((key, end))
+                        }
+                        Some(_) => {}
+                        None if !beyond.contains(end.end) => beyond.push(end.end.clone()),
+                        None => {}
+                    }
+                }
+                let Some((key, first)) = ports.first() else {
+                    continue;
+                };
+                if beyond.is_empty() && ports.len() > 1 {
+                    continue;
+                }
+                let landing = match first.wire.other_end(first.end) {
+                    Some(WireEnd::Splice(splice)) => Some(splice),
+                    _ => net.splices.first().copied(),
+                };
+                if let Some(splice) = landing {
+                    let far = FarEnd::Splice {
+                        splice: splice.clone(),
+                        beyond,
+                    };
+                    add(key.clone(), far, &first.wire.color);
+                }
+                continue;
+            }
+            for (i, end) in wire.endpoints.iter().enumerate() {
+                let Some(key) = placed(end) else {
+                    continue;
+                };
+                let mut before: Vec<&WireEnd> = wire.endpoints[..i]
+                    .iter()
+                    .rev()
+                    .take_while(unplaced)
+                    .collect();
+                before.reverse();
+                let after = wire.endpoints[i + 1..].iter().take_while(unplaced);
+                for far in before.into_iter().chain(after) {
+                    add(
+                        key.clone(),
+                        FarEnd::of(far, &subject.type_name),
+                        &wire.color,
+                    );
+                }
+            }
+        }
+        undrawn
     }
 
     /// Wrap the placed child boxes in the subject's boundary, placing each
@@ -553,6 +687,7 @@ impl Placement {
                 }),
                 label: port.label.clone(),
                 inverted: true,
+                off_view: None,
             });
         }
         // Authored coordinates space enclosure ports freely, so each edge's
@@ -609,7 +744,16 @@ impl Placement {
             PortKey::Enclosure(port) => (self.enclosure.as_ref()?, port),
         };
         let idx = comp.port_index.get(port)?;
-        Some(&comp.ports[*idx])
+        comp.ports.get(*idx)
+    }
+
+    fn endpoint_mut(&mut self, key: &PortKey) -> Option<&mut PlacedPort> {
+        let (comp, port) = match key {
+            PortKey::Child { instance, port } => (self.components.get_mut(instance)?, port),
+            PortKey::Enclosure(port) => (self.enclosure.as_mut()?, port),
+        };
+        let idx = *comp.port_index.get(port)?;
+        comp.ports.get_mut(idx)
     }
 
     /// The wire segments to route, each resolved to its two placed ports
@@ -674,8 +818,14 @@ impl Placement {
 
     /// The drawing's bounding box, padded for margins and an optional
     /// title. Encloses both the component boxes and every routed wire —
-    /// wires can detour outside the boxes, so they must be measured too.
-    pub(super) fn viewbox(&self, has_title: bool, wires: &[Vec<Point>]) -> ViewBox {
+    /// wires can detour outside the boxes, so they must be measured too —
+    /// and keeps every pin annotation and off-view reference inside it.
+    pub(super) fn viewbox(
+        &self,
+        has_title: bool,
+        wires: &[Vec<Point>],
+        references: &[OffView],
+    ) -> ViewBox {
         if self.components.is_empty() && self.texts.is_empty() && self.enclosure.is_none() {
             return ViewBox {
                 x: 0.0,
@@ -730,11 +880,15 @@ impl Placement {
         let (mut right, mut bottom) = (max_x + pad, max_y + pad);
 
         // A pin annotation outside a box can reach past everything measured
-        // above (a long designator on an unwired port at the edge). Each is
-        // kept `PIN_CANVAS_PAD` inside the canvas, measured after the margin
-        // so an annotation the margin already holds leaves the canvas as it
-        // was.
-        for extent in self.ports().filter_map(PlacedPort::pin_extent) {
+        // above (a long designator on an unwired port at the edge), and so
+        // can an off-view reference. Each is kept `PIN_CANVAS_PAD` inside
+        // the canvas, measured after the margin so a text the margin
+        // already holds leaves the canvas as it was.
+        let texts = self
+            .ports()
+            .filter_map(PlacedPort::pin_extent)
+            .chain(references.iter().map(OffView::extent));
+        for extent in texts {
             left = left.min(extent.origin.x - PIN_CANVAS_PAD);
             top = top.min(extent.origin.y - PIN_CANVAS_PAD - title_pad);
             right = right.max(extent.origin.x + extent.width + PIN_CANVAS_PAD);
@@ -1044,6 +1198,148 @@ component sys {
         assert!(connections_of(&design, &["a"]).is_empty());
     }
 
+    /// Each placed port's undrawn far ends, as `owner.port: end, end`
+    /// (`port` alone on the enclosure), with the stub's colour.
+    fn undrawn_of(placement: &Placement) -> Vec<String> {
+        let boxes = placement.components.iter().map(|(n, pc)| (Some(n), pc));
+        boxes
+            .chain(placement.enclosure().map(|pc| (None, pc)))
+            .flat_map(|(owner, pc)| pc.ports.iter().map(move |port| (owner, port)))
+            .filter_map(|(owner, port)| {
+                let undrawn = port.off_view.as_ref()?;
+                let far: Vec<String> = undrawn.far.iter().map(ToString::to_string).collect();
+                let at = match owner {
+                    Some(owner) => format!("{owner}.{}", port.port),
+                    None => port.port.to_string(),
+                };
+                Some(format!("{at}: {} {}", far.join(", "), undrawn.color))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_placed_port_records_the_unplaced_ends_on_either_side_of_it() {
+        // `a` and `c` are placed; along the rail, `a` reaches `x` and `y`
+        // up to `c`, and `c` reaches back to the same two and on to `z`.
+        let design = design_from(
+            r#"
+component sys {
+    a: blk;
+    c: blk;
+    x: blk;
+    y: blk;
+    z: blk;
+    wire red 1 [a.p, x.p, y.p, c.p, z.p];
+    component blk {
+        pub port p "P";
+    }
+}
+"#,
+        );
+        let view = view_of(
+            "sys",
+            &[
+                ("a", 0.0, 0.0, &[("p", Side::East)]),
+                ("c", 10.0, 0.0, &[("p", Side::West)]),
+            ],
+        );
+        let subject = design.get(&design.root).unwrap();
+        let placement = Placement::compute(&design, subject, &view, Grid::new(20.0)).unwrap();
+        assert_eq!(
+            undrawn_of(&placement),
+            ["a.p: x.p, y.p red", "c.p: x.p, y.p, z.p red"]
+        );
+    }
+
+    #[test]
+    fn drawn_wires_and_unwired_ports_record_nothing() {
+        // `a.p`–`b.p` is drawn; `b.spare` has no wire; `b.p`'s second
+        // wire runs to `c`, which the view leaves out: only it is recorded,
+        // in that wire's colour.
+        let design = design_from(
+            r#"
+component sys {
+    a: blk;
+    b: pad;
+    c: blk;
+    wire red 1 [a.p, b.p];
+    wire blue 1 [b.p, c.p];
+    component blk {
+        pub port p "P";
+    }
+    component pad {
+        pub port p "P";
+        pub port spare "Spare";
+    }
+}
+"#,
+        );
+        let view = view_of(
+            "sys",
+            &[
+                ("a", 0.0, 0.0, &[("p", Side::East)]),
+                ("b", 10.0, 0.0, &[("p", Side::West), ("spare", Side::East)]),
+            ],
+        );
+        let subject = design.get(&design.root).unwrap();
+        let placement = Placement::compute(&design, subject, &view, Grid::new(20.0)).unwrap();
+        assert_eq!(undrawn_of(&placement), ["b.p: c.p blue"]);
+    }
+
+    #[test]
+    fn an_own_port_off_the_enclosure_is_where_the_wire_leaves_the_subject() {
+        let design = design_from(
+            r#"
+component sys {
+    a: blk;
+    pub port out "OUT";
+    wire red 1 [a.p, out];
+    component blk {
+        pub port p "P";
+    }
+}
+"#,
+        );
+        let subject = design.get(&design.root).unwrap();
+        let bare = view_of("sys", &[("a", 0.0, 0.0, &[("p", Side::East)])]);
+        let placement = Placement::compute(&design, subject, &bare, Grid::new(20.0)).unwrap();
+        assert_eq!(undrawn_of(&placement), ["a.p: out (leaves sys) red"]);
+
+        // Placed on an enclosure, the wire is drawn and nothing is left.
+        let mut enclosed = bare;
+        enclosed.has_enclosure = true;
+        enclosed.enclosure.push(crate::dsl::ir::EnclosurePort {
+            port: PortName::from("out"),
+            side: Side::East,
+            coord: 0.0,
+        });
+        let placement = Placement::compute(&design, subject, &enclosed, Grid::new(20.0)).unwrap();
+        assert!(undrawn_of(&placement).is_empty());
+    }
+
+    #[test]
+    fn a_splice_net_names_its_splice_and_the_ends_beyond_it_once() {
+        let design = spliced();
+        let subject = design.get(&design.root).unwrap();
+        let placed = |includes: &[&str]| {
+            const SOUTH: &[(&str, Side)] = &[("p", Side::South)];
+            let includes: Vec<_> = includes
+                .iter()
+                .enumerate()
+                .map(|(k, name)| (*name, k as f64 * 10.0, 0.0, SOUTH))
+                .collect();
+            let view = view_of("sys", &includes);
+            let placement = Placement::compute(&design, subject, &view, Grid::new(20.0)).unwrap();
+            undrawn_of(&placement)
+        };
+        // The rail `a`–`b` is drawn; the net's other ends are named once,
+        // beside its first placed port, after the splice `a`'s conductor
+        // lands on, in that conductor's colour.
+        assert_eq!(placed(&["a", "b"]), ["a.p: sp (c.p, d.p) black"]);
+        assert_eq!(placed(&["b"]), ["b.p: sp (a.p, c.p, d.p) brown"]);
+        assert!(placed(&["a", "b", "c", "d"]).is_empty());
+    }
+
     #[test]
     fn unlisted_port_is_hidden() {
         // `b.spare` isn't listed in the view, so it isn't placed.
@@ -1239,7 +1535,7 @@ view schematic "T" {
         assert!(enc.height > 0.0);
         assert_eq!(placement.connections().len(), 1);
 
-        let vb = placement.viewbox(false, &[]);
+        let vb = placement.viewbox(false, &[], &[]);
         assert!(vb.width > MIN_WIDTH);
         assert!(vb.height > 0.0);
     }
@@ -1377,14 +1673,14 @@ view schematic "T" {
         let grid = Grid::new(15.0);
         let short = Placement::compute(&design, subject, &view, grid).unwrap();
         let lamp = &short.components[&InstanceName::from("lamp")];
-        let vb = short.viewbox(false, &[]);
+        let vb = short.viewbox(false, &[], &[]);
         assert_eq!(vb.x, lamp.origin.x - SVG_MARGIN);
         assert_eq!(vb.x + vb.width, lamp.origin.x + lamp.width + SVG_MARGIN);
 
         view.includes[0].instance = InstanceName::from("ecu");
         view.includes[0].ports = vec![(PortName::from("a"), Side::West)];
         let long = Placement::compute(&design, subject, &view, grid).unwrap();
-        let vb = long.viewbox(false, &[]);
+        let vb = long.viewbox(false, &[], &[]);
         let ecu = &long.components[&InstanceName::from("ecu")];
         let west = ecu.ports[0].pin_extent().unwrap();
         // `bms_signals:1` reaches past the margin on the west; the east,

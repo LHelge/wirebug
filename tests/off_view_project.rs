@@ -1,0 +1,155 @@
+//! End-to-end check of the `off_view_project` fixture: an ECU whose listed
+//! ports are wired to devices its views leave out, one case per port and a
+//! port on every side, drawn at the default and at the minimum grid. Each
+//! port whose wire the view does not draw names where it goes.
+//!
+//! Tests never target `examples/` — that is the real, freely-changing
+//! vehicle project.
+
+use std::path::Path;
+
+use wirebug::check_project;
+use wirebug::render::{RenderedView, SvgMode, embed_stylesheet, render_views};
+
+fn views(mode: SvgMode) -> Vec<RenderedView> {
+    let main =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/off_view_project/main.wb");
+    let report = check_project(Some(&main));
+    assert!(
+        report.problems.is_empty(),
+        "fixture should check clean: {:?}",
+        report.problems
+    );
+    render_views(&report.design.expect("a design"), mode)
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("renders")
+}
+
+fn view(views: &[RenderedView], title: &str) -> String {
+    views
+        .iter()
+        .find(|v| v.title == title)
+        .unwrap_or_else(|| panic!("view {title:?}"))
+        .svg
+        .clone()
+}
+
+/// One off-view reference as drawn: the port it stands beside
+/// (`instance.port`), its text and its tooltip.
+#[derive(Debug, PartialEq)]
+struct Reference {
+    port: String,
+    text: String,
+    title: String,
+}
+
+/// Every off-view reference of `svg`, in draw order.
+fn references(svg: &str) -> Vec<Reference> {
+    let attr = |line: &str, name: &str| {
+        line.split(&format!(" {name}=\""))
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .map(str::to_string)
+    };
+    let lines: Vec<&str> = svg.lines().collect();
+    lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.starts_with("<g class=\"off-view\""))
+        .map(|(i, line)| {
+            let port = attr(line, "data-port").expect("a port");
+            let port = match attr(line, "data-component") {
+                Some(owner) => format!("{owner}.{port}"),
+                None => port,
+            };
+            let title = lines[i + 1]
+                .strip_prefix("<title>")
+                .and_then(|t| t.strip_suffix("</title>"))
+                .expect("a tooltip")
+                .to_string();
+            assert!(lines[i + 2].starts_with("<text class=\"off-view-label\""));
+            Reference {
+                port,
+                text: lines[i + 3].to_string(),
+                title,
+            }
+        })
+        .collect()
+}
+
+fn reference(port: &str, text: &str, title: &str) -> Reference {
+    Reference {
+        port: port.to_string(),
+        text: text.to_string(),
+        title: title.to_string(),
+    }
+}
+
+/// What the ECU's ports show, on either grid: west, east, north, then
+/// south.
+fn expected() -> Vec<Reference> {
+    vec![
+        // A rail on to four ends: what fits, then how many more.
+        reference(
+            "ecu.gnd",
+            "lamp.gnd, horn.gnd, +2 more ←",
+            "lamp.gnd, horn.gnd, pump.gnd, gauge.gnd",
+        ),
+        // One end, on an instance the view does not include.
+        reference("ecu.lamp", "→ lamp.pwr", "lamp.pwr"),
+        // One wire drawn to the pump, the other named.
+        reference("ecu.can_h", "→ gauge.can_h", "gauge.can_h"),
+        // The subject's own port, not placed on an enclosure.
+        reference("ecu.wake", "→ out (leaves Vehicle)", "out (leaves Vehicle)"),
+        // Through a splice to two devices left out.
+        reference(
+            "ecu.sense",
+            "→ sp_sense (lamp.sense, +1 more)",
+            "sp_sense (lamp.sense, horn.sense)",
+        ),
+    ]
+}
+
+#[test]
+fn every_listed_port_with_an_undrawn_wire_names_where_it_goes() {
+    let views = views(SvgMode::Standalone);
+    for title in ["Partial", "Partial, minimum grid"] {
+        // `ecu.spare` has no wire and `pump.can_h` only a drawn one: both
+        // stay bare.
+        assert_eq!(references(&view(&views, title)), expected(), "{title}");
+    }
+}
+
+#[test]
+fn a_port_keeps_its_drawn_wire_beside_its_reference() {
+    let views = views(SvgMode::Standalone);
+    for title in ["Partial", "Partial, minimum grid"] {
+        let svg = view(&views, title);
+        // The CAN wire to the pump is drawn; the five references each draw
+        // a stub, in a wire's layers.
+        assert_eq!(
+            svg.matches("<polyline class=\"wire\" data-color=\"white/blue\"")
+                .count(),
+            1,
+            "{title}"
+        );
+        assert_eq!(
+            svg.matches("class=\"wire off-view-stub\"").count(),
+            5,
+            "{title}"
+        );
+        assert_eq!(
+            svg.matches("class=\"wire-casing off-view-stub\"").count(),
+            5,
+            "{title}"
+        );
+    }
+}
+
+#[test]
+fn embed_output_carries_the_references_and_the_starter_styles_them() {
+    let views = views(SvgMode::Embed);
+    assert_eq!(references(&view(&views, "Partial")), expected());
+    assert!(embed_stylesheet().contains(".wirebug-schematic .off-view-label {"));
+}

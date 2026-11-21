@@ -1,9 +1,10 @@
 //! SVG emission: turning placed components, ports, and routed wires
 //! into `svg` crate elements.
 
-use svg::node::element::{Circle, Group, Polyline, Rectangle, Text};
+use svg::node::element::{Circle, Group, Polyline, Rectangle, Text, Title};
 
 use super::layout::{PlacedComponent, PlacedPort, PlacedText};
+use super::off_view::OffView;
 use super::{COMPONENT_TITLE_GAP, LABEL_INSET, PORT_RADIUS};
 use crate::dsl::ir::{InstanceName, WireColor};
 use crate::render::geometry::{Point, Side};
@@ -195,6 +196,14 @@ const WIRE_LAYERS: WireLayers = WireLayers {
     tracer: "wire-tracer",
 };
 
+/// The layers of an off-view reference's stub: a wire's, so it is stroked
+/// like one by any stylesheet that strokes wires, and marked as a stub.
+const OFF_VIEW_STUB_LAYERS: WireLayers = WireLayers {
+    casing: "wire-casing off-view-stub",
+    core: "wire off-view-stub",
+    tracer: "wire-tracer off-view-stub",
+};
+
 /// A routed connector, ready to draw as `<polyline>` layers: the casing,
 /// the core in the wire's base colour, and a two-tone wire's tracer. The
 /// layers come out one at a time so a whole net's casings can go down
@@ -212,6 +221,16 @@ impl<'a> WireDrawing<'a> {
     /// `path` is the ordered list of points produced by
     /// [`super::route::Router::route`].
     pub(super) fn new(path: &[Point], color: &'a WireColor) -> Self {
+        Self::with_layers(path, color, WIRE_LAYERS)
+    }
+
+    /// An off-view reference's stub, in the colour of its first undrawn
+    /// wire.
+    pub(super) fn off_view_stub(reference: &'a OffView) -> Self {
+        Self::with_layers(&reference.stub(), &reference.color, OFF_VIEW_STUB_LAYERS)
+    }
+
+    fn with_layers(path: &[Point], color: &'a WireColor, layers: WireLayers) -> Self {
         let points = path
             .iter()
             .map(|p| format!("{},{}", p.x, p.y))
@@ -219,7 +238,7 @@ impl<'a> WireDrawing<'a> {
             .join(" ");
         Self {
             shape: Polyline::new().set("fill", "none").set("points", points),
-            stroke: WIRE_LAYERS.stroke(color),
+            stroke: layers.stroke(color),
         }
     }
 
@@ -237,6 +256,32 @@ impl<'a> WireDrawing<'a> {
     pub(super) fn tracer(&self) -> Option<Polyline> {
         self.stroke.tracer(Clone::clone(&self.shape))
     }
+}
+
+/// An off-view reference's text at the end of its stub, with every far
+/// end in full as its tooltip. The stub is drawn with the wires.
+pub(super) fn render_off_view(reference: &OffView) -> Group {
+    let (at, anchor, rotate) = reference.anchor();
+    let label = text_with_placement(
+        reference.text(),
+        "off-view-label",
+        LabelPlacement {
+            x: at.x,
+            y: at.y,
+            anchor,
+            rotate,
+            baseline: Some("central"),
+        },
+    );
+    let group = Group::new().set("class", "off-view");
+    let group = match &reference.owner {
+        Some(owner) => group.set("data-component", owner.to_string()),
+        None => group,
+    };
+    group
+        .set("data-port", reference.port.to_string())
+        .add(Title::new(reference.title.clone()))
+        .add(label)
 }
 
 /// Along-track clearance a code keeps from a crossing wire, so its halo

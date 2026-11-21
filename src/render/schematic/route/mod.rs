@@ -28,7 +28,7 @@ use pathfinding::prelude::bfs;
 use visibility::Ovg;
 
 use super::layout::{PlacedPort, Placement};
-use crate::render::geometry::Point;
+use crate::render::geometry::{Bounds, Point};
 
 const EPS: f64 = 1e-6;
 /// World units → fixed-point cost. Keeps A\* costs integral and `Ord`.
@@ -51,7 +51,11 @@ pub(super) struct RawRoute {
 /// every connection against the shared visibility graph.
 pub(super) struct Router {
     ovg: Ovg,
+    /// The component boxes' keepouts, in `component_bounds` order.
     obstacles: Vec<Rect>,
+    /// The keepouts, then the reserved off-view references: everything a
+    /// route must not cross, and the walls nudging keeps segments outside.
+    walls: Vec<Rect>,
     soft_avoid: Vec<Vec<Point>>,
     /// How far routes stay clear of component boxes, and the length of
     /// the stub a wire leaves its port by — one grid step.
@@ -59,10 +63,18 @@ pub(super) struct Router {
 }
 
 impl Router {
-    pub(super) fn build(placement: &Placement, clearance: f64) -> Self {
+    /// The router for `placement`: its boxes, each kept `clearance` clear
+    /// of, and the `reserved` areas (off-view references a route would
+    /// otherwise run through), kept clear as they are.
+    pub(super) fn build(placement: &Placement, clearance: f64, reserved: &[Bounds]) -> Self {
         let obstacles: Vec<Rect> = placement
             .component_bounds()
             .map(|b| Rect::from(b).inflated(clearance))
+            .collect();
+        let walls: Vec<Rect> = obstacles
+            .iter()
+            .copied()
+            .chain(reserved.iter().copied().map(Rect::from))
             .collect();
 
         // Each port contributes its connection point and its stub (one
@@ -71,7 +83,7 @@ impl Router {
         let mut extra = Vec::new();
         for port in placement.ports() {
             extra.push(port.pos);
-            extra.push(stub(port, clearance));
+            extra.push(port.stub(clearance));
         }
 
         let soft_avoid = placement
@@ -81,8 +93,9 @@ impl Router {
             .collect();
 
         Self {
-            ovg: Ovg::build(&obstacles, &extra),
+            ovg: Ovg::build(&walls, &extra),
             obstacles,
+            walls,
             soft_avoid,
             clearance,
         }
@@ -101,7 +114,7 @@ impl Router {
                 if !placement.is_wired(name, &port.port) {
                     continue;
                 }
-                let at = stub(port, self.clearance);
+                let at = port.stub(self.clearance);
                 let swallowed = self
                     .obstacles
                     .iter()
@@ -126,8 +139,8 @@ impl Router {
     /// in by keepouts that meet.
     pub(super) fn connects(&self, a: &PlacedPort, b: &PlacedPort) -> bool {
         let (Some(from), Some(to)) = (
-            self.ovg.node_at(stub(a, self.clearance)),
-            self.ovg.node_at(stub(b, self.clearance)),
+            self.ovg.node_at(a.stub(self.clearance)),
+            self.ovg.node_at(b.stub(self.clearance)),
         ) else {
             return false;
         };
@@ -147,8 +160,8 @@ impl Router {
         b: &PlacedPort,
         avoid: &[Vec<Point>],
     ) -> Option<RawRoute> {
-        let stub_a = self.ovg.node_at(stub(a, self.clearance))?;
-        let stub_b = self.ovg.node_at(stub(b, self.clearance))?;
+        let stub_a = self.ovg.node_at(a.stub(self.clearance))?;
+        let stub_b = self.ovg.node_at(b.stub(self.clearance))?;
         let nodes = astar::find_route_avoiding(
             &self.ovg,
             a.pos,
@@ -191,7 +204,7 @@ impl Router {
             routed.push(self.raw_points(&raw));
             raws.push(raw);
         }
-        Ok(nudge::run(&self.ovg, &self.obstacles, &raws, gap))
+        Ok(nudge::run(&self.ovg, &self.walls, &raws, gap))
     }
 
     fn raw_points(&self, raw: &RawRoute) -> Vec<Point> {
@@ -236,13 +249,6 @@ fn outline(r: Rect) -> Vec<Point> {
 fn out_dir(p: &PlacedPort) -> Dir {
     let dir = Dir::from(p.side);
     if p.inverted { dir.opposite() } else { dir }
-}
-
-/// The point one `clearance` along a port's leaving direction — its stub,
-/// which always lands on a grid node.
-fn stub(p: &PlacedPort, clearance: f64) -> Point {
-    let (dx, dy) = out_dir(p).unit();
-    Point::new(p.pos.x + dx * clearance, p.pos.y + dy * clearance)
 }
 
 /// Drop coincident points and merge consecutive collinear segments so
@@ -294,8 +300,9 @@ mod tests {
             pin: None,
             label: "X".to_string(),
             inverted: true,
+            off_view: None,
         };
-        let s = stub(&port, 10.0);
+        let s = port.stub(10.0);
         assert_eq!(s.x, 110.0);
         assert_eq!(s.y, 50.0);
     }
@@ -338,7 +345,7 @@ component sys {
         let subject = design.get(&design.root).unwrap();
         let placement =
             Placement::compute(&design, subject, &view, Grid::new(step)).expect("places");
-        let router = Router::build(&placement, step);
+        let router = Router::build(&placement, step, &[]);
         let connections = placement.connections();
         let (a, c) = (connections[0].a, connections[0].b);
 
@@ -369,6 +376,7 @@ component sys {
         let router = Router {
             ovg: Ovg::build(&[obstacle], &clear),
             obstacles: vec![obstacle],
+            walls: vec![obstacle],
             soft_avoid: Vec::new(),
             clearance: 10.0,
         };
@@ -379,6 +387,7 @@ component sys {
             pin: None,
             label: "A".to_string(),
             inverted: false,
+            off_view: None,
         };
         let b = PlacedPort {
             port: PortName::from("b"),
@@ -387,6 +396,7 @@ component sys {
             pin: None,
             label: "B".to_string(),
             inverted: false,
+            off_view: None,
         };
 
         assert!(router.route_one_avoiding(&a, &b, &[]).is_none());
@@ -398,6 +408,7 @@ component sys {
             pin: None,
             label: "C".to_string(),
             inverted: false,
+            off_view: None,
         };
         assert_eq!(
             router.route_all(&[(&b, &c), (&a, &b)], 10.0).err(),
@@ -416,6 +427,7 @@ component sys {
             pin: None,
             label: name.to_string(),
             inverted: false,
+            off_view: None,
         };
         let ports = [
             mk_port("a", Side::East, 0.0, 50.0),
@@ -436,6 +448,7 @@ component sys {
         let router = Router {
             ovg: Ovg::build(&[], &extra),
             obstacles: Vec::new(),
+            walls: Vec::new(),
             soft_avoid: Vec::new(),
             clearance: 10.0,
         };
@@ -486,7 +499,7 @@ component sys {
         let subject = design.get(&design.root).unwrap();
         let placement =
             Placement::compute(&design, subject, &view, Grid::new(step)).expect("places");
-        let router = Router::build(&placement, step);
+        let router = Router::build(&placement, step, &[]);
         let connections = placement.connections();
         let pair = (connections[0].a, connections[0].b);
         router

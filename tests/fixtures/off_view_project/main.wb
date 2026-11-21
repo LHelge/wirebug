@@ -1,0 +1,89 @@
+// A controller wired to devices a partial view leaves out: each of its
+// listed ports, one per case, shows where its undrawn wires go.
+
+component Vehicle {
+    ecu:   Ecu   "ECU";
+    pump:  Pump  "Pump";
+    lamp:  Lamp  "Lamp";
+    horn:  Horn  "Horn";
+    gauge: Gauge "Gauge";
+
+    pub port out "OUT";
+
+    splice sp_sense;
+
+    // One far end, on an instance the views do not include.
+    wire red 1.0 [ecu.lamp, lamp.pwr];
+
+    // A rail on to four ends the views do not place (`pump.gnd` is on an
+    // included box, but not listed): too many to spell out.
+    wire black 1.0 [ecu.gnd, lamp.gnd, horn.gnd, pump.gnd, gauge.gnd];
+
+    // One drawn wire and one undrawn wire crimped into one port.
+    wire white/blue 0.5 [ecu.can_h, pump.can_h];
+    wire white/blue 0.5 [ecu.can_h, gauge.can_h];
+
+    // The subject's own port, which no view places on an enclosure.
+    wire green 0.5 [ecu.wake, out];
+
+    // A splice joining the ECU's sense line to two devices left out.
+    wire brown 0.5 [ecu.sense, sp_sense];
+    wire brown 0.5 [lamp.sense, sp_sense];
+    wire brown 0.5 [horn.sense, sp_sense];
+
+    component Ecu {
+        connector x1 "ECU 8p" {
+            pub port lamp  "LAMP"  pin 1;
+            pub port gnd   "GND"   pin 2;
+            pub port can_h "CAN H" pin 3;
+            pub port wake  "WAKE"  pin 4;
+            pub port sense "SENSE" pin 5;
+            pub port spare "SPARE" pin 6;
+        }
+    }
+    component Pump {
+        pub port can_h "CAN H";
+        pub port gnd   "GND";
+    }
+    component Lamp {
+        pub port pwr   "PWR";
+        pub port gnd   "GND";
+        pub port sense "SENSE";
+    }
+    component Horn {
+        pub port gnd   "GND";
+        pub port sense "SENSE";
+    }
+    component Gauge {
+        pub port gnd   "GND";
+        pub port can_h "CAN H";
+    }
+}
+
+// The ECU with a reference on every side, and the pump its CAN line is
+// drawn to.
+view schematic "Partial" {
+    include ecu at (0, 0) ports {
+        east:  lamp, can_h;
+        west:  gnd, spare;
+        north: wake;
+        south: sense;
+    }
+    include pump at (30, 0) ports {
+        west: can_h;
+    }
+}
+
+// The same at the finest grid a schematic allows.
+view schematic "Partial, minimum grid" {
+    grid: 7.5;
+    include ecu at (0, 0) ports {
+        east:  lamp, can_h;
+        west:  gnd, spare;
+        north: wake;
+        south: sense;
+    }
+    include pump at (40, 0) ports {
+        west: can_h;
+    }
+}
