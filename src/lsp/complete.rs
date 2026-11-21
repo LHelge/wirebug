@@ -2,11 +2,12 @@
 //! plus a token-stack scan of the live buffer.
 //!
 //! The index is rebuilt from [`Resolved`] after every check and kept as
-//! *last-good* when the current buffer is too broken to load — mid-edit
-//! buffers usually are, and the instance/port sets are stable across a
-//! keystroke. The buffer at the cursor, by contrast, is always the live
-//! overlay text: it is lexed (not parsed) and a block stack derives the
-//! completion context, so completion works in code the parser rejects.
+//! *last-good* when the current buffer is too broken to load, or loads
+//! without statements the parser skipped — mid-edit buffers usually are,
+//! and the instance/port sets are stable across a keystroke. The buffer at
+//! the cursor, by contrast, is always the live overlay text: it is lexed
+//! (not parsed) and a block stack derives the completion context, so
+//! completion works in code the parser rejects.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -50,6 +51,10 @@ struct FileScope {
     own_connector_types: Vec<String>,
     /// The file's lone top-level component — the subject of its views.
     subject: Option<ComponentKey>,
+    /// Built from a buffer whose broken statements the parser skipped, so
+    /// it lacks what they declared (and, where a `;` was missing, the
+    /// statement after).
+    holes: bool,
 }
 
 #[derive(Default)]
@@ -147,7 +152,10 @@ pub(crate) fn build_index(project: &Project, resolved: &Resolved) -> CompletionI
 
     let mut files = HashMap::new();
     for (fi, file) in project.files.iter().enumerate() {
-        let mut scope = FileScope::default();
+        let mut scope = FileScope {
+            holes: file.holes,
+            ..FileScope::default()
+        };
         let mut top_level_here = Vec::new();
         for (id, def) in resolved.defs.iter().enumerate() {
             if def.file == FileId(fi) && def.parent.is_none() {
@@ -246,8 +254,13 @@ impl CompletionIndex {
     /// their previous scope and the component data it references. A buffer
     /// mid-edit routinely fails to parse, which drops its file from the
     /// load — without this, one broken keystroke kills completion in that
-    /// file (and a broken entry file would kill the whole project's).
-    pub(crate) fn update_with(&mut self, new: CompletionIndex) {
+    /// file (and a broken entry file would kill the whole project's). A
+    /// file `new` holds only with holes (statements the parser skipped)
+    /// keeps its previous scope too, when it has one: the last good scope
+    /// still has what the statement being typed broke.
+    pub(crate) fn update_with(&mut self, mut new: CompletionIndex) {
+        new.files
+            .retain(|path, scope| !(scope.holes && self.files.contains_key(path)));
         self.files.retain(|path, _| !new.files.contains_key(path));
         if self.files.is_empty() {
             *self = new;
@@ -1476,6 +1489,29 @@ mod tests {
             "    wire orange 50 \"HV+\" [pack.‸];",
         );
         assert_ne!(live, disk, "replacement target must exist in the fixture");
+        let labels = fixture_complete(FIXTURE_ENTRY, &live);
+        assert!(labels.iter().any(|l| l == "hv_pos"), "{labels:?}");
+    }
+
+    #[test]
+    fn mid_edit_statement_that_swallows_the_next_keeps_the_last_good_scope() {
+        // `oops` lacks its `: Type;`, so the parser skips to the next `;`,
+        // taking `pack`'s declaration with it: the buffer loads, but
+        // without `pack`. Its last good scope still knows `pack`.
+        let disk =
+            std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(FIXTURE_ENTRY))
+                .unwrap();
+        let live = disk
+            .replace(
+                "    pack: Battery  \"Battery\";",
+                "    oops\n    pack: Battery  \"Battery\";",
+            )
+            .replace(
+                "    wire orange 50 \"HV+\" [pack.hv_pos, inv.dc_pos];",
+                "    wire orange 50 \"HV+\" [pack.‸];",
+            );
+        assert_eq!(live.matches("oops").count(), 1, "first replacement target");
+        assert!(live.contains('‸'), "second replacement target");
         let labels = fixture_complete(FIXTURE_ENTRY, &live);
         assert!(labels.iter().any(|l| l == "hv_pos"), "{labels:?}");
     }
