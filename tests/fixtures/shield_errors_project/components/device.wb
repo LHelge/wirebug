@@ -1,0 +1,6 @@
+component Device {
+    connector j1 "J1" {
+        pub port pwr "PWR" pin 1;
+        pub port gnd "GND" pin 2;
+    }
+}

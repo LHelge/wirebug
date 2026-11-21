@@ -181,7 +181,13 @@ Distinct from clap's `--version`, which prints the wirebug app version.
   schematic renderer draws as the box's `data-text` — so a host styling an
   old box keeps working until it is migrated; a nameless box has none. A
   statement with a syntax error is skipped and leaves no node (see DSL
-  validation).
+  validation). A cable's screen is an `ast::Shield` (optional label, the
+  `Endpoint`s its drain lands on, kept faithful in number): the cable body's
+  own `shield` lines are `Cable.shields`, a pair's are
+  `TwistedGroup.shields`; `Cable::wires()` yields conductors only, and
+  `Cable::endpoints()` every reference the cable names, conductors' and
+  shields' alike, which is what resolve (`check_endpoint`) and the LSP's
+  go-to-definition walk.
 - **Resolved registry** — every definition (top-level and nested) keyed by
   `DefId`, with flattened ports (connectors are grouping metadata, not a
   namespace — port names are unique per component), per-file type scopes
@@ -230,7 +236,18 @@ Distinct from clap's `--version`, which prints the wirebug app version.
   `Instance.wires` tagged with `Wire.cable = Some(name)`; loose wires are
   `None`. A conductor inside a `twisted { }` group also carries
   `Wire.twisted_group = Some(i)` (numbered per cable in source order), so
-  grouping survives flattening. A wire's optional `{ key: value; }` body
+  grouping survives flattening, and `CableMeta.twisted[i]` (an
+  `ir::TwistedMeta`, `CableMeta::twisted_group(i)`) is that pair's place
+  for data of its own. Screens are typed data, never a fake `Wire`: the
+  cable's overall one is `CableMeta.shield` and a pair's
+  `TwistedMeta.shield`, each an `ir::Shield` (label, span and a
+  `ShieldTermination` — `Unterminated`, `Single(WireEnd)` or
+  `Both([WireEnd; 2])`, so more than two ends cannot be represented;
+  `Shield::ends()` lists them). `CableMeta::shields()` yields every screen
+  with what it screens (`ir::Screened::Cable` or `Pair(i)`), which is how
+  a wire list asks whether a cable or a pair is shielded and where its
+  drain lands. Elaboration keeps the first shield of a body and the first
+  two ends of a shield; validate reports the rest. A wire's optional `{ key: value; }` body
   (`ast::Wire.properties`, the same `ast::Property` lines a cable body
   holds) elaborates to typed `Wire.length`/`r#type`/`part`; a conductor's
   `length` overrides its cable's, and `Instance::effective_length(wire)`
@@ -412,8 +429,24 @@ Three deliberate departures from the schematic's no-inference rule: pin
 explicit `ports { }` listing was considered and rejected for harnesses),
 and wire routing is the bezier flex above — no object avoidance, unlike the
 schematic's orthogonal router.
-**Shields/drain wires are not drawn** (the IR carries no shield flag); reusing
-the orthogonal router and adding shields are noted future refinements.
+**Shields** draw with their cable (`layout.rs`, `DrawnShield`): a cable
+box is drawn only for its conductors, as before, and then carries the
+screens of its cable — the overall one, and a pair's own when that pair is
+drawn. An overall screen marks the box with a dashed inner outline
+(`cable-shield`) and `shielded` after the conductor count in the subtitle;
+a screened pair gets a dashed rounded outline round its rows
+(`pair-shield`, `CableBox::pair_rows`). Each shield end on a connector the
+view includes is a **drain**: the pin joins its table's auto-scope (facing
+the spine, since it carries no conductor of its own) and the shield gets a
+row of its own in the box (`DrainRow`; a pair's right below the pair, the
+overall one last, every row placed by its `row` index), drawn as a thin
+dashed `drain-wire` across the box and a flexed `drain-wire` lead from the
+nearer box edge to each pin, with an italic `drain-label` (the shield's
+label, else `Shield`/`Pair shield`), all in a `<g class="drain">`. An end
+on a connector the view leaves out is not drawn; a shield terminated
+nowhere has no row, only its outline. A shield alone never puts a cable
+box in a view. Reusing the orthogonal router is a noted future
+refinement.
 
 ## DSL validation (`check`)
 
@@ -446,7 +479,10 @@ so one run reports many. Errors fail the run; warnings fail only under
   fixed-shape bodies (`twisted { }`, `layout grid { }`, `layout face { }`)
   stay one statement: a mistake inside skips the whole of it (a broken
   line in the body of a wire inside `twisted { }` is still skipped alone,
-  since the wire body is a block of its own). Two guards
+  since the wire body is a block of its own; a broken `shield` line in a
+  pair skips the pair, reporting the shield's own error, never "a twisted
+  pair needs exactly two conductors", since the group's braces fail to
+  close before the count is taken). Two guards
   against one mistake reporting twice: a statement that fails right after
   one that failed on its own `;` is that statement's tail, and is not
   reported, when it goes on where the `;` cut it — on the same line
@@ -556,7 +592,15 @@ so one run reports many. Errors fail the run; warnings fail only under
   conductor (`duplicate_endpoint`, labelled on both occurrences — compared
   as resolved `ir::WireEnd`s, so own port `gnd` and `ecu.gnd` never alias;
   two *different* wires on one port are a deliberate double crimp and are
-  not compared). As warnings: a cable with no conductors (`empty_cable`),
+  not compared); a shield listing an end twice is the same
+`duplicate_endpoint`, its message naming the shield, and a shield end
+sharing a pin with a wire is not compared either (a drain crimped with a
+ground wire). A second `shield` in one cable body or one `twisted { }`
+group (`duplicate_shield`, on both statements, the message naming the cable
+or the pair), and a shield listing more than two ends (`shield_arity`, on
+the statement: a screen, like a conductor, runs end to end), are errors;
+the shield ends resolve in resolve like wire endpoints. As warnings: a
+cable with no conductors (`empty_cable`; a shield is no conductor),
   unused import (an import counts as used when the file instantiates it,
   merges with it, or names it in a view's `for`), bare-port pin, and
   non-IEC 60757 wire color
@@ -631,7 +675,8 @@ so one run reports many. Errors fail the run; warnings fail only under
   covered through either half (an include of either normalizes to the
   designator), a double crimp is two conductors and never a problem, and
   a component with no harness view is not built from drawings yet, so is
-  never reported. A harness view with a rejected `grid:` still counts its
+  never reported. Shields are not conductors and are not judged: a drain no
+  view draws is not reported. A harness view with a rejected `grid:` still counts its
   conductors (laid out on the default grid: which conductors a view draws
   does not depend on its grid), so the grid is reported alone rather than
   with a warning for every conductor the view draws.

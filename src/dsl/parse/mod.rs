@@ -156,11 +156,19 @@ enum ViewItem {
 }
 
 /// One entry of a cable body, parsed in any order and folded into a
-/// [`Cable`]: a property (`type`/`length`), or a conductor entry (a plain
-/// wire or a `twisted { }` group).
+/// [`Cable`]: a property (`type`/`length`), a conductor entry (a plain
+/// wire or a `twisted { }` group), or a `shield` line.
 enum CableItem {
     Property(Property),
     Member(CableMember),
+    Shield(Shield),
+}
+
+/// One entry of a `twisted { }` group, folded into a [`TwistedGroup`]: a
+/// conductor or a `shield` line.
+enum TwistedItem {
+    Wire(Wire),
+    Shield(Shield),
 }
 
 /// What follows `<name>:` in a component body: a type and an optional
@@ -916,6 +924,16 @@ where
         })
         .boxed();
 
+    // `[<endpoint>, …]`: a wire's endpoints, or the pins a shield's drain
+    // lands on.
+    let endpoints = endpoint
+        .separated_by(just(Token::Comma))
+        .allow_trailing()
+        .at_least(1)
+        .collect::<Vec<_>>()
+        .delimited_by(just(Token::LBracket), just(Token::RBracket))
+        .boxed();
+
     // A color is `base` or two-tone `base/tracer` (`green/yellow`). An
     // optional `{ <property>* }` body ends the wire in place of its `;`,
     // like an include's `ports { }` block.
@@ -924,14 +942,7 @@ where
         .then(just(Token::Slash).ignore_then(ident.clone()).or_not())
         .then(number)
         .then(string.or_not())
-        .then(
-            endpoint
-                .separated_by(just(Token::Comma))
-                .allow_trailing()
-                .at_least(1)
-                .collect::<Vec<_>>()
-                .delimited_by(just(Token::LBracket), just(Token::RBracket)),
-        )
+        .then(endpoints.clone())
         .then(choice((
             block(property.clone()),
             just(Token::Semicolon).to(Vec::new()),
@@ -951,33 +962,61 @@ where
 
     // --- Cables ---
 
-    // `twisted { <wire> <wire> }` — a twisted pair. Exactly two
-    // conductors, converted from the repeated parse by `try_map` so a
-    // wrong count is a parse error with a purpose-built message.
-    // (Deliberately NOT `wire.then(wire)`: that embeds the huge wire
-    // combinator type twice and blows rustc's trait solving up —
-    // compile times went from seconds to unbounded.)
+    // `shield ["<label>"] [<end>, …];` — a cable's or a twisted pair's
+    // screen and the pins its drain lands on; `shield;` lands nowhere. The
+    // number of ends is checked in validate.
+    let shield = just(Token::Shield)
+        .ignore_then(string.or_not())
+        .then(endpoints.or_not())
+        .then_ignore(just(Token::Semicolon))
+        .map_with(|(label, ends), e| Shield {
+            label,
+            ends: ends.unwrap_or_default(),
+            span: e.span(),
+        })
+        .boxed();
+
+    // `twisted { <wire> <wire> <shield>* }` — a twisted pair, screened
+    // when it holds a `shield` line. Exactly two conductors, converted
+    // from the repeated parse by `try_map` so a wrong count is a parse
+    // error with a purpose-built message. The shield is no conductor and
+    // does not count. (Deliberately NOT `wire.then(wire)`: that embeds
+    // the huge wire combinator type twice and blows rustc's trait solving
+    // up — compile times went from seconds to unbounded.)
     let twisted_group = just(Token::Twisted)
         .ignore_then(
-            wire.clone()
-                .repeated()
-                .collect::<Vec<_>>()
-                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+            choice((
+                wire.clone().map(TwistedItem::Wire),
+                shield.clone().map(TwistedItem::Shield),
+            ))
+            .repeated()
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LBrace), just(Token::RBrace)),
         )
-        .try_map_with(|wires, e| {
+        .try_map_with(|items, e| {
+            let mut wires = Vec::new();
+            let mut shields = Vec::new();
+            for item in items {
+                match item {
+                    TwistedItem::Wire(w) => wires.push(w),
+                    TwistedItem::Shield(s) => shields.push(s),
+                }
+            }
             let pair: [Wire; 2] = wires.try_into().map_err(|_| {
                 Rich::custom(e.span(), "a twisted pair needs exactly two conductors")
             })?;
             Ok(TwistedGroup {
                 wires: Box::new(pair),
+                shields,
                 span: e.span(),
             })
         });
 
-    // Properties and conductor entries may interleave in any order; the
-    // fold partitions them, each keeping its source order.
+    // Properties, conductor entries and shields may interleave in any
+    // order; the fold partitions them, each keeping its source order.
     let cable_item = choice((
         property.map(CableItem::Property),
+        shield.map(CableItem::Shield),
         twisted_group.map(|t| CableItem::Member(CableMember::Twisted(t))),
         wire.clone()
             .map(|w| CableItem::Member(CableMember::Wire(Box::new(w)))),
@@ -990,10 +1029,12 @@ where
         .map_with(|((name, label), items), e| {
             let mut properties = Vec::new();
             let mut members = Vec::new();
+            let mut shields = Vec::new();
             for item in items {
                 match item {
                     CableItem::Property(p) => properties.push(p),
                     CableItem::Member(m) => members.push(m),
+                    CableItem::Shield(s) => shields.push(s),
                 }
             }
             Cable {
@@ -1001,6 +1042,7 @@ where
                 label,
                 properties,
                 members,
+                shields,
                 span: e.span(),
             }
         })
@@ -1933,6 +1975,136 @@ inverter_control = face 47@(1, 0) large 21@(5, 0) 13@(16, 3)
         assert_eq!(cable.wires().count(), 2);
     }
 
+    /// Each shield's label and ends, as `<label>: <end>, <end>`.
+    fn shield_lines(shields: &[Shield]) -> Vec<String> {
+        shields
+            .iter()
+            .map(|s| {
+                let label = s.label.as_ref().map_or("-", |l| l.node.as_str());
+                let ends: Vec<String> = s
+                    .ends
+                    .iter()
+                    .map(|ep| match &ep.instance {
+                        Some(inst) => format!("{}.{}", inst.node, ep.port.node),
+                        None => ep.port.node.to_string(),
+                    })
+                    .collect();
+                format!("{label}: {}", ends.join(", "))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_cable_shield_lists_the_pins_its_drain_lands_on() {
+        let file = parse_ok(
+            r#"component c {
+                cable k {
+                    wire red 1 [a.x, b.x];
+                    shield "SHLD" [a.gnd, b.gnd];
+                    shield [a.gnd,];
+                    shield "CUT";
+                    shield;
+                }
+            }"#,
+        );
+        let Member::Cable(cable) = &members(&file)[0] else {
+            panic!("expected the cable");
+        };
+        // Faithful: validate allows one shield and two ends.
+        assert_eq!(
+            shield_lines(&cable.shields),
+            ["SHLD: a.gnd, b.gnd", "-: a.gnd", "CUT: ", "-: "]
+        );
+        assert_eq!(cable.wires().count(), 1);
+    }
+
+    #[test]
+    fn a_shield_is_no_conductor() {
+        let file = parse_ok(
+            r#"component c {
+                cable k {
+                    twisted {
+                        wire white 0.5 [a.h, b.h];
+                        shield [a.drain];
+                        wire blue 0.5 [a.l, b.l];
+                    }
+                    shield;
+                }
+            }"#,
+        );
+        let Member::Cable(cable) = &members(&file)[0] else {
+            panic!("expected the cable");
+        };
+        assert_eq!(cable.wires().count(), 2, "the shields carry no conductor");
+        let pair = cable.twisted_groups().next().expect("the pair");
+        assert_eq!(shield_lines(&pair.shields), ["-: a.drain"]);
+        assert_eq!(shield_lines(&cable.shields), ["-: "]);
+        let ends: Vec<&str> = cable.endpoints().map(|ep| ep.port.node.as_str()).collect();
+        assert_eq!(ends, ["h", "h", "l", "l", "drain"]);
+
+        // The shield does not count toward the pair's two conductors.
+        let parsed = parse_str(
+            "component c { cable k { twisted { wire red 1 [a.p, b.p]; shield [a.s]; } } }",
+        );
+        assert!(
+            !parsed.errors.is_empty(),
+            "one conductor and a shield is no pair"
+        );
+    }
+
+    #[test]
+    fn a_broken_shield_in_a_pair_is_not_reported_as_a_wrong_conductor_count() {
+        let src = r#"component c {
+                cable k {
+                    twisted {
+                        wire red 1 [a.x, b.x];
+                        wire blue 1 [a.y, b.y];
+                        shield [a.s;
+                    }
+                }
+            }"#;
+        assert_eq!(errors_at(src), [";: found ';' expected ',', or ']'"]);
+    }
+
+    #[test]
+    fn a_shield_lists_its_ends_in_brackets_or_none() {
+        for body in ["shield [];", "shield a.s;", "shield [a.s]"] {
+            let parsed = parse_str(&format!(
+                "component c {{ cable k {{ wire red 1 [a.x, b.x]; {body} }} }}"
+            ));
+            assert!(!parsed.errors.is_empty(), "{body} should not parse");
+        }
+    }
+
+    #[test]
+    fn shield_is_a_name_outside_a_cable_body() {
+        let file = parse_ok(
+            r#"component c {
+                pub port shield "SHIELD";
+                shield: Lamp;
+                cable shield {
+                    shield: "x";
+                    wire red 1 [shield.shield, shield];
+                    shield [shield.shield];
+                }
+            }"#,
+        );
+        let [
+            Member::Port(port),
+            Member::Instance(inst),
+            Member::Cable(cable),
+        ] = members(&file)
+        else {
+            panic!("expected a port, an instance and a cable");
+        };
+        assert_eq!(port.name.node.as_str(), "shield");
+        assert_eq!(inst.name.node.as_str(), "shield");
+        assert_eq!(cable.name.node.as_str(), "shield");
+        // `shield:` is a property line (validate rejects the key).
+        assert_eq!(cable.properties[0].key.node.as_str(), "shield");
+        assert_eq!(shield_lines(&cable.shields), ["-: shield.shield"]);
+    }
+
     #[test]
     fn a_statement_after_a_wire_body_cut_short_reports_its_own_error() {
         // `length: ;` fails on its own `;`; the next line is the author's
@@ -2601,7 +2773,7 @@ use Relay from "relay.wb";
         connector_type: found 'connector_type' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'component', 'extend', something else, or '}'
         twisted: found 'twisted' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'component', 'extend', something else, or '}'
         pin: found 'pin' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'component', 'extend', something else, or '}'
-        port: found 'port' expected something else, 'twisted', 'wire', or '}'
+        port: found 'port' expected something else, 'shield', 'twisted', 'wire', or '}'
         wire: found 'wire' expected 'layout', something else, or '}'
         cable: found 'cable' expected something else, 'pub', 'port', or '}'
         view: found 'view' expected something else, or '}'

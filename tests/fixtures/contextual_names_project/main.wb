@@ -16,10 +16,14 @@ component Car {
     // `fragment` starts a top-level statement, and is a name in here.
     pub port fragment "FRAGMENT";
 
+    // `shield` starts a statement only in a cable body or a twisted pair.
+    shield: Sensor "Shield sensor";
+
     cable text "Loom" {
         length: 1.5;
         wire red 1 "SIG" [size.at, grid.at];
         wire black 1 "GND" [size.from, grid.from];
+        shield [size.shield, shield.shield];
     }
 
     component Sensor {
@@ -27,6 +31,7 @@ component Car {
             pub port at   "AT"   pin 1;
             pub port from "FROM" pin 2;
         }
+        pub port shield "SHIELD";
     }
 }
 

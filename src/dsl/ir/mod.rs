@@ -450,6 +450,116 @@ pub struct CableMeta {
     /// Free-text construction note, e.g. `"Twisted pair"`.
     pub r#type: Option<String>,
     pub length: Option<Length>,
+    /// The cable's overall screen, from a `shield` line of its body. `None`
+    /// for an unscreened cable.
+    pub shield: Option<Shield>,
+    /// The cable's `twisted { }` pairs, indexed by the number its
+    /// conductors carry in [`Wire::twisted_group`].
+    pub twisted: Vec<TwistedMeta>,
+}
+
+impl CableMeta {
+    /// The `twisted { }` pair numbered `group` (a conductor's
+    /// [`Wire::twisted_group`]).
+    pub fn twisted_group(&self, group: u32) -> Option<&TwistedMeta> {
+        self.twisted.get(usize::try_from(group).ok()?)
+    }
+
+    /// Every screen of the cable: its overall one, then each pair's own,
+    /// with what it screens.
+    pub fn shields(&self) -> impl Iterator<Item = (Screened, &Shield)> {
+        let pairs = (0u32..).zip(&self.twisted).filter_map(|(group, pair)| {
+            pair.shield
+                .as_ref()
+                .map(|shield| (Screened::Pair(group), shield))
+        });
+        self.shield
+            .iter()
+            .map(|shield| (Screened::Cable, shield))
+            .chain(pairs)
+    }
+}
+
+/// One `twisted { }` pair of a cable. Its two conductors stay in
+/// [`Instance::wires`], each carrying the pair's number.
+#[derive(Debug, Clone, Default)]
+pub struct TwistedMeta {
+    /// The pair's own screen, when it is individually shielded.
+    pub shield: Option<Shield>,
+}
+
+/// What a [`Shield`] screens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Screened {
+    /// The whole cable: its overall screen.
+    Cable,
+    /// One twisted pair, by its [`Wire::twisted_group`] number.
+    Pair(u32),
+}
+
+/// The screen of a cable or of a twisted pair: not a conductor (no color,
+/// no gauge), only the pins its drain is terminated on.
+#[derive(Debug, Clone)]
+pub struct Shield {
+    /// Optional name, shown on the drain in a harness drawing.
+    pub label: Option<String>,
+    pub termination: ShieldTermination,
+    /// The authored `shield` statement.
+    pub span: Span,
+}
+
+impl Shield {
+    /// The pins the drain lands on, in source order: none, one or two.
+    pub fn ends(&self) -> &[WireEnd] {
+        self.termination.ends()
+    }
+}
+
+/// A `shield` line, its ends resolved like a wire's.
+impl From<&ast::Shield> for Shield {
+    fn from(shield: &ast::Shield) -> Self {
+        Self {
+            label: shield.label.as_ref().map(|l| l.node.clone()),
+            termination: shield.ends.iter().map(WireEnd::from).collect(),
+            span: shield.span,
+        }
+    }
+}
+
+/// Where a shield's drain is terminated. A screen runs from one end of its
+/// cable to the other, so it lands on two pins at most.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShieldTermination {
+    /// Terminated nowhere: present, but cut back (floating) at both ends.
+    Unterminated,
+    /// Grounded at one end, the usual termination.
+    Single(WireEnd),
+    /// Grounded at both ends.
+    Both([WireEnd; 2]),
+}
+
+impl ShieldTermination {
+    /// The pins the drain lands on, in source order.
+    pub fn ends(&self) -> &[WireEnd] {
+        match self {
+            Self::Unterminated => &[],
+            Self::Single(end) => std::slice::from_ref(end),
+            Self::Both(ends) => ends,
+        }
+    }
+}
+
+/// A termination from the ends a `shield` line lists, the first two of
+/// them: validate reports a shield that lists more.
+impl FromIterator<WireEnd> for ShieldTermination {
+    fn from_iter<I: IntoIterator<Item = WireEnd>>(ends: I) -> Self {
+        let mut ends = ends.into_iter();
+        match (ends.next(), ends.next()) {
+            (None, _) => Self::Unterminated,
+            (Some(end), None) => Self::Single(end),
+            (Some(first), Some(second)) => Self::Both([first, second]),
+        }
+    }
 }
 
 /// A physical length: a cable's or a conductor's. Held as a whole number of
@@ -947,6 +1057,21 @@ mod tests {
 
     fn length(value: f64, unit: &str) -> Length {
         Length::new(value, unit.parse().expect("a unit")).expect("a positive length")
+    }
+
+    #[test]
+    fn a_shield_termination_holds_at_most_two_ends() {
+        let end = |port: &str| WireEnd::Own(PortName::from(port));
+        let of = |ports: &[&str]| ports.iter().map(|p| end(p)).collect::<ShieldTermination>();
+        assert_eq!(of(&[]), ShieldTermination::Unterminated);
+        assert_eq!(of(&["a"]), ShieldTermination::Single(end("a")));
+        assert_eq!(
+            of(&["a", "b"]),
+            ShieldTermination::Both([end("a"), end("b")])
+        );
+        // A third end is validate's to report; the termination keeps two.
+        assert_eq!(of(&["a", "b", "c"]).ends(), [end("a"), end("b")]);
+        assert!(ShieldTermination::Unterminated.ends().is_empty());
     }
 
     #[test]

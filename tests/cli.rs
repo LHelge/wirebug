@@ -446,6 +446,83 @@ fn check_rejects_a_repeated_endpoint_and_warns_on_an_empty_cable() {
     );
 }
 
+const SHIELD_ERRORS_ROOT: &str = "tests/fixtures/shield_errors_project";
+
+#[test]
+fn check_reports_each_wrong_shield_where_it_is_written() {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--format", "json", SHIELD_ERRORS_ROOT])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+    let main =
+        std::fs::read_to_string(format!("{SHIELD_ERRORS_ROOT}/main.wb")).expect("fixture main.wb");
+
+    /// A problem as (code, severity, the text of every label: the repeat
+    /// before the first).
+    type Found<'a> = (&'a str, &'a str, Vec<&'a str>);
+    let found: Vec<Found> = problems
+        .iter()
+        .map(|p| {
+            let labels = p["labels"]
+                .as_array()
+                .expect("labels")
+                .iter()
+                .map(|l| {
+                    let offset = l["span"]["offset"].as_u64().expect("offset") as usize;
+                    let length = l["span"]["length"].as_u64().expect("length") as usize;
+                    &main[offset..offset + length]
+                })
+                .collect();
+            (
+                p["code"].as_str().expect("code"),
+                p["severity"].as_str().expect("severity"),
+                labels,
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        found,
+        [
+            ("wirebug::unknown_port", "error", vec!["ghost"]),
+            (
+                "wirebug::duplicate_shield",
+                "error",
+                vec![r#"shield "SECOND";"#, "shield [ecu.gnd];"],
+            ),
+            (
+                "wirebug::duplicate_shield",
+                "error",
+                vec![r#"shield "AGAIN" [pump.gnd];"#, "shield;"],
+            ),
+            (
+                "wirebug::shield_arity",
+                "error",
+                vec!["shield [ecu.gnd, pump.gnd, ecu.pwr];"],
+            ),
+            (
+                "wirebug::duplicate_endpoint",
+                "error",
+                vec!["pump.gnd", "pump.gnd"],
+            ),
+            ("wirebug::empty_cable", "warning", vec!["bare"]),
+        ]
+    );
+    let messages: Vec<&str> = problems
+        .iter()
+        .map(|p| p["message"].as_str().expect("message"))
+        .collect();
+    assert!(messages.contains(&"cable `doubled` has more than one shield"));
+    assert!(messages.contains(&"a twisted pair of cable `paired` has more than one shield"));
+    assert!(messages.contains(&"shield lists endpoint `pump.gnd` twice"));
+}
+
 const DUPLICATE_TITLES_ROOT: &str = "tests/fixtures/duplicate_titles_project";
 
 #[test]

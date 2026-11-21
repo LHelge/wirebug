@@ -1,0 +1,54 @@
+// Shields: a CAN cable whose overall screen is grounded at the ECU only,
+// and a resolver cable with an individually screened pair grounded at both
+// ends, a pair whose screen is cut back at both ends, and an overall
+// screen. The ECU's ground pin also carries a wire: a drain crimped with
+// it is fine.
+
+use Ecu      from "components/ecu.wb";
+use Node     from "components/node.wb";
+use Resolver from "components/resolver.wb";
+
+component Vehicle {
+    ecu:      Ecu      "ECU";
+    node:     Node     "Node";
+    resolver: Resolver "Resolver";
+
+    cable can "CAN" {
+        type:   "Shielded twisted pair";
+        length: 2m;
+
+        twisted {
+            wire yellow 0.5 "CAN H" [ecu.can_h, node.can_h];
+            wire green  0.5 "CAN L" [ecu.can_l, node.can_l];
+        }
+        wire black 0.5 "GND" [ecu.gnd, node.gnd];
+        shield "CAN SHLD" [ecu.shield_gnd];
+    }
+
+    cable res "Resolver" {
+        length: 1.5;
+
+        twisted {
+            wire red  0.25 "EX+" [ecu.ex_p, resolver.ex_p];
+            wire blue 0.25 "EX-" [ecu.ex_n, resolver.ex_n];
+            shield "EX SHLD" [ecu.gnd, resolver.screen];
+        }
+        twisted {
+            wire yellow 0.25 "SIN+" [ecu.sin_p, resolver.sin_p];
+            wire green  0.25 "SIN-" [ecu.sin_n, resolver.sin_n];
+            shield;
+        }
+        shield;
+    }
+}
+
+view harness "Loom" {
+    include ecu.x1      at (0, 0);
+    include node.x1     at (36, -8);
+    include resolver.x1 at (36, 10);
+}
+
+view harness "CAN only" {
+    include ecu.x1  at (0, 0);
+    include node.x1 at (36, 0);
+}

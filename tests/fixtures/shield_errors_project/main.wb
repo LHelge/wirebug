@@ -1,0 +1,44 @@
+// Every reference resolves but one. Each cable's shields are wrong in one
+// way; the drain on `ecu.gnd` sharing its pin with a ground wire is not
+// one of them (a drain crimped alongside a wire is fine).
+
+use Device from "components/device.wb";
+
+component Vehicle {
+    ecu: Device "ECU";
+    pump: Device "Pump";
+
+    cable doubled {
+        wire black 1 [ecu.gnd, pump.gnd];
+        shield [ecu.gnd];
+        shield "SECOND";
+    }
+
+    cable paired {
+        twisted {
+            wire white 0.5 [ecu.pwr, pump.pwr];
+            wire blue 0.5 [ecu.gnd, pump.gnd];
+            shield;
+            shield "AGAIN" [pump.gnd];
+        }
+    }
+
+    cable fanned {
+        wire red 1 [ecu.pwr, pump.pwr];
+        shield [ecu.gnd, pump.gnd, ecu.pwr];
+    }
+
+    cable looped {
+        wire red 1 [ecu.pwr, pump.pwr];
+        shield [pump.gnd, pump.gnd];
+    }
+
+    cable ghostly {
+        wire red 1 [ecu.pwr, pump.pwr];
+        shield [ecu.ghost];
+    }
+
+    cable bare {
+        shield [ecu.gnd];
+    }
+}

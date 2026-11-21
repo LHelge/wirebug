@@ -200,16 +200,16 @@ impl<'a> Resolver<'a> {
         for d in 0..self.defs.len() {
             let ast = self.defs[d].ast;
             for member in &ast.members {
-                let wires: Vec<&ast::Wire> = match member {
-                    Member::Wire(wire) => vec![wire],
-                    Member::Cable(cable) => cable.wires().collect(),
+                // A cable's shields name their drain pins like its
+                // conductors name their ends, so they resolve alike.
+                let endpoints: Vec<&ast::Endpoint> = match member {
+                    Member::Wire(wire) => wire.endpoints.iter().collect(),
+                    Member::Cable(cable) => cable.endpoints().collect(),
                     _ => continue,
                 };
-                for wire in wires {
-                    for ep in &wire.endpoints {
-                        if let Some(problem) = self.check_endpoint(d, ep) {
-                            problems.push(problem);
-                        }
+                for ep in endpoints {
+                    if let Some(problem) = self.check_endpoint(d, ep) {
+                        problems.push(problem);
                     }
                 }
             }
@@ -368,6 +368,27 @@ mod tests {
             "component m { pub port a \"A\"; cable c { wire red 1 [a, ghost]; } }\n",
         )]);
         assert!(has(&p, "wirebug::unknown_port"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn shield_ends_resolve_like_wire_endpoints() {
+        // A drain end on an unknown port, an unknown instance or a private
+        // port, in a cable body or a twisted pair, is reported as a wire's.
+        let p = problems(&[(
+            "main.wb",
+            "component leaf { pub port a \"A\"; port secret \"S\"; }\n\
+             component m { pub port a \"A\"; l: leaf;\n\
+             cable c { wire red 1 [a, l.a]; shield [ghost, nobody.a];\n\
+             twisted { wire red 1 [a, l.a]; wire blue 1 [l.a, a]; shield [l.secret]; } } }\n",
+        )]);
+        assert_eq!(
+            codes(&p),
+            [
+                "wirebug::unknown_port",
+                "wirebug::unknown_instance",
+                "wirebug::private_port"
+            ]
+        );
     }
 
     #[test]

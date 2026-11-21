@@ -68,6 +68,9 @@ pub(super) const TWIST_PITCH: f64 = 28.0;
 pub(super) const BRAID_HALF_TWISTS: usize = 4;
 /// Width of the symbolic braid section between the two label zones.
 pub(super) const BRAID_SECTION: f64 = BRAID_HALF_TWISTS as f64 * TWIST_PITCH;
+/// How far a cable box's dashed screen outline sits inside the box; a
+/// screened pair's outline sits twice as far in, so the two never meet.
+pub(super) const SHIELD_INSET: f64 = 3.0;
 pub(super) const SVG_MARGIN: f64 = 48.0;
 pub(super) const TITLE_GAP: f64 = 12.0;
 
@@ -88,6 +91,10 @@ pub(super) const STYLE: &str = "\
 .cable-label { font: 9px sans-serif; text-anchor: middle; fill: #333; paint-order: stroke; stroke: white; stroke-width: 3px; stroke-linejoin: round; }
 .cable-label-start { text-anchor: start; }
 .cable-label-end { text-anchor: end; }
+.connector .cable-shield { fill: none; stroke: #666; stroke-width: 1; stroke-dasharray: 6 3; }
+.connector .pair-shield { fill: none; stroke: #666; stroke-width: 1; stroke-dasharray: 3 2; }
+.drain-wire { fill: none; stroke: #777; stroke-width: 1.2; stroke-dasharray: 5 3; }
+.drain-label { font-style: italic; }
 .title { font: bold 14px sans-serif; }
 .stamp { font: 10px sans-serif; fill: #666; text-anchor: end; }\
 ";
@@ -884,6 +891,188 @@ component sys {
         assert!(
             (lead_in - lead_out).abs() < 1.0,
             "box centred in the gap: lead-in {lead_in}, lead-out {lead_out}"
+        );
+    }
+
+    /// A CAN-style pair between `a` and `b`, with a ground stud `g` off to
+    /// the side; `body` is the cable's body.
+    fn screened_design(body: &str) -> Design {
+        design_from(&format!(
+            r#"
+component sys {{
+    a: ecu "ECU";
+    b: dev "Device";
+    g: stud "Stud";
+    cable can "CAN" {{
+        {body}
+    }}
+    component ecu {{
+        connector c "ECU 4p" {{
+            pub port h "CAN H" pin 1;
+            pub port l "CAN L" pin 2;
+            pub port gnd "GND" pin 3;
+            pub port shield "SHIELD" pin 4;
+        }}
+    }}
+    component dev {{
+        connector c "Dev 3p" {{
+            pub port h "CAN H" pin 1;
+            pub port l "CAN L" pin 2;
+            pub port shield "SHIELD" pin 3;
+        }}
+    }}
+    component stud {{
+        connector j "Stud 1p" {{ pub port gnd "GND" pin 1; }}
+    }}
+}}
+"#
+        ))
+    }
+
+    /// The `sys` harness view of `a.c` and `b.c` (and `g.j` with `stud`).
+    fn screened_view(stud: bool) -> View {
+        let mut includes = vec![("a", "c", 0.0, 0.0), ("b", "c", 30.0, 0.0)];
+        if stud {
+            includes.push(("g", "j", 30.0, 10.0));
+        }
+        harness_view("sys", &includes)
+    }
+
+    const PAIR: &str = r#"wire white/blue 0.5 "CAN H" [a.h, b.h];
+        wire white/red 0.5 "CAN L" [a.l, b.l];"#;
+
+    #[test]
+    fn a_shielded_cable_box_says_so_and_wears_a_dashed_screen() {
+        let screened = render(
+            &screened_design(&format!("type: \"CAN\"; {PAIR} shield;")),
+            &screened_view(false),
+        );
+        assert!(screened.contains("CAN · ×2 · shielded"), "{screened}");
+        assert_eq!(screened.matches("class=\"cable-shield\"").count(), 1);
+        // Terminated nowhere: the mark alone, no drain.
+        assert!(!screened.contains("class=\"drain\""));
+
+        let plain = render(
+            &screened_design(&format!("type: \"CAN\"; {PAIR}")),
+            &screened_view(false),
+        );
+        assert!(plain.contains("CAN · ×2"));
+        assert!(!plain.contains("shielded"));
+        assert!(!plain.contains("class=\"cable-shield\""));
+    }
+
+    #[test]
+    fn a_drain_runs_from_the_box_to_each_terminating_pin_in_the_view() {
+        let design = screened_design(&format!(r#"{PAIR} shield "SHLD" [a.shield, b.shield];"#));
+        let svg = render(&design, &screened_view(false));
+        // One drain: its run through the box and a lead to each end.
+        assert_eq!(svg.matches("class=\"drain\"").count(), 1);
+        assert_eq!(svg.matches("class=\"drain-wire\"").count(), 3);
+        assert!(svg.contains("class=\"cable-label drain-label\""));
+        assert!(svg.contains(">\nSHLD\n</text>"), "{svg}");
+
+        // Both drain pins get a row in their pin tables, facing the box.
+        let layout = compute(&design, &screened_view(false));
+        for node in &layout.nodes {
+            let row = node
+                .pins
+                .iter()
+                .find(|r| r.port.as_str() == "shield")
+                .expect("the drain pin has a row");
+            assert_eq!(row.side, node.facing);
+        }
+        let [cable] = layout.cable_boxes.as_slice() else {
+            panic!("expected one cable box");
+        };
+        let [drain] = cable.drains.as_slice() else {
+            panic!("expected one drain");
+        };
+        assert_eq!(drain.attaches.len(), 2);
+        // The drain is the box's last row, below both strands.
+        assert!(cable.strands.iter().all(|s| s.row_y < drain.row_y));
+        assert!(drain.row_y < cable.origin.y + cable.height);
+    }
+
+    #[test]
+    fn a_drain_end_on_a_connector_the_view_leaves_out_is_not_drawn() {
+        let design = screened_design(&format!("{PAIR} shield [a.shield, g.gnd];"));
+        let without = render(&design, &screened_view(false));
+        assert_eq!(without.matches("class=\"drain-wire\"").count(), 2);
+        assert!(!without.contains("Stud"));
+        // An unlabelled cable screen is called what it is.
+        assert!(without.contains(">\nShield\n</text>"));
+
+        let with = render(&design, &screened_view(true));
+        assert_eq!(with.matches("class=\"drain-wire\"").count(), 3);
+    }
+
+    #[test]
+    fn a_shield_alone_never_draws_a_cable_box() {
+        // The conductors' far ends are left out, so the cable is not drawn,
+        // and neither is its shield, though both its ends are included.
+        let design = screened_design(&format!("{PAIR} shield [a.shield, g.gnd];"));
+        let view = harness_view("sys", &[("a", "c", 0.0, 0.0), ("g", "j", 30.0, 0.0)]);
+        let svg = render(&design, &view);
+        assert!(!svg.contains("class=\"connector cable-box\""));
+        assert!(!svg.contains("class=\"drain\""));
+        assert!(
+            !svg.contains("SHIELD"),
+            "the drain pin stays out of the table"
+        );
+    }
+
+    #[test]
+    fn a_drain_may_share_a_pin_with_a_wire() {
+        let design = screened_design(&format!(
+            "{PAIR} wire black 0.5 \"GND\" [a.gnd, b.shield]; shield [a.gnd];"
+        ));
+        let layout = compute(&design, &screened_view(false));
+        let ecu = &layout.nodes[0];
+        assert_eq!(
+            ecu.pins.iter().filter(|r| r.port.as_str() == "gnd").count(),
+            1,
+            "one row for the pin the wire and the drain share"
+        );
+        assert_eq!(layout.cable_boxes[0].drains.len(), 1);
+    }
+
+    #[test]
+    fn a_shielded_pair_is_outlined_with_its_drain_below_it() {
+        let design = screened_design(&format!(
+            r#"wire red 0.5 "12V" [a.gnd, b.shield];
+            twisted {{ {PAIR} shield [a.shield]; }}"#
+        ));
+        let svg = render(&design, &screened_view(false));
+        assert_eq!(svg.matches("class=\"pair-shield\"").count(), 1);
+        assert!(!svg.contains("class=\"cable-shield\""), "no overall screen");
+        assert!(svg.contains(">\nPair shield\n</text>"));
+
+        let layout = compute(&design, &screened_view(false));
+        let cable = &layout.cable_boxes[0];
+        let pair_rows: Vec<usize> = cable
+            .strands
+            .iter()
+            .filter(|s| s.group == Some(0))
+            .map(|s| s.row)
+            .collect();
+        let drain_row = cable.drains[0].row;
+        assert_eq!(drain_row, pair_rows.iter().max().unwrap() + 1);
+
+        let unshielded = render(
+            &screened_design(&format!("twisted {{ {PAIR} }}")),
+            &screened_view(false),
+        );
+        assert!(!unshielded.contains("class=\"pair-shield\""));
+    }
+
+    #[test]
+    fn shields_are_not_counted_as_drawn_conductors() {
+        use crate::render::lint::Segment;
+        let design = screened_design(&format!("{PAIR} shield [a.shield, b.shield];"));
+        let layout = compute(&design, &screened_view(false));
+        assert_eq!(
+            layout.drawn,
+            [Segment { wire: 0, index: 0 }, Segment { wire: 1, index: 0 }]
         );
     }
 

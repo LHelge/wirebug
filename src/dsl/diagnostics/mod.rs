@@ -696,15 +696,51 @@ pub enum Problem {
         at: SourceSpan,
     },
 
-    /// One wire lists the same endpoint twice: it connects a port to
-    /// itself. (Two *different* wires on one port are a deliberate double
-    /// crimp and are fine.)
-    #[error("wire lists endpoint `{endpoint}` twice")]
+    /// A shield of a cable or a twisted pair lists more than two ends: a
+    /// screen, like a cable conductor, runs from one end of its cable to
+    /// the other, so its drain lands on one pin at each end at most.
+    #[error("a shield is terminated on at most two ends, found {count}")]
+    #[diagnostic(
+        code(wirebug::shield_arity),
+        help(
+            "list the one pin the drain lands on, or one at each end of the cable; tie further grounds to that pin with loose wires"
+        )
+    )]
+    ShieldArity {
+        count: usize,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("this shield")]
+        at: SourceSpan,
+    },
+
+    /// A cable body, or one `twisted { }` group, holds a second `shield`
+    /// line: a cable has one overall screen and a pair one screen of its
+    /// own.
+    #[error("{owner} `{cable}` has more than one shield")]
+    #[diagnostic(code(wirebug::duplicate_shield), help("{}", owner.duplicate_help()))]
+    DuplicateShield {
+        owner: ShieldOwner,
+        cable: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("another shield here")]
+        at: SourceSpan,
+        #[label("first shield here")]
+        first: SourceSpan,
+    },
+
+    /// One wire (or one shield) lists the same endpoint twice: it connects
+    /// a port to itself. (Two *different* wires on one port are a
+    /// deliberate double crimp and are fine, and so is a shield's drain
+    /// sharing a pin with a wire.)
+    #[error("{owner} lists endpoint `{endpoint}` twice")]
     #[diagnostic(
         code(wirebug::duplicate_endpoint),
-        help("remove the repeat, or name the endpoint this wire was meant to reach")
+        help("remove the repeat, or name the endpoint this {owner} was meant to reach")
     )]
     DuplicateEndpoint {
+        owner: EndpointOwner,
         endpoint: String,
         #[source_code]
         src: NamedSource<String>,
@@ -1136,6 +1172,51 @@ pub enum PropertyOwner {
     Component,
 }
 
+/// What a shield screens, for the problems that name it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShieldOwner {
+    /// The cable's overall screen, a `shield` line of the cable body.
+    Cable,
+    /// A twisted pair's own screen, a `shield` line inside `twisted { }`.
+    Pair,
+}
+
+impl ShieldOwner {
+    fn duplicate_help(self) -> &'static str {
+        match self {
+            ShieldOwner::Cable => {
+                "a cable has one overall screen: remove the repeat, or put a pair's own screen inside its `twisted { }` group"
+            }
+            ShieldOwner::Pair => "a twisted pair has one screen of its own: remove the repeat",
+        }
+    }
+}
+
+impl std::fmt::Display for ShieldOwner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            ShieldOwner::Cable => "cable",
+            ShieldOwner::Pair => "a twisted pair of cable",
+        })
+    }
+}
+
+/// The statement whose bracketed list names an endpoint twice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EndpointOwner {
+    Wire,
+    Shield,
+}
+
+impl std::fmt::Display for EndpointOwner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            EndpointOwner::Wire => "wire",
+            EndpointOwner::Shield => "shield",
+        })
+    }
+}
+
 /// The kind of value a property key takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PropertyKind {
@@ -1319,6 +1400,8 @@ impl Problem {
             | Problem::DuplicateCableName { .. }
             | Problem::CableWireArity { .. }
             | Problem::DuplicateEndpoint { .. }
+            | Problem::ShieldArity { .. }
+            | Problem::DuplicateShield { .. }
             | Problem::UnknownProperty { .. }
             | Problem::DuplicateProperty { .. }
             | Problem::DuplicateFragmentProperty { .. }
