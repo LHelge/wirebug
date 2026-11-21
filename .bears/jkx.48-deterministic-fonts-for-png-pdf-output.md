@@ -1,10 +1,10 @@
 ---
 id: jkx.48
 title: Deterministic fonts for PNG/PDF output
-status: proposed
+status: open
 priority: P3
 created: "2026-11-20T21:40:32.074741561Z"
-updated: "2026-11-20T21:40:32.078450863Z"
+updated: "2026-11-21T11:47:44.475650181Z"
 tags:
   - render
 ---
