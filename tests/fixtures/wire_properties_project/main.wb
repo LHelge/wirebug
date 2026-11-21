@@ -1,0 +1,37 @@
+// Wires with property bodies: a loose wire, a cable whose conductors
+// inherit or override its length, and a twisted pair with a body inside.
+// Lengths are written bare (metres) and with each unit suffix.
+
+use Ecu from "components/ecu.wb";
+
+component Vehicle {
+    ecu: Ecu "ECU";
+    bms: Ecu "BMS";
+
+    wire red 1.5 "12V" [ecu.pwr, bms.pwr] {
+        length: 800mm;
+        type:   "FLRY-B";
+        part:   "W-RD-1.5";
+    }
+
+    cable link "ECU–BMS link" {
+        type:   "Shielded 3-core";
+        length: 2m;
+
+        wire black 1.5 "GND" [ecu.gnd, bms.gnd] {
+            length: 240cm;
+        }
+        twisted {
+            wire yellow 0.5 "CAN H" [ecu.can_h, bms.can_h] {
+                part:   "TP-YE";
+                length: 2.1;
+            }
+            wire green 0.5 "CAN L" [ecu.can_l, bms.can_l];
+        }
+    }
+}
+
+view harness "Link" {
+    include ecu.x1 at (0, 0);
+    include bms.x1 at (30, 0);
+}

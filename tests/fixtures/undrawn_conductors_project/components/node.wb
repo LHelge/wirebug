@@ -1,7 +1,8 @@
 component Node {
-    connector x1 "X1 3p" {
+    connector x1 "X1 4p" {
         pub port sig  "SIG"  pin 1;
         pub port gnd  "GND"  pin 2;
         pub port horn "HORN" pin 3;
+        pub port aux  "AUX"  pin 4;
     }
 }

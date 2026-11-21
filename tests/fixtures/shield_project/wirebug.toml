@@ -1,0 +1,5 @@
+[project]
+name = "shield-project"
+version = "0.1.0"
+description = "Shield fixture: a cable's overall screen, individually screened pairs, and their drains"
+revision = "fixture"

@@ -14,7 +14,7 @@ use std::path::Path;
 use lsp_types::{Location, Position, Range};
 
 use crate::dsl::ast::{self, Member};
-use crate::dsl::ir::{ConnectorName, InstanceName, PortName};
+use crate::dsl::ir::{ConnectorName, InstanceName, PortName, SpliceName};
 use crate::dsl::project::{self, Overlay};
 use crate::dsl::resolve::{self, DefId, Resolved};
 use crate::dsl::span::{FileId, Span};
@@ -56,28 +56,26 @@ pub(crate) fn goto_definition(
 fn find(resolved: &Resolved, file: FileId, offset: usize) -> Option<Span> {
     let hit = |span: Span| span.file == file && span.start <= offset && offset <= span.end;
 
-    // `use` names and paths.
-    for use_decl in &resolved.project.files[file.0].ast.uses {
-        if !hit(use_decl.name.span) && !hit(use_decl.path.span) {
-            continue;
-        }
-        let dir = resolved.project.files[file.0].path.parent()?;
-        let target = dir.join(use_decl.path.node.as_str()).canonicalize().ok()?;
-        let tf = FileId(
-            resolved
-                .project
-                .files
-                .iter()
-                .position(|f| f.path == target)?,
-        );
-        if hit(use_decl.path.span) {
-            // The path string itself: jump to the top of the file.
+    // `use` and `fragment` paths: the path string jumps to the top of the
+    // file it names.
+    let project = resolved.project;
+    for import in project.files[file.0].ast.imports() {
+        if hit(import.path().span) {
+            let target = project.import_target(file, &import.path().node)?;
             return Some(Span {
-                file: tf,
+                file: target,
                 start: 0,
                 end: 0,
             });
         }
+    }
+
+    // `use` names: the definition they import.
+    for use_decl in &project.files[file.0].ast.uses {
+        if !hit(use_decl.name.span) {
+            continue;
+        }
+        let tf = project.import_target(file, &use_decl.path.node)?;
         let name = use_decl.name.node.as_str();
         if let Some(d) = resolved
             .defs
@@ -136,32 +134,36 @@ fn find(resolved: &Resolved, file: FileId, offset: usize) -> Option<Span> {
         }
 
         for member in &def.ast.members {
-            let wires: Vec<&ast::Wire> = match member {
-                Member::Wire(wire) => vec![wire],
-                Member::Cable(cable) => cable.wires().collect(),
+            let endpoints: Vec<&ast::Endpoint> = match member {
+                Member::Wire(wire) => wire.endpoints.iter().collect(),
+                Member::Cable(cable) => cable.endpoints().collect(),
                 _ => continue,
             };
-            for wire in wires {
-                for ep in &wire.endpoints {
-                    if let Some(inst) = &ep.instance {
-                        if hit(inst.span) {
-                            if let Some(inline) = find_inline(resolved, d, inst.node.as_str()) {
-                                return Some(inline.ast.name.span);
-                            }
-                            return find_instance(resolved, d, inst.node.as_str())
-                                .map(|f| f.ast.name.span);
+            for ep in endpoints {
+                if let Some(inst) = &ep.instance {
+                    if hit(inst.span) {
+                        if let Some(inline) = find_inline(resolved, d, inst.node.as_str()) {
+                            return Some(inline.ast.name.span);
                         }
-                        if hit(ep.port.span) {
-                            if let Some(inline) = find_inline(resolved, d, inst.node.as_str()) {
-                                let port = PortName::from(ep.port.node.as_str());
-                                return inline.ports.get(&port).map(|p| p.span);
-                            }
-                            let t = find_instance(resolved, d, inst.node.as_str())?.type_id?;
-                            return find_port(resolved, t, ep.port.node.as_str());
-                        }
-                    } else if hit(ep.port.span) {
-                        return find_port(resolved, d, ep.port.node.as_str());
+                        return find_instance(resolved, d, inst.node.as_str())
+                            .map(|f| f.ast.name.span);
                     }
+                    if hit(ep.port.span) {
+                        if let Some(inline) = find_inline(resolved, d, inst.node.as_str()) {
+                            let port = PortName::from(ep.port.node.as_str());
+                            return inline.ports.get(&port).map(|p| p.span);
+                        }
+                        let t = find_instance(resolved, d, inst.node.as_str())?.type_id?;
+                        return find_port(resolved, t, ep.port.node.as_str());
+                    }
+                } else if hit(ep.port.span) {
+                    // A bare name is a splice when the component declares
+                    // one of that name, else an own port.
+                    let name = ep.port.node.as_str();
+                    if let Some(splice) = resolved.splice(d, &SpliceName::from(name)) {
+                        return Some(splice.name.span);
+                    }
+                    return find_port(resolved, d, name);
                 }
             }
         }
@@ -171,6 +173,13 @@ fn find(resolved: &Resolved, file: FileId, offset: usize) -> Option<Span> {
     for binding in &resolved.views {
         let view = binding.ast;
         let subject = binding.subject;
+        // `for <Component>` jumps to the component (its root `component`
+        // when it is split with `extend`).
+        if let Some(named) = &view.subject
+            && hit(named.span)
+        {
+            return subject.map(|s| resolved.defs[s].ast.name.span);
+        }
         for ep in &view.enclosure {
             if hit(ep.port.span) {
                 return find_port(resolved, subject?, ep.port.node.as_str());
@@ -182,6 +191,11 @@ fn find(resolved: &Resolved, file: FileId, offset: usize) -> Option<Span> {
                 // A pinout include names a connector on the subject itself.
                 if view.kind.node.as_str() == "pinout" {
                     return find_connector(resolved, subject, inc.instance.node.as_str());
+                }
+                // A harness include may place one of the subject's splices.
+                let splice = SpliceName::from(inc.instance.node.as_str());
+                if let Some(splice) = resolved.splice(subject, &splice) {
+                    return Some(splice.name.span);
                 }
                 if let Some(inline) = find_inline(resolved, subject, inc.instance.node.as_str()) {
                     return Some(inline.ast.name.span);
@@ -355,6 +369,29 @@ mod tests {
     }
 
     #[test]
+    fn fragment_path_jumps_to_the_file() {
+        let frag = (
+            "systems/frag.wb",
+            "extend Root {\n    pub port x \"X\";\n}\n",
+        );
+        let main = (
+            "main.wb",
+            "fragment \"systems/fr‸ag.wb\";\ncomponent Root { }\n",
+        );
+        assert_eq!(
+            target_of(&[frag, main], "main.wb"),
+            Some(("frag.wb".into(), "".into()))
+        );
+    }
+
+    #[test]
+    fn fragment_keyword_resolves_to_nothing() {
+        let frag = ("frag.wb", "extend Root { }\n");
+        let main = ("main.wb", "frag‸ment \"frag.wb\";\ncomponent Root { }\n");
+        assert_eq!(target_of(&[frag, main], "main.wb"), None);
+    }
+
+    #[test]
     fn instance_type_jumps_to_the_component() {
         let main = (
             "main.wb",
@@ -394,6 +431,46 @@ mod tests {
             target_of(&[LEAF, main], "main.wb"),
             Some(("main.wb".into(), "own".into()))
         );
+    }
+
+    #[test]
+    fn shield_ends_jump_like_wire_endpoints() {
+        let main = (
+            "main.wb",
+            "use Leaf from \"leaf.wb\";\ncomponent Root {\n    l: Leaf;\n    pub port own \"O\";\n    cable c {\n        wire red 1 [own, l.a];\n        twisted { wire red 1 [own, l.a]; wire red 1 [l.a, own]; shield [l.a‸]; }\n    }\n}\n",
+        );
+        assert_eq!(
+            target_of(&[LEAF, main], "main.wb"),
+            Some(("leaf.wb".into(), "a".into()))
+        );
+
+        let main = (
+            "main.wb",
+            "use Leaf from \"leaf.wb\";\ncomponent Root {\n    l: Leaf;\n    pub port own \"O\";\n    cable c {\n        wire red 1 [own, l.a];\n        shield \"S\" [ow‸n];\n    }\n}\n",
+        );
+        assert_eq!(
+            target_of(&[LEAF, main], "main.wb"),
+            Some(("main.wb".into(), "own".into()))
+        );
+    }
+
+    #[test]
+    fn a_splice_end_and_include_jump_to_the_splice() {
+        let main = |marked: &str| {
+            format!(
+                "use Leaf from \"leaf.wb\";\ncomponent Root {{\n    l: Leaf;\n    pub port own \"O\";\n    splice sp \"Joint\";\n    wire red 1 [l.b, {}];\n    wire red 1 [sp, own];\n}}\nview harness \"H\" {{\n    include l.j at (0, 0);\n    include {} at (10, 0);\n}}\n",
+                if marked == "end" { "s‸p" } else { "sp" },
+                if marked == "include" { "s‸p" } else { "sp" },
+            )
+        };
+        for marked in ["end", "include"] {
+            let main = main(marked);
+            assert_eq!(
+                target_of(&[LEAF, ("main.wb", &main)], "main.wb"),
+                Some(("main.wb".into(), "sp".into())),
+                "{marked}"
+            );
+        }
     }
 
     #[test]
@@ -505,6 +582,34 @@ mod tests {
         assert_eq!(
             with_cursor("include ic.male", "include ic.ma‸le"),
             Some(("main.wb".into(), "male".into()))
+        );
+    }
+
+    #[test]
+    fn view_subject_jumps_to_the_component() {
+        let main = (
+            "main.wb",
+            "use Leaf from \"leaf.wb\";\ncomponent Root { l: Leaf; }\nview pinout \"P\" for Le‸af {\n    include j at (0, 0);\n}\n",
+        );
+        assert_eq!(
+            target_of(&[LEAF, main], "main.wb"),
+            Some(("leaf.wb".into(), "Leaf".into()))
+        );
+    }
+
+    #[test]
+    fn view_subject_in_a_fragment_jumps_to_the_root_component() {
+        let frag = (
+            "frag.wb",
+            "extend Root {\n    pub port x \"X\";\n}\nview schematic \"S\" for Ro‸ot { }\n",
+        );
+        let main = (
+            "main.wb",
+            "use Root from \"frag.wb\";\ncomponent Root { }\n",
+        );
+        assert_eq!(
+            target_of(&[frag, main], "frag.wb"),
+            Some(("main.wb".into(), "Root".into()))
         );
     }
 

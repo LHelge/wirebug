@@ -8,6 +8,7 @@
 
 use std::fmt;
 
+use crate::dsl::ir::{Length, LengthUnit};
 use crate::dsl::span::{FileId, Span, Spanned};
 
 /// A single lexed identifier (snake_case name, wire colour, view kind).
@@ -34,14 +35,45 @@ impl fmt::Display for Ident {
     }
 }
 
-/// A parsed `.wb` file: its imports, then its top-level definitions and
-/// views, in source order.
+/// A parsed `.wb` file: its imports (`use` and `fragment` statements), then
+/// its top-level definitions and views, each in source order.
 #[derive(Debug, Clone)]
 pub struct File {
     pub id: FileId,
     pub uses: Vec<Use>,
+    pub fragments: Vec<Fragment>,
     pub items: Vec<Item>,
     pub span: Span,
+}
+
+impl File {
+    /// Every statement that names another file, `use` and `fragment` alike,
+    /// in source order: the order the loader follows them in.
+    pub fn imports(&self) -> Vec<Import<'_>> {
+        let mut imports: Vec<Import<'_>> = self
+            .uses
+            .iter()
+            .map(Import::Use)
+            .chain(self.fragments.iter().map(Import::Fragment))
+            .collect();
+        imports.sort_by_key(|import| import.path().span.start);
+        imports
+    }
+
+    /// Whether the file holds a view.
+    pub fn has_views(&self) -> bool {
+        self.items.iter().any(|item| matches!(item, Item::View(_)))
+    }
+
+    /// Whether a `fragment` of this file can add something to the file that
+    /// names it: the file holds a top-level `extend` or a view.
+    pub fn is_fragment_target(&self) -> bool {
+        self.has_views()
+            || self
+                .items
+                .iter()
+                .any(|item| matches!(item, Item::Definition(def) if def.kind == DefKind::Extend))
+    }
 }
 
 /// `use <name> from "<path>"` — brings one top-level definition into scope.
@@ -50,6 +82,33 @@ pub struct Use {
     pub name: Spanned<Ident>,
     pub path: Spanned<String>,
     pub span: Span,
+}
+
+/// `fragment "<path>";` — loads a file into the project, as a `use` of it
+/// would, without bringing any name into scope: the file's top-level
+/// `extend`s merge with the components of their names in this file's
+/// scope, and its views render.
+#[derive(Debug, Clone)]
+pub struct Fragment {
+    pub path: Spanned<String>,
+    pub span: Span,
+}
+
+/// One statement of a [`File`] that names another file.
+#[derive(Debug, Clone, Copy)]
+pub enum Import<'a> {
+    Use(&'a Use),
+    Fragment(&'a Fragment),
+}
+
+impl<'a> Import<'a> {
+    /// The path the statement names, as written (relative to its file).
+    pub fn path(&self) -> &'a Spanned<String> {
+        match self {
+            Import::Use(use_decl) => &use_decl.path,
+            Import::Fragment(fragment) => &fragment.path,
+        }
+    }
 }
 
 /// A top-level item: a component definition or a view.
@@ -135,6 +194,25 @@ pub struct Definition {
     pub span: Span,
 }
 
+impl Definition {
+    /// The type's `key: value;` part-data lines (`part: "…";`), in source
+    /// order, wherever they sit among the other members.
+    pub fn properties(&self) -> impl Iterator<Item = &Property> {
+        self.members.iter().filter_map(|m| match m {
+            Member::Property(p) => Some(p),
+            _ => None,
+        })
+    }
+
+    /// The type's `splice` members, in source order.
+    pub fn splices(&self) -> impl Iterator<Item = &Splice> {
+        self.members.iter().filter_map(|m| match m {
+            Member::Splice(s) => Some(s),
+            _ => None,
+        })
+    }
+}
+
 /// One entry inside a component body.
 #[derive(Debug, Clone)]
 pub enum Member {
@@ -145,6 +223,12 @@ pub enum Member {
     Instance(Instance),
     Wire(Wire),
     Cable(Cable),
+    /// A joint inside the component that conductors end on.
+    Splice(Splice),
+    /// A part-data line of the type (`part: "…";`): a `<name>:` followed
+    /// by a value, where an instance has a type name. Keys and value kinds
+    /// are checked in validate.
+    Property(Property),
     /// A nested (private) definition.
     Definition(Definition),
 }
@@ -159,6 +243,8 @@ impl Member {
             Member::Instance(i) => i.span,
             Member::Wire(w) => w.span,
             Member::Cable(c) => c.span,
+            Member::Splice(s) => s.span,
+            Member::Property(p) => p.span,
             Member::Definition(d) => d.span,
         }
     }
@@ -258,7 +344,8 @@ pub struct Instance {
     pub span: Span,
 }
 
-/// `wire <colour>[/<tracer>] <gauge> ["<label>"] [ <endpoint>, … ] ;`
+/// `wire <colour>[/<tracer>] <gauge> ["<label>"] [ <endpoint>, … ] ;`, or
+/// the same with a `{ <property>* }` body in place of the `;`.
 #[derive(Debug, Clone)]
 pub struct Wire {
     pub color: Spanned<Ident>,
@@ -269,28 +356,53 @@ pub struct Wire {
     /// Optional signal name, shown on each wire in a harness drawing.
     pub label: Option<Spanned<String>>,
     pub endpoints: Vec<Endpoint>,
+    /// The `key: value;` lines of the optional body (`length`, `type`,
+    /// `part`), kept faithful like a cable's: keys and value kinds are
+    /// checked in validate. Empty when the wire has no body.
+    pub properties: Vec<Property>,
     pub span: Span,
 }
 
-/// `inst.port` or bare `port` (the enclosing component's own port).
+/// `inst.port`, or a bare name: the enclosing component's own port or one
+/// of its splices (resolve tells which; they share one namespace).
 #[derive(Debug, Clone)]
 pub struct Endpoint {
-    /// `None` for a bare reference to the enclosing component's own port.
+    /// `None` for a bare reference to the enclosing component's own port or
+    /// splice.
     pub instance: Option<Spanned<Ident>>,
     pub port: Spanned<Ident>,
     pub span: Span,
 }
 
-/// `cable <name> ["<label>"] { <property>* <wire>* }` — a named bundle of
-/// point-to-point conductors carrying physical metadata (`type`, `length`).
-/// Each inner wire is a single conductor; arity (exactly two endpoints) and
-/// property keys are checked later, so the parse stays faithful.
+/// `splice <name> ["<label>"];`, or the same with a `{ <property>* }` body
+/// in place of the `;` — a named joint inside a component (a crimp or
+/// solder splice in a harness) that conductors end on: a wire endpoint
+/// naming it bare, like an own port, ends on the joint. Its body's keys
+/// (`part`, `description`) are checked in validate, as a cable's are.
+#[derive(Debug, Clone)]
+pub struct Splice {
+    pub name: Spanned<Ident>,
+    pub label: Option<Spanned<String>>,
+    /// The `key: value;` lines of the optional body. Empty when the splice
+    /// has no body.
+    pub properties: Vec<Property>,
+    pub span: Span,
+}
+
+/// `cable <name> ["<label>"] { <property>* <wire>* <shield>* }` — a named
+/// bundle of point-to-point conductors carrying physical metadata (`type`,
+/// `length`), and its overall screen. Each inner wire is a single
+/// conductor; arity (exactly two endpoints), property keys and the number
+/// of shields (at most one) are checked later, so the parse stays faithful.
 #[derive(Debug, Clone)]
 pub struct Cable {
     pub name: Spanned<Ident>,
     pub label: Option<Spanned<String>>,
-    pub properties: Vec<CableProperty>,
+    pub properties: Vec<Property>,
     pub members: Vec<CableMember>,
+    /// The cable body's own `shield` lines (its overall screen), in source
+    /// order; a twisted pair's are in its [`TwistedGroup::shields`].
+    pub shields: Vec<Shield>,
     pub span: Span,
 }
 
@@ -300,65 +412,148 @@ impl Cable {
     /// resolution, arity, colors).
     pub fn wires(&self) -> impl Iterator<Item = &Wire> {
         self.members.iter().flat_map(|m| match m {
-            CableMember::Wire(w) => std::slice::from_ref(w),
+            CableMember::Wire(w) => std::slice::from_ref(&**w),
             CableMember::Twisted(t) => t.wires.as_slice(),
         })
+    }
+
+    /// The cable's twisted pairs, in source order.
+    pub fn twisted_groups(&self) -> impl Iterator<Item = &TwistedGroup> {
+        self.members.iter().filter_map(|m| match m {
+            CableMember::Twisted(t) => Some(t),
+            _ => None,
+        })
+    }
+
+    /// Every endpoint the cable names, its conductors' and then its
+    /// shields' (the cable's own, then each twisted pair's): the
+    /// references that resolve against the enclosing component.
+    pub fn endpoints(&self) -> impl Iterator<Item = &Endpoint> {
+        self.wires()
+            .flat_map(|w| &w.endpoints)
+            .chain(self.shield_ends())
+    }
+
+    /// The ends of the cable's shields, the cable's own and then each
+    /// twisted pair's: the pins their drains land on.
+    pub fn shield_ends(&self) -> impl Iterator<Item = &Endpoint> {
+        self.shields
+            .iter()
+            .chain(self.twisted_groups().flat_map(|t| &t.shields))
+            .flat_map(|s| &s.ends)
     }
 }
 
 /// One conductor entry of a cable body: a plain wire, or a `twisted { }`
-/// group of wires that are twisted together (a pair, typically).
+/// group of wires that are twisted together (a pair, typically). The wire
+/// is boxed, like the pair, so the two variants stay close in size.
 #[derive(Debug, Clone)]
 pub enum CableMember {
-    Wire(Wire),
+    Wire(Box<Wire>),
     Twisted(TwistedGroup),
 }
 
-/// `twisted { <wire> <wire> }` inside a cable — a twisted pair. Exactly
-/// two conductors, enforced by the grammar itself: a group of any other
-/// size is a parse error, not a representable state. (Widen to a `Vec`
-/// if twisted triples/quads ever land.) Boxed so the pair doesn't
-/// dominate [`CableMember`]'s size.
+/// `twisted { <wire> <wire> <shield>* }` inside a cable — a twisted pair,
+/// individually screened when it holds a `shield` line. Exactly two
+/// conductors, enforced by the grammar itself: a group of any other size
+/// is a parse error, not a representable state. (Widen to a `Vec` if
+/// twisted triples/quads ever land.) Boxed so the pair doesn't dominate
+/// [`CableMember`]'s size.
 #[derive(Debug, Clone)]
 pub struct TwistedGroup {
     pub wires: Box<[Wire; 2]>,
+    /// The pair's own `shield` lines, in source order; validate allows one.
+    pub shields: Vec<Shield>,
     pub span: Span,
 }
 
-/// `<key>: <value>;` inside a `cable` body. Keys are validated in elaboration.
+/// `shield ["<label>"] [<end>, …];`, or `shield ["<label>"];` — the screen
+/// of a cable or of a twisted pair, and the pins its drain is terminated
+/// on: none (the screen lands on no pin: cut back, or bonded at a gland or
+/// housing), one (the usual single-ended termination) or two. It has no color and no gauge. Kept faithful: the
+/// number of ends is checked in validate.
 #[derive(Debug, Clone)]
-pub struct CableProperty {
+pub struct Shield {
+    pub label: Option<Spanned<String>>,
+    /// Empty for a shield that lands on no pin.
+    pub ends: Vec<Endpoint>,
+    pub span: Span,
+}
+
+/// `<key>: <value>;` inside a `cable` body, a wire's body or a component
+/// body. Keys and value kinds are checked in validate, per owner.
+#[derive(Debug, Clone)]
+pub struct Property {
     pub key: Spanned<Ident>,
-    pub value: CablePropertyValue,
+    pub value: PropertyValue,
     pub span: Span,
 }
 
-/// The right-hand side of a cable property — a quoted string, a number,
-/// or a bare identifier (`twisted: true;` — booleans and future keyword
-/// values parse faithfully; validation types them per key).
+/// The right-hand side of a property — a quoted string, a number, or a
+/// bare identifier (`twisted: true;` — booleans and future keyword values
+/// parse faithfully; validation types them per key).
 #[derive(Debug, Clone)]
-pub enum CablePropertyValue {
+pub enum PropertyValue {
     Str(Spanned<String>),
-    Number(Spanned<f64>),
+    /// Spanned over the number and its unit (`150mm`).
+    Number(Spanned<Quantity>),
     Ident(Spanned<Ident>),
 }
 
-impl CablePropertyValue {
+/// A number as a property value: its value and the unit written directly
+/// after it (`mm` in `150mm`), kept faithful like the key. Which units a
+/// key takes is checked in validate.
+#[derive(Debug, Clone)]
+pub struct Quantity {
+    pub value: f64,
+    pub unit: Option<Spanned<String>>,
+}
+
+impl Quantity {
+    /// The unit this quantity is a length in: metres when it has none, and
+    /// `None` when its unit is no length unit.
+    pub fn length_unit(&self) -> Option<LengthUnit> {
+        self.unit
+            .as_ref()
+            .map_or(Some(LengthUnit::Metre), |unit| unit.node.parse().ok())
+    }
+
+    /// The length this quantity is; `None` when its unit is no length unit
+    /// or the length is not positive (validate reports both).
+    pub fn length(&self) -> Option<Length> {
+        Length::new(self.value, self.length_unit()?)
+    }
+}
+
+/// As written, unit included: `150mm`, `-2`.
+impl fmt::Display for Quantity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let unit = self.unit.as_ref().map_or("", |unit| unit.node.as_str());
+        write!(f, "{}{unit}", self.value)
+    }
+}
+
+impl PropertyValue {
     pub fn span(&self) -> Span {
         match self {
-            CablePropertyValue::Str(s) => s.span,
-            CablePropertyValue::Number(n) => n.span,
-            CablePropertyValue::Ident(i) => i.span,
+            PropertyValue::Str(s) => s.span,
+            PropertyValue::Number(n) => n.span,
+            PropertyValue::Ident(i) => i.span,
         }
     }
 }
 
-/// `view <kind> "<title>" { <item>* }` where each item is a `grid N;`, an
-/// `enclosure { ... }` block, an `include`, or a `text` box, in any order.
+/// `view <kind> "<title>" [for <Component>] { <item>* }` where each item is
+/// a `grid N;`, an `enclosure { ... }` block, an `include`, or a `text` box,
+/// in any order.
 #[derive(Debug, Clone)]
 pub struct View {
     pub kind: Spanned<Ident>,
     pub title: Spanned<String>,
+    /// The component named after `for`: the view's explicit subject. `None`
+    /// when `for` is left out, and the view documents the file's single
+    /// top-level component.
+    pub subject: Option<Spanned<Ident>>,
     pub grid: Option<Spanned<f64>>,
     /// Whether an `enclosure { }` block was authored. Kept separate from the
     /// port list so an empty block still draws a boundary.
@@ -376,15 +571,29 @@ pub struct View {
     pub span: Span,
 }
 
-/// `text <name> at (<x>, <y>) "<label>";` — a named annotation box placed at
-/// grid coordinates in a schematic view.
+/// `text "<label>" at (<x>, <y>);` — an annotation box placed at grid
+/// coordinates in a schematic view.
 #[derive(Debug, Clone)]
 pub struct TextBox {
-    pub name: Spanned<Ident>,
+    /// The name of the deprecated form, `text <name> at (<x>, <y>)
+    /// "<label>";`, which resolve warns about; `None` for the current form,
+    /// whose box has no name.
+    pub name: Option<Spanned<Ident>>,
     pub x: Spanned<f64>,
     pub y: Spanned<f64>,
     pub label: Spanned<String>,
     pub span: Span,
+}
+
+impl TextBox {
+    /// The statement in the current form, `text "<label>" at (<x>, <y>);`,
+    /// whatever form it was written in.
+    pub fn current_form(&self) -> String {
+        format!(
+            "text \"{}\" at ({}, {});",
+            self.label.node, self.x.node, self.y.node
+        )
+    }
 }
 
 /// One `<port> at (<x>, <y>)` placement inside the `enclosure { }` block,

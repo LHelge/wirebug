@@ -1,6 +1,6 @@
 ---
 source: src/dsl/parse/mod.rs
-assertion_line: 1327
+assertion_line: 2883
 expression: file
 ---
 File {
@@ -8,6 +8,7 @@ File {
         0,
     ),
     uses: [],
+    fragments: [],
     items: [
         Definition(
             Definition {
@@ -154,6 +155,7 @@ File {
                                     },
                                 },
                             ],
+                            properties: [],
                             span: Span {
                                 file: FileId(
                                     0,
@@ -195,6 +197,7 @@ File {
                                     },
                                 },
                             ],
+                            properties: [],
                             span: Span {
                                 file: FileId(
                                     0,
@@ -218,6 +221,7 @@ File {
             View {
                 kind: schematic @ 343..352,
                 title: "Battery Detail" @ 353..369,
+                subject: None,
                 grid: Some(
                     20.0 @ 382..384,
                 ),

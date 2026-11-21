@@ -59,6 +59,10 @@ name_newtype!(
     CableName,
     "A cable's designator, grouping its conductor wires."
 );
+name_newtype!(
+    SpliceName,
+    "A splice's name: a joint inside a component that conductors end on."
+);
 /// One wire color, in the IEC 60757 vocabulary. `Other` preserves a name
 /// outside the standard set verbatim (mirroring [`ViewKind::Other`]) —
 /// validation warns on it, and `--strict` turns the warning into a
@@ -382,6 +386,193 @@ pub struct Instance {
     /// shared by both housing halves; the halves' part metadata lives here.
     /// `None` for every ordinary instance.
     pub inline: Option<InlineMeta>,
+    /// The part data of the instance's type (its `part:`, `manufacturer:`,
+    /// … lines, merged across `extend` fragments): every placement of the
+    /// type carries the same. Empty for a synthetic inline instance, whose
+    /// halves' part data is in `inline`.
+    pub part: PartMeta,
+    /// The joints declared at this level, keyed by name, in source order.
+    /// The conductors ending on one are the wires in `wires` with a
+    /// [`WireEnd::Splice`] end naming it ([`Instance::splice_conductors`]).
+    pub splices: IndexMap<SpliceName, Splice>,
+}
+
+/// A joint inside a component — a crimp or solder splice in a harness —
+/// that conductors end on. All conductors ending on one splice are joined
+/// electrically; each stays a two-ended [`Wire`] of its own, with its own
+/// color, gauge and length.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Splice {
+    pub name: SpliceName,
+    /// Optional human name, shown on the splice in a harness drawing.
+    pub label: Option<String>,
+    /// The part number of the splice itself, from its body's `part:`.
+    pub part: Option<String>,
+    /// What it is, for humans, from its body's `description:`.
+    pub description: Option<String>,
+    /// The authored `splice` statement.
+    pub span: Span,
+}
+
+/// A `splice` member, its body's well-typed `part` and `description` kept
+/// (the first of each); unknown keys, values of the wrong kind and repeats
+/// are reported in validate.
+impl From<&ast::Splice> for Splice {
+    fn from(splice: &ast::Splice) -> Self {
+        let mut part = None;
+        let mut description = None;
+        for p in &splice.properties {
+            let ast::PropertyValue::Str(value) = &p.value else {
+                continue;
+            };
+            let field = match p.key.node.as_str() {
+                "part" => &mut part,
+                "description" => &mut description,
+                _ => continue,
+            };
+            field.get_or_insert_with(|| value.node.clone());
+        }
+        Self {
+            name: SpliceName::from(splice.name.node.as_str()),
+            label: splice.label.as_ref().map(|l| l.node.clone()),
+            part,
+            description,
+            span: splice.span,
+        }
+    }
+}
+
+/// The conductors one splice joins, through any splice-to-splice links:
+/// one electrical net. See [`Instance::splice_net`].
+#[derive(Debug, Clone)]
+pub struct SpliceNet<'a> {
+    /// The splices of the net, the one asked about first, then the ones
+    /// reached through links in the order they are found.
+    pub splices: Vec<&'a SpliceName>,
+    /// Each conductor end of the net that is not a splice, in wire order,
+    /// with the conductor it is an end of.
+    pub ends: Vec<NetEnd<'a>>,
+}
+
+/// One end a [`SpliceNet`] reaches beyond its splices: a port, and the
+/// conductor that runs from it to one of the net's splices.
+#[derive(Debug, Clone, Copy)]
+pub struct NetEnd<'a> {
+    pub end: &'a WireEnd,
+    pub wire: &'a Wire,
+}
+
+/// What a component type is bought as, from the `key: value;` lines of its
+/// body. Every field is optional: a type without part data is still a
+/// component, only one a bill of materials cannot name.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PartMeta {
+    /// The manufacturer part number, from `part:`.
+    pub number: Option<String>,
+    /// Who makes the part, e.g. `"TE Connectivity"`.
+    pub manufacturer: Option<String>,
+    /// A human description of the part, e.g. `"Main contactor, 12 V coil"`.
+    pub description: Option<String>,
+    /// A free-text rating, e.g. `"500 A"`: text, since ratings mix units.
+    pub rating: Option<String>,
+}
+
+/// A type's part data from its authored property lines, in source order
+/// (the root fragment's first). Unknown keys, values of the wrong kind and
+/// repeats are reported in validate; here the first well-typed value of
+/// each key is kept and the rest dropped.
+impl<'a> FromIterator<&'a ast::Property> for PartMeta {
+    fn from_iter<I: IntoIterator<Item = &'a ast::Property>>(properties: I) -> Self {
+        let mut meta = PartMeta::default();
+        for p in properties {
+            let ast::PropertyValue::Str(value) = &p.value else {
+                continue;
+            };
+            let field = match p.key.node.as_str() {
+                "part" => &mut meta.number,
+                "manufacturer" => &mut meta.manufacturer,
+                "description" => &mut meta.description,
+                "rating" => &mut meta.rating,
+                _ => continue,
+            };
+            field.get_or_insert_with(|| value.node.clone());
+        }
+        meta
+    }
+}
+
+impl Instance {
+    /// The conductors ending on `splice`, in wire order: each a row of its
+    /// own in a wire list, with the splice as one of its ends.
+    pub fn splice_conductors<'a, 's>(
+        &'a self,
+        splice: &'s SpliceName,
+    ) -> impl Iterator<Item = &'a Wire> + use<'a, 's> {
+        self.wires.iter().filter(move |wire| wire.ends_on(splice))
+    }
+
+    /// The net `splice` joins: every splice linked to it by a conductor
+    /// from splice to splice, and every other end of the conductors of
+    /// those splices. Empty of ends for a splice nothing ends on, and
+    /// empty altogether for a name this instance declares no splice of.
+    pub fn splice_net(&self, splice: &SpliceName) -> SpliceNet<'_> {
+        let mut splices: Vec<&SpliceName> = self
+            .splices
+            .get_key_value(splice)
+            .map(|(name, _)| name)
+            .into_iter()
+            .collect();
+        let mut next = 0;
+        while let Some(&current) = splices.get(next) {
+            next += 1;
+            for wire in self.splice_conductors(current) {
+                for end in &wire.endpoints {
+                    if let WireEnd::Splice(other) = end
+                        && let Some((other, _)) = self.splices.get_key_value(other)
+                        && !splices.contains(&other)
+                    {
+                        splices.push(other);
+                    }
+                }
+            }
+        }
+        let ends = self
+            .wires
+            .iter()
+            .filter(|wire| splices.iter().any(|s| wire.ends_on(s)))
+            .flat_map(|wire| {
+                wire.endpoints
+                    .iter()
+                    .filter(|end| !matches!(end, WireEnd::Splice(_)))
+                    .map(move |end| NetEnd { end, wire })
+            })
+            .collect();
+        SpliceNet { splices, ends }
+    }
+
+    /// One [`SpliceNet`] per group of linked splices, in the order their
+    /// first splice is declared.
+    pub fn splice_nets(&self) -> Vec<SpliceNet<'_>> {
+        let mut nets: Vec<SpliceNet<'_>> = Vec::new();
+        for name in self.splices.keys() {
+            if !nets.iter().any(|net| net.splices.contains(&name)) {
+                nets.push(self.splice_net(name));
+            }
+        }
+        nets
+    }
+
+    /// The length that applies to `wire`, one of this instance's wires: its
+    /// own `length`, else that of the cable it belongs to. `None` when
+    /// neither sets one.
+    pub fn effective_length(&self, wire: &Wire) -> Option<Length> {
+        wire.length.or_else(|| {
+            wire.cable
+                .as_ref()
+                .and_then(|cable| self.cables.get(cable))
+                .and_then(|meta| meta.length)
+        })
+    }
 }
 
 /// Physical metadata for a declared cable. Its conductor wires live in
@@ -391,8 +582,207 @@ pub struct CableMeta {
     pub label: Option<String>,
     /// Free-text construction note, e.g. `"Twisted pair"`.
     pub r#type: Option<String>,
-    /// Length in metres.
-    pub length: Option<f64>,
+    pub length: Option<Length>,
+    /// The cable's overall screen, from a `shield` line of its body. `None`
+    /// for an unscreened cable.
+    pub shield: Option<Shield>,
+    /// The cable's `twisted { }` pairs, indexed by the number its
+    /// conductors carry in [`Wire::twisted_group`].
+    pub twisted: Vec<TwistedMeta>,
+}
+
+impl CableMeta {
+    /// The `twisted { }` pair numbered `group` (a conductor's
+    /// [`Wire::twisted_group`]).
+    pub fn twisted_group(&self, group: u32) -> Option<&TwistedMeta> {
+        self.twisted.get(usize::try_from(group).ok()?)
+    }
+
+    /// Every screen of the cable: its overall one, then each pair's own,
+    /// with what it screens.
+    pub fn shields(&self) -> impl Iterator<Item = (Screened, &Shield)> {
+        let pairs = (0u32..).zip(&self.twisted).filter_map(|(group, pair)| {
+            pair.shield
+                .as_ref()
+                .map(|shield| (Screened::Pair(group), shield))
+        });
+        self.shield
+            .iter()
+            .map(|shield| (Screened::Cable, shield))
+            .chain(pairs)
+    }
+}
+
+/// One `twisted { }` pair of a cable. Its two conductors stay in
+/// [`Instance::wires`], each carrying the pair's number.
+#[derive(Debug, Clone, Default)]
+pub struct TwistedMeta {
+    /// The pair's own screen, when it is individually shielded.
+    pub shield: Option<Shield>,
+}
+
+/// What a [`Shield`] screens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Screened {
+    /// The whole cable: its overall screen.
+    Cable,
+    /// One twisted pair, by its [`Wire::twisted_group`] number.
+    Pair(u32),
+}
+
+/// The screen of a cable or of a twisted pair: not a conductor (no color,
+/// no gauge), only the pins its drain is terminated on.
+#[derive(Debug, Clone)]
+pub struct Shield {
+    /// Optional name, shown on the drain in a harness drawing.
+    pub label: Option<String>,
+    pub termination: ShieldTermination,
+    /// The authored `shield` statement.
+    pub span: Span,
+}
+
+impl Shield {
+    /// The pins the drain lands on, in source order: none, one or two.
+    pub fn ends(&self) -> &[WireEnd] {
+        self.termination.ends()
+    }
+}
+
+/// The pins a shield's drain is terminated on. A screen runs from one end
+/// of its cable to the other, so it lands on two pins at most.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShieldTermination {
+    /// Lands on no pin: cut back, or bonded at a gland or housing rather
+    /// than on a contact. The model does not know which.
+    NoPin,
+    /// Grounded at one end, the usual termination.
+    Single(WireEnd),
+    /// Grounded at both ends.
+    Both([WireEnd; 2]),
+}
+
+impl ShieldTermination {
+    /// The pins the drain lands on, in source order.
+    pub fn ends(&self) -> &[WireEnd] {
+        match self {
+            Self::NoPin => &[],
+            Self::Single(end) => std::slice::from_ref(end),
+            Self::Both(ends) => ends,
+        }
+    }
+}
+
+/// A termination from the ends a `shield` line lists, the first two of
+/// them: validate reports a shield that lists more.
+impl FromIterator<WireEnd> for ShieldTermination {
+    fn from_iter<I: IntoIterator<Item = WireEnd>>(ends: I) -> Self {
+        let mut ends = ends.into_iter();
+        match (ends.next(), ends.next()) {
+            (None, _) => Self::NoPin,
+            (Some(end), None) => Self::Single(end),
+            (Some(first), Some(second)) => Self::Both([first, second]),
+        }
+    }
+}
+
+/// A physical length: a cable's or a conductor's. Held as a whole number of
+/// micrometres, so lengths authored in different units compare and print
+/// exactly — `150mm` is `0.15 m`, never `0.15000000000000002 m` — and a
+/// sum of them would too. Always positive: [`Length::new`] refuses the rest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Length {
+    micrometres: u64,
+}
+
+impl Length {
+    const MICROMETRES_PER_METRE: u64 = 1_000_000;
+
+    /// `value` in `unit`, to the nearest micrometre. `None` unless that is
+    /// at least one micrometre: a length is positive.
+    #[must_use]
+    pub fn new(value: f64, unit: LengthUnit) -> Option<Self> {
+        let micrometres = (value * unit.micrometres() as f64).round();
+        // A float-to-int `as` saturates; no wiring length comes near.
+        (micrometres >= 1.0).then_some(Length {
+            micrometres: micrometres as u64,
+        })
+    }
+
+    /// The length in metres, the unit the IR normalises to.
+    pub fn metres(self) -> f64 {
+        self.micrometres as f64 / Self::MICROMETRES_PER_METRE as f64
+    }
+}
+
+/// In metres, with as many decimals as the length has and no more:
+/// `2 m`, `0.15 m`, `0.000001 m`.
+impl fmt::Display for Length {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let whole = self.micrometres / Self::MICROMETRES_PER_METRE;
+        let fraction = self.micrometres % Self::MICROMETRES_PER_METRE;
+        if fraction == 0 {
+            return write!(f, "{whole} m");
+        }
+        let decimals = format!("{fraction:06}");
+        write!(f, "{whole}.{} m", decimals.trim_end_matches('0'))
+    }
+}
+
+/// A unit a length may be written in, as a suffix touching its number
+/// (`150mm`). A bare number is in metres.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LengthUnit {
+    Metre,
+    Centimetre,
+    Millimetre,
+}
+
+impl LengthUnit {
+    /// Every unit, in the order the diagnostics and completion list them.
+    pub const ALL: [Self; 3] = [Self::Metre, Self::Centimetre, Self::Millimetre];
+
+    /// The suffix the unit is written as.
+    pub fn symbol(self) -> &'static str {
+        match self {
+            Self::Metre => "m",
+            Self::Centimetre => "cm",
+            Self::Millimetre => "mm",
+        }
+    }
+
+    /// Every unit's symbol, as a sentence lists them: `` `m`, `cm` or `mm` ``.
+    pub fn listed() -> String {
+        let symbols: Vec<String> = Self::ALL.iter().map(|u| format!("`{u}`")).collect();
+        match symbols.split_last() {
+            Some((last, rest)) if !rest.is_empty() => format!("{} or {last}", rest.join(", ")),
+            _ => symbols.concat(),
+        }
+    }
+
+    fn micrometres(self) -> u64 {
+        match self {
+            Self::Metre => Length::MICROMETRES_PER_METRE,
+            Self::Centimetre => 10_000,
+            Self::Millimetre => 1_000,
+        }
+    }
+}
+
+impl fmt::Display for LengthUnit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.symbol())
+    }
+}
+
+impl std::str::FromStr for LengthUnit {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|unit| unit.symbol() == s)
+            .ok_or(())
+    }
 }
 
 /// One housing half of a mated inline connector pair.
@@ -565,12 +955,43 @@ pub struct Wire {
     /// cable in source order. Wires of one cable sharing an index are
     /// twisted together; the harness renderer braids two-conductor groups.
     pub twisted_group: Option<u32>,
+    /// The wire's own length, from its body. For a cable conductor it
+    /// overrides the cable's; [`Instance::effective_length`] answers the
+    /// length that applies.
+    pub length: Option<Length>,
+    /// Free-text insulation/construction type from the body, e.g. `"FLRY-B"`.
+    pub r#type: Option<String>,
+    /// Part number from the body.
+    pub part: Option<String>,
     /// The authored `wire` statement (inside its cable, for a conductor),
     /// so a check over the drawings can point back at the source.
     pub span: Span,
 }
 
-/// A resolved wire endpoint.
+impl Wire {
+    /// Whether one of the wire's ends is `splice`.
+    pub fn ends_on(&self, splice: &SpliceName) -> bool {
+        self.endpoints
+            .iter()
+            .any(|end| matches!(end, WireEnd::Splice(name) if name == splice))
+    }
+
+    /// The end across the wire from `end`, for a two-ended wire (a cable
+    /// conductor, or any wire to a splice): where a conductor from a pin
+    /// to a splice goes, or which pin a splice's conductor comes from.
+    /// `None` when `end` is not one of its two ends.
+    pub fn other_end(&self, end: &WireEnd) -> Option<&WireEnd> {
+        match self.endpoints.as_slice() {
+            [a, b] if a == end => Some(b),
+            [a, b] if b == end => Some(a),
+            _ => None,
+        }
+    }
+}
+
+/// A resolved wire endpoint. Which an authored bare name is, an own port
+/// or a splice, is resolve's to say: `Resolved::wire_end` is the one
+/// mapping elaboration and validation share.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum WireEnd {
     /// The enclosing component's own port.
@@ -580,31 +1001,17 @@ pub enum WireEnd {
         instance: InstanceName,
         port: PortName,
     },
+    /// One of the enclosing component's splices.
+    Splice(SpliceName),
 }
 
-/// The endpoint an authored reference names in the enclosing component's
-/// flat namespace: a bare `port` is the component's own, `inst.port` a
-/// child's. Elaboration and validation share this mapping, so both agree on
-/// which references are the same endpoint.
-impl From<&ast::Endpoint> for WireEnd {
-    fn from(ep: &ast::Endpoint) -> Self {
-        let port = PortName::from(ep.port.node.as_str());
-        match &ep.instance {
-            None => Self::Own(port),
-            Some(inst) => Self::Child {
-                instance: InstanceName::from(inst.node.as_str()),
-                port,
-            },
-        }
-    }
-}
-
-/// The endpoint as authored: `port` or `inst.port`.
+/// The endpoint as authored: `port`, `inst.port` or `splice`.
 impl fmt::Display for WireEnd {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Own(port) => write!(f, "{port}"),
             Self::Child { instance, port } => write!(f, "{instance}.{port}"),
+            Self::Splice(splice) => write!(f, "{splice}"),
         }
     }
 }
@@ -679,10 +1086,13 @@ pub struct ViewGrid {
     pub span: Span,
 }
 
-/// A named annotation box placed at grid coordinates in a schematic view.
+/// An annotation box placed at grid coordinates in a schematic view.
 #[derive(Debug)]
 pub struct TextBox {
-    pub name: String,
+    /// The name a box written in the deprecated named form carries, which
+    /// the schematic renderer keeps as the box's `data-text`; `None` for the
+    /// current, nameless form.
+    pub name: Option<String>,
     pub x: f64,
     pub y: f64,
     pub label: String,
@@ -707,6 +1117,9 @@ pub struct EnclosurePort {
 /// connector's pins are drawn.
 #[derive(Debug)]
 pub struct Include {
+    /// The included instance; in a pinout view the subject's connector it
+    /// draws, and in a harness view, when `connector` is `None`, the
+    /// subject's splice it places (resolve allows nothing else there).
     pub instance: InstanceName,
     /// The connector designator for a harness include; `None` for schematic.
     /// For an inline-connector include this is normalized to the inline's
@@ -776,6 +1189,78 @@ impl std::str::FromStr for Side {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn length(value: f64, unit: &str) -> Length {
+        Length::new(value, unit.parse().expect("a unit")).expect("a positive length")
+    }
+
+    #[test]
+    fn a_shield_termination_holds_at_most_two_ends() {
+        let end = |port: &str| WireEnd::Own(PortName::from(port));
+        let of = |ports: &[&str]| ports.iter().map(|p| end(p)).collect::<ShieldTermination>();
+        assert_eq!(of(&[]), ShieldTermination::NoPin);
+        assert_eq!(of(&["a"]), ShieldTermination::Single(end("a")));
+        assert_eq!(
+            of(&["a", "b"]),
+            ShieldTermination::Both([end("a"), end("b")])
+        );
+        // A third end is validate's to report; the termination keeps two.
+        assert_eq!(of(&["a", "b", "c"]).ends(), [end("a"), end("b")]);
+        assert!(ShieldTermination::NoPin.ends().is_empty());
+    }
+
+    #[test]
+    fn lengths_in_every_unit_normalise_to_metres() {
+        assert_eq!(length(2.0, "m").metres(), 2.0);
+        assert_eq!(length(150.0, "mm").metres(), 0.15);
+        assert_eq!(length(15.0, "cm").metres(), 0.15);
+        assert_eq!(length(1.1, "cm").metres(), 0.011);
+        assert_eq!(length(150.0, "mm"), length(0.15, "m"));
+        assert_eq!(length(15.0, "cm"), length(150.0, "mm"));
+    }
+
+    #[test]
+    fn a_length_displays_its_metres_without_float_noise() {
+        for (value, unit, shown) in [
+            (2.0, "m", "2 m"),
+            (150.0, "mm", "0.15 m"),
+            (15.0, "cm", "0.15 m"),
+            (1.1, "cm", "0.011 m"),
+            (0.1, "m", "0.1 m"),
+            (1234.5, "mm", "1.2345 m"),
+            (0.001, "mm", "0.000001 m"),
+        ] {
+            assert_eq!(length(value, unit).to_string(), shown, "{value}{unit}");
+        }
+    }
+
+    #[test]
+    fn a_length_is_positive_to_the_micrometre() {
+        for (value, unit) in [(0.0, "m"), (-2.0, "m"), (-150.0, "mm"), (0.0004, "mm")] {
+            let unit = unit.parse().expect("a unit");
+            assert_eq!(Length::new(value, unit), None, "{value}{unit}");
+        }
+        assert_eq!(length(0.0005, "mm").to_string(), "0.000001 m");
+    }
+
+    #[test]
+    fn lengths_order_by_their_size_whatever_their_unit() {
+        let mut lengths = [length(1.0, "m"), length(15.0, "cm"), length(200.0, "mm")];
+        lengths.sort();
+        assert_eq!(lengths.map(|l| l.to_string()), ["0.15 m", "0.2 m", "1 m"]);
+    }
+
+    #[test]
+    fn length_units_parse_from_their_symbols_only() {
+        for unit in LengthUnit::ALL {
+            assert_eq!(unit.symbol().parse(), Ok(unit));
+            assert_eq!(unit.to_string(), unit.symbol());
+        }
+        for other in ["in", "km", "M", "MM", "metre", ""] {
+            assert_eq!(other.parse::<LengthUnit>(), Err(()), "{other}");
+        }
+        assert_eq!(LengthUnit::listed(), "`m`, `cm` or `mm`");
+    }
 
     #[test]
     fn pin_display_list_is_absent_when_unassigned() {

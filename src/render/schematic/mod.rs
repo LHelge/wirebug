@@ -556,7 +556,7 @@ component sys {
         let design = design_from("component sys { }");
         let mut view = view_of("sys", &[]);
         view.texts.push(TextBox {
-            name: "note".to_string(),
+            name: None,
             x: 2.0,
             y: 3.0,
             label: "This is my textbox!".to_string(),
@@ -564,8 +564,27 @@ component sys {
 
         let svg = render(&design, &view).unwrap();
 
-        assert!(svg.contains("class=\"text-box\""));
-        assert!(svg.contains("data-text=\"note\""));
+        assert!(
+            svg.contains("<g class=\"text-box\">"),
+            "no name, no data-text"
+        );
         assert!(svg.contains("This is my textbox!"));
+    }
+
+    #[test]
+    fn named_text_box_keeps_its_name_as_data_text() {
+        let design = design_from("component sys { }");
+        let mut view = view_of("sys", &[]);
+        view.texts.push(TextBox {
+            name: Some("note".to_string()),
+            x: 2.0,
+            y: 3.0,
+            label: "Named".to_string(),
+        });
+
+        let svg = render(&design, &view).unwrap();
+
+        assert!(svg.contains("<g class=\"text-box\" data-text=\"note\">"));
+        assert!(svg.contains("Named"));
     }
 }

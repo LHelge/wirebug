@@ -1,0 +1,4 @@
+[project]
+name = "fragment-project"
+version = "0.1.0"
+description = "Fixture pulling `extend` fragments in with `fragment`"

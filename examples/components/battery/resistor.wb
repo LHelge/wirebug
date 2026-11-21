@@ -1,6 +1,10 @@
 // Precharge resistor
 
 component Resistor {
+    // No part number chosen yet: the rating says what to buy.
+    description: "Precharge resistor";
+    rating:      "50 ohm, 100 W";
+
     pub port a "A";
     pub port b "B";
 }

@@ -7,12 +7,17 @@
     { "include": "#strings" },
     { "include": "#type-declaration" },
     { "include": "#use-import" },
+    { "include": "#fragment-import" },
+    { "include": "#shield-statement" },
+    { "include": "#splice-statement" },
     { "include": "#view-kind" },
+    { "include": "#view-subject" },
     { "include": "#numbering-mode" },
     { "include": "#wire-color" },
     { "include": "#declared-name" },
     { "include": "#include-target" },
     { "include": "#instance-name" },
+    { "include": "#property-key" },
     { "include": "#member-access" },
     { "include": "#enclosure-port" },
     { "include": "#ports-block" },
@@ -45,11 +50,41 @@
         "2": { "name": "entity.name.type.wirebug" }
       }
     },
+    "fragment-import": {
+      "comment": "`fragment \"<path>\";` starts a top-level statement. Only there: anywhere else `fragment` is an ordinary name (`pub port fragment \"F\";`, `fragment: Lamp;`).",
+      "match": "^\\s*(fragment)(?=\\s*\")",
+      "captures": {
+        "1": { "name": "keyword.control.import.wirebug" }
+      }
+    },
+    "shield-statement": {
+      "comment": "`shield [\"<label>\"] [<ends>];` starts a statement in a cable body or a `twisted { }` group. Only there: anywhere else `shield` is an ordinary name (`pub port shield \"S\";`, `shield: Lamp;`, `[ecu.shield, b]`).",
+      "match": "(?:^|(?<=[{;]))\\s*(shield)(?=\\s*(?:\"|\\[|;))",
+      "captures": {
+        "1": { "name": "storage.type.wirebug" }
+      }
+    },
+    "splice-statement": {
+      "comment": "`splice <name> [\"<label>\"];` starts a statement in a component body, a name following it. Only there: anywhere else `splice` is an ordinary name (`pub port splice \"S\";`, `splice: Sensor;`, `[ecu.splice, b]`).",
+      "match": "(?:^|(?<=[{;]))\\s*(splice)\\s+([a-z_][A-Za-z0-9_]*)\\b",
+      "captures": {
+        "1": { "name": "storage.type.wirebug" },
+        "2": { "name": "variable.other.declaration.wirebug" }
+      }
+    },
     "view-kind": {
       "match": "\\b(view)\\s+(schematic|harness|pinout)\\b",
       "captures": {
         "1": { "name": "storage.type.wirebug" },
         "2": { "name": "support.constant.view-kind.wirebug" }
+      }
+    },
+    "view-subject": {
+      "comment": "`for Component` right after a view's title names its subject. Only there: anywhere else `for` is an ordinary name (`pub port for \"F\";`).",
+      "match": "(?<=\")\\s*\\b(for)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.other.wirebug" },
+        "2": { "name": "entity.name.type.wirebug" }
       }
     },
     "numbering-mode": {
@@ -70,7 +105,7 @@
       }
     },
     "declared-name": {
-      "comment": "The name after a declaring keyword. Contextual keywords (size, grid, at, …) are ordinary names here, so this runs before #keywords.",
+      "comment": "The name after a declaring keyword. Contextual keywords (size, grid, at, …) are ordinary names here, so this runs before #keywords. `text` takes a name only in its deprecated named form (`text note at (…) \"…\"`); the current `text \"…\" at (…)` does not match here, so #keywords takes `text` and #strings its label.",
       "match": "\\b(port|connector|inline|cable|text)\\s+([a-z_][A-Za-z0-9_]*)\\b",
       "captures": {
         "1": { "name": "storage.type.wirebug" },
@@ -92,6 +127,14 @@
       "match": "\\b(?!(?:male|female)\\s*:)([a-z_][A-Za-z0-9_]*)\\s*(:)\\s*(?=[A-Z])",
       "captures": {
         "1": { "name": "variable.other.declaration.wirebug" },
+        "2": { "name": "punctuation.separator.key-value.wirebug" }
+      }
+    },
+    "property-key": {
+      "comment": "`key: value;` in a cable body, a wire body, a splice body, a connector_type, or a component body (part data): `length`, `type`, `part`, `manufacturer`, `description` and `rating` are property keys, not keywords. After #instance-name, so `part: Plug;` stays an instance, as in the parser: a type name after the colon is an instance, a string or number a property.",
+      "match": "\\b(length|type|part|manufacturer|description|rating)\\s*(:)",
+      "captures": {
+        "1": { "name": "support.type.property-name.wirebug" },
         "2": { "name": "punctuation.separator.key-value.wirebug" }
       }
     },
@@ -175,8 +218,12 @@
       "name": "entity.name.type.wirebug"
     },
     "numbers": {
-      "match": "(?<!\\w)-?\\d+(\\.\\d+)?\\b",
-      "name": "constant.numeric.wirebug"
+      "comment": "A number, and a length unit written directly after it (`150mm`). Any other suffix is no unit: the number is left unscoped, as the check reports it.",
+      "match": "(?<!\\w)-?\\d+(?:\\.\\d+)?(?:(m|cm|mm)\\b|\\b)",
+      "name": "constant.numeric.wirebug",
+      "captures": {
+        "1": { "name": "keyword.other.unit.wirebug" }
+      }
     },
     "punctuation": {
       "patterns": [

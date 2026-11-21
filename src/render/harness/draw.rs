@@ -4,10 +4,12 @@
 use svg::node::element::{Circle, Group, Line, Path, Rectangle, Text};
 
 use super::bezier::{FLEX, flex};
-use super::layout::{CableBox, ConnectorNode, LooseWire, braid_partners};
+use super::layout::{
+    CableBox, ConnectorNode, DrainRow, LooseWire, SpliceNode, SpliceText, braid_partners,
+};
 use super::{
     BADGE_INSET, BADGE_SIZE, HEADER_HEIGHT, LABEL_CHAR_WIDTH, NODE_PAD, PIN_COL_WIDTH,
-    PIN_DOT_RADIUS, ROW_HEIGHT, TWIST_PITCH,
+    PIN_DOT_RADIUS, ROW_HEIGHT, SHIELD_INSET, SPLICE_DOT_RADIUS, TWIST_PITCH,
 };
 use crate::dsl::ir::WireColor;
 use crate::render::geometry::{Point, Side};
@@ -159,6 +161,34 @@ pub(super) fn render_node(node: &ConnectorNode) -> Group {
     group
 }
 
+/// A splice as a joint: a solid dot where its conductors meet, haloed so
+/// each conductor's end reads against it, with the splice's name (bold),
+/// label and part centred beneath — no table and no outline, so it never
+/// reads as a connector.
+pub(super) fn render_splice(splice: &SpliceNode) -> Group {
+    let mut group = Group::new().set("class", "splice").add(
+        Circle::new()
+            .set("class", "splice-dot")
+            .set("cx", splice.centre.x)
+            .set("cy", splice.centre.y)
+            .set("r", SPLICE_DOT_RADIUS),
+    );
+    for (i, line) in splice.lines.iter().enumerate() {
+        let class = match line.kind {
+            SpliceText::Name => "splice-name",
+            SpliceText::Label => "splice-label",
+            SpliceText::Part => "splice-part",
+        };
+        group = group.add(
+            Text::new(line.text.clone())
+                .set("class", class)
+                .set("x", splice.centre.x)
+                .set("y", splice.line_y(i)),
+        );
+    }
+    group
+}
+
 /// The path data for one strand of a two-strand twisted pair: a straight
 /// run on its own row, a **symbolic braid section** spanning `xa..xb` —
 /// chained horizontally-flexed cubics (the same shape as [`flex`])
@@ -234,6 +264,8 @@ pub(super) fn render_cable_box(cb: &CableBox) -> Group {
                 .set("y", oy + HEADER_HEIGHT * 0.78),
         );
     }
+
+    group = render_shields(cb, group);
 
     // Each two-strand `twisted { }` group braids between its members'
     // (adjacent) rows; everything else runs straight.
@@ -317,6 +349,81 @@ pub(super) fn render_cable_box(cb: &CableBox) -> Group {
     }
 
     group
+}
+
+/// The screens of a cable box: the overall one as a dashed outline just
+/// inside the box, each screened pair's as a dashed outline round its rows
+/// (its drain included), and every drain.
+fn render_shields(cb: &CableBox, mut group: Group) -> Group {
+    let (ox, oy) = (cb.origin.x, cb.origin.y);
+    if cb.shielded {
+        group = group.add(
+            Rectangle::new()
+                .set("class", "cable-shield")
+                .set("fill", "none")
+                .set("x", ox + SHIELD_INSET)
+                .set("y", oy + HEADER_HEIGHT + SHIELD_INSET)
+                .set("width", cb.width - 2.0 * SHIELD_INSET)
+                .set("height", cb.height - HEADER_HEIGHT - 2.0 * SHIELD_INSET),
+        );
+    }
+    for &pair in &cb.shielded_pairs {
+        let Some((top, bottom)) = cb.pair_rows(pair) else {
+            continue;
+        };
+        // From the top of the pair's first row (its label included) to clear
+        // of both the next row's label and the overall screen's outline.
+        let (y0, y1) = (
+            top - ROW_HEIGHT / 2.0 - 1.0,
+            bottom + ROW_HEIGHT / 2.0 - 2.0 * SHIELD_INSET,
+        );
+        group = group.add(
+            Rectangle::new()
+                .set("class", "pair-shield")
+                .set("fill", "none")
+                .set("x", ox + 2.0 * SHIELD_INSET)
+                .set("y", y0)
+                .set("width", cb.width - 4.0 * SHIELD_INSET)
+                .set("height", y1 - y0)
+                .set("rx", 4),
+        );
+    }
+    for drain in &cb.drains {
+        group = group.add(render_drain(cb, drain));
+    }
+    group
+}
+
+/// A shield's drain: the screen's run through the box on the drain's own
+/// row, and a lead from the box edge nearer each terminating pin to that
+/// pin — thin and dashed, unlike a conductor, and labelled like one.
+fn render_drain(cb: &CableBox, drain: &DrainRow) -> Group {
+    let (left, right) = (cb.origin.x, cb.origin.x + cb.width);
+    let centre = (left + right) / 2.0;
+    let path = |d: String| {
+        Path::new()
+            .set("class", "drain-wire")
+            .set("fill", "none")
+            .set("d", d)
+    };
+    let mut group = Group::new().set("class", "drain").add(path(format!(
+        "M{},{} L{},{}",
+        left, drain.row_y, right, drain.row_y
+    )));
+    for &attach in &drain.attaches {
+        let lead = if attach.x < centre {
+            flex(attach, Point::new(left, drain.row_y), FLEX)
+        } else {
+            flex(Point::new(right, drain.row_y), attach, FLEX)
+        };
+        group = group.add(path(lead.path_d()));
+    }
+    group.add(
+        Text::new(drain.label.clone())
+            .set("class", "cable-label drain-label")
+            .set("x", centre)
+            .set("y", drain.row_y - 4.0),
+    )
 }
 
 /// A loose wire (no cable): a single flexed bezier pin-to-pin, annotated at

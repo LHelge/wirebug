@@ -9,6 +9,8 @@
 use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
+use crate::dsl::ir::LengthUnit;
+
 #[derive(Debug, Error, Diagnostic)]
 pub enum Problem {
     /// A lexical error (bad character, unterminated string, …).
@@ -51,11 +53,11 @@ pub enum Problem {
         at: SourceSpan,
     },
 
-    /// A `use` referenced a file that couldn't be found.
+    /// A `use` or a `fragment` named a file that couldn't be found.
     #[error("cannot find imported file `{target}`")]
     #[diagnostic(
         code(wirebug::use_not_found),
-        help("paths in `use` are relative to the importing file")
+        help("paths in `use` and `fragment` are relative to the file that names them")
     )]
     UseNotFound {
         target: String,
@@ -171,17 +173,13 @@ pub enum Problem {
         first: SourceSpan,
     },
 
-    /// `extend <name>` was written for a component that no reachable file
-    /// introduces with `component <name>`.
-    #[error("`extend {name}` has no `component {name}` to extend")]
-    #[diagnostic(
-        code(wirebug::orphan_fragment),
-        help(
-            "introduce the component once with `component {name} {{ … }}`; other files add to it with `extend {name}`"
-        )
-    )]
+    /// `extend <name>` merged into no `component <name>`: none is
+    /// defined, or none is in scope where the file is pulled in (`cause`).
+    #[error("{}", cause.message(name))]
+    #[diagnostic(code(wirebug::orphan_fragment), help("{}", cause.help(name)))]
     OrphanFragment {
         name: String,
+        cause: OrphanFragmentCause,
         #[source_code]
         src: NamedSource<String>,
         #[label("nothing to extend")]
@@ -201,6 +199,43 @@ pub enum Problem {
         src: NamedSource<String>,
         #[label("nested `extend`")]
         at: SourceSpan,
+    },
+
+    /// A `fragment` line that adds nothing: it names its own file, or it
+    /// merges none of its file's top-level `extend`s and the file
+    /// contributes nothing on its own (no view, no merge in its scope, no
+    /// `fragment` line naming a file not yet loaded on the way that
+    /// contributes). `reason` says why.
+    #[error("`fragment \"{target}\"` adds nothing")]
+    #[diagnostic(
+        severity(Warning),
+        code(wirebug::unused_fragment),
+        help("{}", reason.help(target))
+    )]
+    UnusedFragment {
+        target: String,
+        reason: UnusedFragmentReason,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("nothing to merge or render")]
+        at: SourceSpan,
+    },
+
+    /// A file pulled in by two `fragment` lines of one file.
+    #[error("`{target}` is already pulled in by a `fragment` in this file")]
+    #[diagnostic(
+        severity(Warning),
+        code(wirebug::duplicate_fragment),
+        help("a file loads once however often it is named; remove the repeated line")
+    )]
+    DuplicateFragment {
+        target: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("pulled in again here")]
+        at: SourceSpan,
+        #[label("first pulled in here")]
+        first: SourceSpan,
     },
 
     /// Two instances in one component share a name.
@@ -233,6 +268,33 @@ pub enum Problem {
         first: SourceSpan,
     },
 
+    /// A splice shares its name with another declaration of its component.
+    /// A bare endpoint names an own port or a splice, so the two share one
+    /// namespace; a splice also stays clear of the instances, connectors
+    /// and cables, so a name means one thing in the component. The other
+    /// declaration is a label when it is in the splice's file, else a
+    /// related note.
+    #[error("splice `{name}` has the same name as {other} of `{component}`")]
+    #[diagnostic(
+        code(wirebug::duplicate_splice_name),
+        help(
+            "a bare name in a wire is an own port or a splice of the component, so a splice takes a name no port, instance, connector, cable or other splice of it has"
+        )
+    )]
+    DuplicateSpliceName {
+        name: String,
+        other: SpliceClash,
+        component: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("this splice")]
+        at: SourceSpan,
+        #[label("{other} of that name")]
+        here: Option<SourceSpan>,
+        #[related]
+        elsewhere: Vec<OtherDeclaration>,
+    },
+
     /// A wire endpoint names an instance that doesn't exist in the
     /// enclosing component.
     #[error("unknown instance `{name}`")]
@@ -245,13 +307,17 @@ pub enum Problem {
         at: SourceSpan,
     },
 
-    /// A wire endpoint names a port that doesn't exist on its component.
+    /// A wire endpoint names a port that doesn't exist on its component
+    /// (for a bare name, nor a splice of it).
     #[error("unknown port `{port}`{on}")]
     #[diagnostic(code(wirebug::unknown_port))]
     UnknownPort {
         port: String,
         /// e.g. " on `cell_module`", or empty for a self port.
         on: String,
+        /// What a bare name may be, when the endpoint is a conductor's.
+        #[help]
+        help: Option<String>,
         #[source_code]
         src: NamedSource<String>,
         #[label("no such port")]
@@ -285,17 +351,34 @@ pub enum Problem {
         at: SourceSpan,
     },
 
-    /// A view can't be bound to a single documented component (the file
-    /// has zero or several top-level components).
+    /// A view without `for` can't be bound to a single documented
+    /// component (the file has zero or several top-level components).
     #[error("cannot tell which component this view documents")]
     #[diagnostic(
         code(wirebug::view_subject),
-        help("a view documents the file's single top-level component")
+        help(
+            "name the component after the title: `view <kind> \"<title>\" for <Component> {{ … }}`; \
+             without `for`, a view documents the file's single top-level component"
+        )
     )]
     ViewSubject {
         #[source_code]
         src: NamedSource<String>,
         #[label("this view")]
+        at: SourceSpan,
+    },
+
+    /// A view's `for` names a connector type: a view documents a component.
+    #[error("`{name}` is a connector type, not a component")]
+    #[diagnostic(
+        code(wirebug::view_subject_not_component),
+        help("a view documents a component: name one after `for`")
+    )]
+    ViewSubjectNotComponent {
+        name: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("a connector type")]
         at: SourceSpan,
     },
 
@@ -631,7 +714,9 @@ pub enum Problem {
     #[error("a cable wire must connect exactly two endpoints, found {count}")]
     #[diagnostic(
         code(wirebug::cable_wire_arity),
-        help("split a shared rail into one loose `wire` per net, or add a junction")
+        help(
+            "a cable conductor runs from one pin to another: join several at a `splice`, one conductor to it from each pin, or keep a shared rail a loose `wire`"
+        )
     )]
     CableWireArity {
         count: usize,
@@ -641,15 +726,103 @@ pub enum Problem {
         at: SourceSpan,
     },
 
-    /// One wire lists the same endpoint twice: it connects a port to
-    /// itself. (Two *different* wires on one port are a deliberate double
-    /// crimp and are fine.)
-    #[error("wire lists endpoint `{endpoint}` twice")]
+    /// A shield's drain names a splice: a drain is terminated on a pin.
+    #[error("a shield's drain cannot land on splice `{splice}`")]
+    #[diagnostic(
+        code(wirebug::shield_on_splice),
+        help(
+            "terminate the drain on a connector pin; to join the screen to the splice, run a wire from that pin to the splice"
+        )
+    )]
+    ShieldOnSplice {
+        splice: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("a splice, not a pin")]
+        at: SourceSpan,
+    },
+
+    /// A loose wire with a splice among more than two endpoints: each
+    /// conductor to a splice runs from one end to the other.
+    #[error("a wire to a splice has exactly two ends, found {count}")]
+    #[diagnostic(
+        code(wirebug::splice_wire_arity),
+        help(
+            "a splice joins point-to-point conductors: write one `wire` from each pin to the splice"
+        )
+    )]
+    SpliceWireArity {
+        count: usize,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("this wire")]
+        at: SourceSpan,
+    },
+
+    /// A splice fewer than two conductors end on: a joint that joins
+    /// nothing. Nothing breaks, so this is a warning.
+    #[error("splice `{name}` joins nothing: {}", conductor_count(.count))]
+    #[diagnostic(
+        severity(Warning),
+        code(wirebug::splice_joins_nothing),
+        help(
+            "end a wire on it from each pin it joins (`wire <color> <gauge> [<pin>, {name}];`), or remove the splice"
+        )
+    )]
+    SpliceJoinsNothing {
+        name: String,
+        count: usize,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("this splice")]
+        at: SourceSpan,
+    },
+
+    /// A shield of a cable or a twisted pair lists more than two ends: a
+    /// screen, like a cable conductor, runs from one end of its cable to
+    /// the other, so its drain lands on one pin at each end at most.
+    #[error("a shield is terminated on at most two ends, found {count}")]
+    #[diagnostic(
+        code(wirebug::shield_arity),
+        help(
+            "list the one pin the drain lands on, or one at each end of the cable; tie further grounds to that pin with loose wires"
+        )
+    )]
+    ShieldArity {
+        count: usize,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("this shield")]
+        at: SourceSpan,
+    },
+
+    /// A cable body, or one `twisted { }` group, holds a second `shield`
+    /// line: a cable has one overall screen and a pair one screen of its
+    /// own.
+    #[error("{owner} `{cable}` has more than one shield")]
+    #[diagnostic(code(wirebug::duplicate_shield), help("{}", owner.duplicate_help()))]
+    DuplicateShield {
+        owner: ShieldOwner,
+        cable: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("another shield here")]
+        at: SourceSpan,
+        #[label("first shield here")]
+        first: SourceSpan,
+    },
+
+    /// One wire (or one shield) lists the same endpoint twice: it connects
+    /// a port to itself. (Two *different* wires on one port are a
+    /// deliberate double crimp and are fine, and so is a shield's drain
+    /// sharing a pin with a wire.)
+    #[error("{owner} lists endpoint `{endpoint}` twice")]
     #[diagnostic(
         code(wirebug::duplicate_endpoint),
-        help("remove the repeat, or name the endpoint this wire was meant to reach")
+        help("remove the repeat, or name the endpoint this {owner} was meant to reach")
     )]
     DuplicateEndpoint {
+        owner: EndpointOwner,
         endpoint: String,
         #[source_code]
         src: NamedSource<String>,
@@ -675,13 +848,16 @@ pub enum Problem {
         at: SourceSpan,
     },
 
-    /// A cable property uses a key other than `type` or `length`.
-    #[error("unknown cable property `{key}`")]
+    /// A cable's, a wire's or a component's body uses a key its owner does
+    /// not take. The code keeps its first name, from when only cables had
+    /// properties.
+    #[error("unknown {owner} property `{key}`")]
     #[diagnostic(
         code(wirebug::unknown_cable_property),
-        help("a cable supports `type: \"...\";` and `length: <number>;`")
+        help("{}", owner.unknown_key_help(key))
     )]
-    UnknownCableProperty {
+    UnknownProperty {
+        owner: PropertyOwner,
         key: String,
         #[source_code]
         src: NamedSource<String>,
@@ -689,10 +865,12 @@ pub enum Problem {
         at: SourceSpan,
     },
 
-    /// A cable sets the same property key twice.
-    #[error("duplicate cable property `{key}`")]
+    /// A cable's, a wire's or a component's body sets the same key twice
+    /// (for a component split with `extend`, two fragments in one file).
+    #[error("duplicate {owner} property `{key}`")]
     #[diagnostic(code(wirebug::duplicate_cable_property))]
-    DuplicateCableProperty {
+    DuplicateProperty {
+        owner: PropertyOwner,
         key: String,
         #[source_code]
         src: NamedSource<String>,
@@ -702,13 +880,35 @@ pub enum Problem {
         first: SourceSpan,
     },
 
-    /// A cable property's value is the wrong kind (e.g. `length: "x"`).
-    #[error("cable property `{key}` expects {expected}")]
-    #[diagnostic(code(wirebug::cable_property_type))]
-    CablePropertyType {
+    /// A component split with `extend` sets a property in one file that a
+    /// fragment in another file already set. The same code as any repeated
+    /// key; the first setting is a related note, since one diagnostic
+    /// carries one source file.
+    #[error("duplicate component property `{key}`")]
+    #[diagnostic(
+        code(wirebug::duplicate_cable_property),
+        help(
+            "a component split with `extend` sets each property once, in its `component` or in one `extend`"
+        )
+    )]
+    DuplicateFragmentProperty {
         key: String,
-        /// e.g. "a number" or "a string".
-        expected: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("set again here")]
+        at: SourceSpan,
+        #[related]
+        first: [FirstProperty; 1],
+    },
+
+    /// A cable, wire or component property's value is the wrong kind (e.g.
+    /// `length: "x"`).
+    #[error("{owner} property `{key}` expects {expected}")]
+    #[diagnostic(code(wirebug::cable_property_type))]
+    PropertyType {
+        owner: PropertyOwner,
+        key: String,
+        expected: PropertyKind,
         #[source_code]
         src: NamedSource<String>,
         #[label("wrong value type")]
@@ -729,17 +929,27 @@ pub enum Problem {
         at: SourceSpan,
     },
 
-    /// A `length` (in metres) is zero or negative.
+    /// A `length` is zero or negative (or under a micrometre, the finest a
+    /// length resolves to).
     #[error("length must be positive, got {value}")]
-    #[diagnostic(
-        code(wirebug::invalid_length),
-        help("a length is in metres, e.g. `length: 2.5;`")
-    )]
+    #[diagnostic(code(wirebug::invalid_length), help("{}", length_help()))]
     InvalidLength {
-        value: f64,
+        /// The length as written, its unit included (`-150mm`).
+        value: String,
         #[source_code]
         src: NamedSource<String>,
         #[label("not a positive length")]
+        at: SourceSpan,
+    },
+
+    /// A `length` written with a unit that is no length unit (`2in`).
+    #[error("unknown length unit `{unit}`")]
+    #[diagnostic(code(wirebug::unknown_length_unit), help("{}", length_help()))]
+    UnknownLengthUnit {
+        unit: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("not a length unit")]
         at: SourceSpan,
     },
 
@@ -850,6 +1060,28 @@ pub enum Problem {
         at: SourceSpan,
     },
 
+    /// A text box written in the deprecated named form, `text <name> at (x,
+    /// y) "<label>";`. It still renders as before; the help shows the
+    /// statement in the current form, `text "<label>" at (x, y);`, whose box
+    /// takes no name.
+    #[error("text box `{name}` is written in the deprecated named form")]
+    #[diagnostic(
+        severity(Warning),
+        code(wirebug::deprecated_text_syntax),
+        help(
+            "write the label first and drop the name: `{rewrite}`; the named form will be removed"
+        )
+    )]
+    DeprecatedTextSyntax {
+        name: String,
+        /// The statement in the current form, with its label and coordinates.
+        rewrite: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("deprecated form")]
+        at: SourceSpan,
+    },
+
     /// An enclosure port's `at (x, y)` anchor isn't exactly one side keyword
     /// and one coordinate: two coordinates, two sides, or a side in the
     /// wrong slot (west/east must be the x slot, north/south the y slot).
@@ -896,7 +1128,7 @@ pub enum Problem {
     #[diagnostic(
         code(wirebug::uninstantiated_view_subject),
         help(
-            "a view is drawn against an instance of its file's top-level component; instantiate `{subject}` under the root component, or remove the view"
+            "a view is drawn against an instance of its subject, the component it documents; instantiate `{subject}` under the root component, or remove the view"
         )
     )]
     UninstantiatedViewSubject {
@@ -997,6 +1229,389 @@ pub struct FirstViewTitle {
     pub at: SourceSpan,
 }
 
+/// The declaration a splice shares its name with, attached to
+/// [`Problem::DuplicateSpliceName`] as a related note when it is in another
+/// file than the splice.
+#[derive(Debug, Error, Diagnostic)]
+#[error("{what} `{name}` is declared here")]
+#[diagnostic(severity(Advice))]
+pub struct OtherDeclaration {
+    pub what: SpliceClash,
+    pub name: String,
+    #[source_code]
+    pub src: NamedSource<String>,
+    #[label("declared here")]
+    pub at: SourceSpan,
+}
+
+/// What a splice's name clashes with ([`Problem::DuplicateSpliceName`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpliceClash {
+    Port,
+    Instance,
+    InlineConnector,
+    Connector,
+    Cable,
+    Splice,
+}
+
+impl std::fmt::Display for SpliceClash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            SpliceClash::Port => "a port",
+            SpliceClash::Instance => "an instance",
+            SpliceClash::InlineConnector => "an inline connector",
+            SpliceClash::Connector => "a connector",
+            SpliceClash::Cable => "a cable",
+            SpliceClash::Splice => "another splice",
+        })
+    }
+}
+
+/// How many conductors end on a splice that joins nothing.
+fn conductor_count(count: &usize) -> &'static str {
+    if *count == 0 {
+        "no conductor ends on it"
+    } else {
+        "only one conductor ends on it"
+    }
+}
+
+/// The fragment that first set a component property, attached to
+/// [`Problem::DuplicateFragmentProperty`] as a related note: the two
+/// fragments are in different files.
+#[derive(Debug, Error, Diagnostic)]
+#[error("component property `{key}` first set here")]
+#[diagnostic(severity(Advice))]
+pub struct FirstProperty {
+    pub key: String,
+    #[source_code]
+    pub src: NamedSource<String>,
+    #[label("first set here")]
+    pub at: SourceSpan,
+}
+
+/// What a `key: value;` property body belongs to: it decides the keys the
+/// body takes, and the property problems name it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PropertyOwner {
+    Cable,
+    Wire,
+    /// A component type's part data, the `key: value;` lines among its
+    /// members.
+    Component,
+    /// A splice's body.
+    Splice,
+}
+
+/// Why an `extend` merged into no component ([`Problem::OrphanFragment`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OrphanFragmentCause {
+    /// No reachable file defines a top-level `component` of the name.
+    Undefined,
+    /// One file defines the component, and the one line that merges this
+    /// file's `extend`s (a `fragment`, or a `use` of the name) is written
+    /// in a file that does not have it in scope. `defined_in` and
+    /// `pulled_in_by` are paths from the project's directory; `use_path`
+    /// names the defining file as a `use` in `pulled_in_by` writes it.
+    PulledInWithoutIt {
+        defined_in: String,
+        pulled_in_by: String,
+        use_path: String,
+    },
+    /// The component is defined, in `defined_in` when that is one file, but
+    /// not in scope in any file whose line merges this file's `extend`s, or
+    /// no such line names this file.
+    NotInScope { defined_in: Option<String> },
+}
+
+impl OrphanFragmentCause {
+    fn message(&self, name: &str) -> String {
+        match self {
+            OrphanFragmentCause::Undefined => {
+                format!("`extend {name}` has no `component {name}` to extend")
+            }
+            OrphanFragmentCause::PulledInWithoutIt { .. }
+            | OrphanFragmentCause::NotInScope { .. } => {
+                format!("`extend {name}` merges into no `component {name}`")
+            }
+        }
+    }
+
+    fn help(&self, name: &str) -> String {
+        match self {
+            OrphanFragmentCause::Undefined => format!(
+                "introduce the component once with `component {name} {{ … }}`; other files add to it with `extend {name}`"
+            ),
+            OrphanFragmentCause::PulledInWithoutIt {
+                defined_in,
+                pulled_in_by,
+                use_path,
+            } => format!(
+                "`component {name}` is defined in `{defined_in}`, but `{pulled_in_by}`, whose line pulls this file in, does not have it in scope, and an `extend` merges only into a component in scope where that line is written: add `use {name} from \"{use_path}\";` to `{pulled_in_by}`, or pull this file in from a file that has `{name}` in scope, such as `{defined_in}`"
+            ),
+            OrphanFragmentCause::NotInScope { defined_in } => {
+                let defined = match defined_in {
+                    Some(file) => format!("`component {name}` is defined in `{file}`"),
+                    None => format!("`component {name}` is defined"),
+                };
+                format!(
+                    "{defined}, but not in scope where this file is pulled in, and an `extend` merges only into a component in scope where the `fragment` line naming its file is written: `use {name}` in the file that holds that line, or in this file"
+                )
+            }
+        }
+    }
+}
+
+/// Why a `fragment` line adds nothing ([`Problem::UnusedFragment`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnusedFragmentReason {
+    /// The file holds no view, no top-level `extend` and no `fragment`
+    /// line.
+    Empty,
+    /// The file holds no view and no top-level `extend`, and its own
+    /// `fragment` lines add nothing either: each names a file already
+    /// loaded on the way to it, or one that adds nothing through it.
+    ItsFragmentsAddNothing,
+    /// The file extends components none of which is in the naming file's
+    /// scope: these, in the file's order. Merging does not pass through a
+    /// file, so a `fragment` merges an `extend` only where its component is
+    /// in scope.
+    NotInScope(Vec<String>),
+    /// The file extends components whose scope entry in the naming file is
+    /// that very `extend`, imported with `use`: these, in the file's order.
+    /// With no component of the name in scope, there is nothing to merge
+    /// it into.
+    Imported(Vec<String>),
+    /// The line names the project's entry file, which is loaded whatever
+    /// names it, and merges none of its `extend`s.
+    TheEntryFile,
+    /// The line names the file it is written in.
+    ItsOwnFile,
+}
+
+impl UnusedFragmentReason {
+    fn help(&self, target: &str) -> String {
+        match self {
+            UnusedFragmentReason::Empty => format!(
+                "`{target}` has no view and no `extend`, so pulling it in adds nothing; remove the line, or `use` a component it defines by name"
+            ),
+            UnusedFragmentReason::ItsFragmentsAddNothing => format!(
+                "`{target}` has no view and no `extend`, and its own `fragment` lines add nothing either: each names a file already loaded on the way here, or one that adds nothing through it; fix those lines, or remove this one"
+            ),
+            UnusedFragmentReason::NotInScope(components) => {
+                let (names, plural) = Self::quoted(components);
+                let (which, them) = if plural {
+                    ("which are", "them")
+                } else {
+                    ("which is", "it")
+                };
+                format!(
+                    "`{target}` extends {names}, {which} not in scope here, and a `fragment` merges an `extend` only into a component in scope where the line is written: `use` {them} in this file, or write the line in a file that has {them} in scope, such as the one that defines {them}"
+                )
+            }
+            UnusedFragmentReason::Imported(components) => {
+                let (names, plural) = Self::quoted(components);
+                if plural {
+                    format!(
+                        "`{target}` extends {names}, but the {names} in scope here are those same `extend`s, imported with `use`, so there are no components to merge them into; import the components themselves, from the files that define them"
+                    )
+                } else {
+                    format!(
+                        "`{target}` extends {names}, but the {names} in scope here is that same `extend`, imported with `use`, so there is no component to merge it into; import the component itself, from the file that defines it"
+                    )
+                }
+            }
+            UnusedFragmentReason::TheEntryFile => format!(
+                "`{target}` is the project's entry file, which is loaded whatever names it, and the line merges none of its `extend`s; remove the line"
+            ),
+            UnusedFragmentReason::ItsOwnFile => format!(
+                "`{target}` is the file this line is written in, which is already loaded; remove the line"
+            ),
+        }
+    }
+
+    /// `names` quoted and joined into prose (`` `a`, `b` and `c` ``), and
+    /// whether they are more than one.
+    fn quoted(names: &[String]) -> (String, bool) {
+        let quoted: Vec<String> = names.iter().map(|name| format!("`{name}`")).collect();
+        match quoted.as_slice() {
+            [rest @ .., last] if !rest.is_empty() => {
+                (format!("{} and {last}", rest.join(", ")), true)
+            }
+            _ => (quoted.concat(), false),
+        }
+    }
+
+    /// Whether the line may be the echo of a statement the parser skipped
+    /// ([`Problem::reports_an_absence`]): every reason but a line naming
+    /// its own file, which is wrong whatever the file holds.
+    fn reports_an_absence(&self) -> bool {
+        !matches!(self, UnusedFragmentReason::ItsOwnFile)
+    }
+}
+
+/// What a shield screens, for the problems that name it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShieldOwner {
+    /// The cable's overall screen, a `shield` line of the cable body.
+    Cable,
+    /// A twisted pair's own screen, a `shield` line inside `twisted { }`.
+    Pair,
+}
+
+impl ShieldOwner {
+    fn duplicate_help(self) -> &'static str {
+        match self {
+            ShieldOwner::Cable => {
+                "a cable has one overall screen: remove the repeat, or put a pair's own screen inside its `twisted { }` group"
+            }
+            ShieldOwner::Pair => "a twisted pair has one screen of its own: remove the repeat",
+        }
+    }
+}
+
+impl std::fmt::Display for ShieldOwner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            ShieldOwner::Cable => "cable",
+            ShieldOwner::Pair => "a twisted pair of cable",
+        })
+    }
+}
+
+/// The statement whose bracketed list names an endpoint twice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EndpointOwner {
+    Wire,
+    Shield,
+}
+
+impl std::fmt::Display for EndpointOwner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            EndpointOwner::Wire => "wire",
+            EndpointOwner::Shield => "shield",
+        })
+    }
+}
+
+/// The kind of value a property key takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PropertyKind {
+    /// A quoted string.
+    Str,
+    /// A positive number of metres.
+    Length,
+}
+
+impl PropertyOwner {
+    /// The keys this owner's body takes, with the kind of value each wants,
+    /// in the order the help lists them.
+    pub(crate) fn keys(self) -> &'static [(&'static str, PropertyKind)] {
+        match self {
+            PropertyOwner::Cable => &[
+                ("type", PropertyKind::Str),
+                ("length", PropertyKind::Length),
+            ],
+            PropertyOwner::Wire => &[
+                ("length", PropertyKind::Length),
+                ("type", PropertyKind::Str),
+                ("part", PropertyKind::Str),
+            ],
+            // What a bill of materials lists a component by. All free text:
+            // a rating mixes units ("500 A", "12 V 2 W").
+            PropertyOwner::Component => &[
+                ("part", PropertyKind::Str),
+                ("manufacturer", PropertyKind::Str),
+                ("description", PropertyKind::Str),
+                ("rating", PropertyKind::Str),
+            ],
+            // What a bill of materials lists a splice by.
+            PropertyOwner::Splice => &[
+                ("part", PropertyKind::Str),
+                ("description", PropertyKind::Str),
+            ],
+        }
+    }
+
+    /// The kind of value `key` takes here; `None` for a key this owner does
+    /// not take.
+    pub(crate) fn expects(self, key: &str) -> Option<PropertyKind> {
+        self.keys()
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|&(_, kind)| kind)
+    }
+
+    /// The help for an unknown `key`: the keys this owner takes. In a
+    /// component body a `<name>:` with a string after it is part data, so
+    /// an instance written without its type (`l: "Lamp";`) lands here too,
+    /// and the help names that reading as well.
+    fn unknown_key_help(self, key: &str) -> String {
+        let supported = format!("a {self} supports {}", self.supported());
+        match self {
+            PropertyOwner::Component => format!(
+                "{supported}; to place an instance, name its type after the colon: `{key}: <Type> \"<label>\";`"
+            ),
+            PropertyOwner::Cable | PropertyOwner::Wire | PropertyOwner::Splice => supported,
+        }
+    }
+
+    /// The keys as the help lists them: `` `type: "...";` and `length: <number>;` ``.
+    fn supported(self) -> String {
+        let lines: Vec<String> = self
+            .keys()
+            .iter()
+            .map(|(key, kind)| format!("`{key}: {};`", kind.placeholder()))
+            .collect();
+        match lines.split_last() {
+            Some((last, [])) => last.clone(),
+            Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+            None => String::new(),
+        }
+    }
+}
+
+impl std::fmt::Display for PropertyOwner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            PropertyOwner::Cable => "cable",
+            PropertyOwner::Wire => "wire",
+            PropertyOwner::Component => "component",
+            PropertyOwner::Splice => "splice",
+        })
+    }
+}
+
+/// The help of the length problems: how a length is written.
+fn length_help() -> String {
+    format!(
+        "write a length as a positive number of metres (`length: 2.5;`), or with one of the units {} directly after the number (`length: 150mm;`)",
+        LengthUnit::listed()
+    )
+}
+
+impl PropertyKind {
+    /// How a value of this kind is written, for the help.
+    fn placeholder(self) -> &'static str {
+        match self {
+            PropertyKind::Str => "\"...\"",
+            PropertyKind::Length => "<number>",
+        }
+    }
+}
+
+/// What the type error says the key expects: "a string", "a number".
+impl std::fmt::Display for PropertyKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            PropertyKind::Str => "a string",
+            PropertyKind::Length => "a number",
+        })
+    }
+}
+
 impl Problem {
     /// True for problems that fail the run (severity error). Warnings
     /// return false unless the caller is running `--strict`.
@@ -1006,10 +1621,10 @@ impl Problem {
 
     /// True for problems that report something missing: a name that
     /// resolves to nothing, a component with no root or no instance, an
-    /// import nothing uses, a cable with no conductors, a port without
-    /// `pub`. A statement the parser skipped may have declared or used
-    /// that very thing (a `;` too early parts `pub ; port a "A";` into a
-    /// skipped `pub` and a private port), so while a file has syntax
+    /// import or a `fragment` nothing uses, a cable with no conductors, a
+    /// port without `pub`. A statement the parser skipped may have declared
+    /// or used that very thing (a `;` too early parts `pub ; port a "A";`
+    /// into a skipped `pub` and a private port), so while a file has syntax
     /// errors these may be their echo, not mistakes of their own
     /// ([`Project::drop_parse_cascades`]).
     ///
@@ -1029,13 +1644,16 @@ impl Problem {
             | Problem::PrivatePort { .. }
             | Problem::UnknownInclude { .. }
             | Problem::ViewSubject { .. }
+            | Problem::ViewSubjectNotComponent { .. }
             | Problem::UndeclaredInlineHalf { .. }
             | Problem::EmptyCable { .. }
             | Problem::UnknownConnector { .. }
             | Problem::NoRoot
             | Problem::UninstantiatedViewSubject { .. }
             | Problem::UnusedImport { .. }
+            | Problem::SpliceJoinsNothing { .. }
             | Problem::UndrawnConductor { .. } => true,
+            Problem::UnusedFragment { reason, .. } => reason.reports_an_absence(),
             Problem::Lex { .. }
             | Problem::Parse { .. }
             | Problem::ReservedWord { .. }
@@ -1047,8 +1665,10 @@ impl Problem {
             | Problem::DuplicateConnectorType { .. }
             | Problem::DuplicateType { .. }
             | Problem::NestedExtend { .. }
+            | Problem::DuplicateFragment { .. }
             | Problem::DuplicateInstance { .. }
             | Problem::DuplicatePort { .. }
+            | Problem::DuplicateSpliceName { .. }
             | Problem::UnknownPortSide { .. }
             | Problem::DuplicateViewPort { .. }
             | Problem::DuplicateViewInclude { .. }
@@ -1066,18 +1686,25 @@ impl Problem {
             | Problem::InlinePubPort { .. }
             | Problem::DuplicateCableName { .. }
             | Problem::CableWireArity { .. }
+            | Problem::ShieldOnSplice { .. }
+            | Problem::SpliceWireArity { .. }
             | Problem::DuplicateEndpoint { .. }
-            | Problem::UnknownCableProperty { .. }
-            | Problem::DuplicateCableProperty { .. }
-            | Problem::CablePropertyType { .. }
+            | Problem::ShieldArity { .. }
+            | Problem::DuplicateShield { .. }
+            | Problem::UnknownProperty { .. }
+            | Problem::DuplicateProperty { .. }
+            | Problem::DuplicateFragmentProperty { .. }
+            | Problem::PropertyType { .. }
             | Problem::InvalidGauge { .. }
             | Problem::InvalidLength { .. }
+            | Problem::UnknownLengthUnit { .. }
             | Problem::WrongIncludeForm { .. }
             | Problem::UnknownViewKind { .. }
             | Problem::DuplicateViewItem { .. }
             | Problem::DuplicateViewText { .. }
             | Problem::DuplicateViewTitle { .. }
             | Problem::UnsupportedViewText { .. }
+            | Problem::DeprecatedTextSyntax { .. }
             | Problem::EnclosureAnchor { .. }
             | Problem::ContainmentCycle { .. }
             | Problem::WireArity { .. }

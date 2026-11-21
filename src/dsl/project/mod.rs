@@ -3,10 +3,11 @@
 //! A wirebug project is rooted at a `wirebug.toml` manifest. We discover
 //! it by walking up from a target (or the CWD), then load `main.wb` from
 //! that root plus every file
-//! reachable through `use` declarations, resolving paths relative to the
-//! importing file and de-duplicating by canonical path (so a `use` cycle
-//! is harmless — we load each file once). Logical hierarchy depends only
-//! on `use` paths and DSL nesting, never on directory layout.
+//! reachable through `use` and `fragment` statements, resolving paths
+//! relative to the importing file and de-duplicating by canonical path (so
+//! an import cycle is harmless — we load each file once). Logical hierarchy
+//! depends only on `use` and `fragment` paths and DSL nesting, never on
+//! directory layout.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -61,6 +62,37 @@ impl Project {
         self.file(id).named_source()
     }
 
+    /// The loaded file that `path`, written in a `use` or `fragment` of
+    /// file `from`, names: resolved relative to `from`'s directory, as the
+    /// loader followed it. `None` when it names no file, or one the load
+    /// left out.
+    pub fn import_target(&self, from: FileId, path: &str) -> Option<FileId> {
+        let target = self
+            .file(from)
+            .path
+            .parent()?
+            .join(path)
+            .canonicalize()
+            .ok()?;
+        self.files
+            .iter()
+            .position(|file| file.path == target)
+            .map(FileId)
+    }
+
+    /// The path a `use` or `fragment` written in file `from` gives to name
+    /// file `to`.
+    pub fn import_path(&self, from: FileId, to: FileId) -> String {
+        let from = &self.file(from).path;
+        relative_path(from.parent().unwrap_or(from), &self.file(to).path)
+    }
+
+    /// The path of `id` as diagnostics name it: relative to the entry
+    /// file's directory, the project's.
+    pub fn display_path(&self, id: FileId) -> String {
+        self.import_path(self.root, id)
+    }
+
     /// Drop from `problems` those a source that did not parse whole can
     /// cause on its own ([`Problem::reports_an_absence`]): a name that
     /// resolves to nothing may have been declared in a skipped statement.
@@ -71,6 +103,22 @@ impl Project {
             problems.retain(|problem| !problem.reports_an_absence());
         }
     }
+}
+
+/// `to` relative to `from_dir`, with forward slashes — the form a `use`
+/// or `fragment` path is written in. Both paths must be absolute (they
+/// come from the loader's canonicalization).
+pub(crate) fn relative_path(from_dir: &Path, to: &Path) -> String {
+    let from: Vec<_> = from_dir.components().collect();
+    let to: Vec<_> = to.components().collect();
+    let common = from.iter().zip(&to).take_while(|(a, b)| a == b).count();
+    let mut parts: Vec<String> = vec!["..".to_string(); from.len() - common];
+    parts.extend(
+        to[common..]
+            .iter()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned()),
+    );
+    parts.join("/")
 }
 
 /// Find the entry `.wb` file for `target`:
@@ -158,9 +206,9 @@ impl Overlay {
     }
 }
 
-/// Load `entry` and every file reachable through `use`, collecting all
-/// lex/parse/import problems. Returns `None` for the project only if the
-/// entry file itself couldn't be loaded.
+/// Load `entry` and every file reachable through `use` and `fragment`,
+/// collecting all lex/parse/import problems. Returns `None` for the
+/// project only if the entry file itself couldn't be loaded.
 pub fn load(entry: &Path) -> (Option<Project>, Vec<Problem>) {
     load_with(entry, &Overlay::default())
 }
@@ -292,13 +340,14 @@ impl Loader<'_> {
         };
         self.parsed_whole &= !holes;
 
-        // Register before following imports so a `use` cycle terminates.
+        // Register before following imports so an import cycle terminates.
         // `files` index stays equal to the FileId because parsing doesn't
-        // recurse — we push the fully-parsed file here, then follow uses.
+        // recurse — we push the fully-parsed file here, then follow imports,
+        // `use` and `fragment` alike, in source order.
         let imports: Vec<(String, crate::dsl::span::Span)> = ast
-            .uses
+            .imports()
             .iter()
-            .map(|u| (u.path.node.clone(), u.path.span))
+            .map(|import| (import.path().node.clone(), import.path().span))
             .collect();
         self.files.push(LoadedFile {
             path: path.to_path_buf(),
@@ -358,6 +407,21 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/tests/fixtures/basic_project/main.wb"
         ))
+    }
+
+    #[test]
+    fn relative_paths_walk_up_and_down() {
+        assert_eq!(
+            relative_path(
+                Path::new("/p/systems"),
+                Path::new("/p/components/hv/inv.wb")
+            ),
+            "../components/hv/inv.wb"
+        );
+        assert_eq!(
+            relative_path(Path::new("/p"), Path::new("/p/hv.wb")),
+            "hv.wb"
+        );
     }
 
     #[test]

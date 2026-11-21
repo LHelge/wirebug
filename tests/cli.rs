@@ -327,7 +327,7 @@ fn check_accepts_the_fixture_project() {
 const INVALID_VALUES_ROOT: &str = "tests/fixtures/invalid_values_project";
 
 #[test]
-fn check_rejects_non_positive_gauges_and_cable_length() {
+fn check_rejects_non_positive_gauges_and_lengths_and_unknown_units() {
     let output = Command::cargo_bin("wirebug")
         .expect("binary present")
         .args(["check", "--format", "json", INVALID_VALUES_ROOT])
@@ -341,7 +341,8 @@ fn check_rejects_non_positive_gauges_and_cable_length() {
     let main =
         std::fs::read_to_string(format!("{INVALID_VALUES_ROOT}/main.wb")).expect("fixture main.wb");
 
-    // Each problem is an error labelled on the offending number itself.
+    // Each problem is an error labelled on the offending number itself (its
+    // unit included), or on the unit that is no length unit.
     let found: Vec<(&str, &str)> = problems
         .iter()
         .map(|p| {
@@ -360,7 +361,9 @@ fn check_rejects_non_positive_gauges_and_cable_length() {
         [
             ("wirebug::invalid_gauge", "-1"),
             ("wirebug::invalid_gauge", "0"),
+            ("wirebug::invalid_length", "-500mm"),
             ("wirebug::invalid_length", "-2"),
+            ("wirebug::unknown_length_unit", "in"),
         ]
     );
 }
@@ -443,6 +446,153 @@ fn check_rejects_a_repeated_endpoint_and_warns_on_an_empty_cable() {
     );
 }
 
+const SHIELD_ERRORS_ROOT: &str = "tests/fixtures/shield_errors_project";
+
+#[test]
+fn check_reports_each_wrong_shield_where_it_is_written() {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--format", "json", SHIELD_ERRORS_ROOT])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+    let main =
+        std::fs::read_to_string(format!("{SHIELD_ERRORS_ROOT}/main.wb")).expect("fixture main.wb");
+
+    /// A problem as (code, severity, the text of every label: the repeat
+    /// before the first).
+    type Found<'a> = (&'a str, &'a str, Vec<&'a str>);
+    let found: Vec<Found> = problems
+        .iter()
+        .map(|p| {
+            let labels = p["labels"]
+                .as_array()
+                .expect("labels")
+                .iter()
+                .map(|l| {
+                    let offset = l["span"]["offset"].as_u64().expect("offset") as usize;
+                    let length = l["span"]["length"].as_u64().expect("length") as usize;
+                    &main[offset..offset + length]
+                })
+                .collect();
+            (
+                p["code"].as_str().expect("code"),
+                p["severity"].as_str().expect("severity"),
+                labels,
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        found,
+        [
+            ("wirebug::unknown_port", "error", vec!["ghost"]),
+            (
+                "wirebug::duplicate_shield",
+                "error",
+                vec![r#"shield "SECOND";"#, "shield [ecu.gnd];"],
+            ),
+            (
+                "wirebug::duplicate_shield",
+                "error",
+                vec![r#"shield "AGAIN" [pump.gnd];"#, "shield;"],
+            ),
+            (
+                "wirebug::shield_arity",
+                "error",
+                vec!["shield [ecu.gnd, pump.gnd, ecu.pwr];"],
+            ),
+            (
+                "wirebug::duplicate_endpoint",
+                "error",
+                vec!["pump.gnd", "pump.gnd"],
+            ),
+            ("wirebug::empty_cable", "warning", vec!["bare"]),
+        ]
+    );
+    let messages: Vec<&str> = problems
+        .iter()
+        .map(|p| p["message"].as_str().expect("message"))
+        .collect();
+    assert!(messages.contains(&"cable `doubled` has more than one shield"));
+    assert!(messages.contains(&"a twisted pair of cable `paired` has more than one shield"));
+    assert!(messages.contains(&"shield lists endpoint `pump.gnd` twice"));
+}
+
+const SPLICE_ERRORS_ROOT: &str = "tests/fixtures/splice_errors_project";
+
+#[test]
+fn check_reports_each_wrong_splice_where_it_is_written() {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--format", "json", SPLICE_ERRORS_ROOT])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+    let main =
+        std::fs::read_to_string(format!("{SPLICE_ERRORS_ROOT}/main.wb")).expect("fixture main.wb");
+
+    /// A problem as (code, severity, the text of every label).
+    type Found<'a> = (&'a str, &'a str, Vec<&'a str>);
+    let found: Vec<Found> = problems
+        .iter()
+        .map(|p| {
+            let labels = p["labels"]
+                .as_array()
+                .expect("labels")
+                .iter()
+                .map(|l| {
+                    let offset = l["span"]["offset"].as_u64().expect("offset") as usize;
+                    let length = l["span"]["length"].as_u64().expect("length") as usize;
+                    &main[offset..offset + length]
+                })
+                .collect();
+            (
+                p["code"].as_str().expect("code"),
+                p["severity"].as_str().expect("severity"),
+                labels,
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        found,
+        [
+            (
+                "wirebug::duplicate_splice_name",
+                "error",
+                vec!["out", "out"]
+            ),
+            ("wirebug::unknown_port", "error", vec!["spp"]),
+            ("wirebug::shield_on_splice", "error", vec!["sp"]),
+            ("wirebug::wrong_include_form", "error", vec!["sp"]),
+            (
+                "wirebug::splice_wire_arity",
+                "error",
+                vec!["wire black 1 [a.y, sp, c.y];"],
+            ),
+            ("wirebug::unknown_cable_property", "error", vec!["colour"]),
+            ("wirebug::splice_joins_nothing", "warning", vec!["once"]),
+        ]
+    );
+    let messages: Vec<&str> = problems
+        .iter()
+        .map(|p| p["message"].as_str().expect("message"))
+        .collect();
+    assert!(messages.contains(&"splice `out` has the same name as a port of `Vehicle`"));
+    assert!(messages.contains(&"a wire to a splice has exactly two ends, found 3"));
+    assert!(messages.contains(&"splice `once` joins nothing: only one conductor ends on it"));
+    assert!(messages.contains(&"unknown splice property `colour`"));
+}
+
 const DUPLICATE_TITLES_ROOT: &str = "tests/fixtures/duplicate_titles_project";
 
 #[test]
@@ -521,6 +671,76 @@ fn check_strict_fails_on_a_duplicate_view_title() {
         ));
 }
 
+const PART_DATA_ERRORS_ROOT: &str = "tests/fixtures/part_data_errors_project";
+
+#[test]
+fn check_rejects_bad_part_data_and_a_key_an_extend_fragment_sets_again() {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--format", "json", PART_DATA_ERRORS_ROOT])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+
+    /// A diagnostic as (code, severity, file name, the text of its labels).
+    fn summary(p: &serde_json::Value) -> (String, String, String, Vec<String>) {
+        let file = p["filename"].as_str().expect("filename");
+        let src = std::fs::read_to_string(file).expect("the file a diagnostic names");
+        let labels = p["labels"]
+            .as_array()
+            .expect("labels")
+            .iter()
+            .map(|l| {
+                let offset = l["span"]["offset"].as_u64().expect("offset") as usize;
+                let length = l["span"]["length"].as_u64().expect("length") as usize;
+                src[offset..offset + length].to_string()
+            })
+            .collect();
+        (
+            p["code"].as_str().unwrap_or("").to_string(),
+            p["severity"].as_str().expect("severity").to_string(),
+            file.rsplit('/').next().expect("file name").to_string(),
+            labels,
+        )
+    }
+    let found: Vec<_> = problems.iter().map(summary).collect();
+    let row = |code: &str, file: &str, label: &str| {
+        (
+            code.to_string(),
+            "error".to_string(),
+            file.to_string(),
+            vec![label.to_string()],
+        )
+    };
+    assert_eq!(
+        found,
+        [
+            row("wirebug::cable_property_type", "relay.wb", "40"),
+            row("wirebug::unknown_cable_property", "relay.wb", "colour"),
+            row("wirebug::duplicate_cable_property", "harness.wb", "part"),
+        ]
+    );
+    // The root's `part`, in main.wb, rides along as the repeat's related
+    // note.
+    let related = problems[2]["related"].as_array().expect("related");
+    let [first] = related.as_slice() else {
+        panic!("expected one related note: {}", problems[2]);
+    };
+    assert_eq!(
+        summary(first),
+        (
+            String::new(),
+            "advice".to_string(),
+            "main.wb".to_string(),
+            vec!["part".to_string()]
+        )
+    );
+}
+
 const UNDRAWN_CONDUCTORS_ROOT: &str = "tests/fixtures/undrawn_conductors_project";
 
 #[test]
@@ -571,9 +791,11 @@ fn check_warns_on_conductors_no_harness_view_draws() {
         })
         .collect();
 
-    // The rail's undrawn segment and the cable conductor in the other file,
-    // each on its own wire; the drawn segment, the drawn loose wire and the
-    // wire of `Dash` (no harness view) are not reported.
+    // The rail's undrawn segment, the conductor from the splice to a
+    // connector no view includes, and the cable conductor in the other
+    // file, each on its own wire; the drawn segment, the drawn loose wire,
+    // the drawn conductor to the splice and the wire of `Dash` (no harness
+    // view) are not reported.
     assert_eq!(
         found,
         vec![
@@ -583,6 +805,13 @@ fn check_warns_on_conductors_no_harness_view_draws() {
                 "main.wb",
                 "wire from `lamp.gnd` to `horn.gnd` is in no harness view of `Car`",
                 vec!["wire black 1 [ecu.gnd, lamp.gnd, horn.gnd];"]
+            ),
+            (
+                "wirebug::undrawn_conductor",
+                "warning",
+                "main.wb",
+                "wire \"AUX\" from `sp` to `horn.aux` is in no harness view of `Car`",
+                vec!["wire white 0.5 \"AUX\" [sp, horn.aux];"]
             ),
             (
                 "wirebug::undrawn_conductor",
@@ -973,6 +1202,233 @@ view schematic "M" { include l at (0, 0); }
         .success();
 }
 
+/// `main.wb` merges `traction.wb` in with the older spelling,
+/// `use Vehicle from "traction.wb";`.
+const USE_AS_MERGE_TRIGGER_ROOT: &str = "tests/fixtures/split_project";
+
+#[test]
+fn check_strict_accepts_use_as_a_merge_trigger() {
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--strict", USE_AS_MERGE_TRIGGER_ROOT])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("warning").not());
+}
+
+/// `main.wb` pulls its fragments in with `fragment "<path>";`.
+const FRAGMENT_ROOT: &str = "tests/fixtures/fragment_project";
+
+#[test]
+fn check_strict_accepts_fragment_lines() {
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--strict", FRAGMENT_ROOT])
+        .assert()
+        .success();
+}
+
+#[test]
+fn check_reports_a_missing_unused_or_repeated_fragment() {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(
+        tmp.path().join("wirebug.toml"),
+        "[project]\nname = \"t\"\nversion = \"0.0.0\"\n",
+    )
+    .expect("write wirebug.toml");
+    std::fs::write(tmp.path().join("lamp.wb"), "component Lamp { }\n").expect("write lamp.wb");
+    std::fs::write(
+        tmp.path().join("hv.wb"),
+        "extend Root { pub port hv \"HV\"; }\n",
+    )
+    .expect("write hv.wb");
+    std::fs::write(
+        tmp.path().join("main.wb"),
+        "fragment \"nope.wb\";\nfragment \"lamp.wb\";\nfragment \"hv.wb\";\nfragment \"hv.wb\";\ncomponent Root { }\n",
+    )
+    .expect("write main.wb");
+
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--format", "json", tmp.path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+    let found: Vec<(&str, &str)> = problems
+        .iter()
+        .map(|p| {
+            (
+                p["code"].as_str().expect("code"),
+                p["severity"].as_str().expect("severity"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        found,
+        [
+            ("wirebug::use_not_found", "error"),
+            ("wirebug::unused_fragment", "warning"),
+            ("wirebug::duplicate_fragment", "warning"),
+        ]
+    );
+}
+
+/// A project whose `main.wb` names `systems/all.wb` with `fragment`, and
+/// `systems/all.wb` holds `all` and nothing else.
+fn project_with_an_aggregating_file(all: &str) -> tempfile::TempDir {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(
+        tmp.path().join("wirebug.toml"),
+        "[project]\nname = \"t\"\nversion = \"0.0.0\"\n",
+    )
+    .expect("write wirebug.toml");
+    std::fs::write(
+        tmp.path().join("main.wb"),
+        "fragment \"systems/all.wb\";\ncomponent Vehicle { }\nview schematic \"V\" { }\n",
+    )
+    .expect("write main.wb");
+    std::fs::create_dir(tmp.path().join("systems")).expect("mkdir systems");
+    std::fs::write(tmp.path().join("systems/all.wb"), all).expect("write all.wb");
+    std::fs::write(
+        tmp.path().join("systems/a.wb"),
+        "extend Vehicle { pub port x \"X\"; }\n",
+    )
+    .expect("write a.wb");
+    tmp
+}
+
+#[test]
+fn check_strict_accepts_an_aggregating_file_that_uses_the_component() {
+    let tmp =
+        project_with_an_aggregating_file("use Vehicle from \"../main.wb\";\nfragment \"a.wb\";\n");
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--strict", tmp.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("warning").not());
+}
+
+#[test]
+fn check_strict_rejects_two_files_that_only_fragment_each_other() {
+    let tmp = project_with_an_aggregating_file("fragment \"../main.wb\";\n");
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args([
+            "check",
+            "--strict",
+            "--format",
+            "json",
+            tmp.path().to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+    let codes: Vec<&str> = problems
+        .iter()
+        .map(|p| p["code"].as_str().expect("code"))
+        .collect();
+    assert_eq!(
+        codes,
+        ["wirebug::unused_fragment", "wirebug::unused_fragment"]
+    );
+}
+
+/// A project whose `systems/all.wb` pulls in two loom files with `fragment`
+/// but lacks `use Vehicle from "../main.wb";`, so their `extend`s merge into
+/// nothing; each loom file has a harness view when `views` is set. The
+/// problem codes `check --format json` reports, and the help of its first
+/// `orphan_fragment`.
+fn check_aggregator_without_the_component(views: bool) -> (Vec<String>, String) {
+    let tmp = tempdir().expect("tempdir");
+    let write = |path: &str, src: &str| {
+        let path = tmp.path().join(path);
+        std::fs::create_dir_all(path.parent().expect("a parent")).expect("mkdir");
+        std::fs::write(path, src).expect("write");
+    };
+    write(
+        "wirebug.toml",
+        "[project]\nname = \"t\"\nversion = \"0.0.0\"\n",
+    );
+    write(
+        "components/leaf.wb",
+        "component Leaf { connector c \"C 1p\" { pub port a \"A\" pin 1; } }\n",
+    );
+    write(
+        "main.wb",
+        "use Leaf from \"components/leaf.wb\";\nfragment \"systems/all.wb\";\n\
+         component Vehicle { pack: Leaf \"Pack\"; }\nview schematic \"V\" { }\n",
+    );
+    write("systems/all.wb", "fragment \"a.wb\";\nfragment \"b.wb\";\n");
+    for (file, device) in [("a", "inv"), ("b", "dcdc")] {
+        let view = if views {
+            format!(
+                "view harness \"{file} loom\" {{ include pack.c at (2, 2); include {device}.c at (10, 2); }}\n"
+            )
+        } else {
+            String::new()
+        };
+        write(
+            &format!("systems/{file}.wb"),
+            &format!(
+                "use Leaf from \"../components/leaf.wb\";\n\
+                 extend Vehicle {{ {device}: Leaf \"D\"; wire red 1 [pack.a, {device}.a]; }}\n{view}"
+            ),
+        );
+    }
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--format", "json", tmp.path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+    let codes = problems
+        .iter()
+        .map(|p| p["code"].as_str().expect("code").to_string())
+        .collect();
+    let help = problems
+        .iter()
+        .find(|p| p["code"] == "wirebug::orphan_fragment")
+        .and_then(|p| p["help"].as_str())
+        .expect("an orphan_fragment with a help")
+        .to_string();
+    (codes, help)
+}
+
+#[test]
+fn check_says_where_to_use_the_component_an_aggregator_lacks() {
+    for views in [false, true] {
+        let (codes, help) = check_aggregator_without_the_component(views);
+        assert_eq!(
+            codes,
+            [
+                "wirebug::orphan_fragment",
+                "wirebug::orphan_fragment",
+                "wirebug::unused_fragment",
+                "wirebug::unused_fragment",
+                "wirebug::unused_fragment",
+            ],
+            "views: {views}"
+        );
+        assert!(
+            help.contains("add `use Vehicle from \"../main.wb\";` to `systems/all.wb`"),
+            "{help}"
+        );
+    }
+}
+
 #[test]
 fn check_rejects_an_undeclared_inline_half() {
     let tmp = tempdir().expect("tempdir");
@@ -1070,7 +1526,8 @@ fn render_stops_at_check_instead_of_failing_on_an_uninstantiated_subject() {
 }
 
 /// Ports, instances, a connector and a cable named with contextual keywords
-/// (`at`, `from`, `size`, `grid`, `layout`, `text`, `ports`).
+/// (`at`, `from`, `fragment`, `size`, `grid`, `layout`, `text`, `shield`,
+/// `splice`, `face`).
 const CONTEXTUAL_NAMES_ROOT: &str = "tests/fixtures/contextual_names_project";
 
 #[test]
@@ -1104,6 +1561,100 @@ fn render_draws_a_project_named_with_contextual_keywords() {
         "text box drawn"
     );
     assert!(out.join("loom.svg").exists(), "harness view drawn");
+}
+
+/// A schematic view with one text box in the current form and one in the
+/// deprecated named form.
+const DEPRECATED_TEXT_ROOT: &str = "tests/fixtures/deprecated_text_project";
+
+#[test]
+fn check_warns_on_a_text_box_in_the_deprecated_named_form() {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--format", "json", DEPRECATED_TEXT_ROOT])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+    let main =
+        std::fs::read_to_string(format!("{DEPRECATED_TEXT_ROOT}/main.wb")).expect("fixture file");
+
+    // One warning, for the named box only, labelled on its statement, its
+    // help the statement rewritten with the author's label and position.
+    let [problem] = problems.as_slice() else {
+        panic!("expected one problem, got {problems:?}");
+    };
+    assert_eq!(problem["code"], "wirebug::deprecated_text_syntax");
+    assert_eq!(problem["severity"], "warning");
+    let [label] = problem["labels"].as_array().expect("labels").as_slice() else {
+        panic!("expected one label: {problem}");
+    };
+    let offset = label["span"]["offset"].as_u64().expect("offset") as usize;
+    let length = label["span"]["length"].as_u64().expect("length") as usize;
+    assert_eq!(
+        &main[offset..offset + length],
+        "text old_note at (26, 14) \"Deprecated form\";"
+    );
+    assert!(
+        problem["help"]
+            .as_str()
+            .expect("help")
+            .contains("`text \"Deprecated form\" at (26, 14);`"),
+        "{problem}"
+    );
+}
+
+#[test]
+fn check_strict_fails_on_a_text_box_in_the_deprecated_named_form() {
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--strict", DEPRECATED_TEXT_ROOT])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "text box `old_note` is written in the deprecated named form",
+        ));
+}
+
+#[test]
+fn render_draws_both_text_box_forms_and_keeps_the_named_box_data_text() {
+    for mode in [None, Some("--embed")] {
+        let tmp = tempdir().expect("tempdir");
+        let out = tmp.path().join("out");
+        let mut args = vec![
+            "render",
+            DEPRECATED_TEXT_ROOT,
+            "--out",
+            out.to_str().unwrap(),
+        ];
+        args.extend(mode);
+
+        Command::cargo_bin("wirebug")
+            .expect("binary present")
+            .args(&args)
+            .assert()
+            .success();
+        let svg = std::fs::read_to_string(out.join("bench.svg")).expect("bench.svg");
+        let boxes: Vec<&str> = svg
+            .match_indices("<g class=\"text-box\"")
+            .map(|(at, _)| &svg[at..at + svg[at..].find('>').expect("tag ends")])
+            .collect();
+        // Source order: the current form has no name to carry; the named
+        // box keeps the `data-text` a host may style against.
+        assert_eq!(
+            boxes,
+            [
+                "<g class=\"text-box\"",
+                "<g class=\"text-box\" data-text=\"old_note\""
+            ],
+            "{mode:?}"
+        );
+        assert!(svg.contains("Current form"), "{mode:?}");
+        assert!(svg.contains("Deprecated form"), "{mode:?}");
+    }
 }
 
 /// A port named with the reserved word `wire`.
@@ -1152,8 +1703,8 @@ fn check_text_output_explains_the_reserved_word() {
         .stderr(predicate::str::contains("help:"));
 }
 
-/// Two broken statements in `lamp.wb` and two in `main.wb`, plus a wire of
-/// gauge zero in `main.wb`.
+/// Two broken statements in `lamp.wb` and three in `main.wb` (one a grid
+/// with a unit), plus a wire of gauge zero in `main.wb`.
 const SYNTAX_ERRORS_ROOT: &str = "tests/fixtures/syntax_errors_project";
 
 #[test]
@@ -1199,12 +1750,21 @@ fn check_reports_every_syntax_error_and_what_else_is_wrong() {
     assert_eq!(
         found,
         [
-            at("main.wb", "wirebug::parse", "[", 11),
-            at("main.wb", "wirebug::parse", "2", 15),
+            at("main.wb", "wirebug::parse", "[", 12),
+            at("main.wb", "wirebug::parse", "2", 16),
+            at("main.wb", "wirebug::parse", "1cm", 17),
             at("lamp.wb", "wirebug::parse", ";", 4),
             at("lamp.wb", "wirebug::parse", ";", 6),
-            at("main.wb", "wirebug::invalid_gauge", "0", 10),
+            at("main.wb", "wirebug::invalid_gauge", "0", 11),
         ]
+    );
+    let unit = problems
+        .iter()
+        .find(|p| p["labels"][0]["span"]["length"] == 3)
+        .expect("the grid's unit");
+    assert_eq!(
+        unit["message"],
+        "only a `length` takes a unit: write `1`, without the `cm`"
     );
 }
 

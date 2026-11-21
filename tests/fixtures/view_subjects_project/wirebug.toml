@@ -1,0 +1,5 @@
+[project]
+name = "view-subjects-project"
+version = "0.1.0"
+description = "View-subject fixture: views that name the component they document with `for`"
+revision = "fixture"

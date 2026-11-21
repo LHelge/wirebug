@@ -1,0 +1,9 @@
+// The traction fragment: the inverter. Its HV bus lives in the loom file
+// beside it, which this file pulls in in turn; the path is relative to
+// this file.
+use Inverter from "../components/inverter.wb";
+fragment "hv_loom.wb";
+
+extend Vehicle {
+    inv: Inverter "Inverter";
+}

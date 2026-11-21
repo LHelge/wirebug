@@ -79,17 +79,37 @@ Four CLI commands share it:
   A buffer with several broken statements gets a squiggle for each.
   Completion covers auto-import —
   `use ‸` offers every component/connector_type defined elsewhere,
-  inserting the full `<Name> from "<relative path>";` remainder — plus
-  `extend` targets and the `connector_type`/`layout` bodies. An open
+  inserting the full `<Name> from "<relative path>";` remainder; `fragment
+  ‸` offers every other file holding a top-level `extend` or a view
+  (`ast::File::is_fragment_target`), inserting `"<relative path>";`, and
+  nothing once the cursor is inside a string (`Cursor.in_string`) — plus
+  `extend` targets, the `connector_type`/`layout` bodies, and the keys of
+  a cable body, of a wire body (a `{` right after a wire's `]`) and of a
+  component's part data (beside the member keywords), the length units
+  on a number the cursor touches after a key that takes a length
+  (`length: 150‸`; each item's text edit replaces the unit typed so far,
+  `Cursor.unit`), and `for` after a
+  view's title with the file's component types after it; inside a view,
+  includes, `ports { }` and `enclosure { }` complete against the
+  component its `for` names (`FileScope.top_level`, then
+  `FileScope.imported`), else the file's lone top-level one. A
+  component's splices complete where a bare endpoint goes (not in a
+  `shield`'s list) and as a harness include, `splice` is a member keyword,
+  and a splice body (`Block::Splice`, opened only where `splice` starts
+  the statement) offers its keys. An open
   `.wb` file its project never loads (not reachable from `main.wb` via
-  `use`) gets one info-severity `unlinked_file` notice instead of
-  silence — rust-analyzer's unlinked-file move; its contents stay
-  unchecked, but its top-level names are parsed into the index so
-  auto-import can wire the fresh fragment in. Go-to-definition
-  (`lsp/definition.rs`) re-runs load/resolve per request (never stale;
-  projects are small) and span-walks the registry: use names/paths,
-  instance type refs, connector type refs, wire endpoints, view
-  includes/ports/enclosures, and `extend` → its root `component`, all
+  `use` or `fragment`) gets one info-severity `unlinked_file` notice
+  instead of silence — rust-analyzer's unlinked-file move; its contents
+  stay unchecked, but its top-level names are parsed into the index so
+  auto-import (and `fragment ‸`) can wire the fresh fragment in.
+  Go-to-definition (`lsp/definition.rs`) re-runs load/resolve per
+  request (never stale; projects are small) and span-walks the registry:
+  `use` names, `use` and `fragment` paths (to the top of the file),
+  instance type refs, connector type refs, wire endpoints (a bare name to
+  its splice, through `Resolved::splice`, else its own port), a view's
+  `for` subject, view includes/ports/enclosures (a harness include of a
+  splice to the splice), and `extend` → its root
+  `component`, all
   merge-group aware. Hover/rename/semantic tokens/formatting are
   deliberately later.
 
@@ -139,31 +159,93 @@ Distinct from clap's `--version`, which prints the wirebug app version.
 
 ## DSL mental model
 
-- **AST** — a faithful parse of one `.wb` file. `Definition` (a component
-  *type*) holds `Port`/`Connector`/`Instance`/`Wire`/nested-`Definition`
-  members; `View`s are top-level siblings. A `Definition.kind` marks it
+- **AST** — a faithful parse of one `.wb` file. A `File` holds its `use`
+  imports (`File.uses`), its `fragment` lines (`File.fragments`, an
+  `ast::Fragment` being just the path) and its items; `File::imports()`
+  lists the `use` and `fragment` lines together in source order, as
+  `ast::Import`s, which is the order the loader follows them in. A path
+  names a file through `Project::import_target` (relative to the naming
+  file's directory, canonicalized), the one lookup resolve and the LSP
+  share. `Definition` (a component
+  *type*) holds `Port`/`Connector`/`Instance`/`Wire`/`Property`/nested-
+  `Definition` members; `View`s are top-level siblings, each with an
+  optional `subject` (the component named by `for` after its title;
+  `None` leaves the subject implicit, see the registry). A `Member::Property`
+  is a line of the type's part data (`part: "…";`, read by
+  `Definition::properties`): the parser reads a component-body statement
+  that starts `<name>:` once (`named_member`) and the token after the colon
+  decides — a name makes an instance (`part: Fuse;` is an instance named
+  `part`), a string or number a property. A `Definition.kind` marks it
   `component` (introduces the type) or `extend` (a fragment merged into a
   same-named component). Every node carries a `Span`; type/instance/port
-  references are *unresolved* `Spanned<Ident>`. A statement with a
-  syntax error is skipped and leaves no node (see DSL validation).
+  references are *unresolved* `Spanned<Ident>`. A view's `text` boxes
+  (`ast::TextBox`, schematic annotations) are written label first, `text
+  "<label>" at (x, y);`, and have no name; the deprecated named form,
+  `text <name> at (x, y) "<label>";`, parses into the same node with
+  `name: Some(_)` (one boxed `text_box` production, the token after `text`
+  choosing the form) and flows through to `ir::TextBox.name`, which the
+  schematic renderer draws as the box's `data-text` — so a host styling an
+  old box keeps working until it is migrated; a nameless box has none. A
+  statement with a syntax error is skipped and leaves no node (see DSL
+  validation). A cable's screen is an `ast::Shield` (optional label, the
+  `Endpoint`s its drain lands on, kept faithful in number): the cable body's
+  own `shield` lines are `Cable.shields`, a pair's are
+  `TwistedGroup.shields`; `Cable::wires()` yields conductors only, and
+  `Cable::endpoints()` every reference the cable names, conductors' and
+  shields' alike, which is what resolve (`check_endpoint`) and the LSP's
+  go-to-definition walk; `Cable::shield_ends()` the shields' alone, which
+  resolve checks may not name a splice. A `splice` member is an
+  `ast::Splice` (name, optional label, the `ast::Property` lines of an
+  optional body; `Definition::splices`).
 - **Resolved registry** — every definition (top-level and nested) keyed by
   `DefId`, with flattened ports (connectors are grouping metadata, not a
   namespace — port names are unique per component), per-file type scopes
-  (own defs + `use` imports), and resolved instance/endpoint/include refs.
+  (own defs + `use` imports; a `fragment` adds no name), and resolved
+  instance/endpoint/include refs. A definition's splices
+  (`DefInfo.splices`) share the own ports' namespace: a bare endpoint
+  names one or the other, and `Resolved::wire_end(d, ep)` is the one
+  mapping from an authored endpoint to an `ir::WireEnd` (a bare name a
+  splice of the merged component declares is `WireEnd::Splice`, else
+  `Own`), which elaboration and validation both call, so they agree on
+  which references are one end; resolve's `check_endpoint` makes the same
+  lookup (`Resolver::lookup_splice`).
+  Each view is bound to its subject (`ViewBinding.subject`, in
+  `resolve/views.rs`): the component its `for` names, looked up in the
+  view's file scope (own top-level components and `use` imports, not
+  nested ones), else the file's single top-level component; either way
+  canonicalized, so a view in an `extend` fragment documents the merged
+  component. Everything downstream keys on that subject (by type name in
+  `ir::View.subject`), never on the file, so one file may hold views of
+  several components.
 - **Merge groups (`extend`)** — a top-level component may be authored across
   files: `main.wb` has `component Vehicle { … }`, other files
-  `extend Vehicle { … }`, and `main.wb` pulls each in with the usual
-  `use Vehicle from "traction.wb";`. A same-name collision in a file's scope
+  `extend Vehicle { … }`, and `main.wb` pulls each in with
+  `fragment "traction.wb";`, or the older `use Vehicle from "traction.wb";`,
+  which keeps working unchanged. A same-name collision in a file's scope
   is a *merge* (not the `duplicate_type` error) as soon as either side is an
-  `extend`. `resolve::MergeGroups` records the fragment set with one
-  **canonical** id (the lone root `component`, kept first); `Resolved::
-  fragments(d)` yields a component's fragments (just `[d]` when unmerged).
+  `extend`; that is how the `use` spelling merges. A `fragment` brings no
+  name into the scope: once the file's scope is complete (own definitions,
+  then every `use`, so the lines' order does not matter), each top-level
+  `extend` of the named file merges into the group of the scope entry of
+  its name (`Resolver::merge_fragment`). `build_scopes` makes the merges of
+  a file's `use` and `fragment` lines last, sorted by line, so a group
+  gathers its fragments in source order whichever spelling names them (the
+  order instances elaborate in, and which of two duplicates is reported). An `extend` whose
+  component is not in the naming file's scope is not merged by the line, so
+  a file of nothing but `fragment` lines passes nothing on to a file that
+  names it: merging is not transitive, as with `use`.
+  `resolve::MergeGroups` records the fragment set with one **canonical**
+  id (the lone root `component`, kept first); `Resolved::fragments(d)`
+  yields a component's fragments (just `[d]` when unmerged).
   Type resolution stays per-fragment (each carries its own `use` imports), but
   the merged component is one **flat namespace**: endpoints (`check_endpoint`),
-  view includes/enclosures (`resolve/views.rs`), and elaboration all consult
+  view includes/enclosures (`resolve/views.rs`), splices, and elaboration all consult
   the union across fragments, so a wire or view in one file freely references
   an instance/port declared in another. `extend` is top-level only; a fragment
-  with no root `component` is an `orphan_fragment`.
+  with no root `component` is an `orphan_fragment` (`Resolver::is_orphan`),
+  and its wires and the includes of views documenting it are not checked:
+  they reach members of the component it never joined, so they would only
+  echo the error.
 - **IR (`ir::Design`)** — the elaboration: a flat
   `IndexMap<InstancePath, Instance>` (hierarchical semantics, no recursive
   ownership; the tree lives in `children` links). One node per placement,
@@ -176,12 +258,55 @@ Distinct from clap's `--version`, which prints the wirebug app version.
   `Instance.wires` tagged with `Wire.cable = Some(name)`; loose wires are
   `None`. A conductor inside a `twisted { }` group also carries
   `Wire.twisted_group = Some(i)` (numbered per cable in source order), so
-  grouping survives flattening. Every `Wire` keeps its authored `span`
-  (the `wire` statement, inside its cable for a conductor), so a check over
-  the drawings can point back at it. So the schematic renderer ignores cables
+  grouping survives flattening, and `CableMeta.twisted[i]` (an
+  `ir::TwistedMeta`, `CableMeta::twisted_group(i)`) is that pair's place
+  for data of its own. Screens are typed data, never a fake `Wire`: the
+  cable's overall one is `CableMeta.shield` and a pair's
+  `TwistedMeta.shield`, each an `ir::Shield` (label, span and a
+  `ShieldTermination` — `NoPin` (cut back, or bonded at a gland or
+  housing: the model does not say which), `Single(WireEnd)` or
+  `Both([WireEnd; 2])`, so more than two ends cannot be represented;
+  `Shield::ends()` lists them). `CableMeta::shields()` yields every screen
+  with what it screens (`ir::Screened::Cable` or `Pair(i)`), which is how
+  a wire list asks whether a cable or a pair is shielded and where its
+  drain lands. Elaboration keeps the first shield of a body and the first
+  two ends of a shield; validate reports the rest. A wire's optional `{ key: value; }` body
+  (`ast::Wire.properties`, the same `ast::Property` lines a cable body
+  holds) elaborates to typed `Wire.length`/`r#type`/`part`; a conductor's
+  `length` overrides its cable's, and `Instance::effective_length(wire)`
+  answers the one that applies (its own, else its cable's
+  `CableMeta.length`); `CableMeta.length` itself stays the cable's. A
+  length is an `ir::Length`, whole micrometres (`u64`, always at least
+  one), built by `Length::new(value, LengthUnit)` from the AST's
+  `ast::Quantity` (the number and the unit written after it, `150mm`;
+  `Quantity::length`, a bare number in metres), so lengths in any unit
+  compare (`Ord`) and print exactly: `Length::metres()` normalises,
+  `Display` prints metres with only the decimals the length has
+  (`0.15 m`). The closed `LengthUnit` set (`m`, `cm`, `mm`) is
+  `LengthUnit::ALL`. A length that does not convert (an unknown unit, not
+  positive) elaborates to `None`; validate reports it. A
+  component type's part data elaborates to `Instance.part`, an
+  `ir::PartMeta` of typed optional strings (`number` from `part:`,
+  `manufacturer`, `description`, `rating`) collected across the type's
+  fragments, root first, so every placement of the type carries the same;
+  a synthetic inline instance's is empty (its halves' part data lives in
+  `InlineMeta`). A component's splices elaborate to `Instance.splices`
+  (`ir::Splice`: `SpliceName`, label, `part`, `description`, span),
+  gathered across its fragments; a conductor to one has a
+  `WireEnd::Splice` end, and each conductor stays a two-ended `Wire` of its
+  own. The IR answers what a splice joins:
+  `Instance::splice_conductors(name)` (each conductor, a wire list's row
+  with the splice as an end; `Wire::other_end` gives the pin across it),
+  `Instance::splice_net(name)` (an `ir::SpliceNet`: the splices linked to
+  it by splice-to-splice conductors and every other end of their
+  conductors, as `NetEnd`s with their wire) and `Instance::splice_nets()`
+  (one per group of linked splices). Every
+  `Wire` keeps its authored `span` (the `wire` statement, inside its
+  cable for a conductor), so a check over the drawings can point back at
+  it. So the schematic renderer ignores cables
   for free, and only the harness renderer reads the tags. Cable
-  conductors are 2-endpoint by rule; shared rails stay loose
-  multi-endpoint wires.
+  conductors are 2-endpoint by rule, and so is any wire to a splice;
+  shared rails without a splice stay loose multi-endpoint wires.
 - **Inline connectors (`inline`)** — a mated plug/receptacle pair
   mid-harness (a loom's branch point): one shared port set, two optional
   `male:`/`female:` housing halves, each a `connector_type` ref. Inlines
@@ -228,6 +353,14 @@ adds no inference (`src/render/schematic/layout.rs`):
   a `WireEnd::Own` port *listed in the enclosure* (below). Excluded instances,
   unlisted ports, and own ports without an enclosure placement drop silently —
   a listed port whose wire lands on such an end shows as a bare stub.
+  A splice has no box and no port in a schematic (no schematic syntax
+  names one): each `Instance::splice_nets()` net is drawn as what it is
+  electrically, one rail between the far ends of its conductors — those
+  the view places, in wire order, each port once — chain-decomposed like
+  a multi-endpoint wire, each segment in the color of the conductor that
+  brings its second end in. No junction dot, as for any rail. The segments
+  join `Placement`'s connections, so the router and the Layout lints
+  (`include_too_close`, `unroutable_wire`) see exactly what is drawn.
   Each drawn segment carries a `wire-code` annotation — the wire's color
   as an IEC 60757 code (`ir::WireColor::code`; unknown names pass through
   verbatim), haloed and centred on the longest run clear of wire
@@ -289,14 +422,36 @@ via `ir::ConnectorRef.name`, so a connectorless / excluded / `Own` end drops
 silently (like an unlisted port in a schematic). The candidates are the
 subject's `layout::HarnessConductor`s (`HarnessConductor::all`: each chain
 segment between connectors of two *different* children — one within a
-single connector is a jumper, never drawn); `HarnessLayout::compute` keeps
-those whose two connectors are included and records them as
-`HarnessLayout.drawn` (`lint::Segment`, wire and pair index), which is what
-`check`'s `undrawn_conductor` reads.
+single connector is a jumper, never drawn — and each wire with an end on a
+splice of the subject; an end is a `layout::HarnessEnd`, `Connector` or
+`Splice`, keyed by a `NodeKey` of the same two kinds);
+`HarnessLayout::compute` keeps those whose two ends' connectors or splices
+are included and records them as `HarnessLayout.drawn` (`lint::Segment`,
+wire and pair index), which is what `check`'s `undrawn_conductor` reads.
+
+A **splice** include (`include sp`, an `ir::Include` with no connector
+naming one of the subject's `Instance.splices`; `NodeKey::of`) draws as a
+`SpliceNode`: a solid dot at the authored point (`splice-dot`, haloed in
+white so each conductor's end reads against it) with the name
+(`splice-name`, bold), label (`splice-label`) and part (`splice-part`)
+centred beneath, in a `<g class="splice">` drawn over the connectors — no
+table and no outline, so it reads as a joint, not a connector. Every
+conductor to it attaches at the dot's centre (`layout::Anchor::Splice`; a
+pin's is `Anchor::Pin`), so they visibly converge there, and a pin wired
+to a splice faces it as it faces a connector. A conductor to a splice
+draws by the same rule as any other: a cable's through its cable box on
+the spine, a loose wire as one bezier. The splice's box (dot and text) is
+`SpliceNode.bounds`, counted in the spine (`spine_x` takes every node's
+and splice's bounds) and the viewBox, and reported as an `IncludeBox`, so
+the overlap and canvas checks see it. One cable box per cable on one
+spine still holds, so a splice placed between a cable's two ends draws
+its strands doubling back; author the halves as two cables, or a cable
+and a loose wire.
 
 Kept conductors split by `Wire.cable`. A **declared cable** draws as a
 **cable box** (`CableBox`/`render_cable_box`) on the spine: a titled table
-(label + `type · length · ×count`), one coloured strand per row. A
+(label + `type · length · ×count`, the length in metres as
+`ir::Length` displays it, `0.15 m`), one coloured strand per row. A
 `twisted { }` pair (exactly two conductors, grammar-enforced —
 `ast::TwistedGroup` holds `[Wire; 2]`) draws its box run as a **symbolic
 braid** (`draw::braid_d` — chained flex cubics swapping the pair's two
@@ -336,8 +491,24 @@ Three deliberate departures from the schematic's no-inference rule: pin
 explicit `ports { }` listing was considered and rejected for harnesses),
 and wire routing is the bezier flex above — no object avoidance, unlike the
 schematic's orthogonal router.
-**Shields/drain wires are not drawn** (the IR carries no shield flag); reusing
-the orthogonal router and adding shields are noted future refinements.
+**Shields** draw with their cable (`layout.rs`, `DrawnShield`): a cable
+box is drawn only for its conductors, as before, and then carries the
+screens of its cable — the overall one, and a pair's own when that pair is
+drawn. An overall screen marks the box with a dashed inner outline
+(`cable-shield`) and `shielded` after the conductor count in the subtitle;
+a screened pair gets a dashed rounded outline round its rows
+(`pair-shield`, `CableBox::pair_rows`). Each shield end on a connector the
+view includes is a **drain**: the pin joins its table's auto-scope (facing
+the spine, since it carries no conductor of its own) and the shield gets a
+row of its own in the box (`DrainRow`; a pair's right below the pair, the
+overall one last, every row placed by its `row` index), drawn as a thin
+dashed `drain-wire` across the box and a flexed `drain-wire` lead from the
+nearer box edge to each pin, with an italic `drain-label` (the shield's
+label, else `Shield`/`Pair shield`), all in a `<g class="drain">`. An end
+on a connector the view leaves out is not drawn; a shield on no pin
+has no row, only its outline. A shield alone never puts a cable
+box in a view. Reusing the orthogonal router is a noted future
+refinement.
 
 ## DSL validation (`check`)
 
@@ -345,8 +516,15 @@ Problems are miette `Diagnostic`s (`dsl::diagnostics::Problem`), collected
 so one run reports many. Errors fail the run; warnings fail only under
 `--strict`. The checks, by phase:
 
-- **Load** — file not found for a `use`; no `wirebug.toml`; IO.
+- **Load** — file not found for a `use` or a `fragment`
+  (`use_not_found`, on the path); no `wirebug.toml`; IO.
 - **Parse/lex** — syntax and lexical errors (with expected-token sets),
+  a unit on a number where no length goes (a gauge, a coordinate, a
+  `grid:`, a pin, `rows`/`cols`, a `connector_type` property: the bare
+  `number` and `whole` productions refuse it, naming the number to write;
+  only a property value parses one, `quantity`), and a length unit after
+  a space (`length: 2 m;`, which says to write the unit against the
+  number in place of "expected ';'"),
   and a reserved keyword written where a name belongs (`reserved_word`,
   on the word, with a rename hint). The parse takes the word as the name
   and goes on, so every occurrence of the word is reported, and the later
@@ -354,14 +532,19 @@ so one run reports many. Errors fail the run; warnings fail only under
   that does not exist is also an `unknown_include`).
   A syntax error does not stop the parse either: every `{ … }` block (a
   component body, a view, a connector type, a connector, an inline, a
-  cable, a `ports { }` or `enclosure { }` block) and the file's top level
-  recover per statement (`parse::block`). A statement that does not parse
+  cable, a wire's body, a `ports { }` or `enclosure { }` block) and the
+  file's top level recover per statement (`parse::block`). A statement that does not parse
   gets the error it got before recovery (same span, same expected set,
   the block's `}` included), is skipped up to its `;` or through the
   `{ … }` it opens (never past the `}` that closes its block), and the
   block reads on, so one run reports each broken statement once. The
   fixed-shape bodies (`twisted { }`, `layout grid { }`, `layout face { }`)
-  stay one statement: a mistake inside skips the whole of it. Two guards
+  stay one statement: a mistake inside skips the whole of it (a broken
+  line in the body of a wire inside `twisted { }` is still skipped alone,
+  since the wire body is a block of its own; a broken `shield` line in a
+  pair skips the pair, reporting the shield's own error, never "a twisted
+  pair needs exactly two conductors", since the group's braces fail to
+  close before the count is taken). Two guards
   against one mistake reporting twice: a statement that fails right after
   one that failed on its own `;` is that statement's tail, and is not
   reported, when it goes on where the `;` cut it — on the same line
@@ -383,8 +566,9 @@ so one run reports many. Errors fail the run; warnings fail only under
   syntax error (`Project.parsed_whole` is false: a hole, a misnested file,
   or a lex error) the problems that report an absence
   (`Problem::reports_an_absence`: unknown or undefined names, unresolved
-  or unused imports, no root, a view of nothing, an empty cable, a port
-  without `pub` — a `;` too early parts `pub ; port a "A";` into a skipped
+  or unused imports and unused fragments (but for a `fragment` naming its
+  own file), no root, a view of nothing, an
+  empty cable, a splice that joins nothing, a port without `pub` — a `;` too early parts `pub ; port a "A";` into a skipped
   `pub` and a private port) are dropped (`Project::drop_parse_cascades`,
   in `dsl::check_loaded`, so for the CLI and the LSP alike), and come
   back once the syntax is fixed. The problems that report something present and wrong (a bad
@@ -394,11 +578,28 @@ so one run reports many. Errors fail the run; warnings fail only under
 - **Resolve** — undefined type, unresolved import, duplicate
   type/instance/port, unknown instance/port in a wire endpoint,
   private-port access (a non-`pub` port referenced from outside), unknown
-  view include, ambiguous view subject, duplicate connector designator
-  (`duplicate_connector_name`), duplicate cable designator
-  (`duplicate_cable_name`). `extend` fragments add: a fragment nested inside a
-  component (`nested_extend`); an `extend` with no root `component` of that
-  name (`orphan_fragment`); an instance/port name declared in two fragments of
+  view include, a view without `for` in a file with no or several
+  top-level components (`view_subject`; the help shows `for`), a `for`
+  naming no component in scope (the instances' `undefined_type`, on the
+  name) or a connector type (`view_subject_not_component`), duplicate
+  connector designator (`duplicate_connector_name`), duplicate cable designator
+  (`duplicate_cable_name`), a splice named like a port, instance, inline
+  connector, connector, cable or other splice of its merged component
+  (`duplicate_splice_name`, one per splice, on the splice; the other
+  declaration a second label in the same file, else a `#[related]`
+  `OtherDeclaration` note; `Resolver::check_splice_names`), a shield end
+  naming a splice (`shield_on_splice`). An unknown bare conductor endpoint
+  is the usual `unknown_port`, its help saying a bare name is an own port
+  or a splice. `extend` fragments add: a fragment nested inside a
+  component (`nested_extend`); an `extend` whose merge group has no root
+  `component` (`orphan_fragment`), its `diagnostics::OrphanFragmentCause`
+  telling `Undefined` (no `component` of the name anywhere) from a
+  component that exists but is not in scope where the file is pulled in:
+  `PulledInWithoutIt` when one file defines it and one file's line (a
+  `fragment`, or a `use` of the name) merges the `extend`'s file, the help
+  naming the `use` to add there with its path (`Project::import_path`),
+  else `NotInScope`, naming the defining file when there is one; an
+  instance/port name declared in two fragments of
   one merged component (the ordinary `duplicate_instance`/`duplicate_port`,
   reported once across the group). A cable's wire endpoints resolve exactly
   like a loose wire's. A view kind no renderer implements is
@@ -408,12 +609,52 @@ so one run reports many. Errors fail the run; warnings fail only under
   unknown/private port, and a duplicate-port-in-one-include guard
   (`duplicate_view_port`). Includes are checked per view kind: a `harness`
   include must name an existing connector (`unknown_connector`) and carry no
-  `ports { }`; a `schematic` include must not name a connector — violations
-  are `wrong_include_form`. A view's `enclosure { }` ports resolve against the
+  `ports { }`, or name one of the subject's splices alone (`include sp`, no
+  `.connector`, no `ports { }`; `check_splice_include`); a `schematic`
+  include must not name a connector, and no schematic or pinout include may
+  name a splice — violations are `wrong_include_form`. A splice included
+  twice in one view is a `duplicate_view_include`. A view's `enclosure { }` ports resolve against the
   *subject*: each anchor must name exactly one side in the slot for its axis
   (`enclosure_anchor`) and an existing `pub` subject port (`unknown_port` /
   `private_port`), with the same duplicate guard (`duplicate_view_port`).
-  As a warning: a view title already used by another view anywhere in the
+  A `text` box outside a schematic view is `unsupported_view_text`; two
+  boxes of one view sharing a name are `duplicate_view_text` (only the
+  deprecated named form has a name to clash).
+  As warnings: a `fragment` that adds nothing (`unused_fragment`, on the
+  path; a stale line, in the spirit of `unused_import`). A line is useful
+  when it merges one of its target's top-level `extend`s, or when the
+  target contributes something: a view, a merge its own scope makes (a
+  `use` collision or one of its `fragment` lines), or a `fragment` line
+  naming a file that contributes. A file's views count only when none of
+  its `extend`s is orphaned: views of a component the file never joined
+  document nothing that is there, so a line naming a loom file whose
+  `extend` is not in scope is reported even though the file has a harness
+  view. Files already loaded on the way — the
+  entry file, the file the line is written in, the files followed to get
+  there — contribute nothing again (`FragmentGraph::contributes`, a search
+  with a visited set; `build_scopes` returns the lines and
+  `Resolver::report_fragment_lines` judges them once the merge groups are
+  final, after `report_orphan_fragments`), so two files that
+  only name each other are both reported, and an aggregating file of
+  `fragment` lines that `use`s their component is not. A line naming its
+  own file is always reported. The variant carries why
+  (`diagnostics::UnusedFragmentReason`): `Empty` (no view, `extend` or
+  `fragment` line), `ItsFragmentsAddNothing` (only `fragment` lines, none
+  adding anything), `NotInScope` (naming the extended components missing
+  from the naming file's scope, the help telling to `use` them there or
+  move the line), `Imported` (the scope entry of the extended name is that
+  same `extend`, brought in by a `use` of the file, so there is no
+  component to merge it into), `TheEntryFile` or `ItsOwnFile`. All but
+  `ItsOwnFile` report an absence, dropped while a file has syntax errors
+  (`Problem::reports_an_absence`); a line naming its own file is wrong
+  whatever a skipped statement held. A second
+  `fragment` in one file naming a file an earlier one did, compared by the
+  loaded file so `./x.wb` repeats `x.wb` (`duplicate_fragment`, on both
+  paths; a `use` of the same file is no repeat, since a file loads once
+  whatever names it); a text box in the deprecated named form
+  (`deprecated_text_syntax`, labelled on the statement, its help the
+  statement rewritten label first by `ast::TextBox::current_form`); and a
+  view title already used by another view anywhere in the
   project (`duplicate_view_title`, compared exactly). The repeat is the
   primary label; the first view rides along as a miette `#[related]` note
   (`FirstViewTitle`), because one diagnostic carries one source file and the
@@ -429,18 +670,53 @@ so one run reports many. Errors fail the run; warnings fail only under
   and `render` use to find the instance a view is drawn against.
 - **Validate** — wire arity (fewer than two endpoints, error); cable wire
   arity (a cable conductor that isn't exactly two endpoints,
-  `cable_wire_arity`); cable property checks (`unknown_cable_property`,
-  `duplicate_cable_property`, `cable_property_type` — `type` wants a string,
-  `length` a number); non-positive values (`invalid_gauge` on a wire or
-  cable conductor's gauge, `invalid_length` on a cable `length`, both
-  labelled on the number); an endpoint listed twice in one wire or cable
+  `cable_wire_arity`; a loose wire with a splice among more than two
+  endpoints, `splice_wire_arity`, since a conductor to a splice runs end
+  to end); property checks on a cable body and on any wire's
+  body and on a component's part data (`validate_properties`, keyed by
+  `diagnostics::PropertyOwner`, whose `keys()` say what each body takes: a
+  cable `type` and `length`, a wire `length`, `type` and `part`, a
+  component `part`, `manufacturer`, `description` and `rating`, a splice
+  `part` and `description`, a closed set a later bill of materials reads) — an unknown key, a key set twice, a
+  value of the wrong kind (strings for `type`/`part` and the component
+  keys, a number for `length`). A component split with `extend` sets each
+  key once across its fragments (`validate_fragment_properties`): a
+  fragment may set a key the root left unset, and a key one fragment sets
+  after another did is the same `duplicate_cable_property`, against the
+  first setting (the root's first) — two labels when both fragments sit in
+  one file, else `DuplicateFragmentProperty` with the first setting as a
+  `#[related]` note (`FirstProperty`), as for `duplicate_view_title`.
+  The codes keep the names from when only cables had properties
+  (`unknown_cable_property`, `duplicate_cable_property`,
+  `cable_property_type`); the messages name the owner (`unknown wire
+  property`). Non-positive values (`invalid_gauge` on a wire or cable
+  conductor's gauge, `invalid_length` on a cable's or a wire's `length` —
+  under a micrometre included, the finest an `ir::Length` holds — both
+  labelled on the number, a length's unit included); a `length` whose
+  unit is none of `m`, `cm`, `mm` (`unknown_length_unit`, labelled on the
+  unit, the help listing the units; a unit on a key that takes a string
+  is the usual `cable_property_type`); an endpoint listed twice in one wire or cable
   conductor (`duplicate_endpoint`, labelled on both occurrences — compared
   as resolved `ir::WireEnd`s, so own port `gnd` and `ecu.gnd` never alias;
   two *different* wires on one port are a deliberate double crimp and are
-  not compared). As warnings: a cable with no conductors (`empty_cable`),
-  unused import, bare-port pin, and non-IEC 60757 wire color
+  not compared); a shield listing an end twice is the same
+`duplicate_endpoint`, its message naming the shield, and a shield end
+sharing a pin with a wire is not compared either (a drain crimped with a
+ground wire). A second `shield` in one cable body or one `twisted { }`
+group (`duplicate_shield`, on both statements, the message naming the cable
+or the pair), and a shield listing more than two ends (`shield_arity`, on
+the statement: a screen, like a conductor, runs end to end), are errors;
+the shield ends resolve in resolve like wire endpoints. As warnings: a
+cable with no conductors (`empty_cable`; a shield is no conductor), a
+splice fewer than two conductors of its merged component end on
+(`splice_joins_nothing`, on its name; two is a butt splice;
+`validate_splice_conductors`),
+  unused import (an import counts as used when the file instantiates it,
+  merges with it, a `fragment` of the file merges an `extend` into it, or
+  the file names it in a view's `for`), bare-port pin, and
+  non-IEC 60757 wire color
   (`unknown_wire_color` — the `ir::ColorName::Other` escape hatch still
-  renders verbatim). Cable property/arity/value checks and the endpoint
+  renders verbatim). Property, arity and value checks and the endpoint
   check live here (not elaborate) so a type instantiated many times
   reports each once.
 
@@ -500,17 +776,21 @@ so one run reports many. Errors fail the run; warnings fail only under
   with at least one harness view that none of those views draws
   (`undrawn_conductor`, labelled on the conductor's `ir::Wire.span`, which
   may sit in another file than the views; the help names the includes that
-  would draw it, as `lint::EndTarget`s — an inline connector only through
+  would draw it, as `lint::EndTarget`s — a splice as itself
+  (`IncludeTarget::Splice`), the help then saying a view must include what
+  both ends land on, connector or splice; an inline connector only through
   the halves it declares, and one that declares none is told to declare a
   half first, since an include of an undeclared half is an error). Each harness view's `ViewLayout.drawn` is the
   `HarnessLayout.drawn` it renders; `lint::HarnessCoverage` unions them per
   subject type, and every `HarnessRenderer::conductors` entry (the same
   `HarnessConductor::all` candidates) outside the union is reported. So a
-  multi-endpoint rail is judged per chain segment, an inline connector is
+  multi-endpoint rail is judged per chain segment, a conductor to a splice
+  is drawn when a view includes both its ends, an inline connector is
   covered through either half (an include of either normalizes to the
   designator), a double crimp is two conductors and never a problem, and
   a component with no harness view is not built from drawings yet, so is
-  never reported. A harness view with a rejected `grid:` still counts its
+  never reported. Shields are not conductors and are not judged: a drain no
+  view draws is not reported. A harness view with a rejected `grid:` still counts its
   conductors (laid out on the default grid: which conductors a view draws
   does not depend on its grid), so the grid is reported alone rather than
   with a warning for every conductor the view draws.
@@ -611,18 +891,19 @@ src/
 │   ├── ast/mod.rs       # spanned AST; refs are unresolved Spanned<Ident>
 │   ├── parse/mod.rs     # chumsky parser over &[(Token, Span)] → ast::File
 │   ├── manifest/        # wirebug.toml loader + git-revision auto-fill
-│   ├── project/mod.rs   # walk-up discovery + transitive `use` loading → Project
+│   ├── project/mod.rs   # walk-up discovery + transitive `use`/`fragment` loading → Project
 │   ├── resolve/         # DefId registry + reference checks, one pass per file
 │   │   ├── mod.rs       # data model (Resolved, *Facts) + the resolve() driver
 │   │   ├── register.rs  # pass 1: AST walk → DefInfo facts, local duplicates
-│   │   ├── scopes.rs    # per-file type scopes (own defs + `use` imports)
+│   │   ├── scopes.rs    # per-file type scopes (own defs + `use` imports),
+│   │   │                #   `fragment` merges, unused/duplicate fragments
 │   │   ├── merge.rs     # MergeGroups: `extend` canonicals, orphans, dup guards
 │   │   ├── refs.rs      # flat-namespace lookups + instance/connector/inline/
 │   │   │                #   endpoint reference binding
 │   │   └── views.rs     # view subject binding + include/enclosure checks
 │   ├── elaborate/mod.rs # AST/registry → ir::Design; containment-cycle guard
 │   ├── ir/mod.rs        # id newtypes + elaborated Design/Instance/Port/Wire/View
-│   ├── validate/mod.rs  # wire arity, pin/gauge/length values (errors) + --strict warnings
+│   ├── validate/mod.rs  # wire arity, cable/wire properties, pin/gauge/length values (errors) + --strict warnings
 │   └── diagnostics/mod.rs # miette `Problem` enum (one variant per failure class)
 │
 │  # ── ir::Design → SVG renderer ──
@@ -657,7 +938,7 @@ src/
 │   │           └── vpsc.rs      # separation-constraint solver
 │   ├── harness/     # WireViz-style trunk-and-bezier renderer (kind: harness)
 │   │   ├── mod.rs       # HarnessRenderer; render orchestration + STYLE
-│   │   ├── layout.rs    # conductors (HarnessConductor), pin-table nodes,
+│   │   ├── layout.rs    # conductors (HarnessConductor), pin-table nodes, splices,
 │   │   │                #   spine + facing, cable boxes (centroid placement
 │   │   │                #   + de-overlap), loose wires
 │   │   ├── bezier.rs    # horizontally-flexed cubic bezier math (FLEX)
@@ -702,6 +983,12 @@ DSL pipeline notes:
 - The lexer recognises trivia (whitespace, comments) as first-class spanned
   lexemes; `lex::significant()` is the *dial* that drops them today — a
   future `fmt` swaps it for a trivia collector without touching the parser.
+- A number token carries the unit written against it: the name-shaped run
+  touching its digits (`Token::Number { digits, unit }`, `150mm`), one
+  token spanning both. So a number directly followed by a name is always
+  one token, whatever the name spells (`1at` is no pin); after a space the
+  name is a token of its own. The lexer judges no unit: the parser says
+  where one may go, validate which ones exist.
 - `chumsky` parses a `(Token, Span)` slice; our `Span` implements
   `chumsky::span::Span` (context = `FileId`), so `e.span()` yields
   file-tagged spans directly. `Rich` errors become owned `ParseError`s.
@@ -715,7 +1002,11 @@ DSL pipeline notes:
 - Keywords are **reserved** or **contextual** (`Token::is_contextual`;
   one `KEYWORDS` table in `lex/token.rs` drives both lexing and display).
   Contextual ones — the view, `connector_type` layout and cavity words,
-  plus `from` — mean something only in their own production; everywhere a
+  plus `from`, `for` (a view's subject), `fragment` (a top-level
+  statement, where no name can start one), `shield` (a statement of a cable
+  body or a pair) and `splice` (a component-body statement when a name
+  follows it; `splice: Sensor;` reads on as an instance) — mean something only in their
+  own production; everywhere a
   name belongs they are names. Names go through two boxed productions,
   both taking an identifier or a contextual keyword (`Token::as_name`):
   `ident` for a name after a keyword, and `leading_name(separator)` for a
@@ -732,11 +1023,12 @@ DSL pipeline notes:
   reserved unless listed as contextual. LSP completion reads names through `Token::as_name` and
   only treats `ports {`/`enclosure {` as their blocks in their own
   position, so a connector named `ports` stays a connector body.
-- Files are loaded once each (by canonical path), so a `use` cycle or a
-  diamond import is harmless and never double-reports. Directory layout
-  never affects logical hierarchy — only `use` paths and DSL nesting do.
-- Wire endpoints are at most two-part (`inst.port` or bare `port`); the
-  deep dotted form is an IR *path*, not surface syntax.
+- Files are loaded once each (by canonical path), so an import cycle or a
+  diamond import (`use` and `fragment` alike) is harmless and never
+  double-reports. Directory layout never affects logical hierarchy — only
+  `use` and `fragment` paths and DSL nesting do.
+- Wire endpoints are at most two-part (`inst.port`, or a bare own port or
+  splice); the deep dotted form is an IR *path*, not surface syntax.
 
 ## Connector routing
 

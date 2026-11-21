@@ -13,6 +13,7 @@ pub enum Token {
     // Keywords.
     Use,
     From,
+    Fragment,
     Component,
     Extend,
     ConnectorType,
@@ -25,7 +26,10 @@ pub enum Token {
     Wire,
     Cable,
     Twisted,
+    Shield,
+    Splice,
     View,
+    For,
     Include,
     Text,
     At,
@@ -61,15 +65,22 @@ pub enum Token {
     Ident(String),
     /// Decoded contents of a `"quoted label"` (without the quotes).
     Str(String),
-    /// Raw numeric literal text, e.g. `50`, `0.25`.
-    Number(String),
+    /// A numeric literal: its raw text (`50`, `-0.25`), and the unit
+    /// written directly after it (`mm` in `150mm`). Any name-shaped run
+    /// touching the digits is the unit, whatever it spells: the parser
+    /// decides where a unit may go, and validation which units exist.
+    Number {
+        digits: String,
+        unit: Option<String>,
+    },
 }
 
 /// Every keyword with its surface text: the lexer's lookup table and the
 /// keywords' [`Display`](fmt::Display) form, so the two cannot drift.
-pub(super) static KEYWORDS: [(&str, Token); 28] = [
+pub(super) static KEYWORDS: [(&str, Token); 32] = [
     ("use", Token::Use),
     ("from", Token::From),
+    ("fragment", Token::Fragment),
     ("component", Token::Component),
     ("extend", Token::Extend),
     ("connector_type", Token::ConnectorType),
@@ -82,7 +93,10 @@ pub(super) static KEYWORDS: [(&str, Token); 28] = [
     ("wire", Token::Wire),
     ("cable", Token::Cable),
     ("twisted", Token::Twisted),
+    ("shield", Token::Shield),
+    ("splice", Token::Splice),
     ("view", Token::View),
+    ("for", Token::For),
     ("include", Token::Include),
     ("text", Token::Text),
     ("at", Token::At),
@@ -117,7 +131,11 @@ impl Token {
     }
 
     /// A contextual keyword: one that means something only inside a view,
-    /// a `connector_type` layout, a cavity line, or after `use <Name>`.
+    /// a `connector_type` layout, a cavity line, after `use <Name>`, after
+    /// a view's title (`for <Component>`), at the start of a top-level
+    /// statement (`fragment "<path>";`), or at the start of a statement in
+    /// a cable body or a `twisted { }` group (`shield [<end>];`), or at
+    /// the start of a statement in a component body (`splice <name>;`).
     /// Where the grammar expects a name, it is an ordinary name
     /// (`pub port size "SIZE";`), so the word stays free for users.
     ///
@@ -128,6 +146,10 @@ impl Token {
         matches!(
             self,
             Token::From
+                | Token::Fragment
+                | Token::Shield
+                | Token::Splice
+                | Token::For
                 | Token::Include
                 | Token::Text
                 | Token::At
@@ -181,7 +203,9 @@ impl fmt::Display for Token {
             Token::Slash => "/",
             Token::Ident(name) => name,
             Token::Str(s) => return write!(f, "{s:?}"),
-            Token::Number(n) => n,
+            Token::Number { digits, unit } => {
+                return write!(f, "{digits}{}", unit.as_deref().unwrap_or_default());
+            }
             // Only a keyword left out of `KEYWORDS` lands here, and that
             // keyword would not lex either.
             unlisted => return write!(f, "{unlisted:?}"),

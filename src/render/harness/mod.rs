@@ -10,9 +10,11 @@
 //! and the same chain-decomposition of wires, but keyed on connectors rather
 //! than authored port sides.
 //!
-//! - `layout` places connector nodes, the spine, and the cable boxes.
+//! - `layout` places connector nodes, splices, the spine, and the cable
+//!   boxes.
 //! - `bezier` is the pure cubic-bezier math for the wire flex.
-//! - `draw` emits the SVG for the pin tables, cable boxes, and wires.
+//! - `draw` emits the SVG for the pin tables, splices, cable boxes, and
+//!   wires.
 
 mod bezier;
 mod draw;
@@ -58,6 +60,10 @@ pub(super) const PIN_DOT_RADIUS: f64 = 3.0;
 pub(super) const BADGE_SIZE: f64 = 16.0;
 /// Gap between the badge chip and the header's corner.
 pub(super) const BADGE_INSET: f64 = 4.0;
+/// Radius of a splice's dot, the joint its conductors converge on.
+pub(super) const SPLICE_DOT_RADIUS: f64 = 7.0;
+/// Line height of the name, label and part under a splice's dot.
+pub(super) const SPLICE_LINE_HEIGHT: f64 = 13.0;
 /// Minimum vertical gap between two cable boxes stacked on the spine.
 pub(super) const CABLE_GAP: f64 = 24.0;
 /// Nominal width of one half-twist in a braided (twisted-pair) box run.
@@ -68,6 +74,9 @@ pub(super) const TWIST_PITCH: f64 = 28.0;
 pub(super) const BRAID_HALF_TWISTS: usize = 4;
 /// Width of the symbolic braid section between the two label zones.
 pub(super) const BRAID_SECTION: f64 = BRAID_HALF_TWISTS as f64 * TWIST_PITCH;
+/// How far a cable box's dashed screen outline sits inside the box; a
+/// screened pair's outline sits twice as far in, so the two never meet.
+pub(super) const SHIELD_INSET: f64 = 3.0;
 pub(super) const SVG_MARGIN: f64 = 48.0;
 pub(super) const TITLE_GAP: f64 = 12.0;
 
@@ -88,6 +97,14 @@ pub(super) const STYLE: &str = "\
 .cable-label { font: 9px sans-serif; text-anchor: middle; fill: #333; paint-order: stroke; stroke: white; stroke-width: 3px; stroke-linejoin: round; }
 .cable-label-start { text-anchor: start; }
 .cable-label-end { text-anchor: end; }
+.connector .cable-shield { fill: none; stroke: #666; stroke-width: 1; stroke-dasharray: 6 3; }
+.connector .pair-shield { fill: none; stroke: #666; stroke-width: 1; stroke-dasharray: 3 2; }
+.drain-wire { fill: none; stroke: #777; stroke-width: 1.2; stroke-dasharray: 5 3; }
+.drain-label { font-style: italic; }
+.splice-dot { fill: black; stroke: white; stroke-width: 1.5; }
+.splice-name { font: bold 11px sans-serif; text-anchor: middle; }
+.splice-label { font: 10px sans-serif; text-anchor: middle; fill: #333; }
+.splice-part { font: italic 9px sans-serif; text-anchor: middle; fill: #555; }
 .title { font: bold 14px sans-serif; }
 .stamp { font: 10px sans-serif; fill: #666; text-anchor: end; }\
 ";
@@ -165,10 +182,20 @@ impl HarnessRenderer {
         }
         doc = doc.add(nodes_group);
 
+        // Splice dots over their conductors' converging ends.
+        if !layout.splices.is_empty() {
+            let mut splices_group = Group::new().set("class", "splices");
+            for splice in &layout.splices {
+                splices_group = splices_group.add(draw::render_splice(splice));
+            }
+            doc = doc.add(splices_group);
+        }
+
         Ok(doc.to_string())
     }
 
-    /// Each include's pin-table box, the conductors drawn and the canvas of
+    /// Each include's box (a connector's pin table, a splice's joint), the
+    /// conductors drawn and the canvas of
     /// the standalone SVG, from the same layout [`Self::render`] draws. A
     /// non-positive grid lays out no boxes and no canvas, only the fault;
     /// which conductors a view draws does not depend on its grid, so they
@@ -182,14 +209,19 @@ impl HarnessRenderer {
         let (boxes, canvas) = match fault {
             Some(_) => (Vec::new(), None),
             None => {
-                let boxes = layout
+                let mut boxes: Vec<IncludeBox> = layout
                     .nodes
                     .iter()
                     .map(|node| IncludeBox {
                         include: node.include,
                         bounds: node.bounds(),
                     })
+                    .chain(layout.splices.iter().map(|splice| IncludeBox {
+                        include: splice.include,
+                        bounds: splice.bounds,
+                    }))
                     .collect();
+                boxes.sort_by_key(|b| b.include);
                 let vb = viewbox(design, view, &layout, SvgMode::Standalone);
                 (boxes, Some(Canvas::new(vb.width, vb.height)))
             }
@@ -214,7 +246,7 @@ impl HarnessRenderer {
             .map(|c| Conductor {
                 segment: c.segment,
                 wire: c.wire,
-                ends: c.ends.each_ref().map(|end| end.end),
+                ends: c.ends.each_ref().map(|end| end.end()),
                 targets: c.ends.each_ref().map(|end| end.target()),
             })
             .collect()
@@ -885,6 +917,300 @@ component sys {
             (lead_in - lead_out).abs() < 1.0,
             "box centred in the gap: lead-in {lead_in}, lead-out {lead_out}"
         );
+    }
+
+    /// A CAN-style pair between `a` and `b`, with a ground stud `g` off to
+    /// the side; `body` is the cable's body.
+    fn screened_design(body: &str) -> Design {
+        design_from(&format!(
+            r#"
+component sys {{
+    a: ecu "ECU";
+    b: dev "Device";
+    g: stud "Stud";
+    cable can "CAN" {{
+        {body}
+    }}
+    component ecu {{
+        connector c "ECU 4p" {{
+            pub port h "CAN H" pin 1;
+            pub port l "CAN L" pin 2;
+            pub port gnd "GND" pin 3;
+            pub port shield "SHIELD" pin 4;
+        }}
+    }}
+    component dev {{
+        connector c "Dev 3p" {{
+            pub port h "CAN H" pin 1;
+            pub port l "CAN L" pin 2;
+            pub port shield "SHIELD" pin 3;
+        }}
+    }}
+    component stud {{
+        connector j "Stud 1p" {{ pub port gnd "GND" pin 1; }}
+    }}
+}}
+"#
+        ))
+    }
+
+    /// The `sys` harness view of `a.c` and `b.c` (and `g.j` with `stud`).
+    fn screened_view(stud: bool) -> View {
+        let mut includes = vec![("a", "c", 0.0, 0.0), ("b", "c", 30.0, 0.0)];
+        if stud {
+            includes.push(("g", "j", 30.0, 10.0));
+        }
+        harness_view("sys", &includes)
+    }
+
+    const PAIR: &str = r#"wire white/blue 0.5 "CAN H" [a.h, b.h];
+        wire white/red 0.5 "CAN L" [a.l, b.l];"#;
+
+    #[test]
+    fn a_shielded_cable_box_says_so_and_wears_a_dashed_screen() {
+        let screened = render(
+            &screened_design(&format!("type: \"CAN\"; {PAIR} shield;")),
+            &screened_view(false),
+        );
+        assert!(screened.contains("CAN · ×2 · shielded"), "{screened}");
+        assert_eq!(screened.matches("class=\"cable-shield\"").count(), 1);
+        // On no pin: the mark alone, no drain.
+        assert!(!screened.contains("class=\"drain\""));
+
+        let plain = render(
+            &screened_design(&format!("type: \"CAN\"; {PAIR}")),
+            &screened_view(false),
+        );
+        assert!(plain.contains("CAN · ×2"));
+        assert!(!plain.contains("shielded"));
+        assert!(!plain.contains("class=\"cable-shield\""));
+    }
+
+    #[test]
+    fn a_drain_runs_from_the_box_to_each_terminating_pin_in_the_view() {
+        let design = screened_design(&format!(r#"{PAIR} shield "SHLD" [a.shield, b.shield];"#));
+        let svg = render(&design, &screened_view(false));
+        // One drain: its run through the box and a lead to each end.
+        assert_eq!(svg.matches("class=\"drain\"").count(), 1);
+        assert_eq!(svg.matches("class=\"drain-wire\"").count(), 3);
+        assert!(svg.contains("class=\"cable-label drain-label\""));
+        assert!(svg.contains(">\nSHLD\n</text>"), "{svg}");
+
+        // Both drain pins get a row in their pin tables, facing the box.
+        let layout = compute(&design, &screened_view(false));
+        for node in &layout.nodes {
+            let row = node
+                .pins
+                .iter()
+                .find(|r| r.port.as_str() == "shield")
+                .expect("the drain pin has a row");
+            assert_eq!(row.side, node.facing);
+        }
+        let [cable] = layout.cable_boxes.as_slice() else {
+            panic!("expected one cable box");
+        };
+        let [drain] = cable.drains.as_slice() else {
+            panic!("expected one drain");
+        };
+        assert_eq!(drain.attaches.len(), 2);
+        // The drain is the box's last row, below both strands.
+        assert!(cable.strands.iter().all(|s| s.row_y < drain.row_y));
+        assert!(drain.row_y < cable.origin.y + cable.height);
+    }
+
+    #[test]
+    fn a_drain_end_on_a_connector_the_view_leaves_out_is_not_drawn() {
+        let design = screened_design(&format!("{PAIR} shield [a.shield, g.gnd];"));
+        let without = render(&design, &screened_view(false));
+        assert_eq!(without.matches("class=\"drain-wire\"").count(), 2);
+        assert!(!without.contains("Stud"));
+        // An unlabelled cable screen is called what it is.
+        assert!(without.contains(">\nShield\n</text>"));
+
+        let with = render(&design, &screened_view(true));
+        assert_eq!(with.matches("class=\"drain-wire\"").count(), 3);
+    }
+
+    #[test]
+    fn a_shield_alone_never_draws_a_cable_box() {
+        // The conductors' far ends are left out, so the cable is not drawn,
+        // and neither is its shield, though both its ends are included.
+        let design = screened_design(&format!("{PAIR} shield [a.shield, g.gnd];"));
+        let view = harness_view("sys", &[("a", "c", 0.0, 0.0), ("g", "j", 30.0, 0.0)]);
+        let svg = render(&design, &view);
+        assert!(!svg.contains("class=\"connector cable-box\""));
+        assert!(!svg.contains("class=\"drain\""));
+        assert!(
+            !svg.contains("SHIELD"),
+            "the drain pin stays out of the table"
+        );
+    }
+
+    #[test]
+    fn a_drain_may_share_a_pin_with_a_wire() {
+        let design = screened_design(&format!(
+            "{PAIR} wire black 0.5 \"GND\" [a.gnd, b.shield]; shield [a.gnd];"
+        ));
+        let layout = compute(&design, &screened_view(false));
+        let ecu = &layout.nodes[0];
+        assert_eq!(
+            ecu.pins.iter().filter(|r| r.port.as_str() == "gnd").count(),
+            1,
+            "one row for the pin the wire and the drain share"
+        );
+        assert_eq!(layout.cable_boxes[0].drains.len(), 1);
+    }
+
+    #[test]
+    fn a_shielded_pair_is_outlined_with_its_drain_below_it() {
+        let design = screened_design(&format!(
+            r#"wire red 0.5 "12V" [a.gnd, b.shield];
+            twisted {{ {PAIR} shield [a.shield]; }}"#
+        ));
+        let svg = render(&design, &screened_view(false));
+        assert_eq!(svg.matches("class=\"pair-shield\"").count(), 1);
+        assert!(!svg.contains("class=\"cable-shield\""), "no overall screen");
+        assert!(svg.contains(">\nPair shield\n</text>"));
+
+        let layout = compute(&design, &screened_view(false));
+        let cable = &layout.cable_boxes[0];
+        let pair_rows: Vec<usize> = cable
+            .strands
+            .iter()
+            .filter(|s| s.group == Some(0))
+            .map(|s| s.row)
+            .collect();
+        let drain_row = cable.drains[0].row;
+        assert_eq!(drain_row, pair_rows.iter().max().unwrap() + 1);
+
+        let unshielded = render(
+            &screened_design(&format!("twisted {{ {PAIR} }}")),
+            &screened_view(false),
+        );
+        assert!(!unshielded.contains("class=\"pair-shield\""));
+    }
+
+    #[test]
+    fn shields_are_not_counted_as_drawn_conductors() {
+        use crate::render::lint::Segment;
+        let design = screened_design(&format!("{PAIR} shield [a.shield, b.shield];"));
+        let layout = compute(&design, &screened_view(false));
+        assert_eq!(
+            layout.drawn,
+            [Segment { wire: 0, index: 0 }, Segment { wire: 1, index: 0 }]
+        );
+    }
+
+    /// Three devices whose grounds join at splice `sp`, and the splice's
+    /// run on to `bat` inside cable `run`.
+    fn spliced_design() -> Design {
+        design_from(
+            r#"
+component sys {
+    a: dev "A";
+    b: dev "B";
+    bat: dev "Battery";
+    splice sp "Ground splice" { part: "D-436"; }
+    wire black 1 "GND" [a.gnd, sp];
+    wire brown 0.5 "GND" [b.gnd, sp];
+    cable run "Run" { wire black 2.5 "GND" [sp, bat.gnd]; }
+    component dev {
+        connector j "J 1p" { pub port gnd "GND" pin 1; }
+    }
+}
+"#,
+        )
+    }
+
+    /// A harness view of `sys` including `a.j`, `b.j` and `bat.j` and, when
+    /// `with_splice`, the splice `sp` between them.
+    fn spliced_view(with_splice: bool) -> View {
+        let mut view = harness_view(
+            "sys",
+            &[
+                ("a", "j", 0.0, 0.0),
+                ("b", "j", 0.0, 10.0),
+                ("bat", "j", 40.0, 5.0),
+            ],
+        );
+        if with_splice {
+            view.includes.push(Include {
+                instance: InstanceName::from("sp"),
+                connector: None,
+                half: None,
+                x: 20.0,
+                y: 5.0,
+                ports: Vec::new(),
+                span: Span::new(FileId(0), 0, 0),
+            });
+        }
+        view
+    }
+
+    #[test]
+    fn a_splice_draws_as_a_labelled_joint_its_conductors_meet_at() {
+        let design = spliced_design();
+        let svg = render(&design, &spliced_view(true));
+        assert_eq!(svg.matches("class=\"splice\"").count(), 1);
+        assert_eq!(svg.matches("class=\"splice-dot\"").count(), 1);
+        assert!(svg.contains("class=\"splice-name\""));
+        assert!(svg.contains(">\nsp\n</text>"), "{svg}");
+        assert!(svg.contains(">\nGround splice\n</text>"));
+        assert!(svg.contains(">\nD-436\n</text>"));
+        // A loose conductor stays a loose wire, a cable's runs through its box.
+        assert!(svg.contains("GND · 0.5mm² · BN"));
+        assert!(svg.contains("class=\"connector cable-box\""));
+
+        let layout = compute(&design, &spliced_view(true));
+        let [splice] = layout.splices.as_slice() else {
+            panic!("one splice node");
+        };
+        assert_eq!(
+            splice.centre,
+            crate::render::geometry::Point::new(400.0, 100.0)
+        );
+        // Every conductor ends at the dot: both loose wires, and the cable
+        // strand's left end.
+        assert_eq!(layout.loose.len(), 2);
+        assert!(layout.loose.iter().all(|w| w.to == splice.centre));
+        assert_eq!(layout.cable_boxes[0].strands[0].left_attach, splice.centre);
+        // The pins face the splice they run to.
+        use crate::render::geometry::Side;
+        assert!(
+            layout.nodes[..2]
+                .iter()
+                .all(|n| n.pins[0].side == Side::East)
+        );
+        assert_eq!(layout.nodes[2].pins[0].side, Side::West);
+    }
+
+    #[test]
+    fn conductors_to_a_splice_the_view_leaves_out_are_not_drawn() {
+        use crate::render::lint::Segment;
+        let design = spliced_design();
+        let without = compute(&design, &spliced_view(false));
+        assert!(without.splices.is_empty());
+        assert!(without.drawn.is_empty());
+        assert!(without.cable_boxes.is_empty() && without.loose.is_empty());
+        // And with it, all three are drawn, in wire order.
+        let with = compute(&design, &spliced_view(true));
+        assert_eq!(
+            with.drawn,
+            (0..3)
+                .map(|wire| Segment { wire, index: 0 })
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_splice_is_an_include_box_of_its_own() {
+        let design = spliced_design();
+        let subject = design.get(&design.root).expect("root");
+        let layout = HarnessRenderer.layout(&design, subject, &spliced_view(true));
+        let includes: Vec<usize> = layout.boxes.iter().map(|b| b.include).collect();
+        assert_eq!(includes, [0, 1, 2, 3], "every include, in include order");
+        let splice = &layout.boxes[3].bounds;
+        assert!(splice.width > 0.0 && splice.height > 0.0);
     }
 
     /// Build the layout for `view` against `design`'s subject instance.

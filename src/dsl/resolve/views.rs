@@ -8,10 +8,10 @@ use std::collections::HashMap;
 
 use crate::dsl::ast::{self, Item};
 use crate::dsl::diagnostics::{FirstViewTitle, Problem};
-use crate::dsl::ir::{ConnectorName, InstanceName, PortName, Side, ViewKind};
+use crate::dsl::ir::{ConnectorName, InstanceName, PortName, Side, SpliceName, ViewKind};
 use crate::dsl::span::{FileId, Span, Spanned};
 
-use super::{DefId, InlineFacts, Resolver, ViewBinding};
+use super::{ComponentScope, ConnectorTypeScope, DefId, InlineFacts, Resolver, ViewBinding};
 
 impl<'a> Resolver<'a> {
     /// Validate one include's `ports { }` placements against the included
@@ -66,6 +66,7 @@ impl<'a> Resolver<'a> {
             None => problems.push(Problem::UnknownPort {
                 port: port.to_string(),
                 on: format!(" on `{}`", self.defs[tid].name),
+                help: None,
                 src: self.project.source(file),
                 at: span.into(),
             }),
@@ -215,7 +216,7 @@ impl<'a> Resolver<'a> {
         let Some(conn) = &inc.connector else {
             problems.push(Problem::WrongIncludeForm {
                 message: "a harness include must name a connector".to_string(),
-                help: "write `include <instance>.<connector> at (x, y);`".to_string(),
+                help: "write `include <instance>.<connector> at (x, y);`, or `include <splice> at (x, y);` to place one of the subject's splices".to_string(),
                 src: self.project.source(file),
                 at: inc.instance.span.into(),
             });
@@ -294,6 +295,51 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    /// An include naming one of the subject's splices places that joint,
+    /// in a harness view only, and by its name alone: `include <splice> at
+    /// (x, y);`, with no `.connector` and no `ports { }` block.
+    fn check_splice_include(
+        &self,
+        inc: &ast::Include,
+        kind: &ViewKind,
+        file: FileId,
+        problems: &mut Vec<Problem>,
+    ) {
+        let splice = inc.instance.node.as_str();
+        if !kind.is_harness() {
+            let help = if kind.is_schematic() {
+                format!(
+                    "remove this include: a schematic draws the ports splice `{splice}` joins as one connection between them"
+                )
+            } else {
+                "remove this include: a pinout view draws its subject's connectors".to_string()
+            };
+            problems.push(Problem::WrongIncludeForm {
+                message: format!("a splice is placed in harness views, not in a {kind} view"),
+                help,
+                src: self.project.source(file),
+                at: inc.instance.span.into(),
+            });
+            return;
+        }
+        if let Some(segment) = &inc.connector {
+            problems.push(Problem::WrongIncludeForm {
+                message: "a splice include names the splice alone".to_string(),
+                help: format!("write `include {splice} at (x, y);`"),
+                src: self.project.source(file),
+                at: segment.span.into(),
+            });
+        }
+        if let Some(first) = inc.ports.first() {
+            problems.push(Problem::WrongIncludeForm {
+                message: "a splice include places a joint, not selected ports".to_string(),
+                help: "remove the `ports { }` block from this splice include".to_string(),
+                src: self.project.source(file),
+                at: first.span.into(),
+            });
+        }
+    }
+
     /// A pinout include names a connector on the view subject itself:
     /// `include <connector> at (x, y);`. It carries neither an instance
     /// connector segment nor a schematic `ports { }` block.
@@ -366,7 +412,10 @@ impl<'a> Resolver<'a> {
             let is_inline = self
                 .lookup_inline(subject, &InstanceName::from(name))
                 .is_some();
-            let target = if is_inline {
+            let is_splice = self
+                .lookup_splice(subject, &SpliceName::from(name))
+                .is_some();
+            let target = if is_inline || is_splice {
                 Some(name.to_string())
             } else {
                 include_target(inc, is_harness)
@@ -413,7 +462,57 @@ impl<'a> Resolver<'a> {
         });
     }
 
-    pub(super) fn resolve_views(&mut self, roots_by_file: &[Vec<DefId>]) -> Vec<ViewBinding<'a>> {
+    /// The component `view` documents. With `for`, the component it names,
+    /// looked up in the file's scope (its own top-level components and its
+    /// `use` imports); without, the file's single top-level component. A
+    /// view in a fragment file binds to the fragment's definition, so the
+    /// subject is canonicalized: the view documents — and sees the whole
+    /// merged namespace of — the one component the fragment extends.
+    fn view_subject(
+        &self,
+        view: &ast::View,
+        file: FileId,
+        roots: &[DefId],
+        components: &ComponentScope,
+        connector_types: &ConnectorTypeScope,
+        problems: &mut Vec<Problem>,
+    ) -> Option<DefId> {
+        let Some(named) = &view.subject else {
+            if let [only] = roots {
+                return Some(self.groups.canonical(*only));
+            }
+            problems.push(Problem::ViewSubject {
+                src: self.project.source(file),
+                at: view.span.into(),
+            });
+            return None;
+        };
+        let name = named.node.as_str();
+        if let Some(&id) = components.get(name) {
+            return Some(self.groups.canonical(id));
+        }
+        problems.push(if connector_types.contains_key(name) {
+            Problem::ViewSubjectNotComponent {
+                name: name.to_string(),
+                src: self.project.source(file),
+                at: named.span.into(),
+            }
+        } else {
+            Problem::UndefinedType {
+                name: name.to_string(),
+                src: self.project.source(file),
+                at: named.span.into(),
+            }
+        });
+        None
+    }
+
+    pub(super) fn resolve_views(
+        &mut self,
+        roots_by_file: &[Vec<DefId>],
+        file_scope: &HashMap<FileId, ComponentScope>,
+        connector_type_scope: &HashMap<FileId, ConnectorTypeScope>,
+    ) -> Vec<ViewBinding<'a>> {
         let mut bindings = Vec::new();
         let mut problems = Vec::new();
         let mut titles = HashMap::new();
@@ -439,14 +538,22 @@ impl<'a> Resolver<'a> {
                 }
                 let mut text_names: HashMap<&str, Span> = HashMap::new();
                 for text in &view.texts {
-                    let name = text.name.node.as_str();
-                    if let Some(first) = text_names.insert(name, text.name.span) {
-                        problems.push(Problem::DuplicateViewText {
-                            name: name.to_string(),
+                    // Only the deprecated named form has a name to clash.
+                    if let Some(name) = &text.name {
+                        problems.push(Problem::DeprecatedTextSyntax {
+                            name: name.node.to_string(),
+                            rewrite: text.current_form(),
                             src: self.project.source(FileId(fi)),
-                            at: text.name.span.into(),
-                            first: first.into(),
+                            at: text.span.into(),
                         });
+                        if let Some(first) = text_names.insert(name.node.as_str(), name.span) {
+                            problems.push(Problem::DuplicateViewText {
+                                name: name.node.to_string(),
+                                src: self.project.source(FileId(fi)),
+                                at: name.span.into(),
+                                first: first.into(),
+                            });
+                        }
                     }
                     if !view_kind.is_schematic() {
                         problems.push(Problem::UnsupportedViewText {
@@ -456,28 +563,31 @@ impl<'a> Resolver<'a> {
                         });
                     }
                 }
-                // A view in a fragment file binds to that fragment's top-level
-                // definition; canonicalize so it documents — and sees the whole
-                // merged namespace of — the one component it extends.
-                let subject = if roots.len() == 1 {
-                    Some(self.groups.canonical(roots[0]))
-                } else {
-                    problems.push(Problem::ViewSubject {
-                        src: self.project.source(FileId(fi)),
-                        at: view.span.into(),
-                    });
-                    None
-                };
-                if let Some(s) = subject {
+                let subject = self.view_subject(
+                    view,
+                    FileId(fi),
+                    roots,
+                    &file_scope[&FileId(fi)],
+                    &connector_type_scope[&FileId(fi)],
+                    &mut problems,
+                );
+                // The members of a component whose `extend`s merged into
+                // nothing are missing, so checking the includes against them
+                // would only echo the `orphan_fragment`.
+                if let Some(s) = subject.filter(|&s| !self.is_orphan(s)) {
                     self.check_enclosure(view, s, FileId(fi), &mut problems);
                     self.check_duplicate_includes(view, s, FileId(fi), &mut problems);
                     let is_harness = view_kind.is_harness();
                     for inc in &view.includes {
+                        let name = inc.instance.node.as_str();
+                        if self.lookup_splice(s, &SpliceName::from(name)).is_some() {
+                            self.check_splice_include(inc, &view_kind, FileId(fi), &mut problems);
+                            continue;
+                        }
                         if view_kind.is_pinout() {
                             self.check_pinout_include(inc, s, FileId(fi), &mut problems);
                             continue;
                         }
-                        let name = inc.instance.node.as_str();
                         match self.lookup_instance(s, &InstanceName::from(name)) {
                             None if is_harness
                                 && let Some(facts) =
@@ -538,12 +648,57 @@ fn include_target(inc: &ast::Include, is_harness: bool) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use crate::dsl::diagnostics::Problem;
-    use crate::dsl::resolve::testkit::{LEAF, codes, has, inline_project, problems};
+    use crate::dsl::resolve::testkit::{LEAF, codes, has, inline_project, problems, with_resolved};
 
     #[test]
     fn unknown_view_kind_is_reported() {
         let p = problems(&[("main.wb", "component m { } view schemtic \"V\" { }\n")]);
         assert!(has(&p, "wirebug::unknown_view_kind"), "{:?}", codes(&p));
+    }
+
+    /// Every problem code of a component `m` with a splice `sp` (and two
+    /// `leaf`s wired to it), under `view`.
+    fn splice_view(view: &str) -> Vec<String> {
+        codes(&problems(&[(
+            "main.wb",
+            &format!(
+                "component leaf {{ connector j {{ pub port a \"A\" pin 1; }} }}\n\
+                 component m {{ l: leaf; r: leaf; splice sp;\n\
+                 wire red 1 [l.a, sp]; wire red 1 [sp, r.a]; }}\n{view}\n"
+            ),
+        )]))
+    }
+
+    #[test]
+    fn a_harness_view_places_a_splice_by_its_name() {
+        assert!(
+            splice_view(
+                "view harness \"H\" for m { include l.j at (0, 0); include sp at (10, 0); }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_splice_include_in_another_form_or_view_kind_is_the_wrong_form() {
+        for view in [
+            "view harness \"H\" for m { include sp.j at (0, 0); }",
+            "view harness \"H\" for m { include sp at (0, 0) ports { west: a; } }",
+            "view schematic \"S\" for m { include sp at (0, 0); }",
+            "view pinout \"P\" for m { include sp at (0, 0); }",
+        ] {
+            assert_eq!(splice_view(view), ["wirebug::wrong_include_form"], "{view}");
+        }
+    }
+
+    #[test]
+    fn a_splice_included_twice_is_a_duplicate_include() {
+        assert_eq!(
+            splice_view(
+                "view harness \"H\" for m { include sp at (0, 0); include sp at (10, 0); }"
+            ),
+            ["wirebug::duplicate_view_include"]
+        );
     }
 
     #[test]
@@ -738,6 +893,14 @@ mod tests {
             "component m { } view schematic \"V\" { text note at (0, 0) \"A\"; text note at (1, 1) \"B\"; }\n",
         )]);
         assert!(has(&p, "wirebug::duplicate_view_text"), "{:?}", codes(&p));
+        assert_eq!(
+            codes(&p)
+                .iter()
+                .filter(|c| *c == "wirebug::deprecated_text_syntax")
+                .count(),
+            2,
+            "each named box is also deprecated"
+        );
     }
 
     #[test]
@@ -794,9 +957,52 @@ mod tests {
     fn text_box_in_harness_view_is_reported() {
         let p = problems(&[(
             "main.wb",
-            "component m { } view harness \"H\" { text note at (0, 0) \"A\"; }\n",
+            "component m { } view harness \"H\" { text \"A\" at (0, 0); }\n",
         )]);
-        assert!(has(&p, "wirebug::unsupported_view_text"), "{:?}", codes(&p));
+        assert_eq!(codes(&p), ["wirebug::unsupported_view_text"]);
+    }
+
+    #[test]
+    fn named_text_box_warns_and_shows_the_current_form() {
+        use miette::Diagnostic;
+        let src = "component m { }\nview schematic \"V\" { text front_term at (8, -4)  \"120 Ω termination\"; }\n";
+        let p = problems(&[("main.wb", src)]);
+        let [problem] = p.as_slice() else {
+            panic!("expected one problem, got {:?}", codes(&p));
+        };
+        let Problem::DeprecatedTextSyntax { at, .. } = problem else {
+            panic!("expected the deprecation, got {:?}", codes(&p));
+        };
+        assert_eq!(problem.severity(), Some(miette::Severity::Warning));
+        assert_eq!(
+            &src[at.offset()..at.offset() + at.len()],
+            "text front_term at (8, -4)  \"120 Ω termination\";",
+            "labelled on the whole statement"
+        );
+        assert_eq!(
+            problem.help().map(|h| h.to_string()).as_deref(),
+            Some(
+                "write the label first and drop the name: `text \"120 Ω termination\" at (8, -4);`; the named form will be removed"
+            )
+        );
+    }
+
+    #[test]
+    fn text_boxes_in_the_current_form_have_no_name_to_clash() {
+        let p = problems(&[(
+            "main.wb",
+            "component m { } view schematic \"V\" { text \"A\" at (0, 0); text \"A\" at (0, 0); }\n",
+        )]);
+        assert!(p.is_empty(), "unexpected problems: {:?}", codes(&p));
+    }
+
+    #[test]
+    fn mixed_text_box_forms_warn_only_on_the_named_one() {
+        let p = problems(&[(
+            "main.wb",
+            "component m { } view schematic \"V\" { text note at (0, 0) \"A\"; text \"note\" at (1, 1); }\n",
+        )]);
+        assert_eq!(codes(&p), ["wirebug::deprecated_text_syntax"]);
     }
 
     /// A two-file project whose `main.wb` holds one `leaf` instance `l` and a
@@ -1028,6 +1234,163 @@ mod tests {
             "component m { }\nview schematic \"S\" { }\nview schematic \"S 2\" { }\n",
         )]);
         assert!(p.is_empty(), "unexpected problems: {:?}", codes(&p));
+    }
+
+    // --- the view subject (`for <Component>`) ---
+
+    /// Two components in one library file, each with a connector; `main.wb`
+    /// places one of each.
+    const TWO_COMPONENTS: &str = "component Sensor { connector x1 \"X1\" { pub port sig \"SIG\" pin 1; } }\n\
+         component Lamp { connector x2 \"X2\" { pub port feed \"FEED\" pin 1; } }\n";
+    const PLACES_BOTH: (&str, &str) = (
+        "main.wb",
+        "use Sensor from \"lib.wb\";\nuse Lamp from \"lib.wb\";\ncomponent m { s: Sensor; l: Lamp; }\n",
+    );
+
+    /// The subject type name of each view, in source order.
+    fn subjects(files: &[(&str, &str)]) -> Vec<Option<String>> {
+        let mut names = Vec::new();
+        with_resolved(files, |r| {
+            names = r
+                .views
+                .iter()
+                .map(|v| v.subject.map(|s| r.defs[s].name.to_string()))
+                .collect();
+        });
+        names
+    }
+
+    #[test]
+    fn views_for_each_of_two_components_in_one_file_bind_to_each() {
+        let lib = format!(
+            "{TWO_COMPONENTS}view pinout \"Sensor\" for Sensor {{ include x1 at (0, 0); }}\n\
+             view pinout \"Lamp\" for Lamp {{ include x2 at (0, 0); }}\n"
+        );
+        let files = [PLACES_BOTH, ("lib.wb", &lib)];
+        let p = problems(&files);
+        assert!(p.is_empty(), "unexpected problems: {:?}", codes(&p));
+        assert_eq!(
+            subjects(&files),
+            [Some("Sensor".to_string()), Some("Lamp".to_string())]
+        );
+    }
+
+    #[test]
+    fn includes_resolve_against_the_component_for_names() {
+        // `x1` is Sensor's connector, not Lamp's.
+        let lib =
+            format!("{TWO_COMPONENTS}view pinout \"Lamp\" for Lamp {{ include x1 at (0, 0); }}\n");
+        let p = problems(&[PLACES_BOTH, ("lib.wb", &lib)]);
+        assert_eq!(codes(&p), ["wirebug::unknown_connector"]);
+        assert!(p[0].to_string().contains("on `Lamp`"), "{}", p[0]);
+    }
+
+    #[test]
+    fn a_view_without_for_in_a_two_component_file_still_cannot_bind() {
+        use miette::Diagnostic;
+        let lib = format!("{TWO_COMPONENTS}view pinout \"P\" {{ include x1 at (0, 0); }}\n");
+        let p = problems(&[PLACES_BOTH, ("lib.wb", &lib)]);
+        assert_eq!(codes(&p), ["wirebug::view_subject"]);
+        let help = p[0].help().expect("help").to_string();
+        assert!(help.contains("for <Component>"), "{help}");
+    }
+
+    #[test]
+    fn a_view_for_the_files_single_component_resolves_cleanly() {
+        let files = [(
+            "main.wb",
+            "component m { connector x1 \"X1\" { pub port a \"A\" pin 1; } }\n\
+             view pinout \"P\" for m { include x1 at (0, 0); }\n",
+        )];
+        let p = problems(&files);
+        assert!(p.is_empty(), "unexpected problems: {:?}", codes(&p));
+        assert_eq!(subjects(&files), [Some("m".to_string())]);
+    }
+
+    #[test]
+    fn a_view_for_an_imported_component_binds_to_it() {
+        // The file's own component is `m`; the view documents `leaf`.
+        let files = [
+            (
+                "main.wb",
+                "use leaf from \"leaf.wb\";\ncomponent m { l: leaf; }\n\
+                 view pinout \"Leaf\" for leaf { include j at (0, 0); }\n",
+            ),
+            (
+                "leaf.wb",
+                "component leaf { connector j \"J\" { pub port a \"A\" pin 1; } }\n",
+            ),
+        ];
+        let p = problems(&files);
+        assert!(p.is_empty(), "unexpected problems: {:?}", codes(&p));
+        assert_eq!(subjects(&files), [Some("leaf".to_string())]);
+    }
+
+    #[test]
+    fn a_view_for_an_unknown_name_is_an_undefined_type_on_the_name() {
+        let src = "component m { }\nview pinout \"P\" for Ghost { }\n";
+        let p = problems(&[("main.wb", src)]);
+        assert_eq!(codes(&p), ["wirebug::undefined_type"]);
+        assert_eq!(
+            labelled(&p[0]),
+            [("main.wb".to_string(), "Ghost".to_string())]
+        );
+    }
+
+    #[test]
+    fn a_view_for_a_nested_component_is_an_undefined_type() {
+        // A view sits at the top level, so it sees the file's scope only.
+        let p = problems(&[(
+            "main.wb",
+            "component m { component inner { } i: inner; }\nview pinout \"P\" for inner { }\n",
+        )]);
+        assert_eq!(codes(&p), ["wirebug::undefined_type"]);
+    }
+
+    #[test]
+    fn a_view_for_a_connector_type_says_it_is_not_a_component() {
+        let p = problems(&[(
+            "main.wb",
+            "connector_type Plug \"P\" { }\ncomponent m { }\nview pinout \"P\" for Plug { }\n",
+        )]);
+        assert_eq!(codes(&p), ["wirebug::view_subject_not_component"]);
+        assert_eq!(
+            p[0].to_string(),
+            "`Plug` is a connector type, not a component"
+        );
+        assert_eq!(
+            labelled(&p[0]),
+            [("main.wb".to_string(), "Plug".to_string())]
+        );
+    }
+
+    #[test]
+    fn a_view_for_in_a_fragment_file_documents_the_merged_component() {
+        // The view names the extended component and reaches `pack`, an
+        // instance the root fragment declares.
+        let files = [
+            (
+                "main.wb",
+                "use vehicle from \"traction.wb\";\nuse leaf from \"leaf.wb\";\n\
+                 component vehicle { pack: leaf \"Pack\"; }\n",
+            ),
+            (
+                "traction.wb",
+                "use leaf from \"leaf.wb\";\nextend vehicle { inv: leaf \"Inv\"; }\n\
+                 view schematic \"Traction\" for vehicle {\n\
+                   include pack at (2, 2) ports { east: a; }\n\
+                   include inv  at (8, 2) ports { west: a; }\n\
+                 }\n",
+            ),
+            ("leaf.wb", LEAF),
+        ];
+        let p = problems(&files);
+        assert!(p.is_empty(), "{:?}", codes(&p));
+        with_resolved(&files, |r| {
+            let subject = r.views[0].subject.expect("bound");
+            assert_eq!(subject, r.groups.canonical(subject), "the root component");
+            assert_eq!(r.defs[subject].kind, crate::dsl::ast::DefKind::Component);
+        });
     }
 
     // --- `extend` fragments (split a component across files) ---

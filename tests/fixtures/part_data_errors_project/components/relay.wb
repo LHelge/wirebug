@@ -1,0 +1,7 @@
+component Relay {
+    part:   "V23134";
+    rating: 40;
+    colour: "black";
+
+    pub port coil "COIL";
+}

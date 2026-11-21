@@ -1,6 +1,6 @@
 ---
 name: wirebug-dsl
-description: Use this skill whenever editing, creating, reviewing, or discussing wirebug DSL files (.wb extension) — a text-defined electrical schematic and wiring harness language for the Aphid EV project. Covers component definitions, type/instance separation, ports (pub vs private), connector groupings, multi-endpoint wires, hierarchical composition, imports between files, views, and grid-based layout. Trigger whenever the user mentions wirebug, .wb files, components, schematics, harnesses, EV wiring, or is designing electrical systems in text. Trigger whenever a .wb file is open, being edited, or referenced.
+description: Use this skill whenever editing, creating, reviewing, or discussing wirebug DSL files (.wb extension) — a text-defined electrical schematic and wiring harness language for the Aphid EV project. Covers component definitions, type/instance separation, ports (pub vs private), connector groupings, multi-endpoint wires, splices, hierarchical composition, imports between files, views, and grid-based layout. Trigger whenever the user mentions wirebug, .wb files, components, schematics, harnesses, EV wiring, or is designing electrical systems in text. Trigger whenever a .wb file is open, being edited, or referenced.
 ---
 
 # wirebug DSL
@@ -37,19 +37,20 @@ my-ev/
 
 Conventions the `examples/` project follows: every instance is declared in exactly one fragment (the system the device belongs to); cross-system wires live in the fragment owning the *signal* (interlock wires in `safety.wb`, 12V and grounds in `lv.wb`); a single-system point-to-point cable stays in its system file, a multi-system bundle lives in its loom file; views sit in the file whose subject they document (component detail views beside the component, system views in the system fragment, harness views in the loom).
 
-Filesystem layout is for human navigation only. **A component's logical position in the hierarchy is determined entirely by `use` statements and nesting in the DSL**, not by what directory the file lives in. Moving a `.wb` file to a different folder must never change the model — the only thing that matters is which paths the `use` statements resolve to.
+Filesystem layout is for human navigation only. **A component's logical position in the hierarchy is determined entirely by `use` and `fragment` statements and nesting in the DSL**, not by what directory the file lives in. Moving a `.wb` file to a different folder must never change the model — the only thing that matters is which paths the `use` and `fragment` statements resolve to.
 
 ## File contents
 
 A `.wb` file contains zero or more of, in any order:
 
 - `use` declarations (imports from other files)
+- `fragment` statements (files pulled in for their `extend`s and views)
 - `component` definitions (type definitions, which may nest other definitions)
 - `view` declarations (rendering targets)
 
 Comments are `//` line comments only. Block comments are not supported.
 
-Statements end with `;`; brace blocks end at the closing brace with no trailing `;`. Comma-separated lists — `pins [ ]`, wire endpoint lists, and view `ports` side lists — allow a trailing comma, so multi-line lists diff cleanly. Numbers may be negative (`at (-2, 4)`); there is no other arithmetic.
+Statements end with `;`; brace blocks end at the closing brace with no trailing `;` (so a wire with a property body ends at its `}`). Comma-separated lists — `pins [ ]`, wire endpoint lists, and view `ports` side lists — allow a trailing comma, so multi-line lists diff cleanly. Numbers may be negative (`at (-2, 4)`); there is no other arithmetic.
 
 ## Imports
 
@@ -66,6 +67,19 @@ If multiple imports come from the same file, repeat the statement (no list form 
 use CellModule from "components/cell_module.wb";
 use Contactor  from "components/contactor.wb";
 ```
+
+### Pulling in a file (`fragment`)
+
+```
+fragment "systems/traction.wb";
+```
+
+A `fragment` statement loads a file into the project **without importing any name**. The path is relative to the file that names it, as in a `use`. It is the statement for a file of `extend` fragments and views (see Splitting a component across files): each top-level `extend` in that file merges into the component of the same name in this file's scope, and its views render. A component the pulled-in file defines is *not* in scope here — to instantiate it, `use` it by name.
+
+- A file loads once however many `use` and `fragment` lines name it, so naming one file in both is fine, and so is a cycle.
+- A missing file is `use_not_found`, labelled on the path.
+- A `fragment` that adds nothing warns (`unused_fragment`, fatal under `--strict`): a stale line. A line adds something when it merges one of the file's `extend`s, or when the file contributes on its own: it has a view (and no `extend` that merged into nothing), a `use` or `fragment` line of its own that merges an `extend`, or a `fragment` line naming a file that contributes. A file already loaded on the way (the project's entry file, the file the line is written in, the files in between) contributes nothing again, so two files that only name each other are both reported, and so is a line naming the entry file that merges nothing. The help says why: the file has no view and no `extend`; its own `fragment` lines add nothing either; its `extend`s name components not in this file's scope (the help names them); the component in scope is that same `extend`, imported with `use` (import the component itself); it is the entry file; or it is the file the line is written in. An aggregating file that `use`s the component and holds `fragment` lines that merge into it is fine, both where it is named and in itself.
+- Two `fragment` lines in one file naming the same file warn (`duplicate_fragment`); remove the repeat.
 
 ## Component definitions
 
@@ -102,16 +116,41 @@ component CellModule {
 }
 ```
 
+### Part data
+
+A component body may carry `key: value;` lines that say what the type is bought as — what a bill of materials lists it by. They sit anywhere among the members:
+
+```
+component Contactor {
+    part:         "EV200AAANA";
+    manufacturer: "TE Connectivity";
+    description:  "HV main contactor, 12 V coil";
+    rating:       "500 A";
+
+    pub port in  "IN";
+    pub port out "OUT";
+}
+```
+
+- `part: "<string>";` — the manufacturer part number.
+- `manufacturer: "<string>";` — who makes it.
+- `description: "<string>";` — what it is, for humans.
+- `rating: "<string>";` — free text such as `"500 A"` or `"12 V, 2 W"` (a string, since ratings mix units).
+
+All four are optional, each may appear once, and every value is a quoted string. The data belongs to the **type**: every placement of `Contactor` carries it. A type without a `part` is still fine, just one a bill of materials cannot name. Any other key is an error (`unknown_cable_property`, the code cable, wire and component bodies share), as is a key set twice (`duplicate_cable_property`) or a number where the string belongs (`cable_property_type`). Part data is not drawn in any view.
+
+A `<name>:` line is part data only when a **string or number** follows the colon; a type name after the colon makes it an instance, so `part: Fuse "F1";` places a `Fuse` named `part`.
+
 ## Splitting a component across files (`extend`)
 
 A large top-level component — the vehicle root, say — can be authored across
 several files. One file introduces it with `component`; others add to it with
-`extend`. `main.wb` pulls the fragments in with ordinary `use` statements:
+`extend`. `main.wb` pulls the fragments in with `fragment` statements:
 
 ```
 // main.wb
-use Vehicle from "traction.wb";
-use Vehicle from "charging.wb";
+fragment "traction.wb";
+fragment "charging.wb";
 use Battery from "components/battery.wb";
 
 component Vehicle {
@@ -135,10 +174,22 @@ Rules:
 - The fragments merge into one component. `component Vehicle` (in `main.wb`) is
   the **root fragment**; each `extend Vehicle` adds members. `main.wb` must
   still declare exactly one top-level `component`.
-- A `use Vehicle from "traction.wb"` both loads the file and triggers the
-  merge (a same-name collision with `extend` on either side merges instead of
-  erroring). Without `extend`, two same-named `component`s are still a
-  duplicate-type error.
+- `fragment "traction.wb";` loads the file, and its `extend Vehicle` merges
+  into the `Vehicle` in `main.wb`'s scope. A file of fragments may pull in
+  further fragment files the same way, as long as it has the component in its
+  own scope: its own `extend Vehicle` counts, and a file of nothing but
+  `fragment` lines gets it with `use Vehicle from "../main.wb";`. Merging
+  does not pass through files: without that `use`, the `extend`s it pulls in
+  merge into nothing, each an `orphan_fragment` error whose help names the
+  `use` to add and where. Their lines, and the line naming the aggregating
+  file, also warn (`unused_fragment`), even when the pulled-in files have
+  views, since those views document a component they never joined.
+- `use Vehicle from "traction.wb";` is the older spelling of the same: it
+  loads the file and triggers the merge (a same-name collision with `extend`
+  on either side merges instead of erroring). It keeps working, with no
+  warning; prefer `fragment` in new files, since it says what it does.
+  Without `extend`, two same-named `component`s are still a duplicate-type
+  error.
 - Each fragment carries its **own** `use` imports for the types it
   instantiates (`traction.wb` imports `Inverter` itself).
 - The merged component is **one flat namespace**: a wire or view in any
@@ -147,6 +198,11 @@ Rules:
   whole merged component.
 - `extend` is top-level only (not nested), and every `extend <name>` needs a
   `component <name>` somewhere — a lone `extend` is an error.
+- Part data (`part:`, `manufacturer:`, …) is set **once** across the merged
+  component: in the `component` or in one `extend`. An `extend` may set a key
+  the `component` left unset; setting a key that the `component` or another
+  `extend` already set is an error (`duplicate_cable_property`, pointing at
+  both places).
 
 ## Ports
 
@@ -396,12 +452,13 @@ The instance name (`pack`, `inv`) is what wires reference. The label (`"HV Batte
 
 ```
 wire <color>[/<tracer>] <gauge_mm2> ["<label>"] [<endpoint>, <endpoint>, ...];
+wire <color>[/<tracer>] <gauge_mm2> ["<label>"] [<endpoint>, <endpoint>, ...] { <properties> }
 ```
 
 - `color` — bare identifier from the IEC 60757 vocabulary: `black`, `brown`, `red`, `orange`, `yellow`, `green`, `blue`, `violet`, `grey`, `white`, `pink`, `turquoise`, `gold`, `silver` (synonyms `purple` and `gray` normalise to `violet`/`grey`). Any other name still renders verbatim but raises a `check` warning (fatal under `--strict`). A two-tone (tracer/striped) wire writes base and tracer separated by a slash — `green/yellow` — and draws as the base colour with a dashed tracer overlay; colour-code annotations join the IEC 60757 codes with a slash (`GN/YE`).
 - `gauge_mm2` — number in mm² (e.g., `50`, `4`, `0.5`, `0.25`). It must be positive: `check` rejects `0` or a negative gauge (`invalid_gauge`).
 - `"<label>"` — optional signal name (e.g., `"HV+"`, `"CAN H"`), shown on the wire in a harness drawing. Omit it when the net name adds nothing.
-- The bracketed list contains two or more endpoints. Each endpoint is `instance.port` or just `port` if referencing the enclosing component's own port (a `pub` port being wired to internals). An endpoint may appear only once per wire: `check` rejects `[ecu.gnd, ecu.gnd]` (`duplicate_endpoint`). Two separate wires ending on the same port are fine — that is a double crimp.
+- The bracketed list contains two or more endpoints. Each endpoint is `instance.port`, or a bare name: the enclosing component's own port (a `pub` port being wired to internals), or one of its splices (see Splices). An endpoint may appear only once per wire: `check` rejects `[ecu.gnd, ecu.gnd]` (`duplicate_endpoint`). Two separate wires ending on the same port are fine — that is a double crimp.
 
 ```
 // two-endpoint wire
@@ -417,11 +474,42 @@ wire orange 50 [pack.hv_pos, inv.dc_pos, charger.hv_pos, conv.hv_pos];
 wire orange 50 [hv_pos, c_main_pos.out];
 ```
 
-Multi-endpoint wires model shared rails (HV power bus, enable signals to parallel coils). The renderer derives junction dots from the topology — don't try to add junction nodes manually.
+Multi-endpoint wires model shared rails (HV power bus, enable signals to parallel coils): where the branches meet is left to the build. When the joint is a physical part of the harness — a crimp or solder splice in the loom, with conductors of different gauges or colors — declare it as a `splice` and run one wire to it from each pin instead (see Splices).
+
+### Wire properties
+
+A wire may end in a `{ }` body of `key: value;` lines instead of its `;` — the same shape as a cable's properties, and like any brace block it takes **no** `;` after the `}`. The body carries the physical data a wire list or BOM needs:
+
+```
+wire red 0.5 "12V" [fuses.ecu, ecu.b_pos] {
+    length: 1.2;
+    type:   "FLRY-B";
+    part:   "FLRY-B-0.5-RD";
+}
+
+wire black 1.5 "GND" [ecu.gnd, ecu.case_gnd] { length: 150mm; }
+```
+
+- `length: <length>;` — the wire's length (see Lengths below). It must be positive (`invalid_length`).
+- `type: "<string>";` — the insulation/construction type, free text (e.g. `"FLRY-B"`).
+- `part: "<string>";` — the part number.
+
+All three are optional, and each may appear once. Any other key is an error (`unknown_cable_property`, the code cable, wire and component bodies share), as is a key set twice (`duplicate_cable_property`) or a value of the wrong kind — a string for `length`, a number for `type` or `part` (`cable_property_type`). The positional form without a body is unchanged.
+
+### Lengths
+
+A length — a wire's or a cable's `length` — is a positive number with an optional unit written **directly after it**, no space between:
+
+- `length: 2;` — a bare number is **metres**.
+- `length: 2m;`, `length: 15cm;`, `length: 150mm;` — the units are exactly `m`, `cm` and `mm` (no inches, no `km`). Pick whichever reads best: a 150 mm jumper is clearer as `150mm` than as `0.15`.
+
+Every length normalises to metres (to the micrometre), so `150mm`, `15cm` and `0.15` are the same length, and a harness cable box shows it in metres (`0.15 m`). Any other suffix is an error on the unit (`unknown_length_unit`, its help listing the units); a length that is zero, negative or under a micrometre is `invalid_length`, labelled on the number and its unit. `length: 2 m;` (a space before the unit) is a syntax error that says to write the unit directly after the number.
+
+**Only a length takes a unit.** Every other number is bare — a wire's gauge (mm², `wire red 1.5 …`, not `1.5mm`), a view's `grid:`, `at (x, y)` coordinates, pin numbers, a layout's `rows`/`cols`, a `connector_type` property: a unit on any of them is a syntax error. Since a unit is whatever touches the digits, a number directly followed by a name is one token: write `cavity 1 at (…)`, never `cavity 1at (…)`.
 
 ## Cables
 
-A `cable` groups point-to-point wires that travel together as one physical bundle (a twisted pair, a shielded multi-core, a motor-phase loom) and carries its construction metadata. It's the WireViz "cable": connector pin tables on the sides, a labelled cable box in the middle.
+A `cable` groups point-to-point wires that travel together as one physical bundle (a twisted pair, a shielded multi-core, a motor-phase loom) and carries its construction metadata and its screen (see Shields). It's the WireViz "cable": connector pin tables on the sides, a labelled cable box in the middle.
 
 ```
 cable motor_phases "Motor phases" {
@@ -436,19 +524,22 @@ cable motor_phases "Motor phases" {
 
 Format:
 
-- `cable <name> ["<label>"] { <properties> <wires> }` — `name` is a snake_case designator (unique within the component, like a connector's); the optional quoted label is shown on the cable box (the designator is used when omitted).
+- `cable <name> ["<label>"] { <properties> <wires> [<shield>] }` — `name` is a snake_case designator (unique within the component, like a connector's); the optional quoted label is shown on the cable box (the designator is used when omitted).
 - Properties are `key: value;` lines, before the wires. Two keys are supported:
   - `type: "<string>";` — a free-text construction note (e.g. `"Twisted pair"`).
-  - `length: <number>;` — length in **metres** (a bare number, e.g. `2.5`; no unit suffix). It must be positive: `check` rejects `0` or a negative length (`invalid_length`).
+  - `length: <length>;` — the cable's length: metres when bare (`2.5`), or with a unit (`2.5m`, `80cm`, `800mm`; see Lengths). It must be positive: `check` rejects `0` or a negative length (`invalid_length`).
 - A cable needs at least one conductor: `check` warns on a cable with no wires (`empty_cable`).
 - Each `wire` uses the exact same syntax as a loose wire, **but must have exactly two endpoints** — a cable conductor is one physical run from one pin to another. (A shared rail that fans out to three+ pins is not a single conductor; keep it a loose multi-endpoint `wire`, outside any cable.)
+- A conductor may carry a property body like any wire (see Wire properties), inside a `twisted { }` group too. A conductor's own `length` **overrides** its cable's `length` for that conductor — a phase lead that routes further than its siblings, say; the conductors without one take the cable's. The cable's own `length` stays what the cable box shows. A cable body itself takes only `type` and `length` (`part` is a wire key).
 - A `twisted { <wire> <wire> }` group wraps exactly two conductors that are twisted together as a pair. Groups and plain wires may interleave freely, so one cable can carry straight power conductors alongside a twisted signal pair:
 
 ```
 cable sensor_loom "Sensor loom" {
-    length: 2.0;
+    length: 2m;
 
-    wire red 1.5 "12V" [ecu.pwr, sensor.pwr];
+    wire red 1.5 "12V" [ecu.pwr, sensor.pwr] {
+        length: 230cm;              // routes round the bracket: longer than the loom
+    }
     twisted {
         wire white/blue 0.5 "SIG H" [ecu.h, sensor.h];
         wire white/red 0.5 "SIG L" [ecu.l, sensor.l];
@@ -459,15 +550,101 @@ cable sensor_loom "Sensor loom" {
 
 A `twisted { }` group holds **exactly two** conductors — a twisted pair — and that count is grammar-enforced: any other number of wires inside the braces is a parse error. In a harness drawing the pair braids inside the cable box.
 
+### Shields
+
+A screened cable, or an individually screened twisted pair, declares its screen with a `shield` line — in the cable body for the cable's overall screen, inside the `twisted { }` group for the pair's own:
+
+```
+cable can2 "CAN2" {
+    type:   "Shielded twisted pair";
+    length: 1.6;
+
+    twisted {
+        wire white/blue 0.5 "CAN H" [rear.can_h, vcm.can_h];
+        wire white/red  0.5 "CAN L" [rear.can_l, vcm.can_l];
+        shield [vcm.shield_gnd];             // the pair's own screen
+    }
+    shield "SHLD" [vcm.shield_gnd];          // the cable's overall screen
+}
+```
+
+```
+shield ["<label>"] [<endpoint>, <endpoint>];   // grounded at both ends
+shield ["<label>"] [<endpoint>];               // grounded at one end (the usual)
+shield ["<label>"];                            // lands on no pin: cut back, or bonded at a gland or housing
+```
+
+- A shield is **not a conductor**: no color, no gauge, and it does not count toward a pair's two wires or a cable's conductors (a cable holding only a shield still warns `empty_cable`).
+- The bracketed list names the pins its **drain** is terminated on, written like wire endpoints (`instance.port` or an own `port`) and resolved the same way (unknown or private ports are errors). Zero, one or two ends: a screen runs from one end of the cable to the other, so more than two is an error (`shield_arity`). An empty `[]` is a syntax error — write `shield;`, which says only that the screen lands on no pin: it may be cut back (floating) or bonded all round at a cable gland or housing, and the model does not record which (say so in a comment).
+- **At most one shield** in a cable body and at most one in each `twisted { }` group; a second is an error naming both (`duplicate_shield`). A cable's overall screen and its pairs' own screens are separate, so both may be present.
+- An end listed twice is `duplicate_endpoint`. A drain sharing a pin with a wire (a drain crimped alongside a ground wire) is fine.
+- The optional label names the drain in a harness drawing; the drawing calls an unlabelled one `Shield` (or `Pair shield`).
+- In a harness view a shielded cable's box gets a dashed inner outline and `shielded` in its subtitle; a screened pair gets a dashed outline round its rows. Each shield end on a connector the view includes is drawn as a thin dashed drain line from the cable box to that pin (the pin gets a row in its table); an end on a connector the view leaves out is not drawn. A shield never puts a cable box in a view by itself: its cable is drawn only when its conductors are.
+- `shield` is a keyword only at the start of a statement in a cable body or a `twisted { }` group; anywhere else it is an ordinary name (`pub port shield "SHIELD";`, `[ecu.shield]`).
+
 A cable's wires are still ordinary connections: they show in schematic views like any other wire. The cable grouping adds the harness box and the BOM metadata.
 
-**Cables vs. shared rails.** Use a `cable` for a real bundle of two-pin conductors. Use a loose multi-endpoint `wire` for a bus/rail that branches to many pins. Explicit junction elements are not in the language yet.
+**Cables vs. shared rails.** Use a `cable` for a real bundle of two-pin conductors. Use a loose multi-endpoint `wire` for a bus/rail that branches to many pins, or a `splice` when the branch point is a joint built into the harness (see Splices); a cable conductor may end on a splice.
+
+## Splices
+
+A `splice` is a joint inside a component — a crimp or solder splice in a loom — that conductors end on. It gives the joint an identity (a name, a label, a part), and each conductor to it is an ordinary two-ended wire with its own color, gauge and length:
+
+```
+component Vehicle {
+    ecu:  Ecu  "ECU";
+    lamp: Lamp "Lamp";
+    bat:  Battery "Battery";
+
+    splice sp_gnd "Ground splice" {
+        part:        "D-436-36";
+        description: "Solder sleeve";
+    }
+
+    wire black 1   "GND" [ecu.gnd,  sp_gnd];
+    wire black 0.5 "GND" [lamp.gnd, sp_gnd];
+    wire black 2.5 "GND" [sp_gnd, bat.neg];
+}
+```
+
+```
+splice <name> ["<label>"];
+splice <name> ["<label>"] { part: "<string>"; description: "<string>"; }
+```
+
+- A splice is a member of a component (or `extend`) body. The optional label names it in a drawing; the optional body takes `part:` (the splice's part number) and `description:`, both strings, each once — any other key is `unknown_cable_property`, a repeat `duplicate_cable_property`, a number `cable_property_type`. Like a wire's body, it ends at its `}` with no `;`.
+- A conductor ends on a splice by its **bare name**, where an endpoint goes: `[ecu.gnd, sp_gnd]`. A bare name is either an own port or a splice, so a splice's name must differ from every port, instance, inline connector, connector designator, cable designator and other splice of the component (`duplicate_splice_name`). In a component split with `extend`, a splice is visible to every fragment, like a port.
+- **All conductors ending on one splice are joined.** Any wire may end on one: a loose wire, a cable conductor (a cable's conductor can run from a pin to a splice), or a wire from one splice to another (the two joints are then one net).
+- A wire to a splice has **exactly two ends** (`splice_wire_arity` otherwise): a splice joins point-to-point conductors. A shared rail without a splice stays a loose multi-endpoint wire, valid as ever; the two are for different things.
+- A splice that fewer than two conductors end on joins nothing (`splice_joins_nothing`, a warning, fatal under `--strict`). Two is fine: a butt splice, for a gauge or color change.
+- A shield's drain lands on a pin, never on a splice (`shield_on_splice`).
+- A bare endpoint that is neither a port nor a splice is `unknown_port`, its help saying a bare name may be either.
+- `splice` is a keyword only at the start of a statement in a component body, followed by a name; anywhere else it is an ordinary name (`pub port splice "S";`, an instance `splice: Sensor;`, an endpoint `ecu.splice`).
 
 ## Views
 
 A view declares a rendering target — what to render, at what positions, with what grid scale. There are three kinds: **`schematic`** (component boxes with ports on authored sides), **`harness`** (WireViz-style connector pin tables with cable bundles), and **`pinout`** (physical connector faces plus pin tables). They differ in what an `include` selects.
 
-A view documents its file's single top-level component, and is drawn against an instance of it: a view of a component the design never instantiates (say, in a library file used only for its connector types) is the `uninstantiated_view_subject` error.
+Every view documents one component, its **subject**: includes, `ports { }` placements and `enclosure { }` ports all resolve against it. By default the subject is the file's single top-level component. Name it explicitly with `for` after the title:
+
+```
+component Sensor { connector x1 "Sensor 2p" { pub port sig "SIG" pin 1; } }
+component Lamp   { connector x2 "Lamp 2p"   { pub port feed "FEED" pin 1; } }
+
+view pinout "Sensor pinout" for Sensor {
+    include x1 at (0, 0);
+}
+
+view pinout "Lamp pinout" for Lamp {
+    include x2 at (0, 0);
+}
+```
+
+- `for <Component>` names a component the file defines at its top level or imports with `use` (a view naming an import counts as using it). In an `extend` fragment it may name the extended component. A nested component cannot be a subject.
+- Without `for`, a file with no or several top-level components cannot tell which one a view documents (`view_subject`, an error); with `for`, one file can hold views of several components. Naming the file's only component is allowed, just optional.
+- A name that is not in scope is `undefined_type`; a `connector_type` is `view_subject_not_component`.
+
+The view is drawn against an instance of its subject: a view of a component the design never instantiates (say, in a library file used only for its connector types) is the `uninstantiated_view_subject` error.
 
 ### Schematic views
 
@@ -493,20 +670,42 @@ view schematic "System Overview" {
 
 Format:
 
-- `view <kind> "<title>" { ... }` — `kind` is `schematic`, `harness`, or `pinout`. Titles are unique across the project: a repeated title (in any file) is the `duplicate_view_title` warning; the repeat still renders, to a `_2`-suffixed file.
+- `view <kind> "<title>" [for <Component>] { ... }` — `kind` is `schematic`, `harness`, or `pinout`; `for` names the subject (see above). Titles are unique across the project: a repeated title (in any file) is the `duplicate_view_title` warning; the repeat still renders, to a `_2`-suffixed file.
 - `grid: <n>;` — pixels per grid cell. Optional; a sensible default applies. It must be positive (`invalid_grid`), and in a `schematic` at least 7.5: ports sit two steps apart and the pitch must clear a port label, so `check` rejects a finer grid (`grid_too_fine`, naming the minimum). Harness and pinout views take any positive grid.
 - `include <name> at (x, y);` or `include <name> at (x, y) ports { ... }` — place a component by its instance name in the surrounding scope, at grid-cell coordinates (negative is fine). A bare include is a statement and ends with `;`; an include with a `ports { }` block ends at the closing brace, with **no** trailing `;` (like any other brace block).
+- `text "<label>" at (x, y);` — a free-text note at grid-cell coordinates (see Text boxes).
 - `ports { <side>: <port>, <port>; ... }` — optional. Each line lists the ports on one `side` (`north`, `east`, `south`, `west`), in the order they should appear on that edge. A `west: a, b;` line puts `a` above `b` on the west edge. List the same side more than once and the lines concatenate.
 
 **The `ports` block controls both layout and scope.** A port is drawn only if it's listed; everything else is hidden. An include with no `ports` block is a bare labelled box.
 
-**Wires are NOT listed in views.** A wire from the model is drawn only when *both* of a segment's endpoints are listed ports on included components; otherwise that segment drops silently. So a listed port whose wire goes to an unlisted (or excluded) port shows as a bare stub with no line.
+**Wires are NOT listed in views.** A wire from the model is drawn only when *both* of a segment's endpoints are listed ports on included components; otherwise that segment drops silently. So a listed port whose wire goes to an unlisted (or excluded) port shows as a bare stub with no line. A splice never appears in a schematic: the ports its conductors join are drawn connected, like a multi-endpoint rail between the ones the view lists (through splice-to-splice links too).
 
 Sides are authored, never guessed: place a port on the side facing the box it wires to, and line the two boxes up so the wire runs straight (ports sit two grid steps apart, centred on each side). Private (non-`pub`) ports cannot be placed in a view, the same as they cannot be wired from outside.
 
 Leave room between boxes. `check` lays each view out with the renderer's own box sizes and rejects includes whose boxes overlap (`overlapping_includes`, in every view kind; touching edges are fine). In a schematic a wire leaves its port by one grid step and keeps one step clear of every other box, so a wired port needs **two grid steps** of space before the box it faces (`include_too_close`), and boxes closer than two steps to each other leave no gap to route through (`unroutable_wire` when a wire is walled in). The enclosure is never in the way.
 
 Keep a view compact: its drawing may span at most 8192 units on a side, margins, title and stamp included (`view_too_large`, an error in every view kind, naming the size and labelled on the title and the includes farthest apart). Positions count grid steps, so `at (1000, 0)` on `grid: 20;` is already 20000 units out; split a sprawling drawing into several views instead.
+
+### Text boxes
+
+A schematic view may carry free-text notes — a termination resistor, a fitting instruction — each drawn as a small boxed label:
+
+```
+view schematic "CAN bus" {
+    grid: 20;
+
+    include front at (8, 12) ports {
+        south: can_h, can_l;
+    }
+
+    text "120 Ω termination" at (8, 4);
+}
+```
+
+- `text "<label>" at (x, y);` — the label first, as every declaration writes its display string, then the box's **centre** in grid cells (like an include's `at`; negative is fine). A text box has no name: nothing references it. The box sizes itself to the label.
+- Schematic views only: a `text` in a harness or pinout view is `unsupported_view_text`.
+- A text box is an annotation, not an include: `check` does not test it for overlap, so keep it clear of the boxes and wires yourself.
+- **Deprecated:** the older named form, `text <name> at (x, y) "<label>";`, still renders but will be removed. `check` warns on it (`deprecated_text_syntax`, fatal under `--strict`), its help showing the statement rewritten in the form above; two named boxes sharing a name in one view are `duplicate_view_text`. Write new text boxes label-first.
 
 ### Harness views
 
@@ -525,10 +724,11 @@ view harness "Main HV harness" {
 
 - `include <instance>.<connector> at (x, y);` — the target is `instance.connector` (the connector's designator on that instance's type). The pin table is **auto-scoped**: it draws only the pins that carry a conductor in this view, in pin order (an include none of whose pins are wired draws as a header-only box). **No `ports { }` block** — scope is derived from the view's cables, not listed — and **no side/facing** — pin facing is auto-oriented from where the cables go.
 - A connector must have a designator to be included (see Connector blocks). Including the same instance's other connectors is just more `include` lines.
+- `include <splice> at (x, y);` — places one of the subject's splices (see Splices), by its bare name: no `.connector`, no `ports { }`. It draws as a solid dot at `(x, y)` with the splice's name, label and part beneath it, and its conductors meet at the dot. A splice takes part in the overlap check like any include. A splice is placed in harness views only: in a schematic or pinout view the include is `wrong_include_form`.
 
-**Cables are derived, like schematic wires.** A wire renders as a cable strand only when *both* of its endpoints land on *included* connectors; ends on connectorless ports, excluded connectors, or the parent's own ports drop silently. So connectorize the external `pub port`s you want to see in a harness (wrap them in a named `connector` block).
+**Cables are derived, like schematic wires.** A wire renders as a cable strand only when *both* of its endpoints land on *included* connectors or splices; ends on connectorless ports, excluded connectors or splices, or the parent's own ports drop silently. A conductor to a splice draws like any other: a cable's through its cable box, a loose wire as a loose wire. So connectorize the external `pub port`s you want to see in a harness (wrap them in a named `connector` block).
 
-**Every conductor belongs in some harness view.** Once a component has at least one harness view, `check` warns about each wire segment between connectors of two of its children that none of its harness views draws (`undrawn_conductor`, fatal under `--strict`) — the conductor would be missing from every build drawing. A multi-endpoint rail is judged per chain segment (`[a, b, c]` → `a–b`, `b–c`); an inline connector is covered when a view includes either half; segments with an end on the parent's own port or a connectorless port, and jumpers within one connector, are not harness conductors. A component with no harness view is never reported. Fix it by adding the missing connectors to a loom's view, or a view for the missing loom.
+**Every conductor belongs in some harness view.** Once a component has at least one harness view, `check` warns about each wire segment between connectors of two of its children, and each conductor to one of its splices, that none of its harness views draws (`undrawn_conductor`, fatal under `--strict`) — the conductor would be missing from every build drawing. A multi-endpoint rail is judged per chain segment (`[a, b, c]` → `a–b`, `b–c`); a conductor to a splice is drawn when a view includes both its ends (the connector and the splice, or both splices); an inline connector is covered when a view includes either half; segments with an end on the parent's own port or a connectorless port, jumpers within one connector, and shields are not harness conductors. A component with no harness view is never reported. Fix it by adding the missing connectors (or splices) to a loom's view, or a view for the missing loom.
 
 A wire that belongs to a declared `cable` (see Cables) draws WireViz-style: a labelled cable box sits between the two connectors it spans, titled with the cable's label and its `type · length`, one coloured strand per conductor. Loose wires between the same connector pair instead bundle into a plain strand group, each strand drawn in its `color` and annotated with its `label` and gauge.
 
@@ -553,7 +753,7 @@ view pinout "Inverter pinouts" {
   layout and pin bindings.
 - The drawing uses the harness-side convention described above.
 
-Views live in the same file as the component they primarily document — like unit tests in Rust source. A view of the system overview belongs in `main.wb` where `Vehicle` is defined. A view of the battery pack detail belongs in the file where `BatteryPack` is defined. This keeps views close to the data they describe.
+Views live in the same file as the component they primarily document — like unit tests in Rust source. A view of the system overview belongs in `main.wb` where `Vehicle` is defined. A view of the battery pack detail belongs in the file where `BatteryPack` is defined. This keeps views close to the data they describe. In a file that defines several components, give each view a `for`.
 
 ## Naming conventions
 
@@ -567,9 +767,9 @@ Views live in the same file as the component they primarily document — like un
 Keywords come in two kinds. Words are case-sensitive, so `Layout` or `Wire` is never a keyword.
 
 - **Reserved** — the words that declare the design: `use`, `component`, `extend`, `connector_type`, `connector`, `inline`, `port`, `pub`, `pin`, `pins`, `wire`, `cable`, `twisted`, `view`. They can never name anything; `pub port wire "W";` is an error, `'wire' is a reserved word`. Pick another name (`wire_1`, `w`).
-- **Contextual** — words that mean something only inside a view, a `connector_type` layout, a cavity line or a `use` line: `from`, `include`, `text`, `at`, `grid`, `enclosure`, `ports`, `layout`, `face`, `cavity`, `rows`, `cols`, `numbering`, `size`. Anywhere a name belongs they are ordinary names, so `pub port size "SIZE";`, an instance `grid: Sensor;`, `connector layout: Plug { … }`, `cable text { … }` and `include at at (1, 2);` are all valid.
+- **Contextual** — words that mean something only inside a view (or after its title), a `connector_type` layout, a cavity line, a `use` line, at the start of a top-level statement, at the start of a statement in a cable body or a `twisted { }` group, or at the start of a statement in a component body followed by a name: `from`, `fragment`, `shield`, `splice`, `for`, `include`, `text`, `at`, `grid`, `enclosure`, `ports`, `layout`, `face`, `cavity`, `rows`, `cols`, `numbering`, `size`. Anywhere a name belongs they are ordinary names, so `pub port size "SIZE";`, `pub port for "FOR";`, an instance `grid: Sensor;`, `connector layout: Plug { … }`, `cable text { … }` and `include at at (1, 2);` are all valid, and so are `pub port fragment "F";`, an instance `fragment: Lamp;`, `pub port shield "SHIELD";`, an endpoint `ecu.shield`, `pub port splice "SPLICE";` and an instance `splice: Sensor;`.
 
-Other words the grammar reads in one place only (`schematic`, `harness`, `pinout`, `type`, `length`, `part`, `male`, `female`, `north`, `east`, `south`, `west`, the wire colors, the numbering modes, `large`) are not keywords at all.
+Other words the grammar reads in one place only (`schematic`, `harness`, `pinout`, `type`, `length`, `part`, `manufacturer`, `description`, `rating`, `male`, `female`, `north`, `east`, `south`, `west`, the wire colors, the numbering modes, `large`) are not keywords at all.
 
 ## Common patterns
 
@@ -611,11 +811,17 @@ wire orange 50 [pack.hv_neg, inv.dc_neg, charger.hv_neg, conv.hv_neg];
 
 - **Do not** include wires in views. They're derived from the model; you control which show by listing their ports.
 - **Do not** expect a port to appear in a view unless you list it in that include's `ports` block. Listing is the scope.
-- **Do not** rely on filesystem structure for hierarchy. Only `use` and nesting matter.
+- **Do not** rely on filesystem structure for hierarchy. Only `use`, `fragment` and nesting matter.
+- **Do not** pull a file of `extend`s in with `use Vehicle from "x.wb";` in new code: write `fragment "x.wb";`. (The `use` spelling still works.)
 - **Do not** reference unexposed (non-`pub`) ports of nested components from outside. Private is private.
 - **Do not** introduce new keywords or option fields that aren't documented in this skill or already used in the project's `.wb` files. If something is awkward to express, raise it with the user rather than inventing syntax.
-- **Do not** add junction nodes by hand — multi-endpoint wires imply junctions automatically.
+- **Do not** invent junction nodes: a rail is a multi-endpoint wire, and a physical joint is a `splice` with one two-ended wire to it per pin. Do not list a splice among more than two endpoints, or name one as a shield end.
 - **Do not** put `pub` on an inline connector's ports, include both halves of one inline in a single harness view, or include an inline in a schematic view.
+- **Do not** write a `;` after a wire's property body (`[a, b] { length: 1; }`, not `{ … };`), or put `part` on a cable — it is a per-wire key.
+- **Do not** put a space between a length and its unit (`150mm`, not `150 mm`), or a unit on any number but a `length` (a gauge is `1.5`, not `1.5mm`).
+- **Do not** put part numbers in labels or comments when the type can carry them: write `part: "…";` (and `manufacturer`, `description`, `rating`) in the component body. Quote the value — `part: Fuse;` is an instance named `part`, not a part number.
 - **Do not** put a multi-endpoint wire inside a `cable` — cable conductors are point-to-point (exactly two endpoints). Keep fan-out rails as loose wires.
+- **Do not** model a screen as a `wire` with an invented color: write `shield [<pin>];` in the cable body (or the pair's `twisted { }`), with at most two ends and one shield per cable body or pair.
+- **Do not** name a text box (`text note at (0, 4) "…";` is the deprecated form): write the label first, `text "…" at (0, 4);`.
 - **Do not** use block comments (`/* */`). Line comments (`//`) only.
 - **Do not** mix grid coordinates with pixel coordinates. View positions are in grid cells.

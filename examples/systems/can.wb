@@ -34,14 +34,17 @@ extend Vehicle {
     }
 
     // --- CAN2 (self-built): rear BMS → VCM (front → rear via the tunnel) ---
+    // The run past the inverter is screened. The screen is grounded at the
+    // VCM end only, so it carries no ground-loop current.
     cable can2_rear_vcm "CAN2 · rear–VCM" {
-        type:   "Twisted pair";
+        type:   "Shielded twisted pair";
         length: 1.6;
 
         twisted {
             wire white/blue 0.5 "CAN2 H" [rear.can_h, vcm.can2_h];
             wire white/red 0.5 "CAN2 L" [rear.can_l, vcm.can2_l];
         }
+        shield "CAN2 SHLD" [vcm.can2_shield];
     }
 }
 
@@ -53,9 +56,9 @@ extend Vehicle {
 view schematic "CAN bus" {
     grid: 20;
 
-    text front_term at (8, 4)  "120 Ω termination";
-    text vcm_term   at (40, 4) "120 Ω termination";
-    text inv_term   at (72, 4) "120 Ω termination";
+    text "120 Ω termination" at (8, 4);
+    text "120 Ω termination" at (40, 4);
+    text "120 Ω termination" at (72, 4);
 
     include front at (8, 12) ports {
         south: can_h, can_l;

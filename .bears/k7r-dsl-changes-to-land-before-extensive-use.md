@@ -2,10 +2,10 @@
 id: k7r
 title: DSL changes to land before extensive use
 type: epic
-status: open
+status: done
 priority: P1
 created: "2026-11-20T21:40:31.987862998Z"
-updated: "2026-11-20T21:40:31.987862998Z"
+updated: "2026-11-21T10:01:18.655554686Z"
 ---
 
 ## Scope

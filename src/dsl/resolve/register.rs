@@ -9,7 +9,7 @@ use indexmap::IndexMap;
 
 use crate::dsl::ast::{self, Member};
 use crate::dsl::diagnostics::Problem;
-use crate::dsl::ir::{ConnectorName, InstanceName, Pin, PortName};
+use crate::dsl::ir::{ConnectorName, InstanceName, Pin, PortName, SpliceName};
 use crate::dsl::span::{FileId, Span};
 
 use super::{
@@ -45,6 +45,7 @@ impl<'a> Resolver<'a> {
             connectors: IndexMap::new(),
             instances: IndexMap::new(),
             inlines: IndexMap::new(),
+            splices: IndexMap::new(),
             nested: Vec::new(),
         });
 
@@ -52,6 +53,7 @@ impl<'a> Resolver<'a> {
         let mut connectors: IndexMap<ConnectorName, ConnectorInstFacts<'a>> = IndexMap::new();
         let mut instances: IndexMap<InstanceName, InstFacts<'a>> = IndexMap::new();
         let mut inlines: IndexMap<InstanceName, InlineFacts<'a>> = IndexMap::new();
+        let mut splices: IndexMap<SpliceName, &'a ast::Splice> = IndexMap::new();
         let mut nested = Vec::new();
         let mut connector_index = 0;
         let mut connector_names: HashMap<&str, Span> = HashMap::new();
@@ -182,7 +184,15 @@ impl<'a> Resolver<'a> {
                         },
                     );
                 }
-                Member::Wire(_) => {} // endpoints resolved in pass 2
+                // A repeated name is reported with the other clashes of
+                // the component's namespace (`check_splice_names`).
+                Member::Splice(splice) => {
+                    splices
+                        .entry(SpliceName::from(splice.name.node.as_str()))
+                        .or_insert(splice);
+                }
+                Member::Wire(_) => {}     // endpoints resolved in pass 2
+                Member::Property(_) => {} // checked in validate
                 Member::Cable(cable) => {
                     // endpoints resolved in pass 2; here, guard the designator.
                     let n = cable.name.node.as_str();
@@ -208,6 +218,7 @@ impl<'a> Resolver<'a> {
         self.defs[id].connectors = connectors;
         self.defs[id].instances = instances;
         self.defs[id].inlines = inlines;
+        self.defs[id].splices = splices;
         self.defs[id].nested = nested;
         id
     }

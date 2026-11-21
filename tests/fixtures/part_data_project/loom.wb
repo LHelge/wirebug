@@ -1,0 +1,5 @@
+// A fragment of the root: it sets a property the root left unset.
+
+extend Vehicle {
+    manufacturer: "Wirebug Motors";
+}

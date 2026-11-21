@@ -7,13 +7,14 @@
 //! its children. Definitions vanish here; only instances flow to the IR.
 //! A type stack guards against containment cycles.
 
-use crate::dsl::ast::{self, CablePropertyValue, ConnectorPropertyValue, Member};
+use crate::dsl::ast::{self, ConnectorPropertyValue, Member, PropertyValue};
 use crate::dsl::diagnostics::Problem;
 use crate::dsl::ir::{
     CableMeta, CableName, Connector, ConnectorCavity, ConnectorFaceLayout, ConnectorGridLayout,
     ConnectorLayout, ConnectorName, ConnectorPin, ConnectorRef, ConnectorTypeName, Design,
     EnclosurePort, Half, Include, InlineHalfMeta, InlineMeta, Instance, InstanceName, InstancePath,
-    Port, PortName, Side, TypeName, View, ViewGrid, Visibility, Wire, WireColor, WireEnd,
+    PartMeta, Port, PortName, Shield, Side, SpliceName, TwistedMeta, TypeName, View, ViewGrid,
+    Visibility, Wire, WireColor,
 };
 use crate::dsl::resolve::{DefId, Resolved};
 
@@ -140,19 +141,25 @@ impl Elaborator<'_> {
             let info = &self.resolved.defs[frag];
             for m in &info.ast.members {
                 match m {
-                    Member::Wire(w) => wires.push(rewrite_wire(w, None, None)),
+                    Member::Wire(w) => wires.push(self.rewrite_wire(frag, w, None, None)),
                     Member::Cable(c) => {
                         let name = CableName::from(c.name.node.as_str());
-                        cables.insert(name.clone(), cable_meta(c));
+                        cables.insert(name.clone(), self.cable_meta(frag, c));
                         let mut group = 0u32;
                         for m in &c.members {
                             match m {
                                 ast::CableMember::Wire(w) => {
-                                    wires.push(rewrite_wire(w, Some(name.clone()), None));
+                                    wires.push(self.rewrite_wire(
+                                        frag,
+                                        w,
+                                        Some(name.clone()),
+                                        None,
+                                    ));
                                 }
                                 ast::CableMember::Twisted(t) => {
                                     for w in t.wires.iter() {
-                                        wires.push(rewrite_wire(
+                                        wires.push(self.rewrite_wire(
+                                            frag,
                                             w,
                                             Some(name.clone()),
                                             Some(group),
@@ -226,6 +233,15 @@ impl Elaborator<'_> {
                 cables,
                 connectors,
                 inline: None,
+                part: fragments
+                    .iter()
+                    .flat_map(|&frag| self.resolved.defs[frag].ast.properties())
+                    .collect(),
+                splices: fragments
+                    .iter()
+                    .flat_map(|&frag| self.resolved.defs[frag].splices.values())
+                    .map(|&splice| (SpliceName::from(splice.name.node.as_str()), splice.into()))
+                    .collect(),
             },
         );
 
@@ -311,6 +327,90 @@ impl Elaborator<'_> {
                 male: half_meta(facts.male),
                 female: half_meta(facts.female),
             }),
+            part: PartMeta::default(),
+            splices: IndexMap::new(),
+        }
+    }
+
+    /// Rewrite an authored wire of definition `frag` into the IR, its ends
+    /// mapped as validation maps them ([`Resolved::wire_end`]). Its body's
+    /// properties map to typed fields; unknown keys and wrong value types
+    /// are reported in `validate`, and here they are dropped, as for a
+    /// cable.
+    fn rewrite_wire(
+        &self,
+        frag: DefId,
+        w: &ast::Wire,
+        cable: Option<CableName>,
+        twisted_group: Option<u32>,
+    ) -> Wire {
+        let mut wire = Wire {
+            color: WireColor::new(
+                w.color.node.as_str(),
+                w.tracer.as_ref().map(|t| t.node.as_str()),
+            ),
+            gauge: w.gauge.node,
+            label: w.label.as_ref().map(|l| l.node.clone()),
+            endpoints: w
+                .endpoints
+                .iter()
+                .map(|ep| self.resolved.wire_end(frag, ep))
+                .collect(),
+            cable,
+            twisted_group,
+            length: None,
+            r#type: None,
+            part: None,
+            span: w.span,
+        };
+        for p in &w.properties {
+            match (p.key.node.as_str(), &p.value) {
+                ("length", PropertyValue::Number(n)) => wire.length = n.node.length(),
+                ("type", PropertyValue::Str(s)) => wire.r#type = Some(s.node.clone()),
+                ("part", PropertyValue::Str(s)) => wire.part = Some(s.node.clone()),
+                _ => {}
+            }
+        }
+        wire
+    }
+
+    /// Map a cable of definition `frag` to typed [`CableMeta`]. Unknown keys
+    /// and wrong value types are reported in `validate`; here they are
+    /// dropped, and so is every shield of the cable body or of one pair
+    /// after the first.
+    fn cable_meta(&self, frag: DefId, c: &ast::Cable) -> CableMeta {
+        let mut meta = CableMeta {
+            label: c.label.as_ref().map(|l| l.node.clone()),
+            r#type: None,
+            length: None,
+            shield: c.shields.first().map(|s| self.shield(frag, s)),
+            twisted: c
+                .twisted_groups()
+                .map(|pair| TwistedMeta {
+                    shield: pair.shields.first().map(|s| self.shield(frag, s)),
+                })
+                .collect(),
+        };
+        for p in &c.properties {
+            match (p.key.node.as_str(), &p.value) {
+                ("type", PropertyValue::Str(s)) => meta.r#type = Some(s.node.clone()),
+                ("length", PropertyValue::Number(n)) => meta.length = n.node.length(),
+                _ => {}
+            }
+        }
+        meta
+    }
+
+    /// A `shield` line of definition `frag`, its ends mapped like a wire's.
+    fn shield(&self, frag: DefId, shield: &ast::Shield) -> Shield {
+        Shield {
+            label: shield.label.as_ref().map(|l| l.node.clone()),
+            termination: shield
+                .ends
+                .iter()
+                .map(|ep| self.resolved.wire_end(frag, ep))
+                .collect(),
+            span: shield.span,
         }
     }
 
@@ -397,7 +497,10 @@ impl Elaborator<'_> {
                         .texts
                         .iter()
                         .map(|text| crate::dsl::ir::TextBox {
-                            name: text.name.node.as_str().to_string(),
+                            name: text
+                                .name
+                                .as_ref()
+                                .map(|name| name.node.as_str().to_string()),
                             x: text.x.node,
                             y: text.y.node,
                             label: text.label.node.clone(),
@@ -438,39 +541,6 @@ fn elaborate_enclosure_port(ep: &ast::EnclosurePort) -> Option<EnclosurePort> {
         side,
         coord,
     })
-}
-
-fn rewrite_wire(w: &ast::Wire, cable: Option<CableName>, twisted_group: Option<u32>) -> Wire {
-    Wire {
-        color: WireColor::new(
-            w.color.node.as_str(),
-            w.tracer.as_ref().map(|t| t.node.as_str()),
-        ),
-        gauge: w.gauge.node,
-        label: w.label.as_ref().map(|l| l.node.clone()),
-        endpoints: w.endpoints.iter().map(WireEnd::from).collect(),
-        cable,
-        twisted_group,
-        span: w.span,
-    }
-}
-
-/// Map a cable's faithful AST properties to typed [`CableMeta`]. Unknown keys
-/// and wrong value types are reported in `validate`; here they are dropped.
-fn cable_meta(c: &ast::Cable) -> CableMeta {
-    let mut meta = CableMeta {
-        label: c.label.as_ref().map(|l| l.node.clone()),
-        r#type: None,
-        length: None,
-    };
-    for p in &c.properties {
-        match (p.key.node.as_str(), &p.value) {
-            ("type", CablePropertyValue::Str(s)) => meta.r#type = Some(s.node.clone()),
-            ("length", CablePropertyValue::Number(n)) => meta.length = Some(n.node),
-            _ => {}
-        }
-    }
-    meta
 }
 
 fn inline_connector(name: ConnectorName, conn: &ast::Connector) -> Connector {
@@ -568,6 +638,7 @@ fn connector_type_layout(connector_type: &ast::ConnectorType) -> Option<Connecto
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dsl::ir::{Length, Screened, ShieldTermination, WireEnd};
     use crate::dsl::project::load;
     use crate::dsl::resolve::resolve;
 
@@ -675,7 +746,7 @@ mod tests {
                 wire black 1 [a, b];
                 cable feed \"Power feed\" {
                     type: \"2-core\";
-                    length: 0.8;
+                    length: 800mm;
                     wire red 1 [x, y];
                 }
             }\n",
@@ -701,7 +772,146 @@ mod tests {
             .expect("cable meta");
         assert_eq!(meta.label.as_deref(), Some("Power feed"));
         assert_eq!(meta.r#type.as_deref(), Some("2-core"));
-        assert_eq!(meta.length, Some(0.8));
+        // `800mm` normalises to metres.
+        assert_eq!(meta.length.map(Length::metres), Some(0.8));
+    }
+
+    #[test]
+    fn wire_body_properties_land_on_the_ir_wire() {
+        let (design, problems) = elaborate_files(&[(
+            "main.wb",
+            "component m {
+                pub port a \"A\"; pub port b \"B\";
+                wire red 0.5 [a, b] { length: 120cm; type: \"FLRY-B\"; part: \"W-1\"; }
+                wire black 0.5 [a, b];
+            }\n",
+        )]);
+        assert!(problems.is_empty(), "{problems:?}");
+        let m = design.unwrap();
+        let root = m.get(&m.root).unwrap();
+        let [with_body, bare] = root.wires.as_slice() else {
+            panic!("expected two wires");
+        };
+        assert_eq!(with_body.length.map(Length::metres), Some(1.2));
+        assert_eq!(with_body.r#type.as_deref(), Some("FLRY-B"));
+        assert_eq!(with_body.part.as_deref(), Some("W-1"));
+        assert_eq!(
+            (bare.length, bare.r#type.as_deref(), bare.part.as_deref()),
+            (None, None, None)
+        );
+    }
+
+    #[test]
+    fn part_data_reaches_every_placement_of_the_type() {
+        let (design, problems) = elaborate_files(&[
+            (
+                "main.wb",
+                "use Contactor from \"parts.wb\";\nuse Lamp from \"parts.wb\";\n\
+                 component m { pos: Contactor; neg: Contactor; l: Lamp; }\n",
+            ),
+            (
+                "parts.wb",
+                "component Contactor {
+                    part: \"EV200AAANA\";
+                    pub port a \"A\";
+                    manufacturer: \"TE Connectivity\";
+                    description: \"Main contactor\";
+                    rating: \"500 A\";
+                }
+                component Lamp { pub port a \"A\"; }\n",
+            ),
+        ]);
+        assert!(problems.is_empty(), "{problems:?}");
+        let design = design.expect("a design");
+        let contactor = PartMeta {
+            number: Some("EV200AAANA".into()),
+            manufacturer: Some("TE Connectivity".into()),
+            description: Some("Main contactor".into()),
+            rating: Some("500 A".into()),
+        };
+        let part = |path: &str| {
+            let inst = design
+                .instances
+                .values()
+                .find(|i| i.path.to_string() == path)
+                .unwrap_or_else(|| panic!("no instance {path}"));
+            inst.part.clone()
+        };
+        assert_eq!(part("m.pos"), contactor);
+        assert_eq!(part("m.neg"), contactor);
+        assert_eq!(part("m.l"), PartMeta::default());
+        assert_eq!(part("m"), PartMeta::default());
+    }
+
+    #[test]
+    fn part_data_merges_across_extend_fragments() {
+        let (design, problems) = elaborate_files(&[
+            (
+                "main.wb",
+                "use m from \"more.wb\";\ncomponent m { part: \"P-1\"; colour: \"red\"; rating: 5; }\n",
+            ),
+            (
+                "more.wb",
+                "extend m { manufacturer: \"Acme\"; part: \"P-2\"; }\n",
+            ),
+        ]);
+        assert!(problems.is_empty(), "{problems:?}");
+        let design = design.expect("a design");
+        let root = design.get(&design.root).expect("root");
+        // The root fragment's value wins a repeat (validate reports it);
+        // unknown keys and wrongly typed values are dropped.
+        assert_eq!(
+            root.part,
+            PartMeta {
+                number: Some("P-1".into()),
+                manufacturer: Some("Acme".into()),
+                description: None,
+                rating: None,
+            }
+        );
+    }
+
+    #[test]
+    fn a_conductor_length_overrides_its_cables() {
+        let (design, problems) = elaborate_files(&[(
+            "main.wb",
+            "component m {
+                pub port a \"A\"; pub port b \"B\"; pub port c \"C\"; pub port d \"D\";
+                wire red 1 [a, b] { length: 0.3; }
+                wire red 1 [c, d];
+                cable feed {
+                    length: 2.0;
+                    wire red 1 [a, c] { length: 2.4; }
+                    twisted {
+                        wire white 0.5 [b, d] { length: 2.1; }
+                        wire white/red 0.5 [b, c];
+                    }
+                }
+                cable spare { wire red 1 [a, d]; }
+            }\n",
+        )]);
+        assert!(problems.is_empty(), "{problems:?}");
+        let m = design.unwrap();
+        let root = m.get(&m.root).unwrap();
+        let lengths: Vec<Option<f64>> = root
+            .wires
+            .iter()
+            .map(|w| root.effective_length(w).map(Length::metres))
+            .collect();
+        // Loose wires have only their own; a conductor's own wins over its
+        // cable's, a conductor without one takes the cable's, and a cable
+        // without a length leaves its conductors without one.
+        assert_eq!(
+            lengths,
+            [Some(0.3), None, Some(2.4), Some(2.1), Some(2.0), None]
+        );
+        // The cable's own length is untouched by its conductors'.
+        assert_eq!(
+            root.cables[&CableName::from("feed")]
+                .length
+                .map(Length::metres),
+            Some(2.0)
+        );
     }
 
     #[test]
@@ -730,6 +940,166 @@ mod tests {
         assert_eq!(groups, [None, Some(0), Some(0)]);
         // Loose wires (outside any cable) are never grouped.
         assert!(root.wires.iter().all(|w| w.cable.is_some()));
+    }
+
+    #[test]
+    fn splices_land_on_their_instance_and_conductors_end_on_them() {
+        let (design, problems) = elaborate_files(&[
+            (
+                "main.wb",
+                "fragment \"loom.wb\";\n\
+                 component m {\n\
+                     component leaf { pub port a \"A\"; pub port b \"B\"; }\n\
+                     pub port gnd \"GND\";\n\
+                     x: leaf; y: leaf; z: leaf;\n\
+                     splice sp \"Ground splice\" { part: \"BSC-2.5\"; description: \"Butt splice\"; }\n\
+                     wire black 1 [x.a, sp];\n\
+                     cable c { wire black 1 [y.a, sp]; }\n\
+                     wire black 2.5 [sp, far];\n\
+                     wire black 1 [x.b, y.b, z.b];\n\
+                 }\n",
+            ),
+            (
+                "loom.wb",
+                "extend m { splice far; wire black 2.5 [far, z.a]; wire black 1 [far, gnd]; }\n",
+            ),
+        ]);
+        assert!(problems.is_empty(), "{problems:?}");
+        let design = design.expect("design");
+        let root = design.get(&design.root).expect("root");
+
+        let names: Vec<&str> = root.splices.keys().map(SpliceName::as_str).collect();
+        assert_eq!(names, ["sp", "far"], "every fragment's splices, in order");
+        let sp = &root.splices[&SpliceName::from("sp")];
+        assert_eq!(sp.label.as_deref(), Some("Ground splice"));
+        assert_eq!(sp.part.as_deref(), Some("BSC-2.5"));
+        assert_eq!(sp.description.as_deref(), Some("Butt splice"));
+
+        let splice = |name: &str| WireEnd::Splice(SpliceName::from(name));
+        let child = |instance: &str, port: &str| WireEnd::Child {
+            instance: InstanceName::from(instance),
+            port: PortName::from(port),
+        };
+        // Each conductor stays a two-ended wire of its own, the cable's too.
+        let conductors: Vec<String> = root
+            .splice_conductors(&SpliceName::from("sp"))
+            .map(|w| {
+                let ends: Vec<String> = w.endpoints.iter().map(ToString::to_string).collect();
+                format!(
+                    "{}:{}",
+                    w.cable.as_ref().map_or("-", |c| c.as_str()),
+                    ends.join("-")
+                )
+            })
+            .collect();
+        assert_eq!(conductors, ["-:x.a-sp", "c:y.a-sp", "-:sp-far"]);
+        // A bare name that is no splice is still the own port.
+        assert!(
+            root.wires
+                .iter()
+                .any(|w| w.endpoints == [splice("far"), WireEnd::Own(PortName::from("gnd"))])
+        );
+
+        // The net joins every far end, through the splice-to-splice link.
+        let net = root.splice_net(&SpliceName::from("sp"));
+        let splices: Vec<&str> = net.splices.iter().map(|s| s.as_str()).collect();
+        assert_eq!(splices, ["sp", "far"]);
+        let ends: Vec<&WireEnd> = net.ends.iter().map(|e| e.end).collect();
+        assert_eq!(
+            ends,
+            [
+                &child("x", "a"),
+                &child("y", "a"),
+                &child("z", "a"),
+                &WireEnd::Own(PortName::from("gnd"))
+            ]
+        );
+        assert_eq!(root.splice_nets().len(), 1, "one net for the linked pair");
+
+        // Across a conductor from a pin, the splice; across the link, the
+        // other splice.
+        let link = root
+            .splice_conductors(&SpliceName::from("far"))
+            .next()
+            .expect("the link");
+        assert_eq!(link.other_end(&splice("sp")), Some(&splice("far")));
+        assert_eq!(link.other_end(&child("x", "a")), None);
+    }
+
+    #[test]
+    fn shields_land_on_the_cable_and_on_their_pair() {
+        let (design, problems) = elaborate_files(&[(
+            "main.wb",
+            "component m {
+                pub port a \"A\"; pub port b \"B\";
+                pub port c \"C\"; pub port d \"D\";
+                pub port gnd \"GND\";
+                l: leaf;
+                cable loom {
+                    shield \"SHLD\" [gnd, l.drain];
+                    twisted {
+                        wire white/blue 0.5 [a, b];
+                        wire white/red 0.5 [c, d];
+                        shield [gnd];
+                    }
+                    twisted {
+                        wire white/blue 0.5 [b, a];
+                        wire white/red 0.5 [d, c];
+                    }
+                    twisted {
+                        wire white/blue 0.5 [a, c];
+                        wire white/red 0.5 [b, d];
+                        shield;
+                    }
+                }
+                cable plain { wire red 1 [a, b]; }
+                component leaf { pub port drain \"DRAIN\"; }
+            }\n",
+        )]);
+        assert!(problems.is_empty(), "{problems:?}");
+        let m = design.unwrap();
+        let root = m.get(&m.root).unwrap();
+        let loom = &root.cables[&CableName::from("loom")];
+
+        let overall = loom.shield.as_ref().expect("an overall screen");
+        assert_eq!(overall.label.as_deref(), Some("SHLD"));
+        assert_eq!(
+            overall.termination,
+            ShieldTermination::Both([
+                WireEnd::Own(PortName::from("gnd")),
+                WireEnd::Child {
+                    instance: InstanceName::from("l"),
+                    port: PortName::from("drain"),
+                },
+            ])
+        );
+
+        // Each pair has a place, indexed by its conductors' group number.
+        let pair_shield = |group| {
+            loom.twisted_group(group)
+                .expect("the pair")
+                .shield
+                .as_ref()
+                .map(|s| s.termination.clone())
+        };
+        assert_eq!(
+            pair_shield(0),
+            Some(ShieldTermination::Single(WireEnd::Own(PortName::from(
+                "gnd"
+            ))))
+        );
+        assert_eq!(pair_shield(1), None, "an unscreened pair");
+        assert_eq!(pair_shield(2), Some(ShieldTermination::NoPin));
+        assert!(loom.twisted_group(3).is_none());
+
+        let screened: Vec<Screened> = loom.shields().map(|(what, _)| what).collect();
+        assert_eq!(
+            screened,
+            [Screened::Cable, Screened::Pair(0), Screened::Pair(2)]
+        );
+
+        let plain = &root.cables[&CableName::from("plain")];
+        assert!(plain.shield.is_none() && plain.shields().next().is_none());
     }
 
     #[test]
@@ -969,6 +1339,37 @@ mod tests {
         assert_eq!(
             &SPARE_LIB[label.offset()..label.offset() + label.len()],
             "\"Spare Detail\""
+        );
+    }
+
+    #[test]
+    fn an_uninstantiated_for_subject_is_named_as_the_views_subject() {
+        // The view sits in `main.wb`, whose top-level component is
+        // `Vehicle`, and names `Lamp`: the help must not blame the file's
+        // component.
+        let (_, problems) = elaborate_files(&[
+            (
+                "main.wb",
+                "use Lamp from \"lamp.wb\";\ncomponent Vehicle { }\n\
+                 view pinout \"Lamp\" for Lamp { include x at (0, 0); }\n",
+            ),
+            (
+                "lamp.wb",
+                "component Lamp { connector x \"X\" { pub port a \"A\" pin 1; } }\n",
+            ),
+        ]);
+        let [problem] = problems.as_slice() else {
+            panic!("one problem: {problems:?}");
+        };
+        assert_eq!(
+            problem.to_string(),
+            "view \"Lamp\" documents `Lamp`, which the design never instantiates"
+        );
+        let help = miette::Diagnostic::help(problem).expect("help").to_string();
+        assert_eq!(
+            help,
+            "a view is drawn against an instance of its subject, the component it documents; \
+             instantiate `Lamp` under the root component, or remove the view"
         );
     }
 

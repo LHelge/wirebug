@@ -12,11 +12,13 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use lsp_types::{CompletionItem, CompletionItemKind};
+use lsp_types::{CompletionItem, CompletionItemKind, CompletionTextEdit, Range, TextEdit};
 
-use crate::dsl::ir::ColorName;
-use crate::dsl::lex::{Token, lex, significant};
-use crate::dsl::project::Project;
+use super::line_index::LineIndex;
+use crate::dsl::diagnostics::{PropertyKind, PropertyOwner};
+use crate::dsl::ir::{ColorName, LengthUnit};
+use crate::dsl::lex::{LexError, Token, lex, significant};
+use crate::dsl::project::{Project, relative_path};
 use crate::dsl::resolve::Resolved;
 use crate::dsl::span::FileId;
 
@@ -49,12 +51,19 @@ struct FileScope {
     /// Connector types *defined* in this file (no imports) — what another
     /// file could `use` from it.
     own_connector_types: Vec<String>,
-    /// The file's lone top-level component — the subject of its views.
+    /// The file's lone top-level component — the subject of its views
+    /// that leave out `for`.
     subject: Option<ComponentKey>,
+    /// The components this file imports by name: with
+    /// [`top_level`](Self::top_level), what a view's `for` may name.
+    imported: HashMap<String, ComponentKey>,
     /// Built from a buffer whose broken statements the parser skipped, so
     /// it lacks what they declared (and, where a `;` was missing, the
     /// statement after).
     holes: bool,
+    /// The file holds a top-level `extend` or a view: what another file
+    /// would pull in with `fragment`.
+    fragment_target: bool,
 }
 
 #[derive(Default)]
@@ -67,6 +76,8 @@ struct ComponentEntry {
     /// Inline (mid-harness) connectors: addressable like instances in wire
     /// endpoints, included by housing half in harness views.
     inlines: Vec<InlineEntry>,
+    /// Splices: bare wire endpoints, like own ports, and harness includes.
+    splices: Vec<SpliceEntry>,
     /// Nested component types, visible only inside this component.
     nested: HashMap<String, ComponentKey>,
 }
@@ -82,6 +93,12 @@ struct InlineEntry {
     ports: Vec<PortEntry>,
     /// The declared housing halves (`male`/`female`), in source order.
     halves: Vec<String>,
+}
+
+struct SpliceEntry {
+    name: String,
+    /// The label, else `splice`, shown as the item's detail.
+    detail: String,
 }
 
 struct PortEntry {
@@ -139,6 +156,15 @@ pub(crate) fn build_index(project: &Project, resolved: &Resolved) -> CompletionI
                     .collect(),
             });
         }
+        for (name, splice) in &def.splices {
+            entry.splices.push(SpliceEntry {
+                name: name.to_string(),
+                detail: splice
+                    .label
+                    .as_ref()
+                    .map_or_else(|| "splice".to_string(), |l| l.node.clone()),
+            });
+        }
         for &nested in &def.nested {
             entry.nested.insert(
                 resolved.defs[nested].name.to_string(),
@@ -154,6 +180,7 @@ pub(crate) fn build_index(project: &Project, resolved: &Resolved) -> CompletionI
     for (fi, file) in project.files.iter().enumerate() {
         let mut scope = FileScope {
             holes: file.holes,
+            fragment_target: file.ast.is_fragment_target(),
             ..FileScope::default()
         };
         let mut top_level_here = Vec::new();
@@ -182,6 +209,9 @@ pub(crate) fn build_index(project: &Project, resolved: &Resolved) -> CompletionI
                 scope.connector_types.push(name.to_string());
             } else {
                 scope.component_types.push(name.to_string());
+                if let Some(key) = imported_component(project, resolved, FileId(fi), import) {
+                    scope.imported.insert(name.to_string(), key);
+                }
             }
         }
         files.insert(file.path.clone(), scope);
@@ -210,7 +240,11 @@ impl CompletionIndex {
             self.components.insert(key + base, entry);
         }
         for (path, mut scope) in other.files {
-            for key in scope.top_level.values_mut() {
+            for key in scope
+                .top_level
+                .values_mut()
+                .chain(scope.imported.values_mut())
+            {
                 *key += base;
             }
             scope.subject = scope.subject.map(|k| k + base);
@@ -225,7 +259,10 @@ impl CompletionIndex {
     /// window in which the author is wiring a fresh fragment into the
     /// project. Only names are indexed; the file's contents stay unchecked.
     pub(crate) fn add_unlinked(&mut self, path: PathBuf, ast: &crate::dsl::ast::File) {
-        let mut scope = FileScope::default();
+        let mut scope = FileScope {
+            fragment_target: ast.is_fragment_target(),
+            ..FileScope::default()
+        };
         for item in &ast.items {
             match item {
                 crate::dsl::ast::Item::Definition(def) => {
@@ -276,7 +313,14 @@ impl CompletionIndex {
         let mut queue: Vec<ComponentKey> = self
             .files
             .values()
-            .flat_map(|scope| scope.top_level.values().copied().chain(scope.subject))
+            .flat_map(|scope| {
+                scope
+                    .top_level
+                    .values()
+                    .chain(scope.imported.values())
+                    .copied()
+                    .chain(scope.subject)
+            })
             .collect();
         let mut keep = HashSet::new();
         while let Some(key) = queue.pop() {
@@ -303,6 +347,23 @@ impl CompletionIndex {
 
     fn component(&self, key: ComponentKey) -> Option<&ComponentEntry> {
         self.components.get(&key)
+    }
+
+    /// The component the view around the cursor documents: the one its
+    /// `for` names, else the file's lone top-level component.
+    fn view_subject(&self, scope: &FileScope, cursor: &Cursor) -> Option<ComponentKey> {
+        let named = cursor.blocks.iter().rev().find_map(|block| match block {
+            Block::View { subject, .. } => Some(subject),
+            _ => None,
+        })?;
+        match named {
+            Some(name) => scope
+                .top_level
+                .get(name)
+                .or_else(|| scope.imported.get(name))
+                .copied(),
+            None => scope.subject,
+        }
     }
 
     /// Resolve the cursor's innermost component by walking the block stack
@@ -385,6 +446,18 @@ impl CompletionIndex {
             .unwrap_or_default()
     }
 
+    fn splices(&self, key: ComponentKey) -> Vec<CompletionItem> {
+        self.component(key)
+            .map(|entry| {
+                entry
+                    .splices
+                    .iter()
+                    .map(|s| item(&s.name, CompletionItemKind::VALUE, &s.detail))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     fn connectors(&self, key: ComponentKey) -> Vec<CompletionItem> {
         self.component(key)
             .map(|entry| {
@@ -447,6 +520,10 @@ impl CompletionIndex {
             let mut items = self.instances(component);
             items.extend(self.inlines(component));
             items.extend(self.ports(component, false));
+            // A conductor may end on a splice; a shield's drain may not.
+            if !in_shield_statement(&cursor.tokens) {
+                items.extend(self.splices(component));
+            }
             return items;
         }
 
@@ -460,11 +537,38 @@ impl CompletionIndex {
                 if let [.., Token::Use] = cursor.tail() {
                     return self.auto_imports(doc);
                 }
+                // The items insert the quotes, so not once one is typed.
+                if let [.., Token::Fragment] = cursor.tail()
+                    && !cursor.in_string
+                {
+                    return self.fragment_paths(doc);
+                }
                 if let [.., Token::Extend] = cursor.tail() {
                     return self.extend_targets();
                 }
+                // `view <kind> "<title>" ‸` may name its subject; `for ‸`
+                // takes a component the file defines or imports.
+                if let [.., Token::View, kind, Token::Str(_)] = cursor.tail()
+                    && kind.as_name().is_some()
+                {
+                    return keywords(&["for"]);
+                }
+                if let [.., Token::Str(_), Token::For] = cursor.tail() {
+                    return scope
+                        .component_types
+                        .iter()
+                        .map(|name| item(name, CompletionItemKind::CLASS, "component"))
+                        .collect();
+                }
                 if cursor.at_statement_start() {
-                    return keywords(&["use", "component", "extend", "connector_type", "view"]);
+                    return keywords(&[
+                        "use",
+                        "fragment",
+                        "component",
+                        "extend",
+                        "connector_type",
+                        "view",
+                    ]);
                 }
                 Vec::new()
             }
@@ -478,29 +582,51 @@ impl CompletionIndex {
                     self.visible_types(scope, cursor)
                 }
                 [.., Token::Pub] => keywords(&["port"]),
-                _ if cursor.at_statement_start() => keywords(&[
-                    "pub",
-                    "port",
-                    "wire",
-                    "cable",
-                    "connector",
-                    "inline",
-                    "component",
-                ]),
+                _ if cursor.at_statement_start() => {
+                    let mut items = keywords(&[
+                        "pub",
+                        "port",
+                        "wire",
+                        "cable",
+                        "splice",
+                        "connector",
+                        "inline",
+                        "component",
+                    ]);
+                    items.extend(properties(PropertyOwner::Component));
+                    items
+                }
                 _ => Vec::new(),
             },
             Some(Block::Cable) => {
+                if let Some(units) = length_units(cursor, PropertyOwner::Cable) {
+                    return units;
+                }
                 if cursor.at_statement_start() {
-                    let mut items = keywords(&["wire", "twisted"]);
-                    items.push(property("type", "cable property"));
-                    items.push(property("length", "cable property"));
+                    let mut items = keywords(&["wire", "twisted", "shield"]);
+                    items.extend(properties(PropertyOwner::Cable));
                     return items;
                 }
                 Vec::new()
             }
             Some(Block::Twisted) => {
                 if cursor.at_statement_start() {
-                    return keywords(&["wire"]);
+                    return keywords(&["wire", "shield"]);
+                }
+                Vec::new()
+            }
+            Some(Block::Splice) => {
+                if cursor.at_statement_start() {
+                    return properties(PropertyOwner::Splice);
+                }
+                Vec::new()
+            }
+            Some(Block::Wire) => {
+                if let Some(units) = length_units(cursor, PropertyOwner::Wire) {
+                    return units;
+                }
+                if cursor.at_statement_start() {
+                    return properties(PropertyOwner::Wire);
                 }
                 Vec::new()
             }
@@ -509,9 +635,9 @@ impl CompletionIndex {
                 _ if cursor.at_statement_start() => keywords(&["pub", "port"]),
                 _ => Vec::new(),
             },
-            Some(Block::View { kind }) => match cursor.tail() {
+            Some(Block::View { kind, .. }) => match cursor.tail() {
                 [.., Token::Include, instance, Token::Dot] => {
-                    match (scope.subject, instance.as_name()) {
+                    match (self.view_subject(scope, cursor), instance.as_name()) {
                         (Some(subject), Some(instance)) => {
                             self.instance_connectors(subject, instance)
                         }
@@ -519,7 +645,7 @@ impl CompletionIndex {
                     }
                 }
                 [.., Token::Include] => {
-                    let Some(subject) = scope.subject else {
+                    let Some(subject) = self.view_subject(scope, cursor) else {
                         return Vec::new();
                     };
                     match kind.as_deref() {
@@ -527,11 +653,15 @@ impl CompletionIndex {
                         Some("harness") => {
                             let mut items = self.instances(subject);
                             items.extend(self.inlines(subject));
+                            items.extend(self.splices(subject));
                             items
                         }
                         _ => self.instances(subject),
                     }
                 }
+                // `text "<label>" ‸`: the position follows the label. The
+                // deprecated named form is not offered.
+                [.., Token::Text, Token::Str(_)] => keywords(&["at"]),
                 _ if cursor.at_statement_start() => {
                     keywords(&["grid", "include", "text", "enclosure"])
                 }
@@ -539,7 +669,9 @@ impl CompletionIndex {
             },
             Some(Block::Ports { instance }) => {
                 if matches!(cursor.tail(), [.., Token::Colon] | [.., Token::Comma]) {
-                    let (Some(subject), Some(instance)) = (scope.subject, instance) else {
+                    let (Some(subject), Some(instance)) =
+                        (self.view_subject(scope, cursor), instance)
+                    else {
                         return Vec::new();
                     };
                     return self.instance_ports(subject, instance);
@@ -560,8 +692,8 @@ impl CompletionIndex {
                     return constants(&SIDES);
                 }
                 if cursor.at_statement_start() {
-                    return scope
-                        .subject
+                    return self
+                        .view_subject(scope, cursor)
                         .map(|s| self.ports(s, true))
                         .unwrap_or_default();
                 }
@@ -648,6 +780,28 @@ impl CompletionIndex {
         items
     }
 
+    /// Path items for `fragment ‸`: every other file holding an `extend` or
+    /// a view, inserting the `"<relative path>";` rest of the statement.
+    fn fragment_paths(&self, doc: &Path) -> Vec<CompletionItem> {
+        let Some(doc_dir) = doc.parent() else {
+            return Vec::new();
+        };
+        let mut items: Vec<CompletionItem> = self
+            .files
+            .iter()
+            .filter(|(path, scope)| *path != doc && scope.fragment_target)
+            .map(|(path, _)| {
+                let rel = relative_path(doc_dir, path);
+                CompletionItem {
+                    insert_text: Some(format!("\"{rel}\";")),
+                    ..item(&rel, CompletionItemKind::FILE, "fragment")
+                }
+            })
+            .collect();
+        items.sort_by(|a, b| a.label.cmp(&b.label));
+        items
+    }
+
     /// The connector designators of a named instance's type — what a
     /// harness `include inst.<connector>` refers to. For an inline
     /// connector the dot selects a housing half instead.
@@ -670,6 +824,23 @@ impl CompletionIndex {
             .map(|key| self.connectors(key))
             .unwrap_or_default()
     }
+}
+
+/// The canonical key of the component `import` brings into `file`: the
+/// top-level definition of that name in the file its path names.
+fn imported_component(
+    project: &Project,
+    resolved: &Resolved,
+    file: FileId,
+    import: &crate::dsl::ast::Use,
+) -> Option<ComponentKey> {
+    let tf = project.import_target(file, &import.path.node)?;
+    let name = import.name.node.as_str();
+    let id = resolved
+        .defs
+        .iter()
+        .position(|d| d.file == tf && d.parent.is_none() && d.name == name)?;
+    Some(resolved.groups.canonical(id))
 }
 
 fn item(label: &str, kind: CompletionItemKind, detail: &str) -> CompletionItem {
@@ -710,20 +881,36 @@ fn property(key: &str, detail: &str) -> CompletionItem {
     }
 }
 
-/// `to` relative to `from_dir`, with forward slashes — the form a `use`
-/// path is written in. Both paths must be absolute (they come from the
-/// loader's canonicalization).
-fn relative_path(from_dir: &Path, to: &Path) -> String {
-    let from: Vec<_> = from_dir.components().collect();
-    let to: Vec<_> = to.components().collect();
-    let common = from.iter().zip(&to).take_while(|(a, b)| a == b).count();
-    let mut parts: Vec<String> = vec!["..".to_string(); from.len() - common];
-    parts.extend(
-        to[common..]
-            .iter()
-            .map(|c| c.as_os_str().to_string_lossy().into_owned()),
-    );
-    parts.join("/")
+/// The keys a cable, wire, component or splice body takes, as validation
+/// knows them.
+fn properties(owner: PropertyOwner) -> Vec<CompletionItem> {
+    let detail = format!("{owner} property");
+    owner
+        .keys()
+        .iter()
+        .map(|(key, _)| property(key, &detail))
+        .collect()
+}
+
+/// The length units, when the cursor touches the number of an `owner`
+/// property that takes a length (`length: 150‸`, `length: 150m‸`): each
+/// replaces the unit typed so far, which the client filters them by.
+fn length_units(cursor: &Cursor, owner: PropertyOwner) -> Option<Vec<CompletionItem>> {
+    let range = cursor.unit?;
+    let [.., key, Token::Colon, Token::Number { .. }] = cursor.tail() else {
+        return None;
+    };
+    if owner.expects(key.as_name()?) != Some(PropertyKind::Length) {
+        return None;
+    }
+    let units = LengthUnit::ALL.iter().map(|unit| CompletionItem {
+        text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(
+            range,
+            unit.symbol().to_string(),
+        ))),
+        ..item(unit.symbol(), CompletionItemKind::UNIT, "length unit")
+    });
+    Some(units.collect())
 }
 
 /// One nesting level at the cursor, tagged by its governing keyword.
@@ -735,8 +922,14 @@ enum Block {
     Connector,
     Cable,
     Twisted,
+    /// A wire's `{ key: value; }` body, after its endpoint list.
+    Wire,
+    /// A splice's `{ key: value; }` body.
+    Splice,
     View {
         kind: Option<String>,
+        /// The component named after `for`, when the header has one.
+        subject: Option<String>,
     },
     Ports {
         instance: Option<String>,
@@ -755,7 +948,13 @@ struct Cursor {
     blocks: Vec<Block>,
     in_list: bool,
     in_at_parens: bool,
+    /// The cursor sits inside a string, typed with or without its closing
+    /// quote.
+    in_string: bool,
     tokens: Vec<Token>,
+    /// Where a number touching the cursor has its unit, typed or not yet
+    /// (`150‸`, `150m‸`): from the end of its digits to the cursor.
+    unit: Option<Range>,
 }
 
 impl Cursor {
@@ -781,14 +980,25 @@ impl Cursor {
 /// [`Cursor`]. A lexically broken buffer degrades to its valid prefix —
 /// the cursor usually sits past the text that still lexes.
 fn scan(text: &str, offset: usize) -> Cursor {
-    let lexemes = match lex(text, FileId(0)) {
-        Ok(lexemes) => lexemes,
+    // Where a string the lexer found no end for opens, if it does.
+    let (lexemes, open_string) = match lex(text, FileId(0)) {
+        Ok(lexemes) => (lexemes, None),
         Err(err) => {
             let cut = err.span().start.min(text.len());
-            lex(&text[..cut], FileId(0)).unwrap_or_default()
+            let open = matches!(
+                err,
+                LexError::UnterminatedString { .. } | LexError::NewlineInString { .. }
+            );
+            let prefix = lex(&text[..cut], FileId(0)).unwrap_or_default();
+            (prefix, open.then_some(cut))
         }
     };
-    let mut tokens: Vec<(Token, crate::dsl::span::Span)> = significant(&lexemes)
+    let significant = significant(&lexemes);
+    let in_string = open_string.is_some_and(|start| start < offset)
+        || significant.iter().any(|(token, span)| {
+            matches!(token, Token::Str(_)) && span.start < offset && offset < span.end
+        });
+    let mut tokens: Vec<(Token, crate::dsl::span::Span)> = significant
         .into_iter()
         .filter(|(_, span)| span.end <= offset)
         .collect();
@@ -802,12 +1012,22 @@ fn scan(text: &str, offset: usize) -> Cursor {
     {
         tokens.pop();
     }
+    let unit = match tokens.last() {
+        Some((Token::Number { digits, .. }, span)) if span.end == offset => {
+            let lines = LineIndex::new(text);
+            let start = lines.position(text, span.start + digits.len());
+            Some(Range::new(start, lines.position(text, offset)))
+        }
+        _ => None,
+    };
 
     let mut cursor = Cursor {
         blocks: Vec::new(),
         in_list: false,
         in_at_parens: false,
+        in_string,
         tokens: Vec::new(),
+        unit,
     };
     let mut list_depth = 0usize;
     let mut paren_depth = 0usize;
@@ -852,8 +1072,13 @@ fn classify(before: &[Token]) -> Block {
                 return Block::Component { name };
             }
             Token::View => {
+                let header = &before[i..];
                 return Block::View {
                     kind: name_at(before, i + 1),
+                    subject: header
+                        .iter()
+                        .position(|t| *t == Token::For)
+                        .and_then(|at| name_at(header, at + 1)),
                 };
             }
             // `ports {` opens a placement block only after an include's
@@ -873,6 +1098,22 @@ fn classify(before: &[Token]) -> Block {
             {
                 return Block::Enclosure;
             }
+            // A `{` right after `]` opens a wire's body: the `]` closes its
+            // endpoint list.
+            Token::RBracket if i + 1 == before.len() && in_wire_statement(&before[..i]) => {
+                return Block::Wire;
+            }
+            // `splice <name> {` opens a splice body only where `splice`
+            // starts the statement; after a declaring keyword it is a name
+            // (`cable splice {`).
+            Token::Splice
+                if matches!(
+                    before.get(i.wrapping_sub(1)),
+                    None | Some(Token::LBrace | Token::RBrace | Token::Semicolon)
+                ) =>
+            {
+                return Block::Splice;
+            }
             Token::Cable => return Block::Cable,
             Token::Twisted => return Block::Twisted,
             Token::Connector => return Block::Connector,
@@ -890,7 +1131,7 @@ fn classify(before: &[Token]) -> Block {
             // include's coordinates).
             Token::Ident(_)
             | Token::Str(_)
-            | Token::Number(_)
+            | Token::Number { .. }
             | Token::Colon
             | Token::Comma
             | Token::LParen
@@ -900,6 +1141,26 @@ fn classify(before: &[Token]) -> Block {
         }
     }
     Block::Other
+}
+
+/// Whether the statement `before` ends inside starts with `wire`.
+fn in_wire_statement(before: &[Token]) -> bool {
+    before
+        .iter()
+        .rev()
+        .take_while(|token| !matches!(token, Token::Semicolon | Token::LBrace | Token::RBrace))
+        .last()
+        == Some(&Token::Wire)
+}
+
+/// Whether the statement `before` ends inside starts with `shield`.
+fn in_shield_statement(before: &[Token]) -> bool {
+    before
+        .iter()
+        .rev()
+        .take_while(|token| !matches!(token, Token::Semicolon | Token::LBrace | Token::RBrace))
+        .last()
+        == Some(&Token::Shield)
 }
 
 /// The instance a `ports { }` block belongs to: the ident right after the
@@ -928,7 +1189,7 @@ fn is_wordlike(token: &Token) -> bool {
     !matches!(
         token,
         Token::Str(_)
-            | Token::Number(_)
+            | Token::Number { .. }
             | Token::LBrace
             | Token::RBrace
             | Token::LBracket
@@ -1026,6 +1287,59 @@ mod tests {
     }
 
     #[test]
+    fn top_level_statement_start_offers_the_file_keywords() {
+        let labels = complete_in(&[LAMP, MAIN], "component A { }\n‸\n");
+        assert_eq!(
+            labels,
+            [
+                "use",
+                "fragment",
+                "component",
+                "extend",
+                "connector_type",
+                "view"
+            ]
+        );
+    }
+
+    #[test]
+    fn fragment_offers_the_files_holding_an_extend_or_a_view() {
+        let traction = ("systems/traction.wb", "extend Root { }\n");
+        let lamps = (
+            "docs/lamps.wb",
+            "use Lamp from \"../lamp.wb\";\nview schematic \"Lamp\" for Lamp { }\n",
+        );
+        let main = (
+            "main.wb",
+            "use Lamp from \"lamp.wb\";\nfragment \"systems/traction.wb\";\nfragment \"docs/lamps.wb\";\ncomponent Root { l: Lamp; }\n",
+        );
+        let items = complete_items_in(&[LAMP, traction, lamps, main], "fragment ‸\n");
+        let offered: Vec<(&str, Option<&str>)> = items
+            .iter()
+            .map(|i| (i.label.as_str(), i.insert_text.as_deref()))
+            .collect();
+        // `lamp.wb` holds only a component, and main.wb is the doc itself.
+        assert_eq!(
+            offered,
+            [
+                ("docs/lamps.wb", Some("\"docs/lamps.wb\";")),
+                ("systems/traction.wb", Some("\"systems/traction.wb\";")),
+            ]
+        );
+    }
+
+    #[test]
+    fn fragment_offers_no_path_once_its_string_is_open() {
+        let traction = ("systems/traction.wb", "extend Root { }\n");
+        let main = (
+            "main.wb",
+            "fragment \"systems/traction.wb\";\ncomponent Root { }\n",
+        );
+        assert!(complete_in(&[traction, main], "fragment \"sys‸\n").is_empty());
+        assert!(complete_in(&[traction, main], "fragment \"sys‸tems.wb\";\n").is_empty());
+    }
+
+    #[test]
     fn extend_offers_top_level_components() {
         let labels = complete_in(&[LAMP, MAIN], "extend ‸\n");
         assert!(labels.contains(&"Root".to_string()), "{labels:?}");
@@ -1065,28 +1379,20 @@ mod tests {
     }
 
     #[test]
-    fn relative_paths_walk_up_and_down() {
-        use std::path::Path;
-        assert_eq!(
-            relative_path(
-                Path::new("/p/systems"),
-                Path::new("/p/components/hv/inv.wb")
-            ),
-            "../components/hv/inv.wb"
-        );
-        assert_eq!(
-            relative_path(Path::new("/p"), Path::new("/p/hv.wb")),
-            "hv.wb"
-        );
-    }
-
-    #[test]
     fn component_statement_start_offers_member_keywords() {
         let labels = complete_in(
             &[LAMP, MAIN],
             "use Lamp from \"lamp.wb\";\ncomponent Root {\n    ‸\n}\n",
         );
-        for expected in ["pub", "port", "wire", "cable", "connector", "component"] {
+        for expected in [
+            "pub",
+            "port",
+            "wire",
+            "cable",
+            "splice",
+            "connector",
+            "component",
+        ] {
             assert!(
                 labels.contains(&expected.to_string()),
                 "{expected}: {labels:?}"
@@ -1242,6 +1548,87 @@ mod tests {
     }
 
     #[test]
+    fn view_title_offers_for_and_for_offers_component_types() {
+        let after_title = complete_in(&[LAMP, MAIN], "view pinout \"P\" ‸");
+        assert_eq!(after_title, ["for"]);
+
+        let mut after_for = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root { }\nview pinout \"P\" for ‸",
+        );
+        after_for.sort();
+        assert_eq!(after_for, ["Lamp", "Root"]);
+    }
+
+    #[test]
+    fn view_body_offers_text_and_a_text_label_offers_at() {
+        let body = complete_in(
+            &[LAMP, MAIN],
+            "component Root { }\nview schematic \"V\" {\n    ‸",
+        );
+        assert!(body.contains(&"text".to_string()), "{body:?}");
+
+        let after_label = complete_in(
+            &[LAMP, MAIN],
+            "component Root { }\nview schematic \"V\" {\n    text \"120 Ω\" ‸",
+        );
+        assert_eq!(after_label, ["at"]);
+
+        // A text box's own name is no keyword's cue: nothing to offer.
+        let after_name = complete_in(
+            &[LAMP, MAIN],
+            "component Root { }\nview schematic \"V\" {\n    text note ‸",
+        );
+        assert!(after_name.is_empty(), "{after_name:?}");
+    }
+
+    #[test]
+    fn a_view_for_an_imported_component_completes_against_it() {
+        let connectors = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n}\nview pinout \"P\" for Lamp {\n    include ‸\n}\n",
+        );
+        assert_eq!(connectors, ["plug"]);
+
+        let ports = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n}\nview schematic \"S\" for Lamp {\n    enclosure {\n        ‸\n    }\n}\n",
+        );
+        assert!(ports.contains(&"anode".to_string()), "{ports:?}");
+        assert!(!ports.contains(&"feed".to_string()), "{ports:?}");
+    }
+
+    #[test]
+    fn views_for_each_of_two_components_complete_against_each() {
+        let head = "use Lamp from \"lamp.wb\";\ncomponent A {\n    l: Lamp;\n}\ncomponent B {\n    pub port b \"B\";\n}\n";
+        let main = ("main.wb", head);
+        let instance_ports = complete_in(
+            &[LAMP, main],
+            &format!(
+                "{head}view schematic \"A\" for A {{\n    include l at (0, 0) ports {{\n        west: ‸\n    }}\n}}\n"
+            ),
+        );
+        assert!(
+            instance_ports.contains(&"anode".to_string()),
+            "{instance_ports:?}"
+        );
+
+        let ports = complete_in(
+            &[LAMP, main],
+            &format!(
+                "{head}view schematic \"B\" for B {{\n    enclosure {{\n        ‸\n    }}\n}}\n"
+            ),
+        );
+        assert_eq!(ports, ["b"]);
+
+        let without_for = complete_in(
+            &[LAMP, main],
+            &format!("{head}view schematic \"S\" {{\n    include ‸\n}}\n"),
+        );
+        assert!(without_for.is_empty(), "no single subject: {without_for:?}");
+    }
+
+    #[test]
     fn schematic_include_offers_subject_instances() {
         let labels = complete_in(
             &[LAMP, MAIN],
@@ -1338,7 +1725,7 @@ mod tests {
             &[LAMP, MAIN],
             "use Lamp from \"lamp.wb\";\ncomponent Root {\n    cable c \"C\" {\n        ‸\n    }\n}\n",
         );
-        for expected in ["wire", "twisted", "type", "length"] {
+        for expected in ["wire", "twisted", "shield", "type", "length"] {
             assert!(
                 labels.contains(&expected.to_string()),
                 "{expected}: {labels:?}"
@@ -1347,12 +1734,38 @@ mod tests {
     }
 
     #[test]
-    fn twisted_block_offers_wire() {
+    fn twisted_block_offers_wire_and_shield() {
         let labels = complete_in(
             &[LAMP, MAIN],
             "use Lamp from \"lamp.wb\";\ncomponent Root {\n    cable c \"C\" {\n        twisted {\n            ‸\n        }\n    }\n}\n",
         );
-        assert_eq!(labels, ["wire"]);
+        assert_eq!(labels, ["wire", "shield"]);
+    }
+
+    #[test]
+    fn shield_ends_complete_like_wire_endpoints() {
+        // In a cable body and in a twisted pair alike: the instances and own
+        // ports, then an instance's pub ports after its dot.
+        for (cable_body, close) in [
+            ("", ""),
+            ("twisted {\n wire white 0.5 [l.anode, l.anode];\n ", "}\n"),
+        ] {
+            let names = complete_in(
+                &[LAMP, MAIN],
+                &format!(
+                    "use Lamp from \"lamp.wb\";\ncomponent Root {{\n    l: Lamp;\n    cable c {{\n        {cable_body}shield [‸]\n{close}    }}\n}}\n"
+                ),
+            );
+            assert!(names.contains(&"l".to_string()), "{names:?}");
+            assert!(names.contains(&"feed".to_string()), "{names:?}");
+            let ports = complete_in(
+                &[LAMP, MAIN],
+                &format!(
+                    "use Lamp from \"lamp.wb\";\ncomponent Root {{\n    l: Lamp;\n    cable c {{\n        {cable_body}shield \"S\" [l.‸]\n{close}    }}\n}}\n"
+                ),
+            );
+            assert!(ports.contains(&"anode".to_string()), "{ports:?}");
+        }
     }
 
     #[test]
@@ -1362,6 +1775,118 @@ mod tests {
             "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n    cable c \"C\" {\n        twisted {\n            wire white 0.5 [l.‸]\n        }\n    }\n}\n",
         );
         assert!(labels.contains(&"anode".to_string()), "{labels:?}");
+    }
+
+    #[test]
+    fn wire_body_offers_its_properties() {
+        let labels = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n    wire red 1 [l.anode, l.cathode] {\n        length: 1.2;\n        ‸\n    }\n}\n",
+        );
+        assert_eq!(labels, ["length", "type", "part"]);
+    }
+
+    /// Each item as `<label> → <the text its edit writes> @ <columns>`.
+    fn edits(items: &[CompletionItem]) -> Vec<String> {
+        items
+            .iter()
+            .map(|item| match &item.text_edit {
+                Some(CompletionTextEdit::Edit(edit)) => format!(
+                    "{} → {} @ {}..{}",
+                    item.label, edit.new_text, edit.range.start.character, edit.range.end.character
+                ),
+                _ => format!("{} (no edit)", item.label),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_length_number_offers_the_units_in_place_of_the_typed_one() {
+        let cable = complete_items_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    cable c {\n        length: 150‸\n    }\n}\n",
+        );
+        assert_eq!(
+            edits(&cable),
+            ["m → m @ 19..19", "cm → cm @ 19..19", "mm → mm @ 19..19"]
+        );
+        // A unit half typed is replaced whole, inside a twisted pair too.
+        let conductor = complete_items_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    cable c {\n        twisted {\n            wire white 0.5 [a, b] { length: 15m‸ }\n        }\n    }\n}\n",
+        );
+        assert_eq!(
+            edits(&conductor),
+            ["m → m @ 46..47", "cm → cm @ 46..47", "mm → mm @ 46..47"]
+        );
+    }
+
+    #[test]
+    fn units_are_offered_only_on_a_length() {
+        for live in [
+            // Not touching the number.
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    cable c {\n        length: 150 ‸\n    }\n}\n",
+            // A key that takes no length.
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    cable c {\n        type: 150‸\n    }\n}\n",
+            // A gauge.
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    wire red 1‸\n}\n",
+        ] {
+            let labels = complete_in(&[LAMP, MAIN], live);
+            assert!(!labels.contains(&"mm".to_string()), "{live:?}: {labels:?}");
+        }
+    }
+
+    #[test]
+    fn conductor_body_inside_a_twisted_pair_offers_wire_properties() {
+        let labels = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    cable c {\n        twisted {\n            wire white 0.5 [a, b] { ‸ }\n        }\n    }\n}\n",
+        );
+        assert_eq!(labels, ["length", "type", "part"]);
+    }
+
+    #[test]
+    fn after_a_wire_body_the_component_body_resumes() {
+        let labels = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    wire red 1 [a, b] { length: 1; }\n    ‸\n}\n",
+        );
+        assert!(labels.contains(&"cable".to_string()), "{labels:?}");
+        // `length` is a wire key, not a component's.
+        assert!(!labels.contains(&"length".to_string()), "{labels:?}");
+    }
+
+    #[test]
+    fn wire_property_completion_inserts_the_colon() {
+        let items = complete_items_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    wire red 1 [a, b] { ‸ }\n}\n",
+        );
+        let part = items.iter().find(|i| i.label == "part").expect("part");
+        assert_eq!(part.insert_text.as_deref(), Some("part: "));
+        assert_eq!(part.detail.as_deref(), Some("wire property"));
+    }
+
+    #[test]
+    fn component_statement_start_offers_its_part_data_keys() {
+        for body in ["component Root {\n    ‸\n}\n", "extend Root {\n    ‸\n}\n"] {
+            let items = complete_items_in(
+                &[LAMP, MAIN],
+                &format!("use Lamp from \"lamp.wb\";\n{body}"),
+            );
+            let keys: Vec<&str> = items
+                .iter()
+                .filter(|i| i.detail.as_deref() == Some("component property"))
+                .map(|i| i.label.as_str())
+                .collect();
+            assert_eq!(
+                keys,
+                ["part", "manufacturer", "description", "rating"],
+                "{body}"
+            );
+            let part = items.iter().find(|i| i.label == "part").expect("part");
+            assert_eq!(part.insert_text.as_deref(), Some("part: "), "{body}");
+        }
     }
 
     const INLINE_MAIN: (&str, &str) = (
@@ -1391,6 +1916,61 @@ mod tests {
             "connector_type M2 \"M 2p\" { }\ncomponent Root {\n    inline ic {\n        male: M2;\n        port sig \"SIG\" pin 1;\n    }\n}\nview harness \"H\" {\n    include ic.‸\n}\n",
         );
         assert_eq!(labels, ["male"], "only the declared half: {labels:?}");
+    }
+
+    /// `Root` with a lamp `l`, an own port `feed` and a splice `sp`.
+    const SPLICED: (&str, &str) = (
+        "main.wb",
+        "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n    pub port feed \"F\";\n    splice sp \"Joint\";\n    wire red 1 [l.anode, sp];\n    wire red 1 [sp, feed];\n}\nview harness \"H\" {\n    include l.plug at (0, 0);\n}\n",
+    );
+
+    #[test]
+    fn a_bare_endpoint_offers_the_components_splices() {
+        let items = complete_items_in(
+            &[LAMP, SPLICED],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n    pub port feed \"F\";\n    splice sp \"Joint\";\n    wire red 1 [l.anode, ‸];\n}\n",
+        );
+        let splice = items.iter().find(|i| i.label == "sp").expect("the splice");
+        assert_eq!(splice.detail.as_deref(), Some("Joint"));
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert!(
+            labels.contains(&"feed") && labels.contains(&"l"),
+            "{labels:?}"
+        );
+
+        // A shield's drain lands on a pin, never a splice.
+        let labels = complete_in(
+            &[LAMP, SPLICED],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n    splice sp;\n    cable c {\n        wire red 1 [l.anode, l.cathode];\n        shield [‸];\n    }\n}\n",
+        );
+        assert!(!labels.contains(&"sp".to_string()), "{labels:?}");
+        assert!(labels.contains(&"feed".to_string()), "{labels:?}");
+    }
+
+    #[test]
+    fn a_harness_include_offers_the_subjects_splices() {
+        let live = "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n}\nview harness \"H\" {\n    include ‸\n}\n";
+        let labels = complete_in(&[LAMP, SPLICED], live);
+        assert!(labels.contains(&"sp".to_string()), "{labels:?}");
+        assert!(labels.contains(&"l".to_string()), "{labels:?}");
+        let schematic = live.replace("view harness", "view schematic");
+        let labels = complete_in(&[LAMP, SPLICED], &schematic);
+        assert!(!labels.contains(&"sp".to_string()), "{labels:?}");
+    }
+
+    #[test]
+    fn a_splice_body_offers_its_properties() {
+        let labels = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    splice sp \"Joint\" {\n        ‸\n    }\n}\n",
+        );
+        assert_eq!(labels, ["part", "description"]);
+        // A cable named `splice` opens a cable body.
+        let labels = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    cable splice {\n        ‸\n    }\n}\n",
+        );
+        assert!(labels.contains(&"twisted".to_string()), "{labels:?}");
     }
 
     #[test]

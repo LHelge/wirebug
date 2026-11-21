@@ -1,0 +1,7 @@
+component Node {
+    connector x1 "Node 3p" {
+        pub port can_h "CAN H" pin 1;
+        pub port can_l "CAN L" pin 2;
+        pub port gnd   "GND"   pin 3;
+    }
+}

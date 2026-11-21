@@ -13,10 +13,24 @@ component Car {
     size: Sensor "Size sensor";
     grid: Sensor "Grid sensor";
 
+    // `fragment` starts a top-level statement, and is a name in here.
+    pub port fragment "FRAGMENT";
+
+    // `shield` starts a statement only in a cable body or a twisted pair.
+    shield: Sensor "Shield sensor";
+
+    // `splice` starts a statement only when a name follows it: here an
+    // instance, a port and an endpoint, and a splice named `face`.
+    splice: Sensor "Splice sensor";
+    splice face;
+    wire black 1 [size.splice, face];
+    wire black 1 [face, splice.splice];
+
     cable text "Loom" {
         length: 1.5;
         wire red 1 "SIG" [size.at, grid.at];
         wire black 1 "GND" [size.from, grid.from];
+        shield [size.shield, shield.shield];
     }
 
     component Sensor {
@@ -24,6 +38,8 @@ component Car {
             pub port at   "AT"   pin 1;
             pub port from "FROM" pin 2;
         }
+        pub port shield "SHIELD";
+        pub port splice "SPLICE";
     }
 }
 
@@ -38,7 +54,7 @@ view schematic "Overview" {
         west: at, from;
     }
 
-    text ports at (6, 14) "Two sensors on one loom";
+    text "Two sensors on one loom" at (6, 14);
 }
 
 view harness "Loom" {

@@ -29,6 +29,7 @@ use chumsky::recovery::via_parser;
 use chumsky::util::MaybeRef;
 
 use crate::dsl::ast::*;
+use crate::dsl::ir::LengthUnit;
 use crate::dsl::lex::Token;
 use crate::dsl::span::{FileId, Span, Spanned};
 
@@ -155,17 +156,36 @@ enum ViewItem {
 }
 
 /// One entry of a cable body, parsed in any order and folded into a
-/// [`Cable`]: a property (`type`/`length`), or a conductor entry (a plain
-/// wire or a `twisted { }` group).
+/// [`Cable`]: a property (`type`/`length`), a conductor entry (a plain
+/// wire or a `twisted { }` group), or a `shield` line.
 enum CableItem {
-    Property(CableProperty),
+    Property(Property),
     Member(CableMember),
+    Shield(Shield),
+}
+
+/// One entry of a `twisted { }` group, folded into a [`TwistedGroup`]: a
+/// conductor or a `shield` line.
+enum TwistedItem {
+    Wire(Wire),
+    Shield(Shield),
+}
+
+/// What follows `<name>:` in a component body: a type and an optional
+/// label (an instance), or a value (a part-data property).
+enum NamedTail {
+    Instance {
+        type_name: Spanned<Ident>,
+        label: Option<Spanned<String>>,
+    },
+    Value(PropertyValue),
 }
 
 /// One top-level file entry, parsed in source order and folded into
-/// [`File::uses`] plus [`File::items`].
+/// [`File::uses`], [`File::fragments`] and [`File::items`].
 enum FileEntry {
     Use(Use),
+    Fragment(Fragment),
     Item(Item),
 }
 
@@ -549,16 +569,74 @@ where
 
     let string = select! { Token::Str(s) => s }.map_with(|s, e| Spanned::new(s, e.span()));
 
-    let number = select! { Token::Number(n) => n }.try_map(|n, span: Span| {
-        n.parse::<f64>()
+    let numeral = select! { Token::Number { digits, unit } => (digits, unit) };
+
+    // A number with no unit: a gauge, a coordinate, a grid step. Only a
+    // property value may carry a unit (see `quantity`).
+    let number = numeral.try_map(|(digits, unit), span: Span| match unit {
+        Some(unit) => Err(Rich::custom(
+            span,
+            format!("only a `length` takes a unit: write `{digits}`, without the `{unit}`"),
+        )),
+        None => digits
+            .parse::<f64>()
             .map(|v| Spanned::new(v, span))
-            .map_err(|_| Rich::custom(span, format!("invalid number `{n}`")))
+            .map_err(|_| Rich::custom(span, format!("invalid number `{digits}`"))),
     });
 
-    let pin = select! { Token::Number(n) => n }.try_map(|n, span: Span| {
-        n.parse::<u32>()
-            .map(|v| Spanned::new(v, span))
-            .map_err(|_| Rich::custom(span, format!("pin must be a whole number, got `{n}`")))
+    // A whole number: a pin, or a connector layout's row or column count.
+    let whole = |what: &'static str| {
+        numeral.try_map(move |(digits, unit), span: Span| {
+            digits
+                .parse::<u32>()
+                .ok()
+                .filter(|_| unit.is_none())
+                .map(|v| Spanned::new(v, span))
+                .ok_or_else(|| {
+                    let written = format!("{digits}{}", unit.as_deref().unwrap_or_default());
+                    Rich::custom(
+                        span,
+                        format!("{what} must be a whole number, got `{written}`"),
+                    )
+                })
+        })
+    };
+    let pin = whole("pin");
+
+    // A property value's number, with the unit written directly after it,
+    // if any; validate checks the unit against the key.
+    let quantity = numeral.try_map(|(digits, unit), span: Span| {
+        let value = digits
+            .parse::<f64>()
+            .map_err(|_| Rich::custom(span, format!("invalid number `{digits}`")))?;
+        let unit = unit.map(|unit| {
+            let start = span.end - unit.len();
+            Spanned::new(unit, Span::new(span.file, start, span.end))
+        });
+        Ok(Spanned::new(Quantity { value, unit }, span))
+    });
+
+    // A length unit written after a space (`length: 2 m;`): a unit lexes
+    // into its number only when it touches it, so say that, not "expected
+    // ';'". It never matches: on a length unit its error stands in for the
+    // `;` one, and on anything else it expects nothing, so the `;` error
+    // stands as it was.
+    let spaced_unit = custom(|inp| {
+        let before = inp.cursor();
+        let found = inp.peek();
+        inp.skip();
+        let span = inp.span_since(&before);
+        Err::<(), _>(match found {
+            Some(Token::Ident(unit)) if unit.parse::<LengthUnit>().is_ok() => Rich::custom(
+                span,
+                format!("write the unit `{unit}` directly after its number, without a space"),
+            ),
+            found => LabelError::<'tok, I, RichPattern<'tok, Token>>::expected_found(
+                [],
+                found.map(MaybeRef::Val),
+                span,
+            ),
+        })
     });
 
     let connector_property = leading_name(Token::Colon)
@@ -579,12 +657,12 @@ where
         .ignore_then(
             just(Token::Rows)
                 .ignore_then(just(Token::Colon))
-                .ignore_then(pin)
+                .ignore_then(whole("`rows`"))
                 .then_ignore(just(Token::Semicolon))
                 .then(
                     just(Token::Cols)
                         .ignore_then(just(Token::Colon))
-                        .ignore_then(pin)
+                        .ignore_then(whole("`cols`"))
                         .then_ignore(just(Token::Semicolon)),
                 )
                 .then(
@@ -773,18 +851,40 @@ where
         })
         .boxed();
 
-    // --- Instances ---
+    // --- Instances and part data ---
 
-    let instance = leading_name(Token::Colon)
+    // A component-body statement that starts `<name>:`. A type name after
+    // the colon makes it an instance (`pack: Battery "Pack";`, and
+    // `part: Plug;` is an instance named `part`); a string or a number
+    // makes it a part-data property of the type (`part: "…";`), its key
+    // checked in validate. One production for both, so the name is read
+    // once and a broken instance fails where it did before.
+    let named_member = leading_name(Token::Colon)
         .then_ignore(just(Token::Colon))
-        .then(ident.clone())
-        .then(string.or_not())
+        .then(choice((
+            ident
+                .clone()
+                .then(string.or_not())
+                .map(|(type_name, label)| NamedTail::Instance { type_name, label }),
+            choice((
+                string.map(PropertyValue::Str),
+                quantity.map(PropertyValue::Number),
+            ))
+            .map(NamedTail::Value),
+        )))
         .then_ignore(just(Token::Semicolon))
-        .map_with(|((name, type_name), label), e| Instance {
-            type_name,
-            name,
-            label,
-            span: e.span(),
+        .map_with(|(name, tail), e| match tail {
+            NamedTail::Instance { type_name, label } => Member::Instance(Instance {
+                type_name,
+                name,
+                label,
+                span: e.span(),
+            }),
+            NamedTail::Value(value) => Member::Property(Property {
+                key: name,
+                value,
+                span: e.span(),
+            }),
         })
         .boxed();
 
@@ -806,77 +906,139 @@ where
             },
         });
 
-    // A color is `base` or two-tone `base/tracer` (`green/yellow`).
+    // A `<key>: <value>;` line of a cable body or a wire body.
+    let property = leading_name(Token::Colon)
+        .then_ignore(just(Token::Colon))
+        .then(choice((
+            string.map(PropertyValue::Str),
+            quantity
+                .then_ignore(spaced_unit.or_not())
+                .map(PropertyValue::Number),
+            ident.clone().map(PropertyValue::Ident),
+        )))
+        .then_ignore(just(Token::Semicolon))
+        .map_with(|(key, value), e| Property {
+            key,
+            value,
+            span: e.span(),
+        })
+        .boxed();
+
+    // `splice <name> ["<label>"];`, or with a `{ <property>* }` body in
+    // place of the `;`: a joint conductors end on. `splice` is contextual,
+    // so `splice: Sensor;` fails here on the colon and reads on as an
+    // instance named `splice` (`named_member`).
+    let splice = just(Token::Splice)
+        .ignore_then(ident.clone())
+        .then(string.or_not())
+        .then(choice((
+            block(property.clone()),
+            just(Token::Semicolon).to(Vec::new()),
+        )))
+        .map_with(|((name, label), properties), e| Splice {
+            name,
+            label,
+            properties,
+            span: e.span(),
+        })
+        .boxed();
+
+    // `[<endpoint>, …]`: a wire's endpoints, or the pins a shield's drain
+    // lands on.
+    let endpoints = endpoint
+        .separated_by(just(Token::Comma))
+        .allow_trailing()
+        .at_least(1)
+        .collect::<Vec<_>>()
+        .delimited_by(just(Token::LBracket), just(Token::RBracket))
+        .boxed();
+
+    // A color is `base` or two-tone `base/tracer` (`green/yellow`). An
+    // optional `{ <property>* }` body ends the wire in place of its `;`,
+    // like an include's `ports { }` block.
     let wire = just(Token::Wire)
         .ignore_then(ident.clone())
         .then(just(Token::Slash).ignore_then(ident.clone()).or_not())
         .then(number)
         .then(string.or_not())
-        .then(
-            endpoint
-                .separated_by(just(Token::Comma))
-                .allow_trailing()
-                .at_least(1)
-                .collect::<Vec<_>>()
-                .delimited_by(just(Token::LBracket), just(Token::RBracket)),
+        .then(endpoints.clone())
+        .then(choice((
+            block(property.clone()),
+            just(Token::Semicolon).to(Vec::new()),
+        )))
+        .map_with(
+            |(((((color, tracer), gauge), label), endpoints), properties), e| Wire {
+                color,
+                tracer,
+                gauge,
+                label,
+                endpoints,
+                properties,
+                span: e.span(),
+            },
         )
-        .then_ignore(just(Token::Semicolon))
-        .map_with(|((((color, tracer), gauge), label), endpoints), e| Wire {
-            color,
-            tracer,
-            gauge,
-            label,
-            endpoints,
-            span: e.span(),
-        })
         .boxed();
 
     // --- Cables ---
 
-    let cable_property = leading_name(Token::Colon)
-        .then_ignore(just(Token::Colon))
-        .then(choice((
-            string.map(CablePropertyValue::Str),
-            number.map(CablePropertyValue::Number),
-            ident.clone().map(CablePropertyValue::Ident),
-        )))
+    // `shield ["<label>"] [<end>, …];` — a cable's or a twisted pair's
+    // screen and the pins its drain lands on; `shield;` lands on no pin. The
+    // number of ends is checked in validate.
+    let shield = just(Token::Shield)
+        .ignore_then(string.or_not())
+        .then(endpoints.or_not())
         .then_ignore(just(Token::Semicolon))
-        .map_with(|(key, value), e| CableProperty {
-            key,
-            value,
+        .map_with(|(label, ends), e| Shield {
+            label,
+            ends: ends.unwrap_or_default(),
             span: e.span(),
-        });
+        })
+        .boxed();
 
-    // `twisted { <wire> <wire> }` — a twisted pair. Exactly two
-    // conductors, converted from the repeated parse by `try_map` so a
-    // wrong count is a parse error with a purpose-built message.
-    // (Deliberately NOT `wire.then(wire)`: that embeds the huge wire
-    // combinator type twice and blows rustc's trait solving up —
-    // compile times went from seconds to unbounded.)
+    // `twisted { <wire> <wire> <shield>* }` — a twisted pair, screened
+    // when it holds a `shield` line. Exactly two conductors, converted
+    // from the repeated parse by `try_map` so a wrong count is a parse
+    // error with a purpose-built message. The shield is no conductor and
+    // does not count. (Deliberately NOT `wire.then(wire)`: that embeds
+    // the huge wire combinator type twice and blows rustc's trait solving
+    // up — compile times went from seconds to unbounded.)
     let twisted_group = just(Token::Twisted)
         .ignore_then(
-            wire.clone()
-                .repeated()
-                .collect::<Vec<_>>()
-                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
+            choice((
+                wire.clone().map(TwistedItem::Wire),
+                shield.clone().map(TwistedItem::Shield),
+            ))
+            .repeated()
+            .collect::<Vec<_>>()
+            .delimited_by(just(Token::LBrace), just(Token::RBrace)),
         )
-        .try_map_with(|wires, e| {
+        .try_map_with(|items, e| {
+            let mut wires = Vec::new();
+            let mut shields = Vec::new();
+            for item in items {
+                match item {
+                    TwistedItem::Wire(w) => wires.push(w),
+                    TwistedItem::Shield(s) => shields.push(s),
+                }
+            }
             let pair: [Wire; 2] = wires.try_into().map_err(|_| {
                 Rich::custom(e.span(), "a twisted pair needs exactly two conductors")
             })?;
             Ok(TwistedGroup {
                 wires: Box::new(pair),
+                shields,
                 span: e.span(),
             })
         });
 
-    // Properties and conductor entries may interleave in any order; the
-    // fold partitions them, each keeping its source order.
+    // Properties, conductor entries and shields may interleave in any
+    // order; the fold partitions them, each keeping its source order.
     let cable_item = choice((
-        cable_property.map(CableItem::Property),
+        property.map(CableItem::Property),
+        shield.map(CableItem::Shield),
         twisted_group.map(|t| CableItem::Member(CableMember::Twisted(t))),
         wire.clone()
-            .map(|w| CableItem::Member(CableMember::Wire(w))),
+            .map(|w| CableItem::Member(CableMember::Wire(Box::new(w)))),
     ));
 
     let cable = just(Token::Cable)
@@ -886,10 +1048,12 @@ where
         .map_with(|((name, label), items), e| {
             let mut properties = Vec::new();
             let mut members = Vec::new();
+            let mut shields = Vec::new();
             for item in items {
                 match item {
                     CableItem::Property(p) => properties.push(p),
                     CableItem::Member(m) => members.push(m),
+                    CableItem::Shield(s) => shields.push(s),
                 }
             }
             Cable {
@@ -897,6 +1061,7 @@ where
                 label,
                 properties,
                 members,
+                shields,
                 span: e.span(),
             }
         })
@@ -959,16 +1124,18 @@ where
         .ignore_then(block(enclosure_port))
         .map_with(|ports, e| Spanned::new(ports, e.span()));
 
+    // `(<x>, <y>)`: where an include or a text box sits, in grid cells.
+    let point = number
+        .then_ignore(just(Token::Comma))
+        .then(number)
+        .delimited_by(just(Token::LParen), just(Token::RParen))
+        .boxed();
+
     let include = just(Token::Include)
         .ignore_then(ident.clone())
         .then(just(Token::Dot).ignore_then(ident.clone()).or_not())
         .then_ignore(just(Token::At))
-        .then(
-            number
-                .then_ignore(just(Token::Comma))
-                .then(number)
-                .delimited_by(just(Token::LParen), just(Token::RParen)),
-        )
+        .then(point.clone())
         .then(choice((
             // A ports block ends the include — no trailing `;` after `}`.
             ports_block.map(Some),
@@ -983,24 +1150,31 @@ where
             span: e.span(),
         });
 
+    // `text "<label>" at (<x>, <y>);`, or the deprecated named form
+    // `text <name> at (<x>, <y>) "<label>";`, which resolve warns about. The
+    // token after `text`, a string or a name, tells the two apart.
     let text_box = just(Token::Text)
-        .ignore_then(ident.clone())
-        .then_ignore(just(Token::At))
-        .then(
-            number
-                .then_ignore(just(Token::Comma))
-                .then(number)
-                .delimited_by(just(Token::LParen), just(Token::RParen)),
-        )
-        .then(string)
+        .ignore_then(choice((
+            string
+                .then_ignore(just(Token::At))
+                .then(point.clone())
+                .map(|(label, (x, y))| (None, x, y, label)),
+            ident
+                .clone()
+                .then_ignore(just(Token::At))
+                .then(point)
+                .then(string)
+                .map(|((name, (x, y)), label)| (Some(name), x, y, label)),
+        )))
         .then_ignore(just(Token::Semicolon))
-        .map_with(|((name, (x, y)), label), e| TextBox {
+        .map_with(|(name, x, y, label), e| TextBox {
             name,
             x,
             y,
             label,
             span: e.span(),
-        });
+        })
+        .boxed();
 
     let grid = just(Token::Grid)
         .ignore_then(just(Token::Colon))
@@ -1019,8 +1193,9 @@ where
     let view = just(Token::View)
         .ignore_then(ident.clone())
         .then(string)
+        .then(just(Token::For).ignore_then(ident.clone()).or_not())
         .then(block(view_item))
-        .map_with(|((kind, title), items), e| {
+        .map_with(|(((kind, title), subject), items), e| {
             let mut grid = None;
             let mut enclosure = None;
             let mut includes = Vec::new();
@@ -1044,6 +1219,7 @@ where
             View {
                 kind,
                 title,
+                subject,
                 grid,
                 has_enclosure,
                 enclosure: enclosure.unwrap_or_default(),
@@ -1065,8 +1241,9 @@ where
             inline.map(Member::Inline),
             wire.map(Member::Wire),
             cable.map(Member::Cable),
+            splice.map(Member::Splice),
             definition.map(Member::Definition),
-            instance.map(Member::Instance),
+            named_member,
         ));
         let head = choice((
             just(Token::Component).to(DefKind::Component),
@@ -1101,7 +1278,19 @@ where
             span: e.span(),
         });
 
-    let file_entry = choice((use_decl.map(FileEntry::Use), item.map(FileEntry::Item)));
+    let fragment_decl = just(Token::Fragment)
+        .ignore_then(string)
+        .then_ignore(just(Token::Semicolon))
+        .map_with(|path, e| Fragment {
+            path,
+            span: e.span(),
+        });
+
+    let file_entry = choice((
+        use_decl.map(FileEntry::Use),
+        fragment_decl.map(FileEntry::Fragment),
+        item.map(FileEntry::Item),
+    ));
 
     // The file reads like a block that ends at the end of input: a broken
     // entry is reported and skipped (a stray `}` alone, since no block
@@ -1114,10 +1303,12 @@ where
         .then_ignore(end())
         .map_with(|entries, e| {
             let mut uses = Vec::new();
+            let mut fragments = Vec::new();
             let mut items = Vec::new();
             for entry in entries.into_iter().flatten() {
                 match entry {
                     FileEntry::Use(use_decl) => uses.push(use_decl),
+                    FileEntry::Fragment(fragment) => fragments.push(fragment),
                     FileEntry::Item(item) => items.push(item),
                 }
             }
@@ -1125,6 +1316,7 @@ where
             File {
                 id: span.file,
                 uses,
+                fragments,
                 items,
                 span,
             }
@@ -1506,7 +1698,7 @@ inverter_control = face 47@(1, 0) large 21@(5, 0) 13@(16, 3)
         assert_eq!(cable.properties[0].key.node.as_str(), "type");
         assert!(matches!(
             cable.properties[1].value,
-            CablePropertyValue::Number(_)
+            PropertyValue::Number(_)
         ));
         assert_eq!(cable.wires().count(), 2);
     }
@@ -1586,6 +1778,444 @@ inverter_control = face 47@(1, 0) large 21@(5, 0) 13@(16, 3)
         assert_eq!(cable.wires().count(), 1);
     }
 
+    /// Each property of `wire` as `<key>=<value>`.
+    fn wire_properties(wire: &Wire) -> Vec<String> {
+        wire.properties
+            .iter()
+            .map(|p| {
+                let value = match &p.value {
+                    PropertyValue::Str(s) => format!("{:?}", s.node),
+                    PropertyValue::Number(n) => n.node.to_string(),
+                    PropertyValue::Ident(i) => i.node.to_string(),
+                };
+                format!("{}={value}", p.key.node)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_length_keeps_the_unit_written_after_its_number() {
+        let src = "component c { wire red 1 [a.x, b.y] { length: 150mm; } cable k { length: 2; type: \"t\"; } }";
+        let file = parse_ok(src);
+        let Member::Wire(wire) = &members(&file)[0] else {
+            panic!("expected a wire");
+        };
+        let PropertyValue::Number(length) = &wire.properties[0].value else {
+            panic!("expected a number");
+        };
+        assert_eq!(&src[length.span.start..length.span.end], "150mm");
+        assert_eq!(length.node.value, 150.0);
+        let unit = length.node.unit.as_ref().expect("a unit");
+        assert_eq!(&src[unit.span.start..unit.span.end], "mm");
+        assert_eq!(wire_properties(wire), ["length=150mm"]);
+
+        let Member::Cable(cable) = &members(&file)[1] else {
+            panic!("expected a cable");
+        };
+        let PropertyValue::Number(bare) = &cable.properties[0].value else {
+            panic!("expected a number");
+        };
+        assert!(bare.node.unit.is_none());
+    }
+
+    #[test]
+    fn any_unit_parses_on_a_property_and_validate_judges_it() {
+        // The parse stays faithful: an unknown unit, or a unit on a key that
+        // takes no length, is validate's to report.
+        let file = parse_ok("component c { part: 2in; cable k { length: 3in; } }");
+        let [Member::Property(part), Member::Cable(cable)] = members(&file) else {
+            panic!("expected a property and a cable");
+        };
+        let PropertyValue::Number(n) = &part.value else {
+            panic!("expected a number");
+        };
+        assert_eq!(n.node.to_string(), "2in");
+        assert_eq!(cable.properties.len(), 1);
+    }
+
+    #[test]
+    fn a_unit_where_no_length_goes_is_a_syntax_error() {
+        let cases = [
+            "component c { wire red 1.5mm [a.x, b.y]; }",
+            "component c { connector j { pub port p \"P\" pin 1a; } }",
+            "component c { connector j { pub port p \"P\" pins [1, 2mm]; } }",
+            "view schematic \"V\" { grid: 10mm; }",
+            "view schematic \"V\" { include a at (2cm, 0); }",
+            "view schematic \"V\" { text t at (0, 1m) \"T\"; }",
+            "view schematic \"V\" { text \"T\" at (3mm, 0); }",
+            "view schematic \"V\" { enclosure { p at (west, 2mm); } }",
+            "connector_type T \"t\" { pitch: 2.54mm; }",
+            "connector_type T \"t\" { layout grid { rows: 2mm; cols: 2; } }",
+            "connector_type T \"t\" { layout grid { rows: 2; cols: 3x; } }",
+            "connector_type T \"t\" { layout face { cavity 1 at (0mm, 0); } }",
+            "connector_type T \"t\" { layout face { cavity 1at (0, 0); } }",
+        ];
+        let report: Vec<String> = cases.iter().flat_map(|src| errors_at(src)).collect();
+        insta::assert_snapshot!(report.join("\n"), @r"
+        1.5mm: only a `length` takes a unit: write `1.5`, without the `mm`
+        1a: pin must be a whole number, got `1a`
+        2mm: pin must be a whole number, got `2mm`
+        10mm: only a `length` takes a unit: write `10`, without the `mm`
+        2cm: only a `length` takes a unit: write `2`, without the `cm`
+        1m: only a `length` takes a unit: write `1`, without the `m`
+        3mm: only a `length` takes a unit: write `3`, without the `mm`
+        2mm: only a `length` takes a unit: write `2`, without the `mm`
+        2.54mm: only a `length` takes a unit: write `2.54`, without the `mm`
+        2mm: `rows` must be a whole number, got `2mm`
+        3x: `cols` must be a whole number, got `3x`
+        0mm: only a `length` takes a unit: write `0`, without the `mm`
+        1at: pin must be a whole number, got `1at`
+        ");
+    }
+
+    #[test]
+    fn a_unit_after_a_space_is_told_to_touch_its_number() {
+        let cases = [
+            "component c { cable k { length: 2 m; } }",
+            "component c { wire red 1 [a, b] { length: 150 mm; } }",
+            "component c { cable k { length: 2 x; } }",
+            "component c { cable k { length: 2",
+        ];
+        let report: Vec<String> = cases.iter().flat_map(|src| errors_at(src)).collect();
+        // Anything else after the number keeps the usual error.
+        insta::assert_snapshot!(report.join("\n"), @r"
+        m: write the unit `m` directly after its number, without a space
+        mm: write the unit `mm` directly after its number, without a space
+        x: found 'x' expected ';'
+        : found end of input expected ';'
+        ");
+    }
+
+    #[test]
+    fn wire_body_carries_properties_in_place_of_the_semicolon() {
+        let file = parse_ok(
+            r#"component c {
+                wire red 0.5 "12V" [a.x, b.y] {
+                    length: 1.2;
+                    type:   "FLRY-B";
+                    part:   "W-123";
+                }
+                wire black 0.5 [a.g, b.g];
+            }"#,
+        );
+        let [Member::Wire(with_body), Member::Wire(without)] = members(&file) else {
+            panic!("expected two wires, got {:?}", members(&file));
+        };
+        assert_eq!(
+            wire_properties(with_body),
+            ["length=1.2", r#"type="FLRY-B""#, r#"part="W-123""#]
+        );
+        assert_eq!(
+            with_body.label.as_ref().map(|l| l.node.as_str()),
+            Some("12V")
+        );
+        assert_eq!(with_body.endpoints.len(), 2);
+        assert!(without.properties.is_empty());
+    }
+
+    #[test]
+    fn an_empty_wire_body_parses() {
+        let file = parse_ok("component c { wire red 1 [a.x, b.y] { } }");
+        let Member::Wire(w) = &members(&file)[0] else {
+            panic!("expected a wire");
+        };
+        assert!(w.properties.is_empty());
+    }
+
+    #[test]
+    fn a_semicolon_after_a_wire_body_is_a_parse_error() {
+        // A brace block ends its statement; no `;` follows the `}`.
+        let parsed = parse_str("component c { wire red 1 [a.x, b.y] { length: 1; }; }");
+        assert_eq!(parsed.errors.len(), 1, "{:?}", parsed.errors);
+    }
+
+    #[test]
+    fn cable_conductors_carry_bodies_inside_and_outside_a_twisted_pair() {
+        let file = parse_ok(
+            r#"component c {
+                cable loom {
+                    length: 2.0;
+                    wire red 1.5 [a.pwr, b.pwr] { length: 2.4; }
+                    twisted {
+                        wire white/blue 0.5 [a.h, b.h] { part: "TP-1"; }
+                        wire white/red 0.5 [a.l, b.l];
+                    }
+                }
+            }"#,
+        );
+        let Member::Cable(cable) = &members(&file)[0] else {
+            panic!("expected a cable");
+        };
+        assert_eq!(cable.properties.len(), 1, "the cable keeps its own length");
+        let bodies: Vec<Vec<String>> = cable.wires().map(wire_properties).collect();
+        assert_eq!(
+            bodies,
+            [
+                vec!["length=2.4".to_string()],
+                vec![r#"part="TP-1""#.to_string()],
+                vec![],
+            ]
+        );
+    }
+
+    #[test]
+    fn a_broken_line_in_a_wire_body_is_reported_alone_and_skipped() {
+        let src = r#"component c {
+                wire red 1 [a.x, b.y] {
+                    length 1.2;
+                    type: "FLRY-B";
+                }
+                pub port ok "OK";
+            }"#;
+        assert_eq!(errors_at(src), ["1.2: found '1.2' expected ':'"]);
+        let parsed = parse_str(src);
+        let file = parsed.file.expect("a file");
+        let Member::Wire(w) = &members(&file)[0] else {
+            panic!("expected the wire");
+        };
+        assert_eq!(wire_properties(w), [r#"type="FLRY-B""#]);
+        assert!(matches!(members(&file)[1], Member::Port(_)));
+    }
+
+    #[test]
+    fn a_broken_line_in_a_twisted_conductor_body_keeps_the_pair() {
+        let src = r#"component c {
+                cable k {
+                    twisted {
+                        wire red 1 [a.x, b.x] { length: ; }
+                        wire blue 1 [a.y, b.y];
+                    }
+                }
+            }"#;
+        assert_eq!(errors_at(src), [";: found ';' expected something else"]);
+        let file = parse_str(src).file.expect("a file");
+        let Member::Cable(cable) = &members(&file)[0] else {
+            panic!("expected the cable");
+        };
+        assert_eq!(cable.wires().count(), 2);
+    }
+
+    /// Each shield's label and ends, as `<label>: <end>, <end>`.
+    fn shield_lines(shields: &[Shield]) -> Vec<String> {
+        shields
+            .iter()
+            .map(|s| {
+                let label = s.label.as_ref().map_or("-", |l| l.node.as_str());
+                let ends: Vec<String> = s
+                    .ends
+                    .iter()
+                    .map(|ep| match &ep.instance {
+                        Some(inst) => format!("{}.{}", inst.node, ep.port.node),
+                        None => ep.port.node.to_string(),
+                    })
+                    .collect();
+                format!("{label}: {}", ends.join(", "))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_cable_shield_lists_the_pins_its_drain_lands_on() {
+        let file = parse_ok(
+            r#"component c {
+                cable k {
+                    wire red 1 [a.x, b.x];
+                    shield "SHLD" [a.gnd, b.gnd];
+                    shield [a.gnd,];
+                    shield "GLAND";
+                    shield;
+                }
+            }"#,
+        );
+        let Member::Cable(cable) = &members(&file)[0] else {
+            panic!("expected the cable");
+        };
+        // Faithful: validate allows one shield and two ends.
+        assert_eq!(
+            shield_lines(&cable.shields),
+            ["SHLD: a.gnd, b.gnd", "-: a.gnd", "GLAND: ", "-: "]
+        );
+        assert_eq!(cable.wires().count(), 1);
+    }
+
+    #[test]
+    fn a_shield_is_no_conductor() {
+        let file = parse_ok(
+            r#"component c {
+                cable k {
+                    twisted {
+                        wire white 0.5 [a.h, b.h];
+                        shield [a.drain];
+                        wire blue 0.5 [a.l, b.l];
+                    }
+                    shield;
+                }
+            }"#,
+        );
+        let Member::Cable(cable) = &members(&file)[0] else {
+            panic!("expected the cable");
+        };
+        assert_eq!(cable.wires().count(), 2, "the shields carry no conductor");
+        let pair = cable.twisted_groups().next().expect("the pair");
+        assert_eq!(shield_lines(&pair.shields), ["-: a.drain"]);
+        assert_eq!(shield_lines(&cable.shields), ["-: "]);
+        let ends: Vec<&str> = cable.endpoints().map(|ep| ep.port.node.as_str()).collect();
+        assert_eq!(ends, ["h", "h", "l", "l", "drain"]);
+
+        // The shield does not count toward the pair's two conductors.
+        let parsed = parse_str(
+            "component c { cable k { twisted { wire red 1 [a.p, b.p]; shield [a.s]; } } }",
+        );
+        assert!(
+            !parsed.errors.is_empty(),
+            "one conductor and a shield is no pair"
+        );
+    }
+
+    #[test]
+    fn a_broken_shield_in_a_pair_is_not_reported_as_a_wrong_conductor_count() {
+        let src = r#"component c {
+                cable k {
+                    twisted {
+                        wire red 1 [a.x, b.x];
+                        wire blue 1 [a.y, b.y];
+                        shield [a.s;
+                    }
+                }
+            }"#;
+        assert_eq!(errors_at(src), [";: found ';' expected ',', or ']'"]);
+    }
+
+    #[test]
+    fn a_shield_lists_its_ends_in_brackets_or_none() {
+        for body in ["shield [];", "shield a.s;", "shield [a.s]"] {
+            let parsed = parse_str(&format!(
+                "component c {{ cable k {{ wire red 1 [a.x, b.x]; {body} }} }}"
+            ));
+            assert!(!parsed.errors.is_empty(), "{body} should not parse");
+        }
+    }
+
+    #[test]
+    fn shield_is_a_name_outside_a_cable_body() {
+        let file = parse_ok(
+            r#"component c {
+                pub port shield "SHIELD";
+                shield: Lamp;
+                cable shield {
+                    shield: "x";
+                    wire red 1 [shield.shield, shield];
+                    shield [shield.shield];
+                }
+            }"#,
+        );
+        let [
+            Member::Port(port),
+            Member::Instance(inst),
+            Member::Cable(cable),
+        ] = members(&file)
+        else {
+            panic!("expected a port, an instance and a cable");
+        };
+        assert_eq!(port.name.node.as_str(), "shield");
+        assert_eq!(inst.name.node.as_str(), "shield");
+        assert_eq!(cable.name.node.as_str(), "shield");
+        // `shield:` is a property line (validate rejects the key).
+        assert_eq!(cable.properties[0].key.node.as_str(), "shield");
+        assert_eq!(shield_lines(&cable.shields), ["-: shield.shield"]);
+    }
+
+    #[test]
+    fn a_splice_is_a_named_member_with_an_optional_label_and_body() {
+        let file = parse_ok(
+            r#"component c {
+                splice sp_gnd "Ground splice";
+                splice bare;
+                splice crimped { part: "BSC-2.5"; description: "Butt splice"; }
+                wire black 2.5 [ecu.gnd, sp_gnd];
+            }"#,
+        );
+        let [
+            Member::Splice(labelled),
+            Member::Splice(bare),
+            Member::Splice(crimped),
+            Member::Wire(wire),
+        ] = members(&file)
+        else {
+            panic!("expected three splices and a wire");
+        };
+        assert_eq!(labelled.name.node.as_str(), "sp_gnd");
+        assert_eq!(
+            labelled.label.as_ref().map(|l| l.node.as_str()),
+            Some("Ground splice")
+        );
+        assert!(labelled.properties.is_empty());
+        assert!(bare.label.is_none() && bare.properties.is_empty());
+        let keys: Vec<&str> = crimped
+            .properties
+            .iter()
+            .map(|p| p.key.node.as_str())
+            .collect();
+        assert_eq!(keys, ["part", "description"]);
+        // A conductor ends on the splice by its bare name, like an own port.
+        let ends: Vec<(Option<&str>, &str)> = wire
+            .endpoints
+            .iter()
+            .map(|ep| {
+                (
+                    ep.instance.as_ref().map(|i| i.node.as_str()),
+                    ep.port.node.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(ends, [(Some("ecu"), "gnd"), (None, "sp_gnd")]);
+    }
+
+    #[test]
+    fn splice_is_a_name_where_a_name_belongs() {
+        let file = parse_ok(
+            r#"component c {
+                pub port splice "SPLICE";
+                splice: Lamp;
+                splice splice;
+                wire red 1 [splice.splice, splice];
+            }"#,
+        );
+        let [
+            Member::Port(port),
+            Member::Instance(inst),
+            Member::Splice(splice),
+            Member::Wire(wire),
+        ] = members(&file)
+        else {
+            panic!("expected a port, an instance, a splice and a wire");
+        };
+        assert_eq!(port.name.node.as_str(), "splice");
+        assert_eq!(inst.name.node.as_str(), "splice");
+        assert_eq!(splice.name.node.as_str(), "splice");
+        assert_eq!(wire.endpoints.len(), 2);
+    }
+
+    #[test]
+    fn a_semicolon_after_a_splice_body_is_a_parse_error() {
+        let parsed = parse_str(r#"component c { splice sp { part: "x"; }; }"#);
+        assert!(!parsed.errors.is_empty());
+    }
+
+    #[test]
+    fn a_statement_after_a_wire_body_cut_short_reports_its_own_error() {
+        // `length: ;` fails on its own `;`; the next line is the author's
+        // next property, not that line's tail.
+        let src = "component c {\n    wire red 1 [a.x, b.y] {\n        length: ;\n        type \"x\";\n    }\n}";
+        assert_eq!(
+            errors_at(src),
+            [
+                ";: found ';' expected something else",
+                "\"x\": found '\"x\"' expected ':'"
+            ]
+        );
+    }
+
     #[test]
     fn harness_include_references_connector() {
         let file = parse_ok(r#"view harness "H" { include charger.hv at (2, 4); }"#);
@@ -1616,6 +2246,113 @@ inverter_control = face 47@(1, 0) large 21@(5, 0) 13@(16, 3)
             b.label.as_ref().map(|l| l.node.as_str()),
             Some("Front Battery")
         );
+    }
+
+    #[test]
+    fn component_part_data_parses_beside_its_members() {
+        let file = parse_ok(
+            r#"component Contactor {
+                part:         "EV200AAANA";
+                manufacturer: "TE Connectivity";
+                pub port a "A";
+                rating:       "500 A";
+                coil: Coil;
+            }"#,
+        );
+        let Item::Definition(def) = &file.items[0] else {
+            panic!("expected the component");
+        };
+        let properties: Vec<String> = def
+            .properties()
+            .map(|p| match &p.value {
+                PropertyValue::Str(s) => format!("{}={:?}", p.key.node, s.node),
+                other => panic!("expected a string, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            properties,
+            [
+                r#"part="EV200AAANA""#,
+                r#"manufacturer="TE Connectivity""#,
+                r#"rating="500 A""#
+            ]
+        );
+        assert!(matches!(members(&file)[2], Member::Port(_)));
+        assert!(matches!(members(&file)[4], Member::Instance(_)));
+    }
+
+    #[test]
+    fn a_name_after_the_colon_is_an_instance_and_a_value_a_property() {
+        // `part: Plug;` places a `Plug` named `part`; only a string or a
+        // number after the colon makes part data.
+        let file = parse_ok(
+            r#"component c { part: Plug; part: Plug "Label"; part: "P-1"; rating: 500; }"#,
+        );
+        let shapes: Vec<String> = members(&file)
+            .iter()
+            .map(|m| match m {
+                Member::Instance(i) => format!(
+                    "instance {}: {} {:?}",
+                    i.name.node,
+                    i.type_name.node,
+                    i.label.as_ref().map(|l| l.node.as_str())
+                ),
+                Member::Property(p) => match &p.value {
+                    PropertyValue::Str(s) => format!("property {}={:?}", p.key.node, s.node),
+                    PropertyValue::Number(n) => format!("property {}={}", p.key.node, n.node),
+                    PropertyValue::Ident(i) => format!("property {}={}", p.key.node, i.node),
+                },
+                other => panic!("unexpected member {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            shapes,
+            [
+                "instance part: Plug None",
+                r#"instance part: Plug Some("Label")"#,
+                r#"property part="P-1""#,
+                "property rating=500",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_broken_part_data_line_is_reported_alone_and_skipped() {
+        let src = r#"component c {
+                part: "P-1" "extra";
+                manufacturer "TE";
+                pub port ok "OK";
+            }"#;
+        assert_eq!(
+            errors_at(src),
+            [
+                "\"extra\": found '\"extra\"' expected ';'",
+                "\"TE\": found '\"TE\"' expected ':'"
+            ]
+        );
+        let file = parse_str(src).file.expect("a file");
+        assert!(matches!(members(&file), [Member::Port(_)]));
+    }
+
+    #[test]
+    fn a_broken_instance_fails_where_it_did_before_part_data() {
+        // The value branch must not move or widen the errors of an
+        // instance that does not parse.
+        let report: Vec<String> = [
+            "component C { l: ; }",
+            "component C { l Lamp; }",
+            r#"component C { l: Lamp "L" extra; }"#,
+            "component C { l: Lamp",
+        ]
+        .iter()
+        .flat_map(|src| errors_at(src))
+        .collect();
+        insta::assert_snapshot!(report.join("\n"), @r"
+        ;: found ';' expected something else
+        Lamp: found 'Lamp' expected ':'
+        extra: found 'extra' expected ';'
+        : found end of input expected something else, or ';'
+        ");
     }
 
     #[test]
@@ -1739,6 +2476,67 @@ inverter_control = face 47@(1, 0) large 21@(5, 0) 13@(16, 3)
     }
 
     #[test]
+    fn view_names_its_subject_after_for() {
+        let src = r#"view pinout "Sensor pinout" for Sensor { include x1 at (0, 0); }"#;
+        let file = parse_ok(src);
+        let Item::View(v) = &file.items[0] else {
+            panic!("expected view");
+        };
+        let subject = v.subject.as_ref().expect("a subject");
+        assert_eq!(subject.node.as_str(), "Sensor");
+        assert_eq!(&src[subject.span.start..subject.span.end], "Sensor");
+        assert_eq!(v.includes.len(), 1);
+
+        let implicit = parse_ok(r#"view pinout "P" { }"#);
+        let Item::View(v) = &implicit.items[0] else {
+            panic!("expected view");
+        };
+        assert!(v.subject.is_none(), "no `for`, no subject");
+    }
+
+    #[test]
+    fn for_is_still_a_name_wherever_a_name_belongs() {
+        // `for` was an ordinary name before it named a view's subject, so a
+        // port, instance, include or text box called `for` still parses.
+        let file = parse_ok(
+            r#"component c {
+                pub port for "FOR";
+                for: Lamp;
+                wire red 1 [for, for.for];
+            }
+            view schematic "V" for for {
+                include for at (1, 2) ports { west: for; }
+                enclosure { for at (west, 1); }
+                text for at (0, 4) "note";
+            }"#,
+        );
+        let names: Vec<&str> = members(&file)
+            .iter()
+            .filter_map(|m| match m {
+                Member::Port(p) => Some(p.name.node.as_str()),
+                Member::Instance(i) => Some(i.name.node.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names, ["for", "for"]);
+        let Item::View(v) = &file.items[1] else {
+            panic!("expected a view");
+        };
+        assert_eq!(v.subject.as_ref().map(|s| s.node.as_str()), Some("for"));
+        assert_eq!(v.includes[0].instance.node.as_str(), "for");
+        assert_eq!(v.includes[0].ports[0].port.node.as_str(), "for");
+        assert_eq!(v.enclosure[0].port.node.as_str(), "for");
+        let name = v.texts[0].name.as_ref().expect("the named form");
+        assert_eq!(name.node.as_str(), "for");
+    }
+
+    #[test]
+    fn for_without_a_subject_is_a_parse_error() {
+        let parsed = parse_str(r#"view pinout "P" for { }"#);
+        assert!(!parsed.errors.is_empty(), "`for` needs a component name");
+    }
+
+    #[test]
     fn include_ports_block_flattens_in_order() {
         let file = parse_ok(
             r#"view schematic "V" { include a at (1, 2) ports { west: p, q; east: r; } }"#,
@@ -1759,16 +2557,81 @@ inverter_control = face 47@(1, 0) large 21@(5, 0) 13@(16, 3)
     }
 
     #[test]
-    fn view_text_box_parses() {
+    fn view_text_box_parses_label_first_without_a_name() {
+        let file = parse_ok(r#"view schematic "V" { text "This is my textbox!" at (3, -4); }"#);
+        let Item::View(v) = &file.items[0] else {
+            panic!("expected view");
+        };
+        assert_eq!(v.texts.len(), 1);
+        assert!(v.texts[0].name.is_none(), "the current form has no name");
+        assert_eq!((v.texts[0].x.node, v.texts[0].y.node), (3.0, -4.0));
+        assert_eq!(v.texts[0].label.node, "This is my textbox!");
+    }
+
+    #[test]
+    fn deprecated_named_text_box_still_parses() {
         let file =
             parse_ok(r#"view schematic "V" { text note_1 at (3, 4) "This is my textbox!"; }"#);
         let Item::View(v) = &file.items[0] else {
             panic!("expected view");
         };
         assert_eq!(v.texts.len(), 1);
-        assert_eq!(v.texts[0].name.node.as_str(), "note_1");
+        let name = v.texts[0].name.as_ref().expect("the named form");
+        assert_eq!(name.node.as_str(), "note_1");
         assert_eq!((v.texts[0].x.node, v.texts[0].y.node), (3.0, 4.0));
         assert_eq!(v.texts[0].label.node, "This is my textbox!");
+    }
+
+    #[test]
+    fn both_text_box_forms_mix_in_one_view() {
+        let file = parse_ok(
+            r#"view schematic "V" {
+                text "new" at (0, 0);
+                text old at (1, 1) "old";
+                text "newer" at (2, 2);
+            }"#,
+        );
+        let Item::View(v) = &file.items[0] else {
+            panic!("expected view");
+        };
+        let got: Vec<(Option<&str>, &str)> = v
+            .texts
+            .iter()
+            .map(|t| {
+                (
+                    t.name.as_ref().map(|n| n.node.as_str()),
+                    t.label.node.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [(None, "new"), (Some("old"), "old"), (None, "newer")],
+            "source order, whatever the form"
+        );
+    }
+
+    #[test]
+    fn text_box_written_with_a_name_and_a_label_first_is_a_syntax_error() {
+        // The forms do not blend: a name before the label is the named
+        // form, whose label comes after the coordinates.
+        let parsed = parse_str(r#"view schematic "V" { text note "N" at (0, 0); }"#);
+        assert!(!parsed.errors.is_empty(), "a name and a leading label");
+    }
+
+    #[test]
+    fn text_box_current_form_rewrites_either_form() {
+        let file = parse_ok(
+            r#"view schematic "V" { text note at (8, -2.5) "120 Ω"; text "A" at (0, 1); }"#,
+        );
+        let Item::View(v) = &file.items[0] else {
+            panic!("expected view");
+        };
+        let rewritten: Vec<String> = v.texts.iter().map(|t| t.current_form()).collect();
+        assert_eq!(
+            rewritten,
+            [r#"text "120 Ω" at (8, -2.5);"#, r#"text "A" at (0, 1);"#]
+        );
     }
 
     #[test]
@@ -1799,6 +2662,97 @@ component b { }
         assert!(matches!(file.items[0], Item::Definition(_)));
         assert!(matches!(file.items[1], Item::View(_)));
         assert!(matches!(file.items[2], Item::Definition(_)));
+    }
+
+    #[test]
+    fn fragment_declaration_names_a_path_and_no_name() {
+        let src = "fragment \"systems/traction.wb\";\ncomponent c { }\n";
+        let file = parse_ok(src);
+        let [fragment] = file.fragments.as_slice() else {
+            panic!("expected one fragment, got {:?}", file.fragments);
+        };
+        assert_eq!(fragment.path.node, "systems/traction.wb");
+        assert_eq!(
+            &src[fragment.path.span.start..fragment.path.span.end],
+            "\"systems/traction.wb\""
+        );
+        assert_eq!(
+            &src[fragment.span.start..fragment.span.end],
+            "fragment \"systems/traction.wb\";"
+        );
+        assert!(file.uses.is_empty());
+        assert_eq!(file.items.len(), 1);
+    }
+
+    #[test]
+    fn imports_list_use_and_fragment_lines_in_source_order() {
+        let file = parse_ok(
+            r#"
+fragment "a.wb";
+use Lamp from "lamp.wb";
+component c { }
+fragment "b.wb";
+use Relay from "relay.wb";
+"#,
+        );
+        let paths: Vec<(&str, bool)> = file
+            .imports()
+            .iter()
+            .map(|import| {
+                (
+                    import.path().node.as_str(),
+                    matches!(import, Import::Fragment(_)),
+                )
+            })
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                ("a.wb", true),
+                ("lamp.wb", false),
+                ("b.wb", true),
+                ("relay.wb", false)
+            ]
+        );
+    }
+
+    #[test]
+    fn fragment_is_a_name_wherever_a_name_belongs() {
+        let file = parse_ok(
+            r#"use fragment from "fragment.wb";
+            component c {
+                pub port fragment "FRAGMENT";
+                fragment: Lamp;
+                wire red 1 [fragment.a, fragment];
+            }"#,
+        );
+        assert_eq!(file.uses[0].name.node.as_str(), "fragment");
+        let Member::Port(port) = &members(&file)[0] else {
+            panic!("expected a port");
+        };
+        assert_eq!(port.name.node.as_str(), "fragment");
+        let Member::Instance(instance) = &members(&file)[1] else {
+            panic!("expected an instance");
+        };
+        assert_eq!(instance.name.node.as_str(), "fragment");
+        assert!(file.fragments.is_empty());
+    }
+
+    #[test]
+    fn a_broken_top_level_statement_expects_the_file_statements() {
+        let report = [
+            r#"pub port a "A";"#,
+            "fragment systems;",
+            r#"fragment "x.wb""#,
+        ]
+        .iter()
+        .flat_map(|src| errors_at(src))
+        .collect::<Vec<_>>();
+        insta::assert_snapshot!(report.join("\n"), @r"
+        pub: found 'pub' expected 'use', 'fragment', 'component', 'extend', 'connector_type', 'view', or end of input
+        systems: found 'systems' expected something else
+        : found end of input expected ';'
+        ");
     }
 
     #[test]
@@ -1844,7 +2798,8 @@ component b { }
             .collect();
         assert_eq!(placed, ["cols", "enclosure"]);
         assert_eq!(v.enclosure[0].port.node.as_str(), "include");
-        assert_eq!(v.texts[0].name.node.as_str(), "grid");
+        let name = v.texts[0].name.as_ref().expect("the named form");
+        assert_eq!(name.node.as_str(), "grid");
     }
 
     #[test]
@@ -1910,12 +2865,12 @@ component b { }
         ];
         let report: Vec<String> = cases.iter().flat_map(|src| errors_at(src)).collect();
         insta::assert_snapshot!(report.join("\n"), @r"
-        view: found 'view' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'component', 'extend', something else, or '}'
-        use: found 'use' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'component', 'extend', something else, or '}'
-        connector_type: found 'connector_type' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'component', 'extend', something else, or '}'
-        twisted: found 'twisted' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'component', 'extend', something else, or '}'
-        pin: found 'pin' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'component', 'extend', something else, or '}'
-        port: found 'port' expected something else, 'twisted', 'wire', or '}'
+        view: found 'view' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'splice', 'component', 'extend', something else, or '}'
+        use: found 'use' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'splice', 'component', 'extend', something else, or '}'
+        connector_type: found 'connector_type' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'splice', 'component', 'extend', something else, or '}'
+        twisted: found 'twisted' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'splice', 'component', 'extend', something else, or '}'
+        pin: found 'pin' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'splice', 'component', 'extend', something else, or '}'
+        port: found 'port' expected something else, 'shield', 'twisted', 'wire', or '}'
         wire: found 'wire' expected 'layout', something else, or '}'
         cable: found 'cable' expected something else, 'pub', 'port', or '}'
         view: found 'view' expected something else, or '}'
@@ -2039,7 +2994,7 @@ view schematic "V" {
         .collect::<Vec<_>>();
         insta::assert_snapshot!(report.join("\n"), @r#"
         ;: found ';' expected something else | "x": found '"x"' expected something else
-        ;: found ';' expected something else | pin: found 'pin' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'component', 'extend', something else, or '}'
+        ;: found ';' expected something else | pin: found 'pin' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'splice', 'component', 'extend', something else, or '}'
         pin: found 'pin' expected something else | Lamp: found 'Lamp' expected ':'
         "#);
     }

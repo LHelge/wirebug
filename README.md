@@ -62,7 +62,7 @@ What works today:
 
 - The `.wb` DSL front end, end to end via `wirebug check`:
   - a lexer and [`chumsky`](https://github.com/zesterer/chumsky) parser for the DSL;
-  - multi-file projects — discover `wirebug.toml`, load `main.wb`, and resolve `use` imports transitively;
+  - multi-file projects — discover `wirebug.toml`, load `main.wb`, and follow `use` and `fragment` imports transitively;
   - name resolution (types, instances, ports, view includes);
   - elaboration of the type/instance hierarchy into a flat, addressable IR;
   - validation (undefined names, duplicates, private-port access, containment cycles, …);
@@ -146,7 +146,7 @@ version.)
 
 ## Concepts
 
-**Component** — a *type*, not an instance: a named definition with `pub` ports (its interface) and, optionally, instances of other components plus the wires between them (its implementation). Components can nest; nested definitions are private to their parent.
+**Component** — a *type*, not an instance: a named definition with `pub` ports (its interface) and, optionally, instances of other components plus the wires between them (its implementation). Components can nest; nested definitions are private to their parent. A component may also say what it is bought as, with `part: "EV200AAANA"; manufacturer: "TE Connectivity"; description: "HV main contactor"; rating: "500 A";` lines in its body (all optional, each once, all strings); every placement of the type carries them. A `<name>:` followed by a type is an instance instead, so `part: Fuse;` places a `Fuse` named `part`.
 
 **Port** — a named connection point with a human-readable label. `pub` exposes it to instantiators; visibility does not propagate automatically — a parent re-exports by declaring its own `pub` port and wiring it through.
 
@@ -154,11 +154,15 @@ version.)
 
 **Instance** — a placement of a component type, with a name (used in wires) and an optional label (shown in diagrams).
 
-**Wire** — a colour, a gauge (mm²), and two or more endpoints (`instance.port`, or a bare `port` for the enclosing component's own port). Multi-endpoint wires model shared rails and T-junctions.
+**Wire** — a colour, a gauge (mm²), and two or more endpoints (`instance.port`, or a bare name: the enclosing component's own port, or one of its splices). Multi-endpoint wires model shared rails and T-junctions. A wire may end in a property body instead of its `;` — `wire red 0.5 "12V" [fuses.ecu, ecu.b_pos] { length: 1.2; type: "FLRY-B"; part: "..."; }` — giving its length, insulation type and part number. A length is in metres when bare, or takes a unit written directly after the number: `2m`, `15cm`, `150mm`. Point-to-point wires that travel together can be grouped into a `cable` with its own `type` and `length`; a conductor's own `length` overrides the cable's. A cable, or one of its `twisted { }` pairs, may be screened: `shield "SHLD" [ecu.shield_gnd];` names the pins its drain is terminated on — one (grounded at one end), two (both ends), or none (`shield;`, a screen that lands on no pin: cut back, or bonded at a gland or housing). A harness drawing marks a screened cable's box (a dashed outline, `shielded` in its subtitle) and a screened pair (a dashed outline round the pair), and draws each drain as a thin dashed line to the pins of the connectors it includes.
 
-**View** — a rendering target that documents a component: a kind (`schematic`, `harness`, or `pinout`), a grid, and what to place where. A `schematic` include lists the ports to show on each side; a `harness` include names a child instance's connector and draws its whole pin table; a `pinout` include names one of the subject component's own connectors and draws its cavity face. Wires are derived from the model, never listed in views — a wire draws only between ports/connectors both views include. A view is drawn against an instance of the component it documents, so that component must be instantiated somewhere in the design (`uninstantiated_view_subject` otherwise).
+**Splice** — a joint inside a component that conductors end on: a crimp or solder splice in a loom. `splice sp_gnd "Ground splice" { part: "D-436-36"; }` declares it (label and body optional), and each conductor to it is an ordinary two-ended wire naming it like an own port: `wire black 0.5 [lamp.gnd, sp_gnd];`. All conductors on one splice are joined, each keeping its own colour, gauge and length — which a multi-endpoint rail cannot say. A cable's conductor may end on a splice, and a wire may join two splices; a wire to a splice has exactly two ends (`splice_wire_arity`), a splice fewer than two conductors end on warns (`splice_joins_nothing`), and its name may not repeat a port, instance, connector, cable or other splice of its component (`duplicate_splice_name`). A shared rail without a splice stays a loose multi-endpoint wire. A schematic draws no splice: the ports its conductors join show connected, like a rail.
 
-**Project** — a directory rooted at `wirebug.toml`, with `main.wb` beside it as the entry file. The CLI intentionally feels Cargo-like: from inside a project, commands walk up parent directories until they find the manifest; you can also point commands at the project root or at `wirebug.toml` explicitly. Logical hierarchy comes only from `use` imports and DSL nesting, never from directory layout.
+**View** — a rendering target that documents a component: a kind (`schematic`, `harness`, or `pinout`), a grid, and what to place where. A `schematic` include lists the ports to show on each side; a `harness` include names a child instance's connector and draws its whole pin table; a `pinout` include names one of the subject component's own connectors and draws its cavity face. Wires are derived from the model, never listed in views — a wire draws only between ports/connectors both views include. A view documents its file's single top-level component unless it names one after its title — `view pinout "Sensor pinout" for Sensor { … }` — so a file defining several components gives each of its views a `for` (`view_subject` otherwise); `for` takes a component the file defines or imports. A view is drawn against an instance of the component it documents, so that component must be instantiated somewhere in the design (`uninstantiated_view_subject` otherwise). A schematic view may also carry free-text notes, label first like every other declaration: `text "120 Ω termination" at (8, 4);` centres a boxed label on that grid point. The older named form, `text <name> at (8, 4) "<label>";`, still renders but is deprecated and will be removed: `check` warns about it (`deprecated_text_syntax`) and shows the statement rewritten.
+
+**Fragment** — a large component can be authored across files: one file introduces it with `component Vehicle { … }`, others add to it with `extend Vehicle { … }`, and the fragments merge into one component whose instances and ports every fragment's wires and views may reference. A file pulls a fragment file in with `fragment "systems/traction.wb";`: that loads the file without importing any name, so its `extend`s merge into the components of their names in scope and its views render. (`use Vehicle from "systems/traction.wb";` is the older spelling of the same and keeps working; prefer `fragment`, which says what it does.) An `extend` that merges into no component is an error (`orphan_fragment`); when the component exists but is not in scope where the file is pulled in, the help names the `use` to add and the file to add it to. `check` warns about a `fragment` line that adds nothing (`unused_fragment`, its help saying why): one that merges none of the file's `extend`s (because it has none, or their components are not in scope where the line is written) when the file adds nothing else either: no merging line of its own, and no view, or only views of a component its `extend`s never joined; one naming the entry file or its own file; and lines that only lead back to files already loaded, such as two files that name each other. It also warns about a file pulled in twice from one file (`duplicate_fragment`).
+
+**Project** — a directory rooted at `wirebug.toml`, with `main.wb` beside it as the entry file. The CLI intentionally feels Cargo-like: from inside a project, commands walk up parent directories until they find the manifest; you can also point commands at the project root or at `wirebug.toml` explicitly. Logical hierarchy comes only from `use` and `fragment` imports and DSL nesting, never from directory layout.
 
 ## Project manifest
 
@@ -189,7 +193,7 @@ Boxes may touch but not overlap (`overlapping_includes`). A wire leaves its port
 
 A view may span at most 8192 units on a side, margins included (`view_too_large`, labelled on the view's title and the includes farthest apart). `--png` rasterises each view to one whole pixmap, so includes placed thousands of grid steps apart would ask for gigabytes of memory; at `--png`'s 2 pixels per unit the limit is 16384 px a side, more than an A0 sheet at 300 dpi and far beyond any real drawing. `check` holds every view to the limit whatever the output mode, so a project that passes `check` renders as SVG, PNG and PDF alike.
 
-A harness view draws a conductor only when it includes the connectors at both of its ends. Once a component has a harness view, `check` warns about each conductor between connectors of two of its children that none of its harness views draws (`undrawn_conductor`, fatal under `--strict`), so a wire cannot go missing from every build drawing unnoticed. Each segment of a multi-endpoint rail counts on its own; an inline connector is covered through either half.
+A harness view draws a conductor only when it includes what both of its ends land on: a connector (`include ecu.x1 at (0, 0);`), or one of the subject's splices by its name (`include sp_gnd at (20, 6);`). A splice draws as a solid dot labelled with its name, label and part, its conductors meeting at the dot — a cable's through its cable box, a loose wire as a loose wire. Once a component has a harness view, `check` warns about each conductor between connectors of two of its children, or to one of its splices, that none of its harness views draws (`undrawn_conductor`, fatal under `--strict`), so a wire cannot go missing from every build drawing unnoticed. Each segment of a multi-endpoint rail counts on its own; an inline connector is covered through either half.
 
 If a view still fails to render, `render` names it (`error: view "Overview": …`), writes every other view, and exits non-zero. The HTML index (and `serve`'s page) shows the error where that view's drawing would be; `--embed`'s `manifest.json` lists only the views written, and `--pdf` pages only those.
 
@@ -219,7 +223,7 @@ component Controller {
     }
 }
 
-view pinout "Controller pinouts" {
+view pinout "Controller pinouts" for Controller {
     grid: 20;
     include x1 at (0, 0);
 }

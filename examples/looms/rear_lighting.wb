@@ -1,0 +1,28 @@
+// Aphid EV — rear lighting loom.
+//
+// The run from the VCM to the three stop lamps. Its stop feed is a shared
+// rail (systems/lighting.wb): one wire, branching to every lamp. The
+// lamps' grounds are joined differently: at a solder splice built into
+// this loom, declared here, from which one lead returns to the VCM ground
+// (the wires to it are in systems/lv.wb, with every other ground).
+
+extend Vehicle {
+    splice sp_rear_gnd "Rear lamp ground" {
+        description: "Solder sleeve, 4 conductors";
+    }
+}
+
+// --- View: rear lighting loom ---
+// The VCM's lighting and 12V connectors on the left, the splice in the
+// middle where the lamp grounds meet, the lamps on the right.
+
+view harness "Rear lighting loom" {
+    grid: 20;
+
+    include vcm.lights  at (0, 0);
+    include vcm.lv      at (0, 12);
+    include sp_rear_gnd at (24, 12);
+    include bl_left.x1  at (46, -6);
+    include bl_right.x1 at (46, 6);
+    include bl_chmsl.x1 at (46, 18);
+}

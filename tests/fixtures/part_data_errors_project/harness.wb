@@ -1,0 +1,3 @@
+extend Vehicle {
+    part: "VH-200";
+}

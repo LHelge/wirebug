@@ -27,8 +27,8 @@ use super::uri;
 /// resolved. Documents outside any project (no `wirebug.toml` above them)
 /// are checked as single-file entries — lex and parse problems still
 /// surface, at the cost of project-level noise like `no_root`. An open
-/// `.wb` file *inside* a project that no `use` chain from its entry
-/// reaches is invisible to the pipeline; it gets an explicit
+/// `.wb` file *inside* a project that no `use` or `fragment` chain from
+/// its entry reaches is invisible to the pipeline; it gets an explicit
 /// `unlinked_file` notice instead of silence (rust-analyzer's
 /// unlinked-file move), though its contents stay unchecked for now.
 pub(crate) fn check_open_documents<'a>(
@@ -100,7 +100,7 @@ fn unlinked(entry: &Path) -> Diagnostic {
         code: Some(NumberOrString::String("wirebug::unlinked_file".to_string())),
         source: Some("wirebug".to_string()),
         message: format!(
-            "file is not included in the project: no `use` chain from `{entry}` reaches it, so it is not checked\nadd `use <Component> from \"<path>\";` in a project file to include it"
+            "file is not included in the project: no `use` or `fragment` chain from `{entry}` reaches it, so it is not checked\nadd `use <Component> from \"<path>\";`, or `fragment \"<path>\";` for a file of `extend`s and views, in a project file to include it"
         ),
         ..Diagnostic::default()
     }
@@ -552,6 +552,65 @@ mod tests {
         let lamp_uri = uri::to_uri(&lamp).unwrap();
         let diags = by_uri.get(&lamp_uri).map(Vec::as_slice).unwrap_or(&[]);
         assert!(unlinked_notice(diags).is_none(), "{diags:?}");
+    }
+
+    /// A file only a `fragment` reaches is part of the project as much as
+    /// a `use`d one: it is checked, and gets no unlinked notice.
+    #[test]
+    fn file_only_a_fragment_reaches_gets_no_unlinked_notice() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        manifest(dir.path());
+        std::fs::create_dir(dir.path().join("systems")).expect("mkdir");
+        let lamps = write(
+            dir.path(),
+            "systems/lamps.wb",
+            "extend Root {\n    pub port wire \"W\";\n}\n",
+        );
+        write(
+            dir.path(),
+            "main.wb",
+            "fragment \"systems/lamps.wb\";\ncomponent Root { }\n",
+        );
+
+        let (by_uri, _) = check_open_documents([lamps.clone()].iter(), &Overlay::default());
+        let lamps_uri = uri::to_uri(&lamps).unwrap();
+        let diags = by_uri.get(&lamps_uri).map(Vec::as_slice).unwrap_or(&[]);
+        assert!(unlinked_notice(diags).is_none(), "{diags:?}");
+        assert!(
+            diags.iter().any(
+                |d| matches!(&d.code, Some(NumberOrString::String(c)) if c == "wirebug::reserved_word")
+            ),
+            "the file is checked: {diags:?}"
+        );
+    }
+
+    /// An unlinked file of `extend`s is what `fragment ‸` offers, so the
+    /// fresh fragment can be wired in by its path.
+    #[test]
+    fn unlinked_extend_file_is_a_fragment_candidate() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        manifest(dir.path());
+        // `parts.wb` is in the project, but holds nothing to pull in.
+        write(dir.path(), "parts.wb", "component Part { }\n");
+        let main = write(
+            dir.path(),
+            "main.wb",
+            "use Part from \"parts.wb\";\ncomponent Root { p: Part; }\n",
+        );
+        std::fs::create_dir(dir.path().join("systems")).expect("mkdir");
+        let orphan = write(dir.path(), "systems/charging.wb", "extend Root { }\n");
+
+        let (_, index) = check_open_documents([main.clone(), orphan].iter(), &Overlay::default());
+        let main = main.canonicalize().expect("canonical main");
+        let items = index.complete(&main, "fragment \n", "fragment ".len());
+        let offered: Vec<(&str, Option<&str>)> = items
+            .iter()
+            .map(|i| (i.label.as_str(), i.insert_text.as_deref()))
+            .collect();
+        assert_eq!(
+            offered,
+            [("systems/charging.wb", Some("\"systems/charging.wb\";"))]
+        );
     }
 
     /// A `.wb` file with no `wirebug.toml` above it is checked as its own

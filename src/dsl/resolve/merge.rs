@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use crate::dsl::ast;
-use crate::dsl::diagnostics::Problem;
+use crate::dsl::diagnostics::{OrphanFragmentCause, OtherDeclaration, Problem, SpliceClash};
 use crate::dsl::span::{FileId, Span};
 
 use super::{ComponentScope, DefId, Resolver};
@@ -116,24 +116,70 @@ impl<'a> Resolver<'a> {
     /// anchor it — a lone fragment, or a group of fragments with no root.
     /// One diagnostic per orphaned component (keyed on the group's canonical).
     pub(super) fn report_orphan_fragments(&mut self) {
-        let mut orphans = Vec::new();
-        for d in 0..self.defs.len() {
-            if self.defs[d].kind != ast::DefKind::Extend || self.defs[d].parent.is_some() {
-                continue;
-            }
-            let canon = self.groups.canonical(d);
-            // A merged fragment canonicalizes onto its root `component`; if the
-            // representative is still an `extend`, the component is missing.
-            if d == canon && self.defs[canon].kind == ast::DefKind::Extend {
-                orphans.push(d);
-            }
-        }
+        let orphans: Vec<DefId> = (0..self.defs.len())
+            .filter(|&d| self.is_orphan(d) && self.groups.canonical(d) == d)
+            .collect();
         for d in orphans {
             self.problems.push(Problem::OrphanFragment {
                 name: self.defs[d].name.to_string(),
+                cause: self.orphan_cause(d),
                 src: self.project.source(self.defs[d].file),
                 at: self.defs[d].ast.name.span.into(),
             });
+        }
+    }
+
+    /// Whether `d` is a top-level `extend` whose merge group has no root
+    /// `component`.
+    pub(super) fn is_orphan(&self, d: DefId) -> bool {
+        let canon = self.groups.canonical(d);
+        self.defs[d].parent.is_none() && self.defs[canon].kind == ast::DefKind::Extend
+    }
+
+    /// Why the orphaned `extend` `d` merged into nothing: no `component` of
+    /// its name, or one not in scope in the files whose lines merge the
+    /// `extend`s of `d`'s file (its `fragment`s, and its `use`s of the
+    /// name, the lines that would have merged it).
+    fn orphan_cause(&self, d: DefId) -> OrphanFragmentCause {
+        let name = self.defs[d].name;
+        let file = self.defs[d].file;
+        let mut defined_in: Vec<FileId> = Vec::new();
+        for def in &self.defs {
+            if def.parent.is_none()
+                && def.kind == ast::DefKind::Component
+                && def.name == name
+                && !defined_in.contains(&def.file)
+            {
+                defined_in.push(def.file);
+            }
+        }
+        let mut pulled_in_by: Vec<FileId> = Vec::new();
+        for (fi, loaded) in self.project.files.iter().enumerate() {
+            let from = FileId(fi);
+            let names = |path: &str| self.project.import_target(from, path) == Some(file);
+            let pulls = loaded.ast.fragments.iter().any(|f| names(&f.path.node))
+                || loaded
+                    .ast
+                    .uses
+                    .iter()
+                    .any(|u| u.name.node.as_str() == name && names(&u.path.node));
+            if from != file && pulls {
+                pulled_in_by.push(from);
+            }
+        }
+        match (defined_in.as_slice(), pulled_in_by.as_slice()) {
+            ([], _) => OrphanFragmentCause::Undefined,
+            (&[defined], &[by]) => OrphanFragmentCause::PulledInWithoutIt {
+                defined_in: self.project.display_path(defined),
+                pulled_in_by: self.project.display_path(by),
+                use_path: self.project.import_path(by, defined),
+            },
+            (defined, _) => OrphanFragmentCause::NotInScope {
+                defined_in: match defined {
+                    &[only] => Some(self.project.display_path(only)),
+                    _ => None,
+                },
+            },
         }
     }
 
@@ -191,6 +237,77 @@ impl<'a> Resolver<'a> {
         self.problems.extend(problems);
     }
 
+    /// A splice's name is unique in its merged component: no port (bare
+    /// endpoints name either), instance, inline connector, connector,
+    /// cable or other splice of any fragment has it. One problem per
+    /// splice that clashes, on the splice, naming the first clash.
+    pub(super) fn check_splice_names(&mut self) {
+        let mut problems = Vec::new();
+        for d in 0..self.defs.len() {
+            if self.groups.canonical(d) != d {
+                continue;
+            }
+            let fragments = self.groups.fragments(d);
+            let mut taken: Vec<(&str, SpliceClash, Span)> = Vec::new();
+            for &f in &fragments {
+                let info = &self.defs[f];
+                taken.extend(
+                    info.ports
+                        .iter()
+                        .map(|(name, facts)| (name.as_str(), SpliceClash::Port, facts.span)),
+                );
+                taken.extend(info.instances.iter().map(|(name, facts)| {
+                    (name.as_str(), SpliceClash::Instance, facts.ast.name.span)
+                }));
+                taken.extend(info.inlines.iter().map(|(name, facts)| {
+                    (
+                        name.as_str(),
+                        SpliceClash::InlineConnector,
+                        facts.ast.name.span,
+                    )
+                }));
+                for member in &info.ast.members {
+                    let (name, what) = match member {
+                        ast::Member::Connector(c) => (&c.name, SpliceClash::Connector),
+                        ast::Member::ConnectorInstance(c) => (&c.name, SpliceClash::Connector),
+                        ast::Member::Cable(c) => (&c.name, SpliceClash::Cable),
+                        _ => continue,
+                    };
+                    taken.push((name.node.as_str(), what, name.span));
+                }
+            }
+            for &f in &fragments {
+                for splice in self.defs[f].ast.splices() {
+                    let name = splice.name.node.as_str();
+                    let at = splice.name.span;
+                    if let Some(&(_, other, first)) = taken.iter().find(|(n, ..)| *n == name) {
+                        let file = self.defs[f].file;
+                        let same_file = first.file == file;
+                        problems.push(Problem::DuplicateSpliceName {
+                            name: name.to_string(),
+                            other,
+                            component: self.defs[d].name.to_string(),
+                            src: self.project.source(file),
+                            at: at.into(),
+                            here: same_file.then(|| first.into()),
+                            elsewhere: (!same_file)
+                                .then(|| OtherDeclaration {
+                                    what: other,
+                                    name: name.to_string(),
+                                    src: self.project.source(first.file),
+                                    at: first.into(),
+                                })
+                                .into_iter()
+                                .collect(),
+                        });
+                    }
+                    taken.push((name, SpliceClash::Splice, at));
+                }
+            }
+        }
+        self.problems.extend(problems);
+    }
+
     /// Rewrite every type-scope entry to its group's canonical id, so an
     /// instance of a merged type resolves to the one representative def.
     pub(super) fn canonicalize_scopes(&self, scopes: &mut HashMap<FileId, ComponentScope>) {
@@ -204,6 +321,9 @@ impl<'a> Resolver<'a> {
 
 #[cfg(test)]
 mod tests {
+    use miette::Diagnostic;
+
+    use crate::dsl::diagnostics::Problem;
     use crate::dsl::resolve::testkit::{LEAF, codes, has, problems, with_resolved};
 
     #[test]
@@ -251,6 +371,171 @@ mod tests {
             ("frag.wb", "extend vehicle { }\n"),
         ]);
         assert!(has(&p, "wirebug::orphan_fragment"), "{:?}", codes(&p));
+        assert_eq!(
+            orphan_helps(&p),
+            [
+                "introduce the component once with `component vehicle { … }`; other files add to it with `extend vehicle`"
+            ]
+        );
+    }
+
+    /// The help of each `orphan_fragment` among `problems`.
+    fn orphan_helps(problems: &[Problem]) -> Vec<String> {
+        problems
+            .iter()
+            .filter(|p| matches!(p, Problem::OrphanFragment { .. }))
+            .map(|p| p.help().expect("a help").to_string())
+            .collect()
+    }
+
+    #[test]
+    fn extend_pulled_in_where_its_component_is_not_in_scope_says_where_to_use_it() {
+        let p = problems(&[
+            (
+                "main.wb",
+                "fragment \"systems/all.wb\";\ncomponent Vehicle { }\n",
+            ),
+            ("systems/all.wb", "fragment \"a.wb\";\n"),
+            ("systems/a.wb", "extend Vehicle { pub port x \"X\"; }\n"),
+        ]);
+        assert_eq!(
+            p.iter()
+                .find(|p| matches!(p, Problem::OrphanFragment { .. }))
+                .map(ToString::to_string),
+            Some("`extend Vehicle` merges into no `component Vehicle`".to_string())
+        );
+        assert_eq!(
+            orphan_helps(&p),
+            [
+                "`component Vehicle` is defined in `main.wb`, but `systems/all.wb`, whose line pulls this file in, does not have it in scope, and an `extend` merges only into a component in scope where that line is written: add `use Vehicle from \"../main.wb\";` to `systems/all.wb`, or pull this file in from a file that has `Vehicle` in scope, such as `main.wb`"
+            ]
+        );
+    }
+
+    #[test]
+    fn extend_pulled_in_by_several_files_without_its_component_names_where_it_is_defined() {
+        let p = problems(&[
+            (
+                "main.wb",
+                "fragment \"b.wb\";\nfragment \"c.wb\";\ncomponent Vehicle { }\n",
+            ),
+            ("b.wb", "fragment \"a.wb\";\n"),
+            ("c.wb", "fragment \"a.wb\";\n"),
+            ("a.wb", "extend Vehicle { }\n"),
+        ]);
+        assert_eq!(
+            orphan_helps(&p),
+            [
+                "`component Vehicle` is defined in `main.wb`, but not in scope where this file is pulled in, and an `extend` merges only into a component in scope where the `fragment` line naming its file is written: `use Vehicle` in the file that holds that line, or in this file"
+            ]
+        );
+    }
+
+    #[test]
+    fn extend_loaded_only_by_a_use_of_another_name_is_not_in_scope() {
+        // `use lamp` loads a.wb but merges nothing of it: no line that
+        // merges a.wb's `extend`s names the file.
+        let p = problems(&[
+            (
+                "main.wb",
+                "use lamp from \"a.wb\";\nuse vehicle from \"v.wb\";\n\
+                 component m { l: lamp; v: vehicle; }\n",
+            ),
+            ("a.wb", "component lamp { }\nextend vehicle { }\n"),
+            ("v.wb", "component vehicle { }\n"),
+        ]);
+        assert_eq!(
+            orphan_helps(&p),
+            [
+                "`component vehicle` is defined in `v.wb`, but not in scope where this file is pulled in, and an `extend` merges only into a component in scope where the `fragment` line naming its file is written: `use vehicle` in the file that holds that line, or in this file"
+            ]
+        );
+    }
+
+    #[test]
+    fn an_orphaned_extends_wires_are_not_checked() {
+        // `pack` lives in the component the `extend` never merged into.
+        let p = problems(&[
+            (
+                "main.wb",
+                "use leaf from \"leaf.wb\";\nfragment \"all.wb\";\n\
+                 component vehicle { pack: leaf \"Pack\"; }\n",
+            ),
+            ("all.wb", "fragment \"a.wb\";\n"),
+            (
+                "a.wb",
+                "use leaf from \"leaf.wb\";\n\
+                 extend vehicle { inv: leaf \"Inv\"; wire red 1 [pack.a, inv.a]; }\n\
+                 view schematic \"A\" { include pack at (2, 2) ports { east: a; } }\n",
+            ),
+            ("leaf.wb", LEAF),
+        ]);
+        assert!(has(&p, "wirebug::orphan_fragment"), "{:?}", codes(&p));
+        assert!(!has(&p, "wirebug::unknown_instance"), "{:?}", codes(&p));
+        assert!(!has(&p, "wirebug::unknown_include"), "{:?}", codes(&p));
+    }
+
+    /// The code and the message of each problem of a one-file component
+    /// `m` with `members`.
+    fn clashes(members: &str) -> Vec<String> {
+        problems(&[(
+            "main.wb",
+            &format!("component leaf {{ pub port a \"A\"; }}\ncomponent m {{ {members} }}\n"),
+        )])
+        .iter()
+        .map(ToString::to_string)
+        .collect()
+    }
+
+    #[test]
+    fn a_splice_takes_a_name_nothing_else_in_its_component_has() {
+        for (members, other) in [
+            ("pub port sp \"SP\"; splice sp;", "a port"),
+            ("splice sp; port sp \"SP\";", "a port"),
+            ("sp: leaf; splice sp;", "an instance"),
+            (
+                "inline sp { port a \"A\" pin 1; } splice sp;",
+                "an inline connector",
+            ),
+            (
+                "connector sp { port a \"A\" pin 1; } splice sp;",
+                "a connector",
+            ),
+            ("cable sp { } splice sp;", "a cable"),
+            ("splice sp; splice sp;", "another splice"),
+        ] {
+            let found = clashes(members);
+            assert!(
+                found.contains(&format!("splice `sp` has the same name as {other} of `m`")),
+                "{members}: {found:?}"
+            );
+        }
+        assert!(clashes("splice sp; splice sq;").is_empty());
+    }
+
+    #[test]
+    fn a_splice_clashing_with_a_port_of_another_fragment_points_at_both() {
+        use miette::Diagnostic;
+        let p = problems(&[
+            (
+                "main.wb",
+                "fragment \"loom.wb\";\ncomponent m { pub port gnd \"GND\"; }\n",
+            ),
+            ("loom.wb", "extend m { splice gnd; }\n"),
+        ]);
+        let [problem] = p.as_slice() else {
+            panic!("one problem: {:?}", codes(&p));
+        };
+        assert!(has(&p, "wirebug::duplicate_splice_name"));
+        // One label, on the splice; the port is a related note in its file.
+        assert_eq!(problem.labels().into_iter().flatten().count(), 1);
+        let related: Vec<String> = problem
+            .related()
+            .into_iter()
+            .flatten()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(related, ["a port `gnd` is declared here"]);
     }
 
     #[test]

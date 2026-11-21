@@ -38,7 +38,14 @@ extend Vehicle {
 
     wire red 6.0 [charger.out_pos, aux.pos, fuses.batt_in];
 
-    wire red 2.5 [fuses.vcm, vcm.b_pos];
+    // A wire can carry its physical data in a body, in place of the `;`:
+    // the length (metres when bare, or written `m`, `cm` or `mm`), the
+    // insulation type and the part number that a wire list or BOM needs.
+    wire red 2.5 [fuses.vcm, vcm.b_pos] {
+        length: 1.4;
+        type:   "FLRY-B";
+        part:   "FLRY-B 2.5 RD";
+    }
     wire red 2.5 [fuses.inv, inv.b_pos];
     wire red 2.5 [fuses.bms_front, front.b_pos];
     wire red 2.5 [fuses.bms_rear, rear.b_pos];
@@ -52,8 +59,17 @@ extend Vehicle {
     wire black 6.0 [
         charger.out_neg, aux.neg, vcm.gnd,
         pump.gnd, fan.gnd,
-        bl_left.gnd, bl_right.gnd, bl_chmsl.gnd,
     ];
+
+    // The stop lamps' grounds are not on the bus: they join at a splice in
+    // the rear lighting loom (looms/rear_lighting.wb), one thin lead from
+    // each lamp, and one heavier lead returns from the splice to the VCM
+    // ground. Each lead is a wire of its own, with its own gauge.
+    wire black 0.5 "GND" [bl_left.gnd,  sp_rear_gnd];
+    wire black 0.5 "GND" [bl_right.gnd, sp_rear_gnd];
+    wire black 0.5 "GND" [bl_chmsl.gnd, sp_rear_gnd];
+    wire black 1.0 "GND" [sp_rear_gnd, vcm.gnd];
+
     wire black 1.0 [vcm.gnd, charger.gnd];
     wire black 2.5 [vcm.gnd, inv.b_neg];
     wire black 2.5 [vcm.gnd, front.gnd];
