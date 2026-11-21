@@ -540,9 +540,15 @@ so one run reports many. Errors fail the run; warnings fail only under
   A `text` box outside a schematic view is `unsupported_view_text`; two
   boxes of one view sharing a name are `duplicate_view_text` (only the
   deprecated named form has a name to clash).
-  As warnings: a `fragment` that adds nothing — the file it names has no
-  view, and no top-level `extend` that the line merged (`unused_fragment`,
-  on the path; a stale line, in the spirit of `unused_import`); a second
+  As warnings: a `fragment` that adds nothing — it names its own file, or
+  a file with no view and no `fragment` of its own (an aggregating file's
+  lines are judged where they are written) whose top-level `extend`s the
+  line merged none of (`unused_fragment`, on the path; a stale line, in the
+  spirit of `unused_import`). The variant carries why
+  (`diagnostics::UnusedFragmentReason`): `Empty` (no `extend` at all),
+  `NotInScope` (naming the extended components missing from the naming
+  file's scope, the help telling to `use` them there or move the line) or
+  `ItsOwnFile`; a second
   `fragment` in one file naming a file an earlier one did, compared by the
   loaded file so `./x.wb` repeats `x.wb` (`duplicate_fragment`, on both
   paths; a `use` of the same file is no repeat, since a file loads once
@@ -602,7 +608,8 @@ the statement: a screen, like a conductor, runs end to end), are errors;
 the shield ends resolve in resolve like wire endpoints. As warnings: a
 cable with no conductors (`empty_cable`; a shield is no conductor),
   unused import (an import counts as used when the file instantiates it,
-  merges with it, or names it in a view's `for`), bare-port pin, and
+  merges with it, a `fragment` of the file merges an `extend` into it, or
+  the file names it in a view's `for`), bare-port pin, and
   non-IEC 60757 wire color
   (`unknown_wire_color` — the `ir::ColorName::Other` escape hatch still
   renders verbatim). Property, arity and value checks and the endpoint

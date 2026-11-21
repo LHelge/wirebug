@@ -206,18 +206,18 @@ pub enum Problem {
     },
 
     /// A `fragment` of a file that adds nothing through it: the file has no
-    /// view, and no top-level `extend` of a component in the including
-    /// file's scope for the line to merge.
+    /// view and no `fragment` of its own, and the line merges none of its
+    /// top-level `extend`s, because it has none or their components are not
+    /// in the naming file's scope (`reason`).
     #[error("`fragment \"{target}\"` adds nothing")]
     #[diagnostic(
         severity(Warning),
         code(wirebug::unused_fragment),
-        help(
-            "a `fragment` renders a file's views and merges its `extend`s into the components of their names in scope here, and `{target}` has neither; remove the line, or `use` a component it defines by name"
-        )
+        help("{}", reason.help(target))
     )]
     UnusedFragment {
         target: String,
+        reason: UnusedFragmentReason,
         #[source_code]
         src: NamedSource<String>,
         #[label("nothing to merge or render")]
@@ -1170,6 +1170,48 @@ pub enum PropertyOwner {
     /// A component type's part data, the `key: value;` lines among its
     /// members.
     Component,
+}
+
+/// Why a `fragment` line adds nothing ([`Problem::UnusedFragment`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnusedFragmentReason {
+    /// The file holds no view and no top-level `extend`.
+    Empty,
+    /// The file extends components none of which is in the naming file's
+    /// scope: these, in the file's order. Merging does not pass through a
+    /// file, so a `fragment` merges an `extend` only where its component is
+    /// in scope.
+    NotInScope(Vec<String>),
+    /// The line names the file it is written in.
+    ItsOwnFile,
+}
+
+impl UnusedFragmentReason {
+    fn help(&self, target: &str) -> String {
+        match self {
+            UnusedFragmentReason::Empty => format!(
+                "`{target}` has no view and no `extend`, so pulling it in adds nothing; remove the line, or `use` a component it defines by name"
+            ),
+            UnusedFragmentReason::NotInScope(components) => {
+                let quoted: Vec<String> =
+                    components.iter().map(|name| format!("`{name}`")).collect();
+                let (names, which, them) = match quoted.as_slice() {
+                    [rest @ .., last] if !rest.is_empty() => (
+                        format!("{} and {last}", rest.join(", ")),
+                        "which are",
+                        "them",
+                    ),
+                    _ => (quoted.concat(), "which is", "it"),
+                };
+                format!(
+                    "`{target}` extends {names}, {which} not in scope here, and a `fragment` merges an `extend` only into a component in scope where the line is written: `use` {them} in this file, or write the line in a file that has {them} in scope, such as the one that defines {them}"
+                )
+            }
+            UnusedFragmentReason::ItsOwnFile => format!(
+                "`{target}` is the file this line is written in, which is already loaded; remove the line"
+            ),
+        }
+    }
 }
 
 /// What a shield screens, for the problems that name it.
