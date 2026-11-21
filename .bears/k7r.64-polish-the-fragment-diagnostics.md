@@ -1,13 +1,14 @@
 ---
 id: k7r.64
 title: Polish the `fragment` diagnostics
-status: open
+status: done
 priority: P2
 created: "2026-11-21T04:05:53.706072712Z"
-updated: "2026-11-21T04:05:53.706072712Z"
+updated: "2026-11-21T04:15:27.927239372Z"
 tags:
   - dsl
   - check
+attempts: 1
 ---
 
 ## Summary
