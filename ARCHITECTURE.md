@@ -544,6 +544,34 @@ has no row, only its outline. A shield alone never puts a cable
 box in a view. Reusing the orthogonal router is a noted future
 refinement.
 
+### Pinout views (`render/pinout/`)
+
+An include names one of the subject's own connectors; it becomes one pin
+table centred at its grid point. Like the other views it documents a type
+and is drawn against `Design::subject_of` (the first instance). The
+header's bold line is the component (that instance's label, else its type
+name) and the designator, `Inverter · control`; the second line the
+housing's description and `part`, each left out when missing (and the line
+with them). When the connector type has a `layout` (`grid` or `face`),
+its cavity face sits under the header, then a caption band (`FACE_CAPTION`,
+"Viewed from harness side": the language authors every layout from the
+harness side and has no notion of another), then the rows. Rows are one
+per pin binding, sorted by `ir::Pin`'s numeric `Ord`, not in declaration
+order; a ganged port has a row per pin. A face cavity no port is bound to
+keeps the `cavity` class and adds `cavity-unused` (its pin
+`cavity-pin-unused`): dashed, grey and lightly filled. A port bound to a
+cavity counts as used whether or not a conductor reaches it — the view
+documents the type, the conductors belong to a placement. A cavity label
+is fitted into its cavity (`fit::FittedLabel`): text has no clipping, so
+its width is estimated per character class from DejaVu Sans, the widest
+common `sans-serif` face, and the label shrinks in half-pixel steps from
+8 px down to a 6 px floor (an inline `font-size` style, since the
+stylesheet's `font` shorthand would beat an attribute), then is cut with
+an ellipsis; a cut cavity carries the whole label as a `<title>`, and the
+row shows it whole. Every size — header, face, caption band, rows —
+comes from `Table::new`, which both `render` and `layout` (the overlap
+and `view_too_large` checks) use, so the drawing and `check` agree.
+
 ## Build tables (`export/`)
 
 The tables a harness is cut, crimped and ordered from are typed models
@@ -1155,7 +1183,8 @@ src/
 │   │   ├── bezier.rs    # horizontally-flexed cubic bezier math (FLEX)
 │   │   └── draw.rs      # SVG emission: pin tables, cable boxes, bezier wires
 │   └── pinout/      # connector-face + pin-table renderer (kind: pinout)
-│       └── mod.rs       # PinoutRenderer; cavity faces from connector layouts
+│       ├── mod.rs       # PinoutRenderer; cavity faces from connector layouts
+│       └── fit.rs       # FittedLabel: a cavity label shrunk or cut to its cavity
 │
 │  # ── live-reloading dev server (`serve`) ──
 ├── serve/
