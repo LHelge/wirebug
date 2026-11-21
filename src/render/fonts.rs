@@ -4,9 +4,11 @@
 //! Both paths parse SVG with `usvg`, which looks text up in a font
 //! database. Filling that database from the system fonts made a drawing
 //! depend on whichever face the machine resolves `sans-serif` to; loading
-//! only the bundled faces makes PNG and PDF output the same everywhere.
-//! The SVG files themselves still ask for `sans-serif` and follow the
-//! viewer's font.
+//! only the bundled faces draws PNG and PDF text in the same font
+//! everywhere. A character DejaVu Sans has no glyph for (CJK, Thai, …) is
+//! drawn as an empty box: there is no other font to fall back to. The SVG
+//! files themselves still ask for `sans-serif` and follow the viewer's
+//! font.
 //!
 //! resvg's and svg2pdf's `usvg` are different crate versions, but they
 //! share one `fontdb`, so one database serves both.

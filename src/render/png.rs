@@ -7,8 +7,9 @@
 //!
 //! `usvg`'s default options ship an *empty* font database, so text simply
 //! vanishes from the raster. [`PngRasterizer`] parses with the bundled
-//! font (`render::fonts`) and no system font, so a given SVG rasterises to
-//! the same pixels on every machine.
+//! font (`render::fonts`) and no system font, so a given SVG is drawn in
+//! the same font on every machine. Pixels may still differ slightly
+//! between CPU architectures, where tiny-skia takes different SIMD paths.
 
 use resvg::tiny_skia::{IntSize, Pixmap};
 use resvg::usvg::Tree;

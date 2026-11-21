@@ -287,7 +287,7 @@ warning: view "HV System Overview": smallest text 3.2 pt on A4, below the 5 pt l
 
 The page is written all the same and the exit status is unchanged — also under `--strict`, which makes the project's own warnings fatal, not the paper's. `--paper` without `--pdf` is refused.
 
-PNG and PDF output draw every label in DejaVu Sans, which is built into wirebug, so a drawing comes out the same on every machine and needs no fonts installed. The SVG files name only `sans-serif` and do not carry the font, so a browser or embedding page draws them with its own sans-serif face.
+PNG and PDF output draw text in DejaVu Sans, which is built into wirebug, and in no other font: they use the same font on every machine and need no fonts installed. (Pixels may still differ slightly between CPU architectures.) A character DejaVu Sans has no glyph for — CJK, Thai, Devanagari and other scripts it does not cover — is drawn as an empty box in PNG and PDF. The SVG files name only `sans-serif` and do not carry the font, so a browser or embedding page draws them with its own sans-serif face, which can draw such characters. DejaVu Sans is wider than many sans-serif faces, and a long bold title in a harness drawing can run past its connector's box in PNG and PDF (and in a viewer whose sans-serif is as wide).
 
 ## Exporting build tables
 
