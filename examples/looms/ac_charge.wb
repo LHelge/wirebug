@@ -13,7 +13,7 @@ extend Vehicle {
 
     cable ac_charge "AC charge lead" {
         type:   "3-core";
-        length: 0.6;
+        length: 60cm;
 
         wire brown        2.5 "AC L"  [ac_inlet.l,  charger.ac_l];
         wire blue         2.5 "AC N"  [ac_inlet.n,  charger.ac_n];

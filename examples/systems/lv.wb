@@ -39,8 +39,8 @@ extend Vehicle {
     wire red 6.0 [charger.out_pos, aux.pos, fuses.batt_in];
 
     // A wire can carry its physical data in a body, in place of the `;`:
-    // the length in metres, the insulation type and the part number that a
-    // wire list or BOM needs.
+    // the length (metres when bare, or written `m`, `cm` or `mm`), the
+    // insulation type and the part number that a wire list or BOM needs.
     wire red 2.5 [fuses.vcm, vcm.b_pos] {
         length: 1.4;
         type:   "FLRY-B";

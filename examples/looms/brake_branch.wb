@@ -47,10 +47,11 @@ extend Vehicle {
     }
 
     // The single EV-12V lead is jumpered on from the first sensor to the
-    // second, 15 cm away — its own short cable.
+    // second, 15 cm away — its own short cable. A short length reads best
+    // in millimetres; a bare length is metres.
     cable brake_jumper "12V jumper" {
         type:   "1-core";
-        length: 0.15;
+        length: 150mm;
 
         wire red 0.75 "EV 12V" [bs1.b_pos, bs2.b_pos];
     }

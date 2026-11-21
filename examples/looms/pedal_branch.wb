@@ -37,7 +37,7 @@ extend Vehicle {
 
     cable pedal_stub "Pedal stub" {
         type:   "4-core";
-        length: 0.35;
+        length: 350mm;
 
         wire green  0.5 "APPS1" [ic_pedal.apps1, pedal.apps1];
         wire yellow 0.5 "APPS2" [ic_pedal.apps2, pedal.apps2];
