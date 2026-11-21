@@ -479,15 +479,19 @@ impl CompletionIndex {
                     self.visible_types(scope, cursor)
                 }
                 [.., Token::Pub] => keywords(&["port"]),
-                _ if cursor.at_statement_start() => keywords(&[
-                    "pub",
-                    "port",
-                    "wire",
-                    "cable",
-                    "connector",
-                    "inline",
-                    "component",
-                ]),
+                _ if cursor.at_statement_start() => {
+                    let mut items = keywords(&[
+                        "pub",
+                        "port",
+                        "wire",
+                        "cable",
+                        "connector",
+                        "inline",
+                        "component",
+                    ]);
+                    items.extend(properties(PropertyOwner::Component));
+                    items
+                }
                 _ => Vec::new(),
             },
             Some(Block::Cable) => {
@@ -716,7 +720,7 @@ fn property(key: &str, detail: &str) -> CompletionItem {
     }
 }
 
-/// The keys a cable or wire body takes, as validation knows them.
+/// The keys a cable, wire or component body takes, as validation knows them.
 fn properties(owner: PropertyOwner) -> Vec<CompletionItem> {
     let detail = format!("{owner} property");
     owner
@@ -1422,7 +1426,8 @@ mod tests {
             "use Lamp from \"lamp.wb\";\ncomponent Root {\n    wire red 1 [a, b] { length: 1; }\n    ‸\n}\n",
         );
         assert!(labels.contains(&"cable".to_string()), "{labels:?}");
-        assert!(!labels.contains(&"part".to_string()), "{labels:?}");
+        // `length` is a wire key, not a component's.
+        assert!(!labels.contains(&"length".to_string()), "{labels:?}");
     }
 
     #[test]
@@ -1434,6 +1439,28 @@ mod tests {
         let part = items.iter().find(|i| i.label == "part").expect("part");
         assert_eq!(part.insert_text.as_deref(), Some("part: "));
         assert_eq!(part.detail.as_deref(), Some("wire property"));
+    }
+
+    #[test]
+    fn component_statement_start_offers_its_part_data_keys() {
+        for body in ["component Root {\n    ‸\n}\n", "extend Root {\n    ‸\n}\n"] {
+            let items = complete_items_in(
+                &[LAMP, MAIN],
+                &format!("use Lamp from \"lamp.wb\";\n{body}"),
+            );
+            let keys: Vec<&str> = items
+                .iter()
+                .filter(|i| i.detail.as_deref() == Some("component property"))
+                .map(|i| i.label.as_str())
+                .collect();
+            assert_eq!(
+                keys,
+                ["part", "manufacturer", "description", "rating"],
+                "{body}"
+            );
+            let part = items.iter().find(|i| i.label == "part").expect("part");
+            assert_eq!(part.insert_text.as_deref(), Some("part: "), "{body}");
+        }
     }
 
     const INLINE_MAIN: (&str, &str) = (
