@@ -17,7 +17,7 @@ A wirebug project is a directory rooted at a `wirebug.toml` manifest, with `main
 
 A conventional layout, which is **convention, not requirement**:
 
-```
+```text
 my-ev/
 ├── wirebug.toml         # project metadata and root marker
 ├── main.wb              # near-empty root component + whole-vehicle overview view
@@ -46,6 +46,8 @@ A `.wb` file contains zero or more of, in any order:
 - `use` declarations (imports from other files)
 - `fragment` statements (files pulled in for their `extend`s and views)
 - `component` definitions (type definitions, which may nest other definitions)
+- `extend` fragments of a component defined elsewhere (see Splitting a component across files)
+- `connector_type` definitions (reusable connector housings, see Connector types and pinout layouts)
 - `view` declarations (rendering targets)
 
 Comments are `//` line comments only. Block comments are not supported.
@@ -54,7 +56,7 @@ Statements end with `;`; brace blocks end at the closing brace with no trailing 
 
 ## Imports
 
-```
+```wb
 use CellModule from "cell_module.wb";
 use Contactor  from "components/contactor.wb";
 ```
@@ -63,14 +65,14 @@ Paths are relative to the importing file. A `use` brings one named top-level com
 
 If multiple imports come from the same file, repeat the statement (no list form yet):
 
-```
+```wb
 use CellModule from "components/cell_module.wb";
 use Contactor  from "components/contactor.wb";
 ```
 
 ### Pulling in a file (`fragment`)
 
-```
+```wb
 fragment "systems/traction.wb";
 ```
 
@@ -87,7 +89,7 @@ A component is a **type**, not an instance. It defines an interface (its `pub` p
 
 A minimal primitive component (no internals, just an interface):
 
-```
+```wb
 component Contactor {
     pub port in     "IN";
     pub port out    "OUT";
@@ -98,7 +100,7 @@ component Contactor {
 
 Components can nest. A definition inside another component is scoped to its parent and is not exported — it can only be instantiated by code inside the containing definition:
 
-```
+```wb
 component CellModule {
     component CellPack {        // private to CellModule
         pub port hv_pos "+";
@@ -120,7 +122,7 @@ component CellModule {
 
 A component body may carry `key: value;` lines that say what the type is bought as — what a bill of materials lists it by. They sit anywhere among the members:
 
-```
+```wb
 component Contactor {
     part:         "EV200AAANA";
     manufacturer: "TE Connectivity";
@@ -147,7 +149,7 @@ A large top-level component — the vehicle root, say — can be authored across
 several files. One file introduces it with `component`; others add to it with
 `extend`. `main.wb` pulls the fragments in with `fragment` statements:
 
-```
+```wb
 // main.wb
 fragment "traction.wb";
 fragment "charging.wb";
@@ -158,7 +160,7 @@ component Vehicle {
 }
 ```
 
-```
+```wb
 // traction.wb
 use Inverter from "components/inverter.wb";
 
@@ -206,7 +208,7 @@ Rules:
 
 ## Ports
 
-```
+```wb component
 port name "Label";          // internal port — only visible inside this component
 pub port name "Label";      // external port — visible to instantiators
 ```
@@ -217,7 +219,7 @@ Every port has a name (snake_case identifier, used in code) and a quoted label (
 
 Ports inside a `connector` block can declare which physical pin(s) they map to. This is metadata for the harness renderer and BOM — it does not affect wiring logic.
 
-```
+```text
 port name "Label" pin N;            // single pin
 port name "Label" pins [N, N, N];   // multiple pins (e.g. ground or high-current)
 ```
@@ -226,8 +228,8 @@ Pin numbers are positive integers. A port may span multiple pins when several co
 
 Example:
 
-```
-connector "Molex MX-150 12p" {
+```wb component
+connector x1 "Molex MX-150 12p" {
     pub port b_pos "B+" pin 1;
     pub port gnd   "GND" pins [2, 3, 4];
     pub port can_h "CAN H" pin 5;
@@ -237,7 +239,7 @@ connector "Molex MX-150 12p" {
 
 **Visibility does not propagate automatically.** If `CellPack` declares `pub port hv_pos`, that port is visible when `CellPack` is instantiated — but the containing `CellModule` does *not* automatically expose it. To re-export, the parent declares its own `pub port` and wires it through:
 
-```
+```wb
 component CellModule {
     pack: CellPack;
     pub port hv_pos "HV+";                  // explicit external port
@@ -251,7 +253,7 @@ This is more verbose than implicit propagation but does useful work: documents t
 
 A `connector` block groups ports that physically belong to a single connector part (a JST XH 15p, a Deutsch DT06-12S, etc.). The block carries a **required designator** (a snake_case reference name), an **optional description** string for the physical part, and contains port declarations with optional pin assignments. (Manufacturer part numbers belong on a `connector_type`'s `part:` property, not in the description string.)
 
-```
+```wb
 component CellMonitor {
     connector cells "JST XH 15p" {       // `cells` is the designator
         port c0 "C0" pin 1;
@@ -280,7 +282,7 @@ type with the **same body as an inline connector** — port declarations with
 their pin assignments — so the two forms differ only in where the part
 metadata comes from (`: Type` versus a free part string).
 
-```
+```wb
 connector_type JstXh8p "JST XH 8p" {
     part: "B8B-XH-A";
 
@@ -313,7 +315,7 @@ mirror it before entering the layout.
 
 Simple rectangular connectors use a grid:
 
-```
+```wb
 connector_type Linear8p "Linear 8p" {
     layout grid {
         rows: 1;
@@ -341,7 +343,7 @@ Supported grid numbering modes:
 
 Complex connectors use an explicit face layout:
 
-```
+```wb
 connector_type InverterControl "Inverter control 47+13p" {
     layout face {
         cavity 47 at (1, 0) size large;
@@ -376,7 +378,7 @@ pedal stub, say). It is **one shared port set with two housing halves**: mated
 pin N is electrically pin N on either side, and each half references the
 `connector_type` of its physical housing.
 
-```
+```wb component
 inline ic_pedal "Pedal branch" {
     male:   Dt04_4p;      // connector_type refs, imported via `use` as usual
     female: Dt06_4s;
@@ -406,7 +408,7 @@ Format and semantics:
 
 **Harness views select a housing half:**
 
-```
+```wb
 view harness "Cab loom — pedal branch" {
     include vcm.accel       at (0, 0);
     include ic_pedal.female at (36, 0);   // the half crimped onto THIS loom
@@ -430,13 +432,13 @@ refinement.
 
 A *type* is a definition; an *instance* is a placement of that definition. To instantiate, write the instance name first, then a colon and the type — like a Rust `let` binding or struct field:
 
-```
+```text
 <instance_name>: <TypeName> "<optional label>";
 ```
 
 Examples:
 
-```
+```wb
 component Vehicle {
     pack:    BatteryPack "HV Battery";
     inv:     Inverter    "Motor Controller";
@@ -450,7 +452,7 @@ The instance name (`pack`, `inv`) is what wires reference. The label (`"HV Batte
 
 ## Wires
 
-```
+```text
 wire <color>[/<tracer>] <gauge_mm2> ["<label>"] [<endpoint>, <endpoint>, ...];
 wire <color>[/<tracer>] <gauge_mm2> ["<label>"] [<endpoint>, <endpoint>, ...] { <properties> }
 ```
@@ -460,7 +462,7 @@ wire <color>[/<tracer>] <gauge_mm2> ["<label>"] [<endpoint>, <endpoint>, ...] { 
 - `"<label>"` — optional signal name (e.g., `"HV+"`, `"CAN H"`), shown on the wire in a harness drawing. Omit it when the net name adds nothing.
 - The bracketed list contains two or more endpoints. Each endpoint is `instance.port`, or a bare name: the enclosing component's own port (a `pub` port being wired to internals), or one of its splices (see Splices). An endpoint may appear only once per wire: `check` rejects `[ecu.gnd, ecu.gnd]` (`duplicate_endpoint`). Two separate wires ending on the same port are fine — that is a double crimp.
 
-```
+```wb component
 // two-endpoint wire
 wire orange 50 [pack.hv_pos, inv.dc_pos];
 
@@ -480,7 +482,7 @@ Multi-endpoint wires model shared rails (HV power bus, enable signals to paralle
 
 A wire may end in a `{ }` body of `key: value;` lines instead of its `;` — the same shape as a cable's properties, and like any brace block it takes **no** `;` after the `}`. The body carries the physical data a wire list or BOM needs:
 
-```
+```wb component
 wire red 0.5 "12V" [fuses.ecu, ecu.b_pos] {
     length: 1.2;
     type:   "FLRY-B";
@@ -511,7 +513,7 @@ Every length normalises to metres (to the micrometre), so `150mm`, `15cm` and `0
 
 A `cable` groups point-to-point wires that travel together as one physical bundle (a twisted pair, a shielded multi-core, a motor-phase loom) and carries its construction metadata and its screen (see Shields). It's the WireViz "cable": connector pin tables on the sides, a labelled cable box in the middle.
 
-```
+```wb component
 cable motor_phases "Motor phases" {
     type:   "Shielded 3-core";
     length: 1.2;
@@ -533,7 +535,7 @@ Format:
 - A conductor may carry a property body like any wire (see Wire properties), inside a `twisted { }` group too. A conductor's own `length` **overrides** its cable's `length` for that conductor — a phase lead that routes further than its siblings, say; the conductors without one take the cable's. The cable's own `length` stays what the cable box shows. A cable body itself takes only `type` and `length` (`part` is a wire key).
 - A `twisted { <wire> <wire> }` group wraps exactly two conductors that are twisted together as a pair. Groups and plain wires may interleave freely, so one cable can carry straight power conductors alongside a twisted signal pair:
 
-```
+```wb component
 cable sensor_loom "Sensor loom" {
     length: 2m;
 
@@ -554,7 +556,7 @@ A `twisted { }` group holds **exactly two** conductors — a twisted pair — an
 
 A screened cable, or an individually screened twisted pair, declares its screen with a `shield` line — in the cable body for the cable's overall screen, inside the `twisted { }` group for the pair's own:
 
-```
+```wb component
 cable can2 "CAN2" {
     type:   "Shielded twisted pair";
     length: 1.6;
@@ -568,7 +570,7 @@ cable can2 "CAN2" {
 }
 ```
 
-```
+```text
 shield ["<label>"] [<endpoint>, <endpoint>];   // grounded at both ends
 shield ["<label>"] [<endpoint>];               // grounded at one end (the usual)
 shield ["<label>"];                            // lands on no pin: cut back, or bonded at a gland or housing
@@ -590,7 +592,7 @@ A cable's wires are still ordinary connections: they show in schematic views lik
 
 A `splice` is a joint inside a component — a crimp or solder splice in a loom — that conductors end on. It gives the joint an identity (a name, a label, a part), and each conductor to it is an ordinary two-ended wire with its own color, gauge and length:
 
-```
+```wb
 component Vehicle {
     ecu:  Ecu  "ECU";
     lamp: Lamp "Lamp";
@@ -607,7 +609,7 @@ component Vehicle {
 }
 ```
 
-```
+```text
 splice <name> ["<label>"];
 splice <name> ["<label>"] { part: "<string>"; description: "<string>"; }
 ```
@@ -627,7 +629,7 @@ A view declares a rendering target — what to render, at what positions, with w
 
 Every view documents one component, its **subject**: includes, `ports { }` placements and `enclosure { }` ports all resolve against it. By default the subject is the file's single top-level component. Name it explicitly with `for` after the title:
 
-```
+```wb
 component Sensor { connector x1 "Sensor 2p" { pub port sig "SIG" pin 1; } }
 component Lamp   { connector x2 "Lamp 2p"   { pub port feed "FEED" pin 1; } }
 
@@ -650,7 +652,7 @@ The view is drawn against an instance of its subject: a view of a component the 
 
 Each `schematic` include also says which of that component's ports to show, on which side, and in what order.
 
-```
+```wb
 view schematic "System Overview" {
     grid: 20;
 
@@ -688,11 +690,46 @@ Leave room between boxes. `check` lays each view out with the renderer's own box
 
 Keep a view compact: its drawing may span at most 8192 units on a side, margins, title and stamp included (`view_too_large`, an error in every view kind, naming the size and labelled on the title and the includes farthest apart). Positions count grid steps, so `at (1000, 0)` on `grid: 20;` is already 20000 units out; split a sprawling drawing into several views instead.
 
+### Enclosure
+
+A schematic view may draw its subject itself as a dashed box wrapping the includes, with some of the subject's own `pub` ports on its edge — the way to show where the subject's interface wires go inside it:
+
+```wb
+component Cell {
+    pub port pos "+";
+    pub port neg "-";
+}
+
+component Module {
+    pub port hv_pos "HV+";
+    pub port hv_neg "HV-";
+    cell: Cell;
+    wire orange 16 [hv_pos, cell.pos];
+    wire orange 16 [hv_neg, cell.neg];
+}
+
+view schematic "Module" for Module {
+    enclosure {
+        hv_pos at (west, 4);
+        hv_neg at (east, 4);
+    }
+
+    include cell at (10, 4) ports {
+        west: pos;
+        east: neg;
+    }
+}
+```
+
+- `enclosure { <port> at (<x>, <y>); ... }` — at most one per view (`duplicate_view_item`). Exactly one slot of each `at` is a side keyword pinning the port to that edge — `west`/`east` in the `x` slot, `north`/`south` in the `y` slot — and the other a grid coordinate along the edge (`enclosure_anchor` otherwise).
+- The ports are the subject's own `pub` ports (`unknown_port` / `private_port`), each placed once (`duplicate_view_port`). The box sizes itself around the includes.
+- A wire between an own port the enclosure places and a listed port inside is drawn; an own port it does not place ends in a `→ <port> (leaves <Subject>)` stub. An empty `enclosure { }` draws the box with no ports.
+
 ### Text boxes
 
 A schematic view may carry free-text notes — a termination resistor, a fitting instruction — each drawn as a small boxed label:
 
-```
+```wb
 view schematic "CAN bus" {
     grid: 20;
 
@@ -713,7 +750,7 @@ view schematic "CAN bus" {
 
 A `harness` include selects a whole **connector** by its designator and draws it as a pin table. Cables between connectors are derived from the model's wires.
 
-```
+```wb
 view harness "Main HV harness" {
     grid: 20;
 
@@ -739,7 +776,7 @@ A wire that belongs to a declared `cable` (see Cables) draws WireViz-style: a la
 A `pinout` include selects a connector owned by the view subject itself. This
 is useful for connector reference drawings when building a harness.
 
-```
+```wb
 view pinout "Inverter pinouts" {
     grid: 20;
 
@@ -799,7 +836,7 @@ Other words the grammar reads in one place only (`schematic`, `harness`, `pinout
 
 **Series chain through a composite's external ports** — wires alternate between connecting external pub ports and chaining internal instances:
 
-```
+```wb component
 wire orange 50 [hv_pos,          c_main_pos.out];
 wire orange 50 [c_main_pos.in,   module_1.hv_pos];
 wire orange 50 [module_1.hv_neg, module_2.hv_pos];
@@ -810,7 +847,7 @@ wire orange 50 [c_main_neg.out,  hv_neg];
 
 **Daisy chain between paired ports** — each instance has an "up" port and a "down" port; wire down-of-N to up-of-N+1, leaving the last one open:
 
-```
+```wb component
 wire black 0.25 [iso_spi_p,                module_1.iso_spi_up_h];
 wire black 0.25 [module_1.iso_spi_down_p,  module_2.iso_spi_up_h];
 wire black 0.25 [module_2.iso_spi_down_p,  module_3.iso_spi_up_h];
@@ -819,14 +856,14 @@ wire black 0.25 [module_2.iso_spi_down_p,  module_3.iso_spi_up_h];
 
 **Parallel coils via one multi-endpoint wire** — many coils driven by the same control signal:
 
-```
+```wb component
 wire black 1.0 [enable_p, c_main_pos.coil_p, c_main_neg.coil_p, c_precharge.coil_p];
 wire black 1.0 [enable_n, c_main_pos.coil_n, c_main_neg.coil_n, c_precharge.coil_n];
 ```
 
 **Shared HV bus** — a single multi-endpoint wire connecting every HV consumer to the pack:
 
-```
+```wb component
 wire orange 50 [pack.hv_pos, inv.dc_pos, charger.hv_pos, conv.hv_pos];
 wire orange 50 [pack.hv_neg, inv.dc_neg, charger.hv_neg, conv.hv_neg];
 ```
