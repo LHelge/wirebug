@@ -64,7 +64,7 @@ impl Paper {
 
     /// The sheet's short and long edge, in PDF points (1/72 in).
     #[must_use]
-    pub fn size(self) -> (f32, f32) {
+    pub(crate) fn size(self) -> (f32, f32) {
         match self {
             Self::A4 => (595.276, 841.89),
             Self::A3 => (841.89, 1190.551),
