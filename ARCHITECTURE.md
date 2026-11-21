@@ -306,7 +306,13 @@ Distinct from clap's `--version`, which prints the wirebug app version.
   it. So the schematic renderer ignores cables
   for free, and only the harness renderer reads the tags. Cable
   conductors are 2-endpoint by rule, and so is any wire to a splice;
-  shared rails without a splice stay loose multi-endpoint wires.
+  shared rails without a splice stay loose multi-endpoint wires. A rail
+  is one physical conductor per pair of consecutive ends, in the order
+  written (`[a, b, c]` → `a–b`, `b–c`): `Wire::segments()` yields those
+  runs (`ir::WireSegment`: its `index` along the wire and its two ends),
+  and it is the only place the decomposition is written — the schematic
+  layout and the harness layout (`HarnessConductor::all`) both take their
+  segments from it.
 - **Inline connectors (`inline`)** — a mated plug/receptacle pair
   mid-harness (a loom's branch point): one shared port set, two optional
   `male:`/`female:` housing halves, each a `connector_type` ref. Inlines
@@ -348,8 +354,8 @@ adds no inference (`src/render/schematic/layout.rs`):
   mechanism — explicit, not derived from wires.)
 - **Connections** — each subject wire (a multi-endpoint net) is
   **chain-decomposed** into consecutive pairs in the order written
-  (`[a,b,c]` → `a–b, b–c`). A pair is drawn only when both ends resolve to a
-  placed port: a *listed* `WireEnd::Child` port of an *included* instance, or
+  (`[a,b,c]` → `a–b, b–c`), by `ir::Wire::segments` (see the IR). A pair
+  is drawn only when both ends resolve to a placed port: a *listed* `WireEnd::Child` port of an *included* instance, or
   a `WireEnd::Own` port *listed in the enclosure* (below). Excluded instances,
   unlisted ports, and own ports without an enclosure placement drop silently —
   a listed port whose wire lands on such an end shows as a bare stub.

@@ -987,6 +987,34 @@ impl Wire {
             _ => None,
         }
     }
+
+    /// The wire's two-ended runs, chain-decomposed in the order its ends are
+    /// written: `[a, b, c]` is `a–b`, then `b–c`. A two-ended wire is one
+    /// segment. This is the one decomposition of a multi-endpoint rail:
+    /// both renderers draw these segments and a wire list counts them, so
+    /// each is one physical conductor everywhere.
+    pub fn segments(&self) -> impl Iterator<Item = WireSegment<'_>> {
+        self.endpoints
+            .windows(2)
+            .enumerate()
+            .filter_map(|(index, pair)| match pair {
+                [from, to] => Some(WireSegment {
+                    index,
+                    ends: [from, to],
+                }),
+                _ => None,
+            })
+    }
+}
+
+/// One two-ended run of a [`Wire`], from [`Wire::segments`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WireSegment<'a> {
+    /// Which run of its wire this is: the ends `endpoints[index]` and
+    /// `endpoints[index + 1]`.
+    pub index: usize,
+    /// The run's two ends, in the order the wire lists them.
+    pub ends: [&'a WireEnd; 2],
 }
 
 /// A resolved wire endpoint. Which an authored bare name is, an own port
@@ -1207,6 +1235,50 @@ mod tests {
         // A third end is validate's to report; the termination keeps two.
         assert_eq!(of(&["a", "b", "c"]).ends(), [end("a"), end("b")]);
         assert!(ShieldTermination::NoPin.ends().is_empty());
+    }
+
+    fn wire_between(ends: &[&str]) -> Wire {
+        Wire {
+            color: WireColor::from("red"),
+            gauge: 0.5,
+            label: None,
+            endpoints: ends
+                .iter()
+                .map(|p| WireEnd::Own(PortName::from(*p)))
+                .collect(),
+            cable: None,
+            twisted_group: None,
+            length: None,
+            r#type: None,
+            part: None,
+            span: Span::new(crate::dsl::span::FileId(0), 0, 0),
+        }
+    }
+
+    #[test]
+    fn a_rail_decomposes_into_consecutive_segments_in_written_order() {
+        let rail = wire_between(&["a", "b", "c", "d"]);
+        let segments: Vec<(usize, String, String)> = rail
+            .segments()
+            .map(|s| (s.index, s.ends[0].to_string(), s.ends[1].to_string()))
+            .collect();
+        assert_eq!(
+            segments,
+            [
+                (0, "a".to_string(), "b".to_string()),
+                (1, "b".to_string(), "c".to_string()),
+                (2, "c".to_string(), "d".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_two_ended_wire_is_one_segment_and_a_lone_end_none() {
+        let wire = wire_between(&["a", "b"]);
+        let segments: Vec<WireSegment> = wire.segments().collect();
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].ends, [&wire.endpoints[0], &wire.endpoints[1]]);
+        assert_eq!(wire_between(&["a"]).segments().count(), 0);
     }
 
     #[test]
