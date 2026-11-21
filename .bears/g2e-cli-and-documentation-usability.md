@@ -2,10 +2,10 @@
 id: g2e
 title: CLI and documentation usability
 type: epic
-status: open
+status: done
 priority: P2
 created: "2026-11-20T21:40:32.082165544Z"
-updated: "2026-11-20T21:40:32.082165544Z"
+updated: "2026-11-21T20:48:51.094612846Z"
 ---
 
 ## Scope
