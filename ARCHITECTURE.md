@@ -47,8 +47,8 @@ Five CLI commands share it:
   and a `wirebug.css` starter stylesheet (`render::embed_stylesheet` —
   the built-in styles re-scoped under `.wirebug-{kind}`, referenced from
   the manifest's `stylesheet` field; hosts copy and theme it), and the
-  build tables as `wires.json` and `connectors.json` (see `export`
-  below), which the manifest names in its last field, `exports`
+  build tables as `wires.json`, `connectors.json` and `bom.json` (see
+  `export` below), which the manifest names in its last field, `exports`
   (`render::EmbedExports`) — added after the fields hosts already read,
   so they keep their names and places.
   Each view renders or fails on its own (see Render-time errors): `render`
@@ -59,8 +59,8 @@ Five CLI commands share it:
 - **`export` (`src/export/`)** — runs `check_project` like `render`,
   refuses a project with errors (or, under `--strict`, warnings) with the
   same message (`— not exporting`), then writes one build table:
-  `export wires` (the wire list) or `export connectors` (the pin tables),
-  one subcommand per `export::Table` (`cli::ExportCommand`, each taking
+  `export wires` (the wire list), `export connectors` (the pin tables)
+  or `export bom` (the bill of materials), one subcommand per `export::Table` (`cli::ExportCommand`, each taking
   `cli::ExportArgs`: the target, `--format csv|json` — its own
   `ExportFormat`, not `check`'s `--format` — `--out <file>` and
   `--strict`). `export::Export::new(design, table, format)` builds the
@@ -630,16 +630,46 @@ is `export::records` (below), and the IR is not a wire format.
   views draw it into each half, it is listed under both halves as
   `Undetermined`, never guessed or dropped. A drain is placed the same
   way (`HarnessScope::draws_drain`). Elsewhere an entry is `Assigned`.
+- **Bill of materials (`export::Bom`, `From<&Design>`)** — what is
+  bought: one `export::Line` per thing to buy, a closed enum whose
+  variant is its kind (`Line::kind()`, an `export::LineKind`, whose order
+  is the BOM's: housings, cables, loose wire, components, splices) and
+  holds the line's placements, so `Line::quantity()` is their count — per
+  placement, since every source it reads is (a type placed six times
+  counts six). Lines within a kind are grouped by an `IndexMap` key (a
+  private `Groups` collector), so they come in order of first use and no
+  hash order reaches the output. `HousingLine` reads `PinTables`, one
+  housing per table (`PinTable::housing()`, so each declared half of an
+  inline is one), keyed by part, else connector type, else neither
+  (connector blocks naming no type, one line). `CableLine` reads every
+  instance's `cables`, keyed by `CableMeta.type`; its `length()` sums the
+  cables' own `length`, not their conductors'. `WireLine` reads the
+  `WireList`'s conductor rows in no cable, keyed by colour, gauge (its
+  bits), `type` and `part`; its `length()` collects the rows'
+  `RowLength`s into an `export::Copper` (`FromIterator<RowLength>`, which
+  `WireList::copper` uses too), so a rail counts once. `ComponentLine`
+  reads the instances, keyed by `PartMeta.number`, else by type; the
+  root, inline instances and, without a part number, assemblies
+  (`Instance::is_assembly`: children and no port or connector of its own)
+  are left out. `SpliceLine` reads every instance's `splices`, keyed by
+  part, else by label (else name). `Line::is_specified()` says whether a
+  line names what to buy (a cable's `type`, which a cable body has in
+  place of a part); `Line::length()` is the `Copper` of a cable or wire
+  line, whose `unmeasured` says what its total leaves out. Contacts,
+  terminals and seals are not in the model, so not in the BOM; a screen
+  is part of its cable.
 - **Wire format (`export/records/`)** — what `wirebug export` prints and
   `render --embed` writes. Each table becomes record types private to the
   module, built from the models (`WireSheet` from a `WireList`,
-  `ConnectorSheet` from `PinTables`; `EndRecord` for an end in either,
+  `ConnectorSheet` from `PinTables`, `BomSheet` from a `Bom` — one flat
+  `LineRecord` per line, every kind under the same fields, so its JSON
+  and CSV are the same table; `EndRecord` for an end in either,
   `From<&End>` / `From<&FarEnd>`), owned strings and numbers with serde
   derives: the JSON nests them, and the CSV is their flattening
   (`Sheet::csv_rows`, one row per wire-list row or per cavity entry, under
   `Sheet::HEADER`), so the two formats carry the same data by
-  construction. The JSON document wraps a sheet's fields (`rows` or
-  `connectors`) in `table`, `format_version` (`export::FORMAT_VERSION`),
+  construction. The JSON document wraps a sheet's fields (`rows`,
+  `connectors` or `lines`) in `table`, `format_version` (`export::FORMAT_VERSION`),
   `project` and `generator` (`crate::GENERATOR`, the embed manifest's).
   CSV goes through the `csv` crate (RFC 4180 quoting, `\n` endings, and a
   row of the wrong length is refused). The rail rule is explicit:
@@ -649,8 +679,9 @@ is `export::records` (below), and the IR is not a wire format.
   `length_m` is `WireList::copper()`. Twisted pairs are numbered from 1
   (the IR's `twisted_group` + 1). The columns are a public interface and
   are listed in README's "Exporting build tables"; a change to one's
-  name, place or meaning raises `FORMAT_VERSION`. A new table (the BOM)
-  is a new `Table` variant, a `Sheet` impl and an `EmbedExports` field.
+  name, place or meaning raises `FORMAT_VERSION`; a new table does not
+  (adding the BOM left it at 1). A new table is a new `Table` variant, a
+  `Sheet` impl and an `EmbedExports` field.
 
 ## DSL validation (`check`)
 
@@ -819,7 +850,7 @@ so one run reports many. Errors fail the run; warnings fail only under
   `diagnostics::PropertyOwner`, whose `keys()` say what each body takes: a
   cable `type` and `length`, a wire `length`, `type` and `part`, a
   component `part`, `manufacturer`, `description` and `rating`, a splice
-  `part` and `description`, a closed set a later bill of materials reads) — an unknown key, a key set twice, a
+  `part` and `description`, a closed set the bill of materials reads) — an unknown key, a key set twice, a
   value of the wrong kind (strings for `type`/`part` and the component
   keys, a number for `length`). A component split with `extend` sets each
   key once across its fragments (`validate_fragment_properties`): a
@@ -1033,11 +1064,13 @@ src/
 │   ├── wires.rs     # WireList: one Row per conductor segment and per screen
 │   ├── pins.rs      # PinTables: one PinTable per connector (per inline half),
 │   │                #   one Cavity per pin + unpinned ports, built from the WireList
+│   ├── bom.rs       # Bom: one Line per thing to buy, per placement, grouped by part
 │   └── records/     # the wire format: Export (Table × Format → text), Exported
 │       ├── mod.rs       # Table, Format, Export, the JSON Document, CSV writing
 │       ├── ends.rs      # EndRecord: an end as both tables write it
 │       ├── wires.rs     # WireSheet: the wire list's records and columns
-│       └── connectors.rs# ConnectorSheet: the pin tables' records and columns
+│       ├── connectors.rs# ConnectorSheet: the pin tables' records and columns
+│       └── bom.rs       # BomSheet: the bill of materials' records and columns
 │
 │  # ── DSL parse-and-check pipeline (the only input: .wb) ──
 ├── dsl/

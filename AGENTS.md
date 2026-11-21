@@ -27,7 +27,7 @@ One pipeline, shared by every command (`check`, `render`, `export`, `serve`, `ls
   `render`; `dsl` never depends on `render`). `check_project` and the LSP
   both go through it; a new stage goes there.
 - `src/export/` — build tables derived from `ir::Design` (the wire list,
-  the pin tables), typed models with no rendering involved, and their
+  the pin tables, the bill of materials), typed models with no rendering involved, and their
   CSV/JSON wire format (`wirebug export`).
 - `src/render/` — consumes `ir::Design` only; one renderer per view kind
   (`schematic/`, `harness/`, `pinout/`) plus `png.rs`, `pdf.rs`, embed output.
@@ -45,7 +45,7 @@ Where to look in `ARCHITECTURE.md`:
 | AST, registry, `extend` merge groups, IR, cables, inline connectors | DSL mental model |
 | Schematic layout, routing, enclosures | Render mental model; Connector routing |
 | Harness views | Harness views |
-| Wire list, pin tables and their CSV/JSON format (`src/export/`) | Build tables |
+| Wire list, pin tables, BOM and their CSV/JSON format (`src/export/`) | Build tables |
 | A new or changed diagnostic, and which phase it belongs in | DSL validation; Render-time errors |
 | Finding a file | Source tree |
 | Why a crate is there | Dependencies |
@@ -55,8 +55,10 @@ Where to look in `ARCHITECTURE.md`:
 These land later, one at a time. Don't pre-bake hooks for them; we'll
 redesign each when it lands.
 
-- Graphviz/object-avoiding harness routing, BOM views, manifest emission
-  (a basic SVG harness renderer has landed; see `render/harness/`)
+- Graphviz/object-avoiding harness routing, a rendered BOM view (a
+  basic SVG harness renderer has landed, see `render/harness/`; and the
+  build tables — wire list, pin tables and BOM — are exported as CSV/JSON,
+  see `src/export/`, but no view draws a BOM)
 - View composition / `extends`
 - Theming, colour
 - Auto-layout
@@ -189,6 +191,7 @@ cargo run --release -- render examples --out out/ --embed  # naked SVGs + manife
 # export a build table (CSV on stdout; --format json, --out <file>)
 cargo run -- export wires examples
 cargo run -- export connectors examples --format json --out out/connectors.json
+cargo run -- export bom examples
 
 # serve a project with live reload (re-renders on every .wb save)
 cargo run -- serve examples --port 3000   # then open http://localhost:3000
