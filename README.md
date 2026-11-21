@@ -321,18 +321,18 @@ An end, in either table, is eight columns after its prefix (`from`, `to`, `far`)
 
 A `length` on a wire with more than two ends is the length of the whole rail, so summing `length_m` gives the copper to cut, each rail counted once.
 
-**`wirebug export connectors`** — one table per connector of each placed instance, one per housing half of an inline connector; within it, one row per conductor or drain crimped into each cavity (two for a double crimp), a cavity in pin order with nothing in it as one row of entry `empty` (so unused pins are listed), and then each port of the connector that has no pin assigned yet, with an empty `pin`:
+**`wirebug export connectors`** — one table per connector of each placed instance, and two per inline connector, its male and female half (a half it does not declare is a table too, with no `housing_type`, described by the inline's label, as the BOM lists it); within it, one row per conductor or drain crimped into each cavity (two for a double crimp), a cavity in pin order with nothing in it as one row of entry `empty` (so unused pins are listed), and then each port of the connector that has no pin assigned yet, with an empty `pin`:
 
 | Column | Holds |
 |---|---|
 | `instance`, `connector` | the instance and the connector designator |
 | `half` | `male` or `female` on a half of an inline connector |
-| `housing_type`, `housing_description`, `housing_part` | the connector type the housing is bought as (an inline half's own) |
+| `housing_type`, `housing_description`, `housing_part` | the connector type the housing is bought as (an inline half's own; empty for a half the inline does not declare, whose description is the inline's label) |
 | `pin` | the cavity; empty for a port with no pin assigned |
 | `ganged_with` | the other cavities of a ganged port (a ganged port's conductor is listed in each of its cavities) |
 | `port`, `port_label` | the port on the pin |
 | `entry` | `conductor`, `drain` (a cable screen's), or `empty` |
-| `half_fit` | on an inline half: `assigned` when the conductor is known to be in this half, `undetermined` when it is not, so it is listed under both halves. On an inline that declares one half it is always `assigned`; on one with both halves the harness views decide: `assigned` when they place the conductor in this half alone, `undetermined` when they place it in neither or both |
+| `half_fit` | on an inline half: `assigned` when the conductor is known to be in this half, `undetermined` when it is not, so it is listed under both halves. The harness views decide: `assigned` when they place the conductor in this half alone (it is then not listed under the other), `undetermined` when they place it in neither or both. An inline is a mated pair, so this holds whether it declares one half, both or none: a half it does not declare cannot be included in a view, so a conductor is never `assigned` to it, and one no view places in the declared half is `undetermined` |
 | `owner` | the instance whose body declares the conductor |
 | `cable`, `twisted_pair`, `screens` | its cable and pair; for a drain, what the screen screens |
 | `label`, `color`, `color_code`, `gauge_mm2` | the conductor's (a drain's: its screen's label only) |

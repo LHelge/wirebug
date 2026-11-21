@@ -19,9 +19,9 @@ use crate::dsl::ir::{
 /// twice yields its tables twice, each with its own instance path.
 /// Connectorless ports have no table. Order is stable and follows the
 /// source: instances in IR order, the root among them, then each
-/// instance's connectors in declaration order — an inline connector's
-/// halves male first — and within a table its cavities by pin, then its
-/// ports without a pin in source order.
+/// instance's connectors in declaration order — an inline connector's two
+/// halves male first, whether it declares them or not — and within a table
+/// its cavities by pin, then its ports without a pin in source order.
 #[derive(Debug, Clone)]
 #[must_use]
 pub struct PinTables<'d> {
@@ -84,9 +84,10 @@ pub struct PinTable<'d> {
     /// connector's is the one its synthetic instance carries, named after
     /// it; its housings are its halves' ([`PinTable::housing`]).
     pub connector: &'d Connector,
-    /// For an inline connector, the housing half this table is of: each
-    /// half it declares has a table of its own. `None` for an ordinary
-    /// connector, and for an inline that declares no half (one table).
+    /// For an inline connector, the housing half this table is of. An
+    /// inline is a mated pair, so it has a table for each of its two halves,
+    /// whether it declares that half's connector type or not
+    /// ([`PinTable::is_declared`]). `None` for an ordinary connector.
     pub half: Option<Half>,
     pub cavities: Vec<Cavity<'d>>,
     /// The connector's ports that are assigned no pin (the pin-out is not
@@ -97,7 +98,8 @@ pub struct PinTable<'d> {
 
 impl<'d> PinTable<'d> {
     /// The empty tables of `instance`'s connectors: one per connector, or
-    /// one per declared half of an inline connector.
+    /// one per half of an inline connector. An undeclared half has no
+    /// layout, so its cavities are the inline's pins.
     fn all_of(instance: &'d Instance) -> impl Iterator<Item = Self> {
         instance.connectors.values().flat_map(move |connector| {
             Self::halves(instance).into_iter().map(move |half| {
@@ -105,7 +107,7 @@ impl<'d> PinTable<'d> {
                     (Some(half), Some(inline)) => {
                         inline.half(half).and_then(|meta| meta.layout.as_ref())
                     }
-                    _ => connector.layout.as_ref(),
+                    (None, _) | (_, None) => connector.layout.as_ref(),
                 };
                 Self {
                     instance,
@@ -119,17 +121,21 @@ impl<'d> PinTable<'d> {
     }
 
     /// The housing this table is of: an inline connector's half's (its
-    /// connector type's), else the connector's own.
+    /// connector type's), else the connector's own. A half the inline does
+    /// not declare is a housing of no type, described by the inline's
+    /// label.
     pub fn housing(&self) -> Housing<'d> {
-        let half = self
-            .half
-            .zip(self.instance.inline.as_ref())
-            .and_then(|(half, inline)| inline.half(half));
-        match half {
-            Some(half) => Housing {
+        let inline = self.half.zip(self.instance.inline.as_ref());
+        match inline.map(|(half, inline)| inline.half(half)) {
+            Some(Some(half)) => Housing {
                 type_name: Some(&half.type_name),
                 description: Some(&half.description),
                 properties: &half.properties,
+            },
+            Some(None) => Housing {
+                type_name: None,
+                description: self.instance.label.as_deref(),
+                properties: &self.connector.properties,
             },
             None => Housing {
                 type_name: self.connector.type_name.as_ref(),
@@ -139,45 +145,35 @@ impl<'d> PinTable<'d> {
         }
     }
 
-    /// The halves `instance`'s connector has a table for: each half an
-    /// inline connector declares, else the one connector (`None`).
-    fn halves(instance: &Instance) -> Vec<Option<Half>> {
-        let declared: Vec<Option<Half>> = instance
-            .inline
-            .iter()
-            .flat_map(|inline| {
-                [Half::Male, Half::Female]
-                    .into_iter()
-                    .filter(|&half| inline.half(half).is_some())
-            })
-            .map(Some)
-            .collect();
-        if declared.is_empty() {
-            vec![None]
-        } else {
-            declared
+    /// Whether the table's housing is declared: `false` only for a half of
+    /// an inline connector that names no connector type for it.
+    pub fn is_declared(&self) -> bool {
+        match (self.half, &self.instance.inline) {
+            (Some(half), Some(inline)) => inline.half(half).is_some(),
+            (None, _) | (_, None) => true,
         }
     }
 
-    /// Whether this table is one of two halves of an inline connector,
-    /// whose conductors the views may or may not place in a half.
-    fn is_one_of_two_halves(&self) -> bool {
-        self.instance
-            .inline
-            .as_ref()
-            .is_some_and(|inline| inline.male.is_some() && inline.female.is_some())
+    /// The halves `instance`'s connector has a table for: both halves of an
+    /// inline connector, else the one connector (`None`).
+    fn halves(instance: &Instance) -> Vec<Option<Half>> {
+        match instance.inline {
+            Some(_) => vec![Some(Half::Male), Some(Half::Female)],
+            None => vec![None],
+        }
     }
 
     /// List `landing` in the cavities of its port, when it belongs in this
-    /// table's half.
+    /// table's half: on an inline connector, unless the harness views draw
+    /// it into the other half.
     fn add(&mut self, landing: &Landing<'d>) {
-        let half = match (self.half, self.is_one_of_two_halves()) {
-            (Some(half), true) => match landing.half {
+        let half = match self.half {
+            Some(half) => match landing.half {
                 Some(drawn) if drawn == half => HalfFit::Assigned,
                 Some(_) => return,
                 None => HalfFit::Undetermined,
             },
-            _ => HalfFit::Assigned,
+            None => HalfFit::Assigned,
         };
         let port = &landing.at.port.name;
         for cavity in &mut self.cavities {
@@ -372,16 +368,22 @@ pub struct CavityDrain<'d> {
 }
 
 /// Whether an entry is known to be crimped into the housing half its
-/// table is of. Outside the tables of an inline connector with two halves
-/// it is always [`HalfFit::Assigned`].
+/// table is of. An inline connector is a mated pair: each conductor on it
+/// is in one of its two halves, declared or not, and only the harness views
+/// say which. Outside an inline's tables an entry is always
+/// [`HalfFit::Assigned`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HalfFit {
-    /// The housing is known: an ordinary connector, an inline that declares
-    /// one half, or a half the harness views of the conductor's component
-    /// draw it into, and no view draws it into the other.
+    /// The housing is known: an ordinary connector, or the half of an
+    /// inline the harness views of the conductor's component draw it into,
+    /// when no view draws it into the other (an entry drawn into the other
+    /// half is in that half's table only).
     Assigned,
-    /// The harness views draw the conductor into neither half, or into
-    /// both: it is listed under each half, flagged, rather than guessed.
+    /// The harness views draw the entry into neither half, or into both:
+    /// it is listed under each half, flagged, rather than guessed. A half
+    /// the inline does not declare cannot be included in a view, so an
+    /// entry is never assigned to it: what is not drawn into the declared
+    /// half is undetermined.
     Undetermined,
 }
 
@@ -448,7 +450,7 @@ pub struct SplicedEnd<'d> {
 
 /// One conductor or drain end landing on a port, as a table entry: the
 /// port, the entry, and the half the harness views draw it into when the
-/// port is an inline connector's with two halves.
+/// port is an inline connector's.
 struct Landing<'d> {
     at: PortEnd<'d>,
     entry: CavityEntry<'d>,
@@ -1065,10 +1067,66 @@ component Loom {
     }
 
     #[test]
-    fn an_inline_with_one_half_has_one_table_with_all_its_conductors() {
+    fn an_inline_with_one_half_keeps_a_table_for_the_other_and_assigns_only_what_a_view_draws() {
         let design = design(&format!(
-            "{USES}{INLINE}component Car {{ ecu: Ecu; pedal: Ecu;\n\
-               inline ic \"Branch\" {{ female: F2; port sig \"SIG\" pin 1; }}\n\
+            "{USES}{INLINE}component Car {{ ecu: Ecu; lamp: Ecu;\n\
+               inline ic \"Branch\" {{ male: M2; port a \"A\" pin 1; port b \"B\" pin 2; }}\n\
+               wire green 0.5 \"E-A\" [ecu.pwr, ic.a];\n\
+               wire green 0.5 \"L-A\" [ic.a, lamp.pwr];\n\
+             }}\n\
+             view harness \"ECU side\" {{ include ecu.x1 at (0, 0); include ic.male at (10, 0); }}\n"
+        ));
+        let tables = PinTables::from(&design);
+        // Each table's half, whether it is declared, housing type and pins.
+        type Shape<'a> = (Option<Half>, bool, Option<&'a str>, Vec<u32>);
+        let ic: Vec<Shape> = tables
+            .into_iter()
+            .filter(|t| t.instance.path == path("Car.ic"))
+            .map(|t| {
+                let housing = t.housing();
+                (
+                    t.half,
+                    t.is_declared(),
+                    housing.type_name.map(|name| name.as_str()),
+                    t.cavities.iter().map(|c| c.pin.0).collect(),
+                )
+            })
+            .collect();
+        // A mated pair has two halves: the undeclared one is a table of no
+        // housing type, its cavities the inline's pins.
+        assert_eq!(
+            ic,
+            [
+                (Some(Half::Male), true, Some("M2"), vec![1, 2, 3]),
+                (Some(Half::Female), false, None, vec![1, 2]),
+            ]
+        );
+        let female = table(&tables, "Car.ic", "ic", Some(Half::Female));
+        assert_eq!(female.housing().description, Some("Branch"));
+
+        let listed = |half: Half| -> Vec<(Option<&str>, HalfFit)> {
+            conductors(cavity(table(&tables, "Car.ic", "ic", Some(half)), 1))
+                .iter()
+                .map(|c| (c.conductor.wire.label.as_deref(), c.half))
+                .collect()
+        };
+        // The view draws E-A into the male half; no view draws L-A, so it
+        // may be in either: it is not assigned to the declared half.
+        assert_eq!(
+            listed(Half::Male),
+            [
+                (Some("E-A"), HalfFit::Assigned),
+                (Some("L-A"), HalfFit::Undetermined),
+            ]
+        );
+        assert_eq!(listed(Half::Female), [(Some("L-A"), HalfFit::Undetermined)]);
+    }
+
+    #[test]
+    fn an_inline_with_no_halves_has_two_undeclared_tables_of_undetermined_conductors() {
+        let design = design(&format!(
+            "{USES}component Car {{ ecu: Ecu; pedal: Ecu;\n\
+               inline ic \"Branch\" {{ port sig \"SIG\" pin 1; }}\n\
                wire green 0.5 [ecu.pwr, ic.sig];\n\
                wire green 0.5 [ic.sig, pedal.pwr];\n\
              }}\n"
@@ -1078,12 +1136,28 @@ component Loom {
             .into_iter()
             .filter(|t| t.instance.path == path("Car.ic"))
             .collect();
-        let [only] = ic[..] else {
-            panic!("one table");
-        };
-        assert_eq!(only.half, Some(Half::Female));
-        let sig = cavity(only, 1);
-        assert_eq!(fars(sig), ["port:Car.ecu.pwr", "port:Car.pedal.pwr"]);
-        assert!(conductors(sig).iter().all(|c| c.half == HalfFit::Assigned));
+        let halves: Vec<(Option<Half>, bool)> =
+            ic.iter().map(|t| (t.half, t.is_declared())).collect();
+        assert_eq!(
+            halves,
+            [(Some(Half::Male), false), (Some(Half::Female), false)]
+        );
+        for table in ic {
+            let sig = cavity(table, 1);
+            assert_eq!(fars(sig), ["port:Car.ecu.pwr", "port:Car.pedal.pwr"]);
+            assert!(
+                conductors(sig)
+                    .iter()
+                    .all(|c| c.half == HalfFit::Undetermined)
+            );
+        }
+        // An ordinary connector's table is declared, its entries assigned.
+        let x1 = table(&tables, "Car.ecu", "x1", None);
+        assert!(x1.is_declared());
+        assert!(
+            conductors(cavity(x1, 1))
+                .iter()
+                .all(|c| c.half == HalfFit::Assigned)
+        );
     }
 }

@@ -673,6 +673,42 @@ mod tests {
     }
 
     #[test]
+    fn an_inline_with_one_half_writes_both_halves_and_assigns_only_what_a_view_draws() {
+        let design = design(
+            LIB,
+            &format!(
+                "{USES}{INLINE}component Car {{ ecu: Ecu; lamp: Ecu;\n\
+               inline ic \"Branch\" {{ male: M2; port a \"A\" pin 1; }}\n\
+               wire green 0.5 \"E-A\" [ecu.pwr, ic.a];\n\
+               wire green 0.5 \"L-A\" [ic.a, lamp.pwr];\n\
+             }}\n\
+             view harness \"ECU side\" for Car {{ include ecu.x1 at (0, 0); include ic.male at (10, 0); }}\n"
+            ),
+        );
+        let (_, rows) = csv_rows(&design, Table::Connectors);
+        let names = [
+            "housing_type",
+            "housing_description",
+            "pin",
+            "label",
+            "half_fit",
+        ];
+        assert_eq!(
+            of(&rows, "Car.ic", "male", &names),
+            strings(&[
+                &["M2", "M 2p", "1", "E-A", "assigned"],
+                &["M2", "M 2p", "1", "L-A", "undetermined"],
+            ])
+        );
+        // The undeclared half is a housing of no type, under the inline's
+        // label, as the BOM counts it.
+        assert_eq!(
+            of(&rows, "Car.ic", "female", &names),
+            strings(&[&["", "Branch", "1", "L-A", "undetermined"]])
+        );
+    }
+
+    #[test]
     fn json_lists_a_ports_without_a_pin_apart_from_the_cavities() {
         let design = design(
             LIB,
