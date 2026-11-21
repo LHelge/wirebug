@@ -202,6 +202,47 @@ fn render_embed_writes_manifest_and_no_index() {
     );
 }
 
+const TIED_ROUTES_ROOT: &str = "tests/fixtures/tied_routes_project";
+
+/// Each process seeds its hash maps afresh, so this catches any output
+/// that follows hash order — here, the router settling a tie between
+/// two equally good routes.
+#[test]
+fn render_writes_the_same_bytes_in_every_process() {
+    let tmp = tempdir().expect("tempdir");
+    let render = |run: usize| {
+        let out = tmp.path().join(format!("run{run}"));
+        Command::cargo_bin("wirebug")
+            .expect("binary present")
+            .args(["render", TIED_ROUTES_ROOT, "--out", out.to_str().unwrap()])
+            .assert()
+            .success();
+        let mut files: Vec<(String, Vec<u8>)> = std::fs::read_dir(&out)
+            .expect("output directory")
+            .map(|entry| {
+                let path = entry.expect("directory entry").path();
+                let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                (name, std::fs::read(&path).expect("rendered file"))
+            })
+            .collect();
+        files.sort();
+        files
+    };
+
+    let first = render(0);
+    assert!(first.iter().any(|(name, _)| name == "stacked.svg"));
+    for run in 1..8 {
+        let again = render(run);
+        let names = |files: &[(String, Vec<u8>)]| -> Vec<String> {
+            files.iter().map(|(name, _)| name.clone()).collect()
+        };
+        assert_eq!(names(&again), names(&first), "run {run} wrote other files");
+        for ((name, bytes), (_, expected)) in again.iter().zip(&first) {
+            assert!(bytes == expected, "run {run} wrote a different {name}");
+        }
+    }
+}
+
 #[test]
 fn render_rejects_a_project_that_does_not_check() {
     let tmp = tempdir().expect("tempdir");

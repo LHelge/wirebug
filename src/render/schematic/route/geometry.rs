@@ -77,8 +77,9 @@ impl Rect {
 }
 
 /// A compass direction of travel. North is toward smaller y (SVG y grows
-/// downward), matching [`Side`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// downward), matching [`Side`]. The declaration order is the order the
+/// visibility graph lists a node's neighbours in, which settles A\* ties.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) enum Dir {
     North,
     South,

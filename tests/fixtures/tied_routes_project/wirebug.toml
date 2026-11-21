@@ -1,0 +1,4 @@
+[project]
+name = "tied-routes-project"
+version = "0.1.0"
+description = "Views whose wires have two equally good routes, for determinism tests"

@@ -1,0 +1,4 @@
+component Unit {
+    pub port gnd "GND";
+    pub port sig "SIG";
+}

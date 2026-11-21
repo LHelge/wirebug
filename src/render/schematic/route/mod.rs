@@ -454,4 +454,68 @@ component sys {
             wires[1]
         );
     }
+
+    /// Paths of a wire that must go round a box to reach a port on its
+    /// far side: two mirror-image routes of equal cost.
+    fn route_round_the_far_box(vertical: bool) -> Vec<Point> {
+        let design = design_from(
+            r#"
+component sys {
+    near: node;
+    far: node;
+    wire red 1 [near.p, far.p];
+    component node {
+        pub port p "P";
+    }
+}
+"#,
+        );
+        let (side, at) = if vertical {
+            (Side::South, (0.0, 8.0))
+        } else {
+            (Side::East, (12.0, 0.0))
+        };
+        let view = view_of(
+            "sys",
+            &[
+                ("near", 0.0, 0.0, &[("p", side)]),
+                ("far", at.0, at.1, &[("p", side)]),
+            ],
+        );
+        let step = 20.0;
+        let subject = design.get(&design.root).unwrap();
+        let placement =
+            Placement::compute(&design, subject, &view, Grid::new(step)).expect("places");
+        let router = Router::build(&placement, step);
+        let connections = placement.connections();
+        let pair = (connections[0].a, connections[0].b);
+        router
+            .route_all(&[pair], 2.0 * step)
+            .expect("routes")
+            .remove(0)
+    }
+
+    /// The tie between two equally good routes is settled by geometry, not
+    /// by the order a hash map happened to hand the graph over in — which
+    /// differs between every map built, in one process as across processes.
+    #[test]
+    fn a_tie_between_mirror_routes_is_settled_the_same_way_every_time() {
+        for vertical in [true, false] {
+            let first = route_round_the_far_box(vertical);
+            for _ in 0..32 {
+                assert_eq!(route_round_the_far_box(vertical), first);
+            }
+        }
+    }
+
+    #[test]
+    fn a_tied_wire_goes_round_the_box_on_the_east_or_the_north() {
+        let stacked = route_round_the_far_box(true);
+        assert!(stacked.iter().any(|p| p.x > 0.0), "{stacked:?}");
+        assert!(stacked.iter().all(|p| p.x >= 0.0), "{stacked:?}");
+
+        let side_by_side = route_round_the_far_box(false);
+        assert!(side_by_side.iter().any(|p| p.y < 0.0), "{side_by_side:?}");
+        assert!(side_by_side.iter().all(|p| p.y <= 0.0), "{side_by_side:?}");
+    }
 }
