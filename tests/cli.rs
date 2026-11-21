@@ -1900,6 +1900,35 @@ fn export_strict_refuses_a_project_with_warnings() {
 }
 
 #[test]
+fn render_embed_writes_the_build_tables_the_manifest_names() {
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("embed");
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args([
+            "render",
+            PIN_TABLE_ROOT,
+            "--out",
+            out.to_str().unwrap(),
+            "--embed",
+        ])
+        .assert()
+        .success();
+    let manifest: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(out.join("manifest.json")).expect("manifest written"),
+    )
+    .expect("valid JSON");
+    for table in ["wires", "connectors"] {
+        let filename = manifest["exports"][table].as_str().expect("named");
+        assert_eq!(filename, format!("{table}.json"));
+        let written = std::fs::read_to_string(out.join(filename)).expect("table written");
+        // The same document `export --format json` prints.
+        let (_, printed, _) = export(&[table, PIN_TABLE_ROOT, "--format", "json"]);
+        assert_eq!(written, printed, "{table}");
+    }
+}
+
+#[test]
 fn export_help_lists_its_tables_and_flags() {
     let help = |args: &[&str]| {
         let output = Command::cargo_bin("wirebug")

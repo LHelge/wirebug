@@ -17,6 +17,7 @@ use super::{
 };
 use crate::dsl::ir::Design;
 use crate::error::{Error, Result, ViewError};
+use crate::export::{Export, Format as ExportFormat, Table};
 
 /// The file format each view is written in.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -32,8 +33,9 @@ pub enum ViewFormat {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Output {
     /// One file per view plus [`INDEX_FILENAME`] — or, with `embed`,
-    /// host-styled SVGs plus [`EMBED_MANIFEST_FILENAME`] and
-    /// [`EMBED_STYLESHEET_FILENAME`] in place of the index.
+    /// host-styled SVGs plus [`EMBED_MANIFEST_FILENAME`],
+    /// [`EMBED_STYLESHEET_FILENAME`] and each build table's JSON in place
+    /// of the index.
     Views { format: ViewFormat, embed: bool },
     /// One A4 PDF with a page per view, named by [`pdf_filename`].
     Pdf,
@@ -84,6 +86,13 @@ impl Output {
                 // written, so a host never looks for a missing file; the
                 // HTML index shows a failed view's error in its place.
                 let entry = if embed {
+                    // The tables first, so the manifest never names a
+                    // file that is not there.
+                    for table in Table::ALL {
+                        let filename = table.filename(ExportFormat::Json);
+                        Export::new(design, table, ExportFormat::Json)?
+                            .write(&out_dir.join(filename))?;
+                    }
                     let manifest = embed_manifest(views.iter().flatten(), manifest);
                     let json = serde_json::to_string_pretty(&manifest)?;
                     let path = write_file(out_dir, EMBED_MANIFEST_FILENAME, json.as_bytes())?;
@@ -361,7 +370,14 @@ mod tests {
         let (tmp, written, entries) = write(embed, &["Overview", "Lost", "Detail"]);
         assert_eq!(
             entries,
-            ["detail.svg", "manifest.json", "overview.svg", "wirebug.css"]
+            [
+                "connectors.json",
+                "detail.svg",
+                "manifest.json",
+                "overview.svg",
+                "wirebug.css",
+                "wires.json"
+            ]
         );
         assert_eq!(failed(&written), [LOST]);
         let out = tmp.path().join("out");
@@ -380,6 +396,14 @@ mod tests {
             .map(|v| v["title"].as_str().expect("title"))
             .collect();
         assert_eq!(titles, ["Overview", "Detail"]);
+        // Each table the manifest names is written beside it, as JSON.
+        for table in ["wires", "connectors"] {
+            let filename = manifest["exports"][table].as_str().expect("named");
+            let document: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(out.join(filename)).expect("written"))
+                    .expect("json");
+            assert_eq!(document["table"], table);
+        }
     }
 
     #[test]
