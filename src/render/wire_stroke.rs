@@ -84,16 +84,6 @@ impl WireStroke<'_> {
         shape.assign("data-color", self.color.to_string());
         Some(shape)
     }
-
-    /// Every layer of a wire drawn as one shape, in draw order: casing,
-    /// core, then the tracer when the wire has one.
-    pub(crate) fn layers<T: Node + Clone>(&self, shape: T) -> impl Iterator<Item = T> + use<T> {
-        // `Node` brings its own boxing `clone`; this is the element's.
-        let tracer = self.tracer(Clone::clone(&shape));
-        [self.casing(Clone::clone(&shape)), self.core(shape)]
-            .into_iter()
-            .chain(tracer)
-    }
 }
 
 #[cfg(test)]
@@ -131,28 +121,21 @@ mod tests {
     }
 
     #[test]
-    fn two_tone_wire_layers_casing_core_then_tracer() {
+    fn two_tone_wire_has_a_tracer_in_its_tracer_colour() {
         let color = WireColor::from("green/yellow");
-        let layers: Vec<String> = LAYERS
-            .stroke(&color)
-            .layers(shape())
-            .map(|layer| layer.to_string())
-            .collect();
-        assert_eq!(layers.len(), 3);
-        assert!(layers[0].contains("class=\"w-casing\""));
-        assert!(layers[1].contains("class=\"w\"") && layers[1].contains("stroke=\"green\""));
-        assert!(
-            layers[2].contains("class=\"w-tracer\"") && layers[2].contains("stroke=\"yellow\"")
-        );
-        assert!(layers[2].contains("data-color=\"green/yellow\""));
+        let stroke = LAYERS.stroke(&color);
+        let core = stroke.core(shape()).to_string();
+        assert!(core.contains("stroke=\"green\""), "{core}");
+        let tracer = stroke.tracer(shape()).expect("a tracer").to_string();
+        assert!(tracer.contains("class=\"w-tracer\""), "{tracer}");
+        assert!(tracer.contains("stroke=\"yellow\""), "{tracer}");
+        assert!(tracer.contains("data-color=\"green/yellow\""), "{tracer}");
     }
 
     #[test]
     fn single_colour_wire_has_no_tracer() {
         let color = WireColor::from("blue");
-        let stroke = LAYERS.stroke(&color);
-        assert!(stroke.tracer(shape()).is_none());
-        assert_eq!(stroke.layers(shape()).count(), 2);
+        assert!(LAYERS.stroke(&color).tracer(shape()).is_none());
     }
 
     #[test]
