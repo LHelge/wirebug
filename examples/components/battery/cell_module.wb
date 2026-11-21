@@ -130,5 +130,5 @@ view schematic "Cell Module" {
         south: iso_spi_down_h, iso_spi_down_l;
     }
 
-    text pack_note at (6, 24) "8s2p cell pack from a Renault Zoe";
+    text "8s2p cell pack from a Renault Zoe" at (6, 24);
 }
