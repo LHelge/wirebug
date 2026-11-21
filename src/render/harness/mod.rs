@@ -1337,8 +1337,8 @@ component sys {
 
     /// A loose wire whose annotation is wider than the gap between its
     /// connectors keeps its lane inside the gap and cuts the annotation
-    /// short; the other lane between the same connectors keeps its own,
-    /// shorter span.
+    /// short; the other lane between the same connectors takes the same
+    /// span.
     #[test]
     fn a_long_annotation_is_cut_short_rather_than_the_lane_overrunning_the_gap() {
         let door = loose_wire_layout("Door loom");
@@ -1363,11 +1363,17 @@ component sys {
             "the shortened annotation fits its run"
         );
 
-        let (fault, lane) = lane_of("FAULT");
+        assert!(lane.right - lane.left > widest, "wider than the box");
+
+        // FAULT shares WAKE's slot, and so its width: a lane below a wider
+        // one would have its leads cross the wider one's run.
+        let (fault, fault_lane) = lane_of("FAULT");
         assert_eq!(fault.annotation(), fault.full_annotation());
-        let own =
-            fault.full_annotation().chars().count() as f64 * LABEL_CHAR_WIDTH + 2.0 * NODE_PAD;
-        assert_eq!(lane.right - lane.left, widest.max(own), "its own span");
+        assert_eq!(
+            (fault_lane.left, fault_lane.right),
+            (lane.left, lane.right),
+            "one width per slot"
+        );
 
         let svg = render_fixture_view("Door loom");
         assert!(
