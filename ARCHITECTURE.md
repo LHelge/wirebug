@@ -620,22 +620,66 @@ refinement.
 
 ### Pinout views (`render/pinout/`)
 
-An include names one of the subject's own connectors; it becomes one pin
-table centred at its grid point. Like the other views it documents a type
-and is drawn against `Design::subject_of` (the first instance). The
-header (`Header`) has a bold title, the component and the designator,
-`Inverter · control`: the component is that instance's label only when the
-type is placed exactly once (`Design::placements_of`), else its type name,
-since a label would name one placement of a sheet that serves them all.
-Under the title come the header's lines — today one, the housing's
+An include names one of the subject's own connectors (never an inline
+connector's half: an inline is a child instance of its own, not one of the
+subject's `connectors`); it becomes one pin table centred at its grid
+point. Like the other views it documents a type and is drawn against
+`Design::subject_of` (the first instance). The table is a crimping sheet
+read off the connector's `export::PinTable` (see Build tables): the
+design's `PinTables` are built once per run — `render_views` and
+`lint::layout_problems` each hold a `OnceCell` the first pinout view
+fills — and each include finds its table with `PinTables::of` (instance
+and designator; an ordinary connector, so `half` and `HalfFit` never
+arise). The header (`Header`) has a bold title, the component and the
+designator, `Inverter · control`: the component is that instance's label
+only when the type is placed exactly once (`Design::placements_of`), else
+its type name, since a label would name one placement of a sheet that
+serves them all. Under the title come the header's lines: the housing's
 description and `part`, each left out when missing (and the line with
-them); `Header::height` grows by a line height for each line past the
-first, and every size below the header follows from it. When the connector type has a `layout` (`grid` or `face`),
-its cavity face sits under the header, then a caption band (`FACE_CAPTION`,
-"Viewed from harness side": the language authors every layout from the
-harness side and has no notion of another), then the rows. Rows are one
-per pin binding, sorted by `ir::Pin`'s numeric `Ord`, not in declaration
-order; a ganged port has a row per pin. A face cavity no port is bound to
+them), then, for a type placed more than once, `Wires shown for
+<instance path>, one of N placements` — the wire columns are a
+placement's, the first's. `Header::height` grows by a line height for
+each line past the first, and every size below the header follows from
+it.
+
+The rows (`rows::Row`, `Row::all`) are one per cavity a port is bound to,
+in the `PinTable`'s order (`ir::Pin`'s numeric `Ord`, not declaration
+order; a ganged port has a row per pin), then one per `PinTable.unpinned`
+port with an empty pin cell, so a conductor into a port with no pin is
+not lost from the sheet. A layout cavity no port uses has no row (the
+face shows it). Columns: pin, port label (with a right-aligned note,
+`rows::Note`: `ganged 46+48` on each row of a ganged port, whose
+conductors the model lists in each of its cavities, or `no pin`), then
+one sub-row per `CavityEntry` (`rows::Entry`, `SUB_ROW_HEIGHT` each past
+the first, a dotted `wire-sep` between): a conductor's colour swatch and
+IEC code, gauge (`0.5mm²`) and far end, or a drain (`drain`, no colour
+or gauge; the far column names the screen — the cable and the shield's
+label, else `shield` / `pair N shield` — and its other end for a screen
+grounded at both). A bound pin with no entry shows a dash
+(`pin-unwired`). The far end (`rows::FarText`) is a list of texts, most
+detailed first: a port's full path, then with `(connector:pin)`; a
+splice's path with what its net joins beyond it, named from the splice's
+component and collapsed to `+N more`, then the bare splice. The swatch
+(`swatch`) is painted as the harness paints a strand — `WireColor::css`
+for the base, `WireColor::tracer` as a stripe — with the authored colour
+as `data-color` in every mode; it is a `<path>`, since `.pinout rect`
+would paint a rectangle's fill white.
+
+Each column (`Columns`) is as wide as its widest cell, measured with the
+same estimator as cavity labels (`fit::Font`, per-class widths, bold
+counted wider), with minimum widths so an unwired table still shows its
+columns; the far column is capped at `FAR_MAX_WIDTH`, then narrowed to
+the widest far end as drawn there. A far end takes the most detailed text
+that fits its column and is cut with an ellipsis only when the least
+detailed one does not; a shortened one keeps the whole text as a
+`<title>`. The table's width is its columns' (or its header's, if
+wider), independent of the face. When the connector type has a `layout`
+(`grid` or `face`), its cavity face sits in a panel of its own
+(`face-panel`) on top of the table, as wide as the face with its padding
+or its caption band (`FACE_CAPTION`, "Viewed from harness side": the
+language authors every layout from the harness side and has no notion of
+another), and the two are centred on the include's point; the include's
+box is their union (`Table::bounds`). A face cavity no port is bound to
 keeps the `cavity` class and adds `cavity-unused` (its pin
 `cavity-pin-unused`): dashed, grey and lightly filled. A port bound to a
 cavity counts as used whether or not a conductor reaches it — the view
@@ -646,9 +690,10 @@ common `sans-serif` face, and the label shrinks in half-pixel steps from
 8 px down to a 6 px floor (an inline `font-size` style, since the
 stylesheet's `font` shorthand would beat an attribute), then is cut with
 an ellipsis; a cut cavity carries the whole label as a `<title>`, and the
-row shows it whole. Every size — header, face, caption band, rows —
-comes from `Table::new`, which both `render` and `layout` (the overlap
-and `view_too_large` checks) use, so the drawing and `check` agree.
+row shows it whole. Every size — header, face panel, caption band, rows
+and sub-rows, columns — comes from `Table::new`, which both `render` and
+`layout` (the overlap and `view_too_large` checks) use, so the drawing
+and `check` agree.
 
 ## Build tables (`export/`)
 
@@ -744,7 +789,9 @@ is `export::records` (below), and the IR is not a wire format.
   half, so an undeclared half is never assigned anything, and a conductor
   no view draws into the declared half is undetermined, not assumed to be
   in it. A drain is placed the same way (`HarnessScope::draws_drain`).
-  Elsewhere an entry is `Assigned`.
+  Elsewhere an entry is `Assigned`. `PinTables::of` (crate-internal) finds
+  one ordinary connector's table by instance and designator; the pinout
+  renderer reads its rows from it.
 - **Bill of materials (`export::Bom`, `From<&Design>`)** — what is
   bought: one `export::Line` per thing to buy, a closed enum whose
   variant is its kind (`Line::kind()`, an `export::LineKind`, whose order
@@ -1266,8 +1313,10 @@ src/
 │   │   ├── bezier.rs    # horizontally-flexed cubic bezier math (FLEX)
 │   │   └── draw.rs      # SVG emission: pin tables, cable boxes, bezier wires
 │   └── pinout/      # connector-face + pin-table renderer (kind: pinout)
-│       ├── mod.rs       # PinoutRenderer; cavity faces from connector layouts
-│       └── fit.rs       # FittedLabel: a cavity label shrunk or cut to its cavity
+│       ├── mod.rs       # PinoutRenderer; cavity faces from connector layouts,
+│       │                #   the table's columns, swatches and layout
+│       ├── rows.rs      # Row/Entry/FarText: the table's rows from a PinTable
+│       └── fit.rs       # FittedLabel, Font: text shrunk or cut to its width
 │
 │  # ── live-reloading dev server (`serve`) ──
 ├── serve/

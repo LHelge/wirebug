@@ -758,10 +758,22 @@ view pinout "Inverter pinouts" {
 - The table is headed by the component (its label when it is placed once,
   else its type, as the drawing serves every placement) and the
   designator, with the connector type's description and `part` beneath; its
-  rows list the pins in numeric order, whatever order they are declared in.
+  rows list the pins in numeric order, whatever order they are declared in,
+  then any port the connector gives no pin (`no pin`).
   Cavities no port uses are drawn dashed and greyed; a cavity label too long
   for its cavity shrinks, then is cut with an ellipsis (the table keeps it
-  whole), so keep labels short where cavities are small.
+  whole), so keep labels short where cavities are small. The face sits in a
+  panel of its own on top of the table; each is as wide as its own content.
+- The table is a crimping sheet: each pin's row lists what is crimped into
+  the cavity, from the design's wires — per conductor a colour swatch with
+  its IEC code, the gauge and the far end (`→ Vehicle.vcm.wake (x1:3)`; a
+  splice with what it joins, `→ Vehicle.sp_gnd (lamp.gnd, +2 more)`), a
+  double crimp as two lines under the pin, a screen's drain as `drain`
+  (no colour or gauge), an unwired pin as a dash. A ganged port's
+  conductors appear on each of its pins, marked `ganged 46+48`. Wires
+  belong to a placement: the table lists the first placement's, and when
+  the type is placed more than once the header names it (`Wires shown for
+  Vehicle.front.bms, one of 2 placements`).
 
 Views live in the same file as the component they primarily document — like unit tests in Rust source. A view of the system overview belongs in `main.wb` where `Vehicle` is defined. A view of the battery pack detail belongs in the file where `BatteryPack` is defined. This keeps views close to the data they describe. In a file that defines several components, give each view a `for`.
 
