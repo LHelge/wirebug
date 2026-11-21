@@ -247,6 +247,17 @@ pub(super) struct PlacedText {
     pub(super) label: String,
 }
 
+impl PlacedText {
+    /// The text box's drawn rectangle.
+    pub(super) fn bounds(&self) -> Bounds {
+        Bounds {
+            origin: self.origin,
+            width: self.width,
+            height: self.height,
+        }
+    }
+}
+
 /// Everything the renderer needs after walking the design's view once:
 /// the placed boxes plus the wire segments to route between their ports.
 pub(super) struct Placement {

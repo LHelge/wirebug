@@ -481,7 +481,15 @@ adds no inference (`src/render/schematic/layout.rs`):
   verbatim), haloed and centred on the longest run clear of wire
   crossings and of codes already placed (the halo would visually cut a
   crossed wire; longest-segment midpoint is the fallback when nothing
-  clears). Each segment is stroked in its color the way the harness
+  clears). Then a code that would lie on a pin annotation
+  (`PinAnnotation::bound`, where it is drawn, turned or moved past a
+  title) moves, in wire order, to the nearest place along its wire (in
+  whole units) where the whole code sits on one run, off every annotation,
+  title and text box, and as clear of crossings and other codes as before
+  (`draw::code_anchors`). A code already clear of every annotation keeps
+  its place; one with no clear place on its wire keeps its place too, as
+  on a short wire between two ports whose turned texts run beside it over
+  its whole length. Each segment is stroked in its color the way the harness
   strokes a strand (see Wire strokes below): a `wire-casing` polyline, the
   `wire` core in the base color, and a `wire-tracer` for a two-tone wire —
   so a splice rail shows which conductor brings each port in. Wires are
@@ -563,8 +571,8 @@ fit level, such as a ganged `1,2,3` on the default grid or a two-digit
 pin on a grid of 10. The minimum grid is therefore unchanged by long
 designators. What a long text can still meet is what lies beyond the
 stub's first grid step: the wire's own first bend, wires in the channel in
-front of the box, and a `wire-code` (the router and the code placement do
-not see annotations). The component title above a box is kept clear: a
+front of the box (the router does not see annotations); a `wire-code`
+moves off one where its wire has room (above). The component title above a box is kept clear: a
 north-side annotation whose area would meet `PlacedComponent::title_extent`
 moves out along its stub (`PinAnnotation::clear_title`, a `lift` rounded
 up to a whole unit) until its near end, the pin number of a turned text,

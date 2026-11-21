@@ -850,7 +850,12 @@ mod tests {
             let wires = Router::build(&placement, grid.step())
                 .route_all(&pairs, grid.pitch())
                 .expect("routes");
-            let codes = code_anchors(&wires);
+            let colors: Vec<_> = connections.iter().map(|c| c.color).collect();
+            let annotations: Vec<_> = placement
+                .ports()
+                .filter_map(PlacedPort::pin_bound)
+                .collect();
+            let codes = code_anchors(&wires, &colors, &annotations, &[]);
             let drawn = Drawn {
                 connections: &connections,
                 wires: &wires,
@@ -1029,7 +1034,12 @@ component sys {
     fn assert_clear(fitted: &Fitted) {
         let placement = &fitted.placement;
         let connections = placement.connections();
-        let codes = code_anchors(&fitted.wires);
+        let colors: Vec<_> = connections.iter().map(|c| c.color).collect();
+        let annotations: Vec<_> = placement
+            .ports()
+            .filter_map(PlacedPort::pin_bound)
+            .collect();
+        let codes = code_anchors(&fitted.wires, &colors, &annotations, &[]);
         let runs: Vec<([WireEnd; 2], Bounds)> = connections
             .iter()
             .zip(&fitted.wires)
