@@ -1,12 +1,13 @@
 ---
 id: k7r.xk
 title: Make view `text` syntax match other declarations
-status: open
+status: done
 priority: P3
 created: "2026-11-20T21:40:32.001396078Z"
-updated: "2026-11-21T01:36:29.863483564Z"
+updated: "2026-11-21T02:47:38.767548233Z"
 tags:
   - dsl
+attempts: 1
 ---
 
 ## Summary
