@@ -101,21 +101,36 @@ Five CLI commands share it:
   to another font. SVG output still asks for `sans-serif` and is drawn
   with whatever font the viewer resolves, which may cover those scripts;
   the font is not embedded in it. So text is not measured exactly for
-  DejaVu Sans but bounded: `render/text.rs`'s `Font` (a size and a
+  DejaVu Sans but bounded: `render/text/`'s `Font` (a size and a
   `Face`, regular, bold or oblique, as the stylesheet sets the text;
-  `width`, and `fit` to cut text to a width with an ellipsis) counts each
-  character at the widest advance of its class in DejaVu Sans, rounded
-  up, bold text 1.15× that (a bold `r` a little more), oblique as
-  regular, and any character outside the classes a full em (wider than
-  the `.notdef` box PNG and PDF draw for a character with no glyph, and
-  as wide as a viewer's fallback CJK glyph). A test holds every class to
-  the bundled faces' advances, so the estimate never falls short of what
-  PNG and PDF draw, and DejaVu Sans being the widest common `sans-serif`,
-  it bounds what a browser draws too; it errs wide by up to about a
-  fifth for lowercase text. The pinout and the harness size their text
-  with it. The schematic still uses flat per-character constants
-  (`PIN_CHAR_WIDTH`, an off-view reference's 7 px a character, the
-  wire-code and port-label estimates), which are averages, not bounds.
+  `width`, and `fit` to cut text to a width with an ellipsis) counts an
+  ASCII character (or `·`) at the widest advance of its class in DejaVu
+  Sans, rounded up; a character some face draws wider than an em at its
+  run's width in `text/wide.rs` (`WIDE`, 134 runs from 1.25 to 2 em:
+  `Œ`, bold Cyrillic capitals, `‰`, long arrows, …); any other character
+  a full em, more than the `.notdef` box PNG and PDF draw for a
+  character with no glyph and as wide as a viewer's fallback CJK glyph.
+  Bold text counts 1.15× that (a bold `r` a little more), oblique as
+  regular, and the three pairs a face kerns apart past their slack
+  (`KERNED_APART`: regular `AA` and `-Q`, oblique `CS`) 0.02 em more.
+  The tests in `text/bound.rs` prove the bound from the faces' own
+  tables, for every character any face has a glyph for (its `cmap`):
+  each character's estimate covers the widest glyph it can be drawn as,
+  its own or a default single substitution's (an Arabic positional
+  form), and each default ligature's covers its glyph; the slack the
+  estimates leave covers every pair the default kerning (or the legacy
+  `kern` table) moves apart, each character's slack going first to the
+  kerning into it, then to the kerning out of it, but for the
+  `KERNED_APART` pairs, whose allowance covers the rest; `WIDE` is
+  exactly the table the faces give, and the faces' other default lookups
+  only place marks. So the estimate never falls short of what PNG and
+  PDF draw, shaping included, and DejaVu Sans being the widest common
+  `sans-serif`, it bounds what a browser draws too; it errs wide by up
+  to about a fifth for lowercase text. The pinout and the harness size
+  their text with it, and the schematic measures off-view references
+  with it; the schematic's other texts still use flat per-character
+  constants (`PIN_CHAR_WIDTH`, `CHAR_WIDTH`, `TITLE_CHAR_WIDTH`), which
+  are averages, not bounds.
   The legacy YAML model/view loader has been removed; `ir::Design` is the
   only thing the renderer consumes.
 - **`export` (`src/export/`)** — runs `check_project` like `render`,
@@ -643,7 +658,7 @@ is fitted against everything drawn and every reference fitted before it:
 The enclosure's outline is a drawn line, not an obstacle: a reference may
 cross it (an own port's `leaves <Subject>` reference reaching out past
 it). The reference's text is measured with the shared estimator
-(`render::text::Font`, 10px regular), whose character classes bound the
+(`render::text::Font`, 10px regular), whose estimate bounds the
 bundled DejaVu Sans, so a text measured as clear is clear as drawn in PNG
 and PDF. What it is kept clear of is measured the same way for the test
 alone (pin annotations as `PinAnnotation::bound`, titles as
@@ -1529,9 +1544,14 @@ src/
 │   │                #   SmallText (views too small to read on the paper)
 │   ├── png.rs       # SVG → PNG rasterisation for --png (resvg/usvg/tiny_skia)
 │   ├── stamp.rs     # project-identity stamp text/element (corner of every SVG)
-│   ├── text.rs      # Font, Face, FittedLabel: how wide text is drawn (an
-│   │                #   upper bound on DejaVu Sans), and text shrunk or cut
-│   │                #   to its width; the pinout and the harness size with it
+│   ├── text/        # how wide text is drawn: an upper bound on DejaVu Sans
+│   │   ├── mod.rs       # Font, Face, FittedLabel: text measured, shrunk or
+│   │   │                #   cut to its width; the character classes and
+│   │   │                #   KERNED_APART
+│   │   ├── wide.rs      # WIDE: the characters wider than an em, derived
+│   │   │                #   from the faces
+│   │   └── bound.rs     # (tests) the proof of the bound from the faces'
+│   │                    #   cmap, substitutions, ligatures and kerning
 │   ├── wire_stroke.rs # WireLayers/WireStroke: a wire's casing, colored core
 │   │                #   and tracer, shared by schematic and harness
 │   ├── schematic/   # rectangle-based SVG renderer (kind: schematic)
@@ -1747,10 +1767,11 @@ Dev / test:
 - [`assert_cmd`] — black-box CLI tests.
 - [`predicates`] — assertions for `assert_cmd`.
 - [`tempfile`] — scratch project dirs for pipeline/render tests.
-- [`ttf-parser`] — reads the bundled DejaVu Sans faces' advance widths,
-  so the text-width tests hold `render::text`'s estimate to the font PNG
-  and PDF draw with (already in the tree through `usvg`/`fontdb`, which
-  do not re-export it).
+- [`ttf-parser`] — reads the bundled DejaVu Sans faces (character map,
+  advances, substitutions, kerning), so the text-width tests prove
+  `render::text`'s estimate against the font PNG and PDF draw with
+  (already in the tree through `usvg`/`fontdb`, which do not re-export
+  it).
 
 [`chumsky`]: https://docs.rs/chumsky
 [`toml`]: https://docs.rs/toml
