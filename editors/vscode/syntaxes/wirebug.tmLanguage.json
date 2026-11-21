@@ -78,7 +78,8 @@
       }
     },
     "include-target": {
-      "match": "\\b(include)\\s+([a-z_][A-Za-z0-9_]*)(?:\\s*(\\.)\\s*([a-z_][A-Za-z0-9_]*))?",
+      "comment": "Not `include at (…)`: that is an enclosure port named `include` (see #enclosure-port).",
+      "match": "\\b(include)\\s+(?!at\\s*\\()([a-z_][A-Za-z0-9_]*)(?:\\s*(\\.)\\s*([a-z_][A-Za-z0-9_]*))?",
       "captures": {
         "1": { "name": "keyword.other.wirebug" },
         "2": { "name": "variable.other.wirebug" },
@@ -87,8 +88,8 @@
       }
     },
     "instance-name": {
-      "comment": "`name: Type` — an instance (types are CamelCase), whatever word names it.",
-      "match": "\\b([a-z_][A-Za-z0-9_]*)\\s*(:)\\s*(?=[A-Z])",
+      "comment": "`name: Type` — an instance (types are CamelCase), whatever word names it. Not an inline's `male:`/`female:` housing line.",
+      "match": "\\b(?!(?:male|female)\\s*:)([a-z_][A-Za-z0-9_]*)\\s*(:)\\s*(?=[A-Z])",
       "captures": {
         "1": { "name": "variable.other.declaration.wirebug" },
         "2": { "name": "punctuation.separator.key-value.wirebug" }
