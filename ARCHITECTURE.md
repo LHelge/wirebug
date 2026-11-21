@@ -1252,6 +1252,25 @@ segments outside the clearance-inflated boxes. Not implemented: the
 paper's general branching-tree ordering (pseudo-direction + split
 points) and alley-midpoint recentring. Revisit if a view needs them.
 
+Routing is deterministic: the same view gives the same bytes in every
+run and every process, and `check`'s Layout lints, which route with the
+same `Router`, see the same routes. Nothing on the way iterates a hash
+map. Two choices settle the ties a symmetric layout produces:
+
+- **A\* ties.** Two routes of equal cost (a wire going round a box on
+  either side) are settled by the order A\* is handed a node's
+  successors, so the visibility graph lists every node's neighbours in
+  `Dir` order (north, south, east, west). In practice a wire that must go
+  round a box goes east rather than west, north rather than south. The
+  graph keeps its cells in a dense `Vec` in coordinate order, not a map.
+- **Nudging order.** `nudge::segments::shared_edges` is an `IndexMap`, so
+  channels, and the separation constraints built from them, come in the
+  order the routes (in connection order) first reach them; the solver
+  breaks equal violations by constraint order.
+
+`tests/fixtures/tied_routes_project` holds the mirror-image ties; a
+test renders it repeatedly in one process and a CLI test in several.
+
 ## Dependencies
 
 What each crate is here for. Add new ones with `cargo add` so versions stay current.

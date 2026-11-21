@@ -1,0 +1,42 @@
+// Every wire here has two mirror-image routes of equal cost: the router's
+// tie-break alone decides which one is drawn, so rendering must settle it
+// the same way every time.
+use Unit from "components/unit.wb";
+
+component Rig {
+    top:    Unit "Top";
+    bottom: Unit "Bottom";
+    left:   Unit "Left";
+    right:  Unit "Right";
+
+    wire black 1 [top.gnd, bottom.gnd];
+    wire red   1 [left.sig, right.sig];
+}
+
+// `top.gnd` faces `bottom`, which stands centred below it: the wire goes
+// round `bottom` on the west or on the east, at the same cost.
+view schematic "Stacked" {
+    grid: 20;
+
+    include top at (0, 0) ports {
+        south: gnd;
+    }
+
+    include bottom at (0, 8) ports {
+        south: gnd;
+    }
+}
+
+// The same tie turned on its side: `left.sig` faces `right`, and the wire
+// goes round `right` on the north or on the south.
+view schematic "Side By Side" {
+    grid: 20;
+
+    include left at (0, 0) ports {
+        east: sig;
+    }
+
+    include right at (12, 0) ports {
+        east: sig;
+    }
+}

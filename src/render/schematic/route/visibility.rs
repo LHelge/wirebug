@@ -11,8 +11,6 @@
 //! interior is exactly one between two adjacent columns/rows, so gating
 //! adjacent edges on [`Rect::blocks_segment`] is enough to forbid it.
 
-use std::collections::HashMap;
-
 use super::geometry::{Dir, Rect};
 use crate::render::geometry::Point;
 
@@ -25,7 +23,9 @@ pub(super) struct Ovg {
     adj: Vec<Vec<(usize, Dir)>>,
     xs: Vec<f64>,
     ys: Vec<f64>,
-    grid: HashMap<(usize, usize), usize>,
+    /// Node id per grid cell, x-major (`i * ys.len() + j`); `None`
+    /// where the cell lies inside an obstacle.
+    cells: Vec<Option<usize>>,
 }
 
 impl Ovg {
@@ -48,36 +48,51 @@ impl Ovg {
         let ys = sorted_unique(ys);
 
         let mut nodes = Vec::new();
-        let mut grid = HashMap::new();
-        for (i, &x) in xs.iter().enumerate() {
-            for (j, &y) in ys.iter().enumerate() {
+        let mut cells = Vec::with_capacity(xs.len() * ys.len());
+        for &x in &xs {
+            for &y in &ys {
                 let p = Point::new(x, y);
                 if obstacles.iter().any(|r| r.contains_point(p)) {
-                    continue;
+                    cells.push(None);
+                } else {
+                    cells.push(Some(nodes.len()));
+                    nodes.push(p);
                 }
-                grid.insert((i, j), nodes.len());
-                nodes.push(p);
             }
         }
+        let cell = |i: usize, j: usize| {
+            (i < xs.len() && j < ys.len())
+                .then(|| cells[i * ys.len() + j])
+                .flatten()
+        };
 
         let mut adj = vec![Vec::new(); nodes.len()];
-        for (&(i, j), &id) in &grid {
-            // East / South neighbours; the reverse edge is added when the
-            // neighbour is the active node, so iterate forward only.
-            if let Some(&east) = grid.get(&(i + 1, j)) {
-                let seg = (nodes[id], nodes[east]);
-                if !obstacles.iter().any(|r| r.blocks_segment(seg.0, seg.1)) {
-                    adj[id].push((east, Dir::East));
-                    adj[east].push((id, Dir::West));
+        for i in 0..xs.len() {
+            for j in 0..ys.len() {
+                let Some(id) = cell(i, j) else { continue };
+                // East / South neighbours; the reverse edge is added when the
+                // neighbour is the active node, so iterate forward only.
+                if let Some(east) = cell(i + 1, j) {
+                    let seg = (nodes[id], nodes[east]);
+                    if !obstacles.iter().any(|r| r.blocks_segment(seg.0, seg.1)) {
+                        adj[id].push((east, Dir::East));
+                        adj[east].push((id, Dir::West));
+                    }
+                }
+                if let Some(south) = cell(i, j + 1) {
+                    let seg = (nodes[id], nodes[south]);
+                    if !obstacles.iter().any(|r| r.blocks_segment(seg.0, seg.1)) {
+                        adj[id].push((south, Dir::South));
+                        adj[south].push((id, Dir::North));
+                    }
                 }
             }
-            if let Some(&south) = grid.get(&(i, j + 1)) {
-                let seg = (nodes[id], nodes[south]);
-                if !obstacles.iter().any(|r| r.blocks_segment(seg.0, seg.1)) {
-                    adj[id].push((south, Dir::South));
-                    adj[south].push((id, Dir::North));
-                }
-            }
+        }
+        // A* settles equal-cost routes by the order it is handed
+        // successors, so that order is fixed by geometry alone: every
+        // node lists its neighbours in `Dir` order.
+        for neighbours in &mut adj {
+            neighbours.sort_by_key(|&(_, dir)| dir);
         }
 
         Self {
@@ -85,7 +100,7 @@ impl Ovg {
             adj,
             xs,
             ys,
-            grid,
+            cells,
         }
     }
 
@@ -107,7 +122,7 @@ impl Ovg {
     pub(super) fn node_at(&self, p: Point) -> Option<usize> {
         let i = self.xs.iter().position(|&v| (v - p.x).abs() < EPS)?;
         let j = self.ys.iter().position(|&v| (v - p.y).abs() < EPS)?;
-        self.grid.get(&(i, j)).copied()
+        self.cells[i * self.ys.len() + j]
     }
 }
 
@@ -151,5 +166,25 @@ mod tests {
         assert!(!crosses_interior);
         // And the left stub does have at least one usable edge.
         assert!(!ovg.neighbours(left).is_empty());
+    }
+
+    #[test]
+    fn every_node_lists_its_neighbours_in_direction_order() {
+        // A plus of four arms around a free centre node gives it all four
+        // neighbours; the boxes in the corners give other nodes fewer.
+        let obstacles = [
+            Rect::new(0.0, 0.0, 40.0, 40.0),
+            Rect::new(80.0, 80.0, 40.0, 40.0),
+        ];
+        let extra = [Point::new(60.0, 60.0), Point::new(140.0, 20.0)];
+        let ovg = Ovg::build(&obstacles, &extra);
+
+        let centre = ovg.node_at(Point::new(60.0, 60.0)).expect("centre node");
+        let dirs: Vec<Dir> = ovg.neighbours(centre).iter().map(|&(_, d)| d).collect();
+        assert_eq!(dirs, [Dir::North, Dir::South, Dir::East, Dir::West]);
+        for id in 0..ovg.node_count() {
+            let dirs: Vec<Dir> = ovg.neighbours(id).iter().map(|&(_, d)| d).collect();
+            assert!(dirs.is_sorted(), "node {id} lists {dirs:?}");
+        }
     }
 }
