@@ -1,14 +1,14 @@
 //! Command-line interface definition: the clap argument tree for the
 //! `wirebug` binary. This module is parsing only — it owns the `Cli`,
-//! `Command`, `OutputFormat`, `ExportFormat` and `PaperArg` types and the
-//! mapping from the CLI's flags into the library's [`Format`],
-//! [`export::Format`] and [`Paper`] (and from a [`Paper`] back to the
-//! `--paper` value naming it). The command implementations live in
-//! `main.rs`.
+//! `Command`, `OutputFormat`, `ExportFormat`, `PaperArg` and `Harness`
+//! types, the install path of each `Harness`, and the mapping from the
+//! CLI's flags into the library's [`Format`], [`export::Format`] and
+//! [`Paper`] (and from a [`Paper`] back to the `--paper` value naming it).
+//! The command implementations live in `main.rs`.
 
 use std::fmt;
 use std::net::{IpAddr, Ipv4Addr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
@@ -91,6 +91,23 @@ impl From<ExportFormat> for export::Format {
         match f {
             ExportFormat::Csv => Self::Csv,
             ExportFormat::Json => Self::Json,
+        }
+    }
+}
+
+/// An agent harness `skill --install` can install the skill for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum Harness {
+    /// Claude Code: `.claude/skills/wirebug-dsl/SKILL.md`.
+    Claude,
+}
+
+impl Harness {
+    /// Where this harness looks for the skill, relative to the directory
+    /// it runs in.
+    pub fn install_path(self) -> &'static Path {
+        match self {
+            Self::Claude => Path::new(".claude/skills/wirebug-dsl/SKILL.md"),
         }
     }
 }
@@ -205,6 +222,18 @@ pub enum Command {
     },
     /// Run the language server over stdio (for editor integration).
     Lsp,
+    /// Print the agent skill for the .wb language, matching this wirebug's
+    /// version, or install it for a coding agent.
+    ///
+    /// Without `--install`, writes the skill to stdout and nothing else.
+    Skill {
+        /// Write the skill where this agent harness looks for it, under the
+        /// current directory (not the project root; no project is needed),
+        /// creating missing directories and overwriting an older copy.
+        /// Prints the path written.
+        #[arg(long, value_enum, value_name = "HARNESS")]
+        install: Option<Harness>,
+    },
     /// Serve a project with live reload, re-rendering on every change.
     Serve {
         /// A project manifest, project directory, or `.wb` file. Defaults

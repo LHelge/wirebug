@@ -11,10 +11,24 @@ Keep this file true in the same change that alters what it describes.
 
 The only input is the **`.wb` DSL** (reference: `docs/`, one page per
 topic; `tests/docs.rs` parses every `wb` code block in it and in the agent
-skill, `.claude/skills/wirebug-dsl/SKILL.md`). Five CLI commands share
+skill's source, `skill/SKILL.md`). Five CLI commands share
 it: `check`, `render`, `export`, `serve` and `lsp`; `fmt` shares its
-front half (discover, load, lex, parse). Of the other two,
-`manifest version` reads only `wirebug.toml` (see Project manifest), and
+front half (discover, load, lex, parse). Of the other three,
+`manifest version` reads only `wirebug.toml` (see Project manifest),
+**`skill` (`src/skill.rs`)** reads nothing: `skill::Skill::current()` is
+`skill/SKILL.md` (`include_str!`, shipped by `Cargo.toml`'s `skill/**`
+include) with `metadata:` / `wirebug-version: "<CARGO_PKG_VERSION>"`
+appended to its frontmatter (`metadata` being the string map the Agent
+Skills format allows, so harnesses accept it; the source carries no
+version, so a release bumps nothing more). `wirebug skill` writes it to
+stdout alone; `--install <harness>` writes it to `cli::Harness::install_path`
+(only `claude`: `.claude/skills/wirebug-dsl/SKILL.md`) under the current
+directory, never the project root, creating directories and overwriting,
+naming the path on stderr, and failing with `Error::SkillInstall` naming
+the path it could not create or write. This repository's own
+`.claude/skills/wirebug-dsl/SKILL.md` is that install output:
+`tests/docs.rs` fails when it differs from the source except for the
+version line. And
 **`init` (`src/init.rs`)** only writes a project: `init::Scaffold` creates
 the directory (with parents) and writes a
 `wirebug.toml` named after it (its file name with every run of characters
@@ -1567,9 +1581,10 @@ has errors (or, under `--strict`, warnings).
 
 ```
 src/
-├── main.rs          # clap CLI: `init`, `check`, `fmt`, `render`, `export`, `serve`, `lsp`, `manifest version`
+├── main.rs          # clap CLI: `init`, `check`, `fmt`, `render`, `export`, `serve`, `lsp`, `manifest version`, `skill`
 ├── lib.rs           # re-exports; check_project + render::render_views
 ├── init.rs          # Scaffold: `wirebug init` writes wirebug.toml, main.wb, .gitignore
+├── skill.rs         # Skill: skill/SKILL.md, version-stamped, printed or installed
 ├── pipeline.rs      # check_loaded: dsl::check_loaded, then render::lint
 │                    #   (the layout checks) — shared by check_project and lsp
 │
@@ -1715,7 +1730,9 @@ language config (declarative highlighting, no server needed) and a thin
 `docs/` is the language reference for a human reader: `README.md` (the
 index and a table of every statement), `syntax.md`, `projects.md`,
 `components.md`, `connectors.md`, `wires-and-cables.md` and `views.md`.
-The agent skill, `.claude/skills/wirebug-dsl/SKILL.md`, is a separate,
+The agent skill, `skill/SKILL.md` (installed for this repository's own
+agents at `.claude/skills/wirebug-dsl/SKILL.md`; edit the source, then
+rerun `wirebug skill --install claude`), is a separate,
 self-contained reference written to be compact in an agent's context (at
 most 20 000 bytes, a test says; it ships to other repositories, so it never names `docs/`,
 `examples/`, `tests/fixtures` or `cargo run`). Neither is generated from
@@ -1728,8 +1745,8 @@ the keywords as paragraphs of nothing but backticked words, each after a
 paragraph bolding its kind (`**reserved**` or `**contextual**`), and those
 lists must name exactly `Token::keywords()`, each word once and under the
 label of its own kind.
-Neither is in `Cargo.toml`'s `include`: the
-published crate needs neither, and the root files there are anchored
+`docs/` is not in `Cargo.toml`'s `include` (the skill is, since the
+binary embeds it): the published crate does not need it, and the root files there are anchored
 (`/README.md`), since a bare `README.md` matches at any depth and would
 ship `docs/README.md` too.
 

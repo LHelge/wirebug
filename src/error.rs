@@ -6,7 +6,8 @@
 //! — the view's title and kind plus a [`ViewErrorKind`] saying why — so
 //! the other views still render; [`Error`] is what stops a whole render:
 //! disk IO, the HTML index and the embed manifest, what stops an export of
-//! a build table, and what stops `init` scaffolding a project.
+//! a build table, what stops `init` scaffolding a project, and what stops
+//! `skill --install` writing the agent skill.
 
 use std::path::PathBuf;
 
@@ -15,8 +16,8 @@ use thiserror::Error;
 use crate::dsl::ir::{ViewKind, WireEnd};
 use crate::export::Table;
 
-/// Errors that stop a whole render, not just one view, an export, or a
-/// scaffold.
+/// Errors that stop a whole render, not just one view, an export, a
+/// scaffold, or a skill install.
 #[derive(Debug, Error)]
 pub enum Error {
     /// Failure writing an output file to disk.
@@ -60,6 +61,15 @@ pub enum Error {
     /// nowhere to put a project.
     #[error("{path} is not a directory; cannot create a project in it")]
     InitNotADirectory { path: PathBuf },
+
+    /// `skill --install` could not create the skill's directory or write
+    /// the skill file.
+    #[error("failed to install the skill at {path}: {source}")]
+    SkillInstall {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 /// Convenience alias used throughout the crate.
