@@ -60,7 +60,8 @@ redesign each when it lands.
   build tables — wire list, pin tables and BOM — are exported as CSV/JSON,
   see `src/export/`, but no view draws a BOM)
 - View composition / `extends`
-- Theming, colour
+- Theming, colour (wires are drawn in their own colours as wire identity;
+  palettes and themes stay out)
 - Auto-layout
 - Non-rectangle component symbols
 - Visual grouping of ports by connector on a side (bracket + label)

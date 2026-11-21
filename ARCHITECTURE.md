@@ -390,7 +390,13 @@ adds no inference (`src/render/schematic/layout.rs`):
   verbatim), haloed and centred on the longest run clear of wire
   crossings and of codes already placed (the halo would visually cut a
   crossed wire; longest-segment midpoint is the fallback when nothing
-  clears).
+  clears). Each segment is stroked in its color the way the harness
+  strokes a strand (see Wire strokes below): a `wire-casing` polyline, the
+  `wire` core in the base color, and a `wire-tracer` for a two-tone wire —
+  so a splice rail shows which conductor brings each port in. Wires are
+  drawn whole (casing, core, tracer, code) one after another in
+  connection order, so where two cross, the later one's casing cuts the
+  earlier one's core and they read as passing over each other.
 - **Enclosure** — an optional `enclosure { }` block draws the subject itself
   as a dashed box *wrapping* the schematic, with the subject's own ports on its
   boundary as **inverted** ports (facing inward, so an `Own` end's wire routes
@@ -423,6 +429,32 @@ Because the pitch is two steps, the grid must be at least
 room: a wired port needs two steps clear in front of it, and boxes closer
 than two steps to each other close the corridor between them. `check`'s
 Layout phase finds both, from the same `Placement` and router geometry.
+
+### Wire strokes (`render/wire_stroke.rs`)
+
+The schematic and the harness draw a wire the same way, through one type:
+a renderer names the classes of a wire's three layers (`WireLayers` —
+`wire-casing`/`wire`/`wire-tracer` in a schematic,
+`cable-wire-casing`/`cable-wire`/`cable-wire-tracer` in a harness), and
+`WireLayers::stroke(&color)` gives a `WireStroke` whose `casing`, `core`
+and `tracer` dress a bare shape (polyline or path) as that layer, and
+whose `layers` yields all three in draw order. The core carries its base
+color as a `stroke` presentation attribute and the authored color as
+`data-color` (`green/yellow`, synonyms normalised); the tracer carries the
+tracer color the same way; the casing carries only its class. Widths, the
+tracer's dash and the casing's black live in each renderer's `STYLE`
+(schematic: casing 4, core and tracer 2; the stroke never affects routing
+or the canvas), whose core rule sets no `stroke`: a presentation attribute
+loses to any stylesheet rule. So in embed mode the color still shows with
+no stylesheet rule for it, and a host stylesheet that sets `stroke` on the
+core class (as one copied from the starter `wirebug.css` before wires were
+colored does, `.wire { stroke: black }`) overrides it. Schematic layers also
+carry `fill="none"` themselves, so such an older host stylesheet, which has
+no rule for the casing or the tracer, draws no casing at all and a thin
+solid tracer, rather than filling the area a bend encloses. A color name
+outside IEC 60757 is painted verbatim: a CSS color name shows as itself,
+anything else leaves the core unpainted, so the wire reads as its black
+casing alone.
 
 ### Harness views (`render/harness/`)
 
@@ -510,7 +542,7 @@ a loose wire is one curve. Control points share each endpoint's y and stay
 within the endpoints' x-span, so the curve never overshoots its bounding box
 (no viewbox padding needed). Each strand is stroked with `wire.color` (the SVG
 `stroke`) over a wider black casing path (WireViz's trick, so light
-colors read on any background) and annotated
+colors read on any background; see Wire strokes) and annotated
 `<label> · <gauge>mm² · <color code>` (IEC 60757 via `ir::WireColor::code`).
 A two-tone color (`green/yellow`) adds a dashed tracer overlay on the
 core and slash-joins its codes (`GN/YE`); `WireColor` carries
@@ -1163,6 +1195,8 @@ src/
 │   │                #   SVG/PNG + index or embed manifest, or the PDF) → Written
 │   ├── png.rs       # SVG → PNG rasterisation for --png (resvg/usvg/tiny_skia)
 │   ├── stamp.rs     # project-identity stamp text/element (corner of every SVG)
+│   ├── wire_stroke.rs # WireLayers/WireStroke: a wire's casing, colored core
+│   │                #   and tracer, shared by schematic and harness
 │   ├── schematic/   # rectangle-based SVG renderer (kind: schematic)
 │   │   ├── mod.rs       # SchematicRenderer; render orchestration
 │   │   ├── layout.rs    # Placement: derive sides + boxes/ports in world coords
