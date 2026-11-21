@@ -188,6 +188,7 @@ cargo run -- check --strict --format json examples
 cargo run --release -- render examples --out out/
 cargo run --release -- render examples --out out/ --png    # rasterise to PNG
 cargo run --release -- render examples --out out/ --pdf    # single A4 PDF, one view per page
+cargo run --release -- render examples --out out/ --pdf --paper a3  # …on a3, letter or tabloid
 cargo run --release -- render examples --out out/ --embed  # naked SVGs + manifest.json
 
 # export a build table (CSV on stdout; --format json, --out <file>)

@@ -72,7 +72,7 @@ What works today:
   - a **schematic** renderer (rectangle blocks, labeled ports, object-avoiding orthogonal wire routing, each wire drawn in its colour);
   - a **harness** renderer (WireViz-style pin tables, a central spine, and bezier cable bundles);
   - a **pinout** renderer (connector cavity faces plus pin tables, authored from the harness side).
-- `wirebug render` to disk (SVG, or `--png` rasterised, or `--pdf` for a single A4 PDF with one view per page, or `--embed` for naked SVGs + a `manifest.json` sidecar).
+- `wirebug render` to disk (SVG, or `--png` rasterised, or `--pdf` for a single PDF with one view per page on A4, A3, Letter or Tabloid paper, or `--embed` for naked SVGs + a `manifest.json` sidecar).
 - `wirebug export` — the build tables as CSV or JSON: the wire list (cut list), the connector pin tables (crimp sheet) and the bill of materials.
 - `wirebug serve` — a live-reloading dev server that re-renders on `.wb` or `wirebug.toml` saves.
 - A VSCode extension ([`editors/vscode/`](editors/vscode/)) — syntax highlighting plus live diagnostics and context-aware completion via `wirebug lsp`, a language server over stdio.
@@ -274,8 +274,18 @@ connector_type InverterControl "Inverter control 47+13p" {
 wirebug render                       # discovers wirebug.toml by walking up from the CWD
 wirebug render examples --out out/                  # one SVG per view, into out/
 wirebug render examples --out out/ --pdf            # one A4 PDF, one view per page
+wirebug render examples --out out/ --pdf --paper a3 # the same on A3 (a4, a3, letter, tabloid)
 wirebug render examples/wirebug.toml --out out/ --embed  # naked SVGs + manifest.json
 ```
+
+`--pdf` lays each view on a page of the `--paper` size (A4 unless told otherwise), landscape for a view wider than tall and portrait otherwise, and scales it to fit inside the margins — down as far as it takes, up by at most 2×. A wide view fitted to a small sheet shrinks its text with it, so `render` warns of every page whose smallest text (a schematic's wire codes, a harness's cable labels, a pinout's shrunk cavity labels) would print under 5 pt, and names the smallest paper that prints it legibly:
+
+```
+warning: view "HV System Overview": smallest text 3.2 pt on A4, below the 5 pt legibility minimum; too small on every paper size
+warning: view "CAN bus": smallest text 4.3 pt on A4, below the 5 pt legibility minimum; legible on Tabloid (--paper tabloid)
+```
+
+The page is written all the same and the exit status is unchanged — also under `--strict`, which makes the project's own warnings fatal, not the paper's. `--paper` without `--pdf` is refused.
 
 ## Exporting build tables
 

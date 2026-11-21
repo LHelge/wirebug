@@ -35,14 +35,29 @@ Five CLI commands share it:
   grouped into **Schematics** / **Harnesses** tabs by view kind. Three view
   kinds render today: `schematic` (`render/schematic/`), `harness`
   (`render/harness/`), and `pinout` (`render/pinout/`). `--png` rasterises each view to PNG instead
-  (`render/png.rs`, via `resvg`, at `png::PNG_SCALE` pixels per unit); `--pdf` writes one A4 PDF with one view
-  per page (`render/pdf.rs`, via `svg2pdf` + `pdf-writer` — orientation per
-  view by aspect ratio, named `<project-slug>.pdf`, replaces the per-view
+  (`render/png.rs`, via `resvg`, at `png::PNG_SCALE` pixels per unit); `--pdf` writes one PDF with one view
+  per page (`render/pdf.rs`, via `svg2pdf` + `pdf-writer` — on the
+  `--paper` sheet (`pdf::Paper`: `a4`, the default, `a3`, `letter`,
+  `tabloid`; refused without `--pdf`), landscape for a view wider than
+  tall and portrait otherwise (with equal margins, also the orientation
+  with the larger scale), the view scaled to fit inside 15 mm margins,
+  down without limit and up by at most 2× (`MAX_UPSCALE`, so a small view
+  is never blown up to fill a large sheet), named `<project-slug>.pdf`,
+  replaces the per-view
   files and index; views render plain (`SvgMode::Plain`, no in-drawing
   title or stamp) and fixed-size page furniture carries them instead — a
   Helvetica-Bold title header, plus a Courier footer with the identity
   stamp and a `n / total` page number — so every page reads the same
-  regardless of view scale); `--embed` emits host-styled "naked" SVGs
+  regardless of view scale). A page whose view's smallest text prints
+  below `pdf::MIN_LEGIBLE_PT` (5 pt) — the smallest text being
+  `RenderedView::smallest_text`, the smallest font in the kind's
+  stylesheet (plus a pinout's cavity-label shrink floor), times the
+  page's scale — is kept and reported as a `pdf::SmallText`
+  (`PdfExport::small_text`, then `Written::small_text`) with the smallest
+  paper, by area, that would print it legibly; `main` prints each as
+  `warning: view "<title>": …` and leaves the exit status alone, also
+  under `--strict` (the paper is a render option, not the project, so
+  this is no `check` diagnostic). `--embed` emits host-styled "naked" SVGs
   plus a `manifest.json` sidecar in place of the HTML index (see below)
   and a `wirebug.css` starter stylesheet (`render::embed_stylesheet` —
   the built-in styles re-scoped under `.wirebug-{kind}`, referenced from
@@ -1273,7 +1288,9 @@ each output mode does with a failure:
   `n / total` among themselves; `PdfExport::failures` names the rest, in
   view order. `PdfExport::document()` is the only way to the bytes and
   returns `None` when every view of a design with views failed, so no
-  PDF is written then.
+  PDF is written then. A failed view gets no `SmallText` warning; one
+  whose text prints too small is a warning, not a failure, and keeps its
+  page.
 
 In every mode `render` prints `error: view "<title>": <cause>` per failure,
 reports `rendered <n> of <total> view(s)`, and exits non-zero. A file left
@@ -1345,6 +1362,8 @@ src/
 │   │                #   from each renderer's `layout`
 │   ├── output.rs    # Output::write: one render mode's files on disk (per-view
 │   │                #   SVG/PNG + index or embed manifest, or the PDF) → Written
+│   ├── pdf.rs       # SVG → one multi-page PDF for --pdf: Paper, the page fit,
+│   │                #   SmallText (views too small to read on the paper)
 │   ├── png.rs       # SVG → PNG rasterisation for --png (resvg/usvg/tiny_skia)
 │   ├── stamp.rs     # project-identity stamp text/element (corner of every SVG)
 │   ├── wire_stroke.rs # WireLayers/WireStroke: a wire's casing, colored core
@@ -1526,7 +1545,7 @@ Runtime:
 - [`resvg`] — SVG → PNG rasterisation for `render --png` (`render/png.rs`).
 - [`svg2pdf`] — vector SVG → PDF conversion for `render --pdf`
   (`render/pdf.rs`; brings its own `usvg`, a separate version from resvg's).
-- [`pdf-writer`] — assembles the multi-page A4 document around `svg2pdf`'s
+- [`pdf-writer`] — assembles the multi-page document around `svg2pdf`'s
   chunks. Pinned to the version `svg2pdf`'s API exposes (its `to_chunk`
   returns this crate's types) — bump the two together.
 - [`serde_json`] — serialises the `--embed` `manifest.json` sidecar and
