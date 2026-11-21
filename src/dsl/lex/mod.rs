@@ -398,6 +398,16 @@ mod tests {
     }
 
     #[test]
+    fn keywords_lists_every_word_that_lexes_as_a_keyword() {
+        let words: Vec<&str> = Token::keywords().collect();
+        assert_eq!(words.len(), 32);
+        assert!(words.contains(&"connector_type") && words.contains(&"enclosure"));
+        for word in words {
+            assert!(Token::keyword(word).is_some(), "{word}");
+        }
+    }
+
+    #[test]
     fn pins_list_lexes() {
         assert_eq!(
             tokens("pins [2, 3, 4]"),
