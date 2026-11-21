@@ -19,6 +19,11 @@
 //! but backticked words, and between them the lists of each must name every
 //! keyword the lexer knows and nothing else, so neither can fall behind the
 //! language or the other.
+//!
+//! Every block that parses also formats faithfully: `wirebug fmt` lays it
+//! out to a text that formats to itself and parses to the same AST.
+
+mod common;
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -210,6 +215,32 @@ fn every_wb_block_in_the_reference_parses() {
 #[test]
 fn every_wb_block_in_the_skill_parses() {
     assert_blocks_parse(&[repo_path(SKILL)]);
+}
+
+#[test]
+fn every_wb_block_in_the_reference_and_the_skill_formats_faithfully() {
+    let mut files = markdown_files(&repo_path(DOCS_DIR));
+    files.push(repo_path(SKILL));
+    let mut problems = Vec::new();
+    let mut formatted = 0;
+    for path in &files {
+        let markdown =
+            std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        for block in fenced_blocks(&markdown) {
+            let Ok(Some(tag)) = WbTag::parse(&block.info) else {
+                continue;
+            };
+            match common::format_faithfully(&tag.context.wrap(&block.body)) {
+                Some(Ok(())) => formatted += 1,
+                Some(Err(problem)) => {
+                    problems.push(format!("{}:{}: {problem}", path.display(), block.line));
+                }
+                None => {}
+            }
+        }
+    }
+    assert!(problems.is_empty(), "\n{}\n", problems.join("\n\n"));
+    assert!(formatted > 20, "only {formatted} blocks formatted");
 }
 
 #[test]

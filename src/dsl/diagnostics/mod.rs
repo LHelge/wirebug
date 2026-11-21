@@ -1715,4 +1715,19 @@ impl Problem {
             | Problem::UnknownWireColor { .. } => false,
         }
     }
+
+    /// True for the problems that keep `fmt` from formatting a file: no
+    /// project to find, a file it cannot read, and a file that does not lex
+    /// or parse. The rest concern what the files mean, which formatting
+    /// leaves as it is.
+    pub(crate) fn stops_formatting(&self) -> bool {
+        matches!(
+            self,
+            Problem::Lex { .. }
+                | Problem::Parse { .. }
+                | Problem::ReservedWord { .. }
+                | Problem::NoProject { .. }
+                | Problem::Io { .. }
+        )
+    }
 }

@@ -10,6 +10,7 @@
 pub mod ast;
 pub mod diagnostics;
 pub mod elaborate;
+pub mod format;
 pub mod ir;
 pub mod lex;
 pub mod manifest;
