@@ -344,6 +344,14 @@ adds no inference (`src/render/schematic/layout.rs`):
   a `WireEnd::Own` port *listed in the enclosure* (below). Excluded instances,
   unlisted ports, and own ports without an enclosure placement drop silently —
   a listed port whose wire lands on such an end shows as a bare stub.
+  A splice has no box and no port in a schematic (no schematic syntax
+  names one): each `Instance::splice_nets()` net is drawn as what it is
+  electrically, one rail between the far ends of its conductors — those
+  the view places, in wire order, each port once — chain-decomposed like
+  a multi-endpoint wire, each segment in the color of the conductor that
+  brings its second end in. No junction dot, as for any rail. The segments
+  join `Placement`'s connections, so the router and the Layout lints
+  (`include_too_close`, `unroutable_wire`) see exactly what is drawn.
   Each drawn segment carries a `wire-code` annotation — the wire's color
   as an IEC 60757 code (`ir::WireColor::code`; unknown names pass through
   verbatim), haloed and centred on the longest run clear of wire

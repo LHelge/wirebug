@@ -669,6 +669,24 @@ view schematic "V" {
         );
     }
 
+    /// The router and the lint see a splice's net as the drawing does: the
+    /// net's one segment is walled in like the wire it replaces.
+    #[test]
+    fn a_walled_in_splice_net_is_unroutable() {
+        let spliced = WALLED_IN.replace(
+            "    wire red 1 [a.sig, far.sig];",
+            "    splice sp;\n    wire red 1 [a.sig, sp];\n    wire red 1 [sp, far.sig];",
+        );
+        assert_eq!(summary(&spliced), [code("unroutable_wire", &["a", "far"])]);
+        let (_, design) = load(&spliced);
+        assert!(!renders(&design));
+
+        let open = spliced.replace("include e at (16, 0)", "include e at (18, 0)");
+        assert!(summary(&open).is_empty());
+        let (_, design) = load(&open);
+        assert!(renders(&design));
+    }
+
     #[test]
     fn opening_one_wall_makes_the_wire_routable() {
         let open = WALLED_IN.replace("include e at (16, 0)", "include e at (18, 0)");

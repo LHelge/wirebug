@@ -308,6 +308,30 @@ impl Placement {
             }
         }
 
+        // A splice is drawn as what it is electrically: one net joining the
+        // far ends of its conductors (through any splice-to-splice links),
+        // chained like a multi-endpoint rail between the ends the view
+        // places, in wire order, each port once. A segment takes the color
+        // of the conductor that brings its second end in.
+        for net in subject.splice_nets() {
+            let mut placed: Vec<(PortKey, &WireColor)> = Vec::new();
+            for end in &net.ends {
+                let Some(key) = endpoint_key(end.end) else {
+                    continue;
+                };
+                if side_of.contains_key(&key) && !placed.iter().any(|(k, _)| k == &key) {
+                    placed.push((key, &end.wire.color));
+                }
+            }
+            for pair in placed.windows(2) {
+                connections.push(Segment {
+                    a: pair[0].0.clone(),
+                    b: pair[1].0.clone(),
+                    color: pair[1].1.clone(),
+                });
+            }
+        }
+
         let pitch = grid.pitch();
         let mut components = IndexMap::new();
 
@@ -620,7 +644,8 @@ fn grow_bounds(bounds: &mut Option<(f64, f64, f64, f64)>, a: Point, b: Point) {
 /// A wire endpoint's port key: a child instance's port, or a subject-own port
 /// on the enclosure boundary. Whether the key is actually drawn depends on it
 /// being listed (present in `side_of`); see [`Placement::compute`]. A splice
-/// has no port in a schematic (`None`), so a segment ending on one drops.
+/// has no port in a schematic (`None`): its conductors draw as the net they
+/// join, between the ports at their far ends.
 fn endpoint_key(end: &WireEnd) -> Option<PortKey> {
     match end {
         WireEnd::Child { instance, port } => Some(PortKey::Child {
@@ -790,6 +815,70 @@ component sys {
         let subject = design.get(&design.root).unwrap();
         let placement = Placement::compute(&design, subject, &view, Grid::new(20.0)).unwrap();
         assert_eq!(placement.connections().len(), 2);
+    }
+
+    /// `a`, `b`, `c` and `d` each run a conductor to splice `sp` or, for
+    /// `d`, to the splice `far` that `sp` links to.
+    fn spliced() -> Design {
+        design_from(
+            r#"
+component sys {
+    a: blk;
+    b: blk;
+    c: blk;
+    d: blk;
+    splice sp;
+    splice far;
+    wire black 1 [a.p, sp];
+    wire brown 1 [sp, b.p];
+    wire blue 1 [c.p, sp];
+    wire red 1 [sp, far];
+    wire green 1 [far, d.p];
+    wire grey 1 [c.p, far];
+    component blk {
+        pub port p "P";
+    }
+}
+"#,
+        )
+    }
+
+    /// The connections a view including `includes` in a row, each showing
+    /// its `p`, places: as `owner.port` pairs, with their color.
+    fn connections_of(design: &Design, includes: &[&str]) -> Vec<String> {
+        const SOUTH: &[(&str, Side)] = &[("p", Side::South)];
+        let includes: Vec<_> = includes
+            .iter()
+            .enumerate()
+            .map(|(k, name)| (*name, k as f64 * 10.0, 0.0, SOUTH))
+            .collect();
+        let view = view_of("sys", &includes);
+        let subject = design.get(&design.root).unwrap();
+        let placement = Placement::compute(design, subject, &view, Grid::new(20.0)).unwrap();
+        placement
+            .connections()
+            .iter()
+            .map(|c| {
+                let [a, b] = c.ends();
+                format!("{a}-{b} {}", c.color)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_splice_draws_as_one_net_between_the_ports_it_joins() {
+        let design = spliced();
+        // The far ends of every conductor of the net (through the link to
+        // `far`), chained in wire order, each port once (`c.p` reaches the
+        // net twice); a segment takes the color of the conductor bringing
+        // its second end in.
+        assert_eq!(
+            connections_of(&design, &["a", "b", "c", "d"]),
+            ["a.p-b.p brown", "b.p-c.p blue", "c.p-d.p green"]
+        );
+        // An end the view leaves out drops, and the chain closes over it.
+        assert_eq!(connections_of(&design, &["a", "d"]), ["a.p-d.p green"]);
+        assert!(connections_of(&design, &["a"]).is_empty());
     }
 
     #[test]
