@@ -1,0 +1,5 @@
+[project]
+name = "wire-list-project"
+version = "0.1.0"
+description = "Wire-list fixture: every kind of conductor end, length and screen a cut list has to list"
+revision = "fixture"

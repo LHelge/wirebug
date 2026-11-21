@@ -1,0 +1,13 @@
+component Ecu {
+    connector x1 "ECU 9p" {
+        pub port pwr   "12V"   pin 1;
+        pub port gnd   "GND"   pins [2, 3];
+        pub port can_h "CAN H" pin 4;
+        pub port can_l "CAN L" pin 5;
+        pub port shld  "SHLD"  pin 6;
+        pub port wake  "WAKE"  pin 7;
+        pub port sig   "SIG"   pin 8;
+        pub port out   "OUT"   pin 9;
+    }
+    pub port sense "SENSE";
+}
