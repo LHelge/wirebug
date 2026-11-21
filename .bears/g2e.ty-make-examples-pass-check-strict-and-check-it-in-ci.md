@@ -1,15 +1,16 @@
 ---
 id: g2e.ty
 title: Make examples/ pass `check --strict` and check it in CI
-status: open
+status: done
 priority: P2
 created: "2026-11-20T23:07:40.066172618Z"
-updated: "2026-11-20T23:26:27.405796018Z"
+updated: "2026-11-21T19:29:13.974289936Z"
 tags:
   - examples
   - ci
 depends_on:
   - g2e.6x
+attempts: 1
 ---
 
 ## Summary
