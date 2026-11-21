@@ -14,6 +14,7 @@ use serde::Serialize;
 use crate::dsl::ir::{Design, Instance, View, ViewKind};
 use crate::dsl::manifest::Manifest;
 use crate::error::{Error, Result, ViewError, ViewErrorKind, ViewResult};
+use crate::export::{Format as ExportFormat, Table};
 
 pub mod geometry;
 pub mod harness;
@@ -168,8 +169,9 @@ pub fn embed_stylesheet() -> String {
 /// Serialized shape of [`EMBED_MANIFEST_FILENAME`]: the project's identity
 /// (or `null` for a synthetic design) plus the list of rendered views in
 /// declaration order — only views that rendered, so a host never looks for
-/// a file that was not written. Borrows from the data so a host needs only
-/// to call `serde_json::to_string_pretty(&embed_manifest(...))`.
+/// a file that was not written — and the build tables written beside them.
+/// Borrows from the data so a host needs only to call
+/// `serde_json::to_string_pretty(&embed_manifest(...))`.
 #[derive(Debug, Serialize)]
 pub struct EmbedManifest<'a> {
     pub project: Option<&'a Manifest>,
@@ -181,6 +183,27 @@ pub struct EmbedManifest<'a> {
     /// so a host discovers it the same way it discovers views.
     pub stylesheet: &'static str,
     pub views: Vec<EmbedManifestView<'a>>,
+    /// The build tables, as `wirebug export <table> --format json` writes
+    /// them, by file name beside the manifest. Last, so the fields before
+    /// it keep their place for hosts that read the manifest.
+    pub exports: EmbedExports,
+}
+
+/// [`EmbedManifest::exports`]: the file name of each build table's JSON,
+/// a sibling of the manifest.
+#[derive(Debug, Serialize)]
+pub struct EmbedExports {
+    pub wires: String,
+    pub connectors: String,
+}
+
+impl Default for EmbedExports {
+    fn default() -> Self {
+        Self {
+            wires: Table::Wires.filename(ExportFormat::Json),
+            connectors: Table::Connectors.filename(ExportFormat::Json),
+        }
+    }
 }
 
 /// One row of [`EmbedManifest::views`].
@@ -199,7 +222,7 @@ pub fn embed_manifest<'a>(
 ) -> EmbedManifest<'a> {
     EmbedManifest {
         project,
-        generator: concat!("wirebug v", env!("CARGO_PKG_VERSION")),
+        generator: crate::GENERATOR,
         stylesheet: EMBED_STYLESHEET_FILENAME,
         views: views
             .into_iter()
@@ -209,6 +232,7 @@ pub fn embed_manifest<'a>(
                 kind: v.kind.as_str(),
             })
             .collect(),
+        exports: EmbedExports::default(),
     }
 }
 
@@ -745,6 +769,13 @@ component sys {
         assert_eq!(entries[2]["title"], "X1 Pinout");
         assert_eq!(entries[2]["filename"], "x1_pinout.svg");
         assert_eq!(entries[2]["kind"], "pinout");
+        // The build tables written beside the manifest, by file name; the
+        // last field, after the ones hosts already read.
+        assert_eq!(parsed["exports"]["wires"], "wires.json");
+        assert_eq!(parsed["exports"]["connectors"], "connectors.json");
+        let at = |field: &str| json.find(&format!("\"{field}\":")).expect(field);
+        let order = ["project", "generator", "stylesheet", "views", "exports"].map(at);
+        assert!(order.is_sorted(), "{json}");
     }
 
     #[test]
