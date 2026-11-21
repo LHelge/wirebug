@@ -195,6 +195,7 @@ pub struct EmbedManifest<'a> {
 pub struct EmbedExports {
     pub wires: String,
     pub connectors: String,
+    pub bom: String,
 }
 
 impl Default for EmbedExports {
@@ -202,6 +203,7 @@ impl Default for EmbedExports {
         Self {
             wires: Table::Wires.filename(ExportFormat::Json),
             connectors: Table::Connectors.filename(ExportFormat::Json),
+            bom: Table::Bom.filename(ExportFormat::Json),
         }
     }
 }
@@ -773,6 +775,7 @@ component sys {
         // last field, after the ones hosts already read.
         assert_eq!(parsed["exports"]["wires"], "wires.json");
         assert_eq!(parsed["exports"]["connectors"], "connectors.json");
+        assert_eq!(parsed["exports"]["bom"], "bom.json");
         let at = |field: &str| json.find(&format!("\"{field}\":")).expect(field);
         let order = ["project", "generator", "stylesheet", "views", "exports"].map(at);
         assert!(order.is_sorted(), "{json}");
