@@ -2040,3 +2040,47 @@ fn render_embed_writes_the_bom_beside_the_manifest() {
     let (_, printed, _) = export(&["bom", BOM_ROOT, "--format", "json"]);
     assert_eq!(written, printed);
 }
+
+/// Run `wirebug <args>` with its stdout a pipe whose reader is gone before
+/// anything is written, as when the output is piped into `head` and `head`
+/// has stopped reading; return (success, stderr).
+fn run_into_closed_pipe(args: &[&str]) -> (bool, String) {
+    use assert_cmd::cargo::CommandCargoExt;
+    use std::io::Read;
+    use std::process::Stdio;
+
+    let mut child = std::process::Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawns");
+    // Closing the read end now makes the command's first write to stdout
+    // fail with a broken pipe: it checks the project before it writes.
+    drop(child.stdout.take());
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .expect("stderr piped")
+        .read_to_string(&mut stderr)
+        .expect("utf-8 stderr");
+    (child.wait().expect("exits").success(), stderr)
+}
+
+#[test]
+fn a_reader_that_stops_early_is_not_an_error() {
+    for table in ["wires", "connectors", "bom"] {
+        for format in ["csv", "json"] {
+            let (ok, stderr) =
+                run_into_closed_pipe(&["export", table, PIN_TABLE_ROOT, "--format", format]);
+            assert!(ok, "export {table} --format {format}: {stderr}");
+            assert!(!stderr.contains("error"), "{stderr}");
+        }
+    }
+    let (ok, stderr) =
+        run_into_closed_pipe(&["check", "--format", "json", UNDRAWN_CONDUCTORS_ROOT]);
+    assert!(ok, "check --format json: {stderr}");
+    assert!(!stderr.contains("panicked"), "{stderr}");
+}
