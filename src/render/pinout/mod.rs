@@ -10,7 +10,6 @@
 //! the table. A face is always drawn from the harness side (the language's
 //! convention for `layout`; it has no other) and says so in a caption.
 
-mod fit;
 mod rows;
 
 use svg::Document;
@@ -24,9 +23,8 @@ use crate::export::{PinTable, PinTables};
 use crate::render::geometry::{Bounds, Point};
 use crate::render::lint::{IncludeBox, ViewLayout};
 use crate::render::stamp::{STAMP_HEIGHT, STAMP_INSET, stamp_element};
+use crate::render::text::{FittedLabel, Font};
 use crate::render::{Canvas, Drawing, GridFault, SvgMode};
-pub(super) use fit::MIN_LABEL_SIZE;
-use fit::{FittedLabel, Font};
 use rows::{Entry, Row};
 
 /// The caption under every cavity face.
