@@ -78,7 +78,7 @@ A `fragment` statement loads a file into the project **without importing any nam
 
 - A file loads once however many `use` and `fragment` lines name it, so naming one file in both is fine, and so is a cycle.
 - A missing file is `use_not_found`, labelled on the path.
-- A `fragment` that adds nothing warns (`unused_fragment`, fatal under `--strict`): a stale line. A line adds something when it merges one of the file's `extend`s, or when the file contributes on its own: it has a view, a `use` or `fragment` line of its own that merges an `extend`, or a `fragment` line naming a file that contributes. A file already loaded on the way (the project's entry file, the file the line is written in, the files in between) contributes nothing again, so two files that only name each other are both reported, and so is a line naming the entry file that merges nothing. The help says why: the file has no view and no `extend`; its own `fragment` lines add nothing either; its `extend`s name components not in this file's scope (the help names them); the component in scope is that same `extend`, imported with `use` (import the component itself); it is the entry file; or it is the file the line is written in. An aggregating file that `use`s the component and holds `fragment` lines that merge into it is fine, both where it is named and in itself.
+- A `fragment` that adds nothing warns (`unused_fragment`, fatal under `--strict`): a stale line. A line adds something when it merges one of the file's `extend`s, or when the file contributes on its own: it has a view (and no `extend` that merged into nothing), a `use` or `fragment` line of its own that merges an `extend`, or a `fragment` line naming a file that contributes. A file already loaded on the way (the project's entry file, the file the line is written in, the files in between) contributes nothing again, so two files that only name each other are both reported, and so is a line naming the entry file that merges nothing. The help says why: the file has no view and no `extend`; its own `fragment` lines add nothing either; its `extend`s name components not in this file's scope (the help names them); the component in scope is that same `extend`, imported with `use` (import the component itself); it is the entry file; or it is the file the line is written in. An aggregating file that `use`s the component and holds `fragment` lines that merge into it is fine, both where it is named and in itself.
 - Two `fragment` lines in one file naming the same file warn (`duplicate_fragment`); remove the repeat.
 
 ## Component definitions
@@ -178,9 +178,12 @@ Rules:
   into the `Vehicle` in `main.wb`'s scope. A file of fragments may pull in
   further fragment files the same way, as long as it has the component in its
   own scope: its own `extend Vehicle` counts, and a file of nothing but
-  `fragment` lines gets it with `use Vehicle from "../main.wb";` (merging
-  does not pass through files, so without it those lines merge nothing and
-  warn, and so does the line that names the file).
+  `fragment` lines gets it with `use Vehicle from "../main.wb";`. Merging
+  does not pass through files: without that `use`, the `extend`s it pulls in
+  merge into nothing, each an `orphan_fragment` error whose help names the
+  `use` to add and where. Their lines, and the line naming the aggregating
+  file, also warn (`unused_fragment`), even when the pulled-in files have
+  views, since those views document a component they never joined.
 - `use Vehicle from "traction.wb";` is the older spelling of the same: it
   loads the file and triggers the merge (a same-name collision with `extend`
   on either side merges instead of erroring). It keeps working, with no
