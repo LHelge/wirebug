@@ -29,6 +29,7 @@ pub mod pinout;
 pub mod png;
 pub mod schematic;
 pub(crate) mod stamp;
+mod text;
 pub(crate) mod wire_stroke;
 
 /// How a rendered SVG carries its presentation.
@@ -144,7 +145,7 @@ impl RenderedView {
         let (style, shrinks_to) = match &self.kind {
             ViewKind::Schematic => (schematic::STYLE, None),
             ViewKind::Harness => (harness::STYLE, None),
-            ViewKind::Pinout => (pinout::STYLE, Some(pinout::MIN_LABEL_SIZE)),
+            ViewKind::Pinout => (pinout::STYLE, Some(text::MIN_LABEL_SIZE)),
             ViewKind::Other(_) => return None,
         };
         font_sizes(style).chain(shrinks_to).reduce(f64::min)

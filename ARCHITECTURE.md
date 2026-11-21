@@ -101,7 +101,7 @@ Five CLI commands share it:
   to another font. SVG output still asks for `sans-serif` and is drawn
   with whatever font the viewer resolves, which may cover those scripts;
   the font is not embedded in it. So the text-width estimators are not
-  made exact for DejaVu Sans: the pinout's `fit::Font` is built on DejaVu
+  made exact for DejaVu Sans: the pinout's `text::Font` is built on DejaVu
   Sans's widths per character class, the widest common `sans-serif`. The
   schematic and harness `*CHAR_WIDTH` constants are flat per-character
   averages and are *not* upper bounds for DejaVu Sans Bold — a known
@@ -868,7 +868,7 @@ as `data-color` in every mode; it is a `<path>`, since `.pinout rect`
 would paint a rectangle's fill white.
 
 Each column (`Columns`) is as wide as its widest cell, measured with the
-same estimator as cavity labels (`fit::Font`, per-class widths, bold
+same estimator as cavity labels (`text::Font`, per-class widths, bold
 counted wider), with minimum widths so an unwired table still shows its
 columns; the far column is capped at `FAR_MAX_WIDTH`, then narrowed to
 the widest far end as drawn there. A far end takes the most detailed text
@@ -886,7 +886,7 @@ keeps the `cavity` class and adds `cavity-unused` (its pin
 `cavity-pin-unused`): dashed, grey and lightly filled. A port bound to a
 cavity counts as used whether or not a conductor reaches it — the view
 documents the type, the conductors belong to a placement. A cavity label
-is fitted into its cavity (`fit::FittedLabel`): text has no clipping, so
+is fitted into its cavity (`text::FittedLabel`): text has no clipping, so
 its width is estimated per character class from DejaVu Sans, the widest
 common `sans-serif` face, and the label shrinks in half-pixel steps from
 8 px down to a 6 px floor (an inline `font-size` style, since the
@@ -1493,6 +1493,8 @@ src/
 │   │                #   SmallText (views too small to read on the paper)
 │   ├── png.rs       # SVG → PNG rasterisation for --png (resvg/usvg/tiny_skia)
 │   ├── stamp.rs     # project-identity stamp text/element (corner of every SVG)
+│   ├── text.rs      # Font, FittedLabel: how wide text is drawn, and text
+│   │                #   shrunk or cut to its width
 │   ├── wire_stroke.rs # WireLayers/WireStroke: a wire's casing, colored core
 │   │                #   and tracer, shared by schematic and harness
 │   ├── schematic/   # rectangle-based SVG renderer (kind: schematic)
@@ -1526,8 +1528,7 @@ src/
 │   └── pinout/      # connector-face + pin-table renderer (kind: pinout)
 │       ├── mod.rs       # PinoutRenderer; cavity faces from connector layouts,
 │       │                #   the table's columns, swatches and layout
-│       ├── rows.rs      # Row/Entry/FarText: the table's rows from a PinTable
-│       └── fit.rs       # FittedLabel, Font: text shrunk or cut to its width
+│       └── rows.rs      # Row/Entry/FarText: the table's rows from a PinTable
 │
 │  # ── live-reloading dev server (`serve`) ──
 ├── serve/

@@ -1,5 +1,6 @@
-//! Fitting text into the width it is given: a cavity label into its
-//! cavity, a table cell's text into its column.
+//! How wide text is drawn, and fitting it into the width it is given: a
+//! pinout's cavity label into its cavity, a table cell's text into its
+//! column. Shared by the renderers, so every one estimates alike.
 //!
 //! SVG text has no clipping and no layout: a label is as wide as its font
 //! makes it, and the font is whatever `sans-serif` resolves to on the
@@ -12,7 +13,7 @@
 pub(super) const LABEL_SIZE: f64 = 8.0;
 /// The smallest size a label shrinks to before it is cut: below it a
 /// printed label stops being readable.
-pub(in crate::render) const MIN_LABEL_SIZE: f64 = 6.0;
+pub(super) const MIN_LABEL_SIZE: f64 = 6.0;
 /// Sizes step down by this much, so a drawing holds a few distinct sizes
 /// rather than one per label.
 const SIZE_STEP: f64 = 0.5;
@@ -151,7 +152,7 @@ mod tests {
 
     impl FittedLabel {
         /// The label's estimated drawn width, in px.
-        pub(in crate::render::pinout) fn width(&self) -> f64 {
+        pub(in crate::render) fn width(&self) -> f64 {
             em_width(&self.text) * self.size
         }
     }

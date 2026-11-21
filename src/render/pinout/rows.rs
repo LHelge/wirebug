@@ -8,7 +8,7 @@ use std::fmt;
 use crate::dsl::ir::{Instance, Pin, Port, Screened, WireColor};
 use crate::export::{CavityDrain, CavityEntry, Contact, FarEnd, FarSplice, PinTable, PortEnd};
 
-use super::fit::{FittedLabel, Font};
+use crate::render::text::{FittedLabel, Font};
 
 /// One row of a pin table: a pin a port is bound to, or a port with no pin
 /// yet, the port's label, and what is crimped into the cavity, one entry
