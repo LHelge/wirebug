@@ -1,13 +1,14 @@
 //! Hand-written lexer for the `.wb` DSL.
 //!
 //! The lexer recognises trivia (whitespace, newlines, `//` comments) as
-//! first-class lexemes and always emits them with spans. [`significant`]
-//! is the dial: today it drops trivia, leaving the parser a clean
-//! `(Token, Span)` stream; a future `fmt` swaps it for a collector that
-//! attaches trivia to neighbouring tokens — without touching anything
-//! downstream.
+//! first-class lexemes and always emits them with spans. What reads the
+//! lexemes picks its view of them: [`significant`] drops the trivia,
+//! leaving the parser a clean `(Token, Span)` stream, and the formatter's
+//! [`trivia::AttachedTokens`] attaches each comment and blank line to the
+//! token it belongs with.
 
 pub mod token;
+pub mod trivia;
 
 use crate::dsl::span::{FileId, Span};
 pub use token::{Lexeme, Token, Trivia};
@@ -185,9 +186,9 @@ fn name_end(bytes: &[u8], start: usize) -> usize {
         .map_or(bytes.len(), |len| start + 1 + len)
 }
 
-/// THE DIAL. Drop trivia, yielding the significant `(Token, Span)` stream
-/// the parser consumes. A future `fmt` replaces this with a pass that
-/// attaches trivia to neighbouring tokens instead of discarding it.
+/// Drop trivia, yielding the significant `(Token, Span)` stream the parser
+/// consumes. The formatter reads the same lexemes through
+/// [`trivia::AttachedTokens`] instead, which keeps the trivia.
 pub fn significant(lexemes: &[SpannedLexeme]) -> Vec<(Token, Span)> {
     lexemes
         .iter()

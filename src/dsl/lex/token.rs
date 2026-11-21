@@ -2,8 +2,9 @@
 //!
 //! A [`Lexeme`] is either a significant [`Token`] or discardable
 //! [`Trivia`] (whitespace, newlines, comments). The lexer emits both,
-//! spanned; [`significant`](super::significant) is the dial that drops
-//! trivia today and that a future `fmt` will replace with a collector.
+//! spanned; [`significant`](super::significant) drops the trivia for the
+//! parser, and [`trivia`](super::trivia) attaches it to the tokens for the
+//! formatter.
 
 use std::fmt;
 
@@ -59,8 +60,7 @@ pub enum Token {
     /// (`green/yellow`). `//` is still a comment.
     Slash,
 
-    // Leaves. Raw text is preserved so a future `fmt` can round-trip and
-    // so the parser can interpret a [`Number`](Token::Number) as either a
+    // Leaves. Raw text is preserved so the parser can interpret a [`Number`](Token::Number) as either a
     // pin (`u32`) or a gauge/coordinate (`f64`).
     Ident(String),
     /// Decoded contents of a `"quoted label"` (without the quotes).
@@ -221,7 +221,8 @@ impl fmt::Display for Token {
     }
 }
 
-/// Insignificant source text, recognised but discarded today.
+/// Insignificant source text: dropped for the parser, kept for the
+/// formatter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Trivia {
     /// A run of spaces, tabs, and carriage returns.
