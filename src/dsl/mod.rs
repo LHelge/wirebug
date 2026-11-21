@@ -5,7 +5,7 @@
 //! type/instance hierarchy into the [`ir`], then validate it. The
 //! terminal artifact is `ir::Design` — nothing here renders. The full
 //! check, with the layout-derived checks that need the renderers, is
-//! `pipeline::check_project`.
+//! `check_project` (`src/pipeline.rs`).
 
 pub mod ast;
 pub mod diagnostics;
@@ -24,6 +24,7 @@ use std::path::Path;
 use diagnostics::Problem;
 use ir::Design;
 use project::Project;
+use resolve::Resolved;
 
 /// Diagnostic output format for `wirebug check`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -83,9 +84,20 @@ pub fn load_manifest(target: Option<&Path>) -> (Option<manifest::Manifest>, Vec<
     }
 }
 
+/// What the DSL stages made of a loaded project: the resolved registry
+/// (the LSP builds its completion index from it), the elaborated design,
+/// and every problem found.
+pub(crate) struct Checked<'p> {
+    /// The registry, its `problems` already moved into [`Self::problems`].
+    pub(crate) resolved: Resolved<'p>,
+    /// `None` when the project got too little far to build one, or did not
+    /// parse whole.
+    pub(crate) design: Option<Design>,
+    pub(crate) problems: Vec<Problem>,
+}
+
 /// The DSL half of the check pipeline over a loaded project: resolve,
-/// elaborate, validate. Returns the elaborated design, when the project got
-/// far enough to build one, and every problem found.
+/// elaborate, validate.
 ///
 /// A project with syntax errors still goes through every phase, over what
 /// parsed, but reports only the problems a skipped statement cannot cause
@@ -93,15 +105,19 @@ pub fn load_manifest(target: Option<&Path>) -> (Option<manifest::Manifest>, Vec<
 /// without the skipped statements is not the design the author wrote.
 ///
 /// The layout-derived checks run after this, outside `dsl`: see
-/// `pipeline::check_project`, the entry every command uses.
-pub fn check_loaded(project: &Project) -> (Option<Design>, Vec<Problem>) {
+/// `pipeline::check_loaded`, which every command goes through.
+pub(crate) fn check_loaded(project: &Project) -> Checked<'_> {
     let mut resolved = resolve::resolve(project);
     let mut problems = std::mem::take(&mut resolved.problems);
     let (design, elab_problems) = elaborate::elaborate(&resolved);
     problems.extend(elab_problems);
     problems.extend(validate::validate(&resolved));
     project.drop_parse_cascades(&mut problems);
-    (design.filter(|_| project.parsed_whole), problems)
+    Checked {
+        resolved,
+        design: design.filter(|_| project.parsed_whole),
+        problems,
+    }
 }
 
 #[cfg(test)]

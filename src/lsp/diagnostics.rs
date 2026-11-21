@@ -16,7 +16,6 @@ use crate::dsl::lex::{lex, significant};
 use crate::dsl::parse::parse_file;
 use crate::dsl::project::{self, Overlay};
 use crate::dsl::span::FileId;
-use crate::dsl::{elaborate, resolve, validate};
 use crate::pipeline;
 
 use super::complete::{self, CompletionIndex};
@@ -108,8 +107,9 @@ fn unlinked(entry: &Path) -> Diagnostic {
 }
 
 /// Run the pipeline for one project entry — `check_project`'s stages over
-/// the overlay — converting each problem to a located diagnostic and
-/// snapshotting the resolved registry for completion. Every file the load
+/// the overlay, through the same `pipeline::check_loaded` — converting each
+/// problem to a located diagnostic and snapshotting the resolved registry
+/// for completion. Every file the load
 /// pulled in is recorded (by its loader-canonical path) into `loaded`, so
 /// the caller can spot open documents no project reached.
 fn check_one(
@@ -130,14 +130,9 @@ fn check_one(
             }
         }
 
-        let mut resolved = resolve::resolve(project);
-        problems.append(&mut resolved.problems);
-        index = Some(complete::build_index(project, &resolved));
-        let (design, elab_problems) = elaborate::elaborate(&resolved);
-        problems.extend(elab_problems);
-        problems.extend(validate::validate(&resolved));
-        project.drop_parse_cascades(&mut problems);
-        pipeline::extend_with_layout_problems(project, design.as_ref(), &mut problems);
+        let checked = pipeline::check_loaded(project, std::mem::take(&mut problems));
+        index = Some(complete::build_index(project, &checked.resolved));
+        problems = checked.problems;
     }
 
     let located = problems
