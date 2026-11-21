@@ -504,12 +504,11 @@ impl<'a> FromIterator<&'a ast::Property> for PartMeta {
 impl Instance {
     /// The conductors ending on `splice`, in wire order: each a row of its
     /// own in a wire list, with the splice as one of its ends.
-    pub fn splice_conductors<'a>(
+    pub fn splice_conductors<'a, 's>(
         &'a self,
-        splice: &SpliceName,
-    ) -> impl Iterator<Item = &'a Wire> + use<'a> {
-        let splice = splice.clone();
-        self.wires.iter().filter(move |wire| wire.ends_on(&splice))
+        splice: &'s SpliceName,
+    ) -> impl Iterator<Item = &'a Wire> + use<'a, 's> {
+        self.wires.iter().filter(move |wire| wire.ends_on(splice))
     }
 
     /// The net `splice` joins: every splice linked to it by a conductor
