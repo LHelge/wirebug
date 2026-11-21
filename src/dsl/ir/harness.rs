@@ -13,7 +13,7 @@ use super::{
 /// an include places there: a child instance's connector, or one of the
 /// subject's splices.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum HarnessNode<'a> {
+pub(crate) enum HarnessNode<'a> {
     Connector(&'a InstanceName, &'a ConnectorName),
     Splice(&'a SpliceName),
 }
@@ -22,7 +22,7 @@ impl<'a> HarnessNode<'a> {
     /// What `include` places in a harness view of `subject`: an instance's
     /// connector, a splice (an include naming one alone), or nothing a
     /// harness draws.
-    pub fn of_include(subject: &'a Instance, include: &'a Include) -> Option<Self> {
+    pub(crate) fn of_include(subject: &'a Instance, include: &'a Include) -> Option<Self> {
         match &include.connector {
             Some(connector) => Some(Self::Connector(&include.instance, connector)),
             None => subject
@@ -36,7 +36,11 @@ impl<'a> HarnessNode<'a> {
     /// it: the connector of a child's port, or a splice. `None` for an end
     /// no harness view can draw: the subject's own port, or a port on no
     /// connector.
-    pub fn of_end(design: &'a Design, subject: &'a Instance, end: &'a WireEnd) -> Option<Self> {
+    pub(crate) fn of_end(
+        design: &'a Design,
+        subject: &'a Instance,
+        end: &'a WireEnd,
+    ) -> Option<Self> {
         match end {
             WireEnd::Own(_) => None,
             WireEnd::Child { instance, port } => {
@@ -51,7 +55,7 @@ impl<'a> HarnessNode<'a> {
     /// The two nodes a conductor with `ends` runs between in a harness view
     /// of `subject`. `None` when an end lands on no node, or both on the
     /// same one: a jumper inside one housing is not a harness conductor.
-    pub fn between(
+    pub(crate) fn between(
         design: &'a Design,
         subject: &'a Instance,
         ends: [&'a WireEnd; 2],
@@ -68,7 +72,7 @@ impl<'a> HarnessNode<'a> {
 /// a conductor of what the screen covers, and a drain end when it draws the
 /// screen and includes the end's connector.
 #[derive(Debug, Clone)]
-pub struct HarnessScope<'a> {
+pub(crate) struct HarnessScope<'a> {
     design: &'a Design,
     subject: &'a Instance,
     view: &'a View,
@@ -78,7 +82,7 @@ pub struct HarnessScope<'a> {
 impl<'a> HarnessScope<'a> {
     /// The scope of `view`, a harness view of `subject`'s type, drawn
     /// against `subject`.
-    pub fn new(design: &'a Design, subject: &'a Instance, view: &'a View) -> Self {
+    pub(crate) fn new(design: &'a Design, subject: &'a Instance, view: &'a View) -> Self {
         Self {
             design,
             subject,
@@ -92,13 +96,13 @@ impl<'a> HarnessScope<'a> {
     }
 
     /// Whether the view includes `node`.
-    pub fn includes(&self, node: HarnessNode<'_>) -> bool {
+    pub(crate) fn includes(&self, node: HarnessNode<'_>) -> bool {
         self.included.contains(&node)
     }
 
     /// Whether the view draws the conductor running between `ends`, two
     /// ends written in the subject's body (a segment of one of its wires).
-    pub fn draws(&self, ends: [&'a WireEnd; 2]) -> bool {
+    pub(crate) fn draws(&self, ends: [&'a WireEnd; 2]) -> bool {
         HarnessNode::between(self.design, self.subject, ends)
             .is_some_and(|nodes| nodes.iter().all(|&node| self.includes(node)))
     }
@@ -107,7 +111,7 @@ impl<'a> HarnessScope<'a> {
     /// that covers `screened`: the cable's overall screen when the view
     /// draws any of its conductors, a pair's when it draws one of the
     /// pair's.
-    pub fn draws_screen(&self, cable: &CableName, screened: Screened) -> bool {
+    pub(crate) fn draws_screen(&self, cable: &CableName, screened: Screened) -> bool {
         self.subject
             .wires
             .iter()
@@ -122,7 +126,12 @@ impl<'a> HarnessScope<'a> {
 
     /// Whether the view draws the drain of that screen to `end`, one of
     /// the ends it is terminated on.
-    pub fn draws_drain(&self, cable: &CableName, screened: Screened, end: &'a WireEnd) -> bool {
+    pub(crate) fn draws_drain(
+        &self,
+        cable: &CableName,
+        screened: Screened,
+        end: &'a WireEnd,
+    ) -> bool {
         self.draws_screen(cable, screened)
             && HarnessNode::of_end(self.design, self.subject, end)
                 .is_some_and(|node| self.includes(node))
@@ -130,7 +139,7 @@ impl<'a> HarnessScope<'a> {
 
     /// The housing half the view includes the inline connector `inline`
     /// through, a child of the subject; `None` when it does not include it.
-    pub fn half(&self, inline: &InstanceName) -> Option<Half> {
+    pub(crate) fn half(&self, inline: &InstanceName) -> Option<Half> {
         self.view
             .includes
             .iter()

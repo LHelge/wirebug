@@ -14,7 +14,7 @@ use crate::dsl::span::Span;
 
 mod harness;
 
-pub use harness::{HarnessNode, HarnessScope};
+pub(crate) use harness::{HarnessNode, HarnessScope};
 
 macro_rules! name_newtype {
     ($name:ident, $doc:literal) => {
