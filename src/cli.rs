@@ -104,8 +104,8 @@ pub enum Command {
         #[arg(long)]
         embed: bool,
     },
-    /// Write a build table of a project — the wire list or the connector
-    /// pin tables — as CSV or JSON.
+    /// Write a build table of a project — the wire list, the connector pin
+    /// tables or the bill of materials — as CSV or JSON.
     Export {
         #[command(subcommand)]
         table: ExportCommand,
@@ -144,6 +144,10 @@ pub enum ExportCommand {
     /// drain in each cavity, and one per empty cavity or port without a
     /// pin.
     Connectors(ExportArgs),
+    /// The bill of materials: one row per thing to buy — housings by part,
+    /// cables by type, loose wire by colour and gauge, components and
+    /// splices by part — with its quantity per placement.
+    Bom(ExportArgs),
 }
 
 impl ExportCommand {
@@ -152,6 +156,7 @@ impl ExportCommand {
         match self {
             Self::Wires(args) => (Table::Wires, args),
             Self::Connectors(args) => (Table::Connectors, args),
+            Self::Bom(args) => (Table::Bom, args),
         }
     }
 }
