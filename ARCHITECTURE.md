@@ -631,8 +631,8 @@ conductor to it attaches at the dot's centre (`layout::Anchor::Splice`; a
 pin's is `Anchor::Pin`), so they visibly converge there, and a pin wired
 to a splice faces it as it faces a connector. A conductor to a splice
 draws by the same rule as any other: a cable's through its cable box on
-the spine, a loose wire through a lane on the spine when it crosses it,
-else as one bezier (below). The splice's box (dot and text) is
+the spine, a loose wire as one bezier, or through a lane on the spine
+where that bezier would meet a box (below). The splice's box (dot and text) is
 `SpliceNode.bounds`, counted in the spine (`spine_x` takes every node's
 and splice's bounds) and the viewBox, and reported as an `IncludeBox`, so
 the overlap and canvas checks see it. One cable box per cable on one
@@ -661,28 +661,42 @@ ordered by each conductor's endpoint-y midpoint (the 1D occupancy step), the
 box's vertical centre is its strands' centroid (`layout::midpoint_y`).
 
 **Loose wires** (`LooseWire`/`render_loose`, a conductor in no cable)
-share the spine's occupancy with the boxes. One whose two ends lie either
-side of the spine (it crosses it — a pin-to-pin curve would run behind
-whatever box sits there and read as that cable's conductor) gets a
-**lane** (`layout::Lane`): a row of its own, like a one-conductor box
-without the box. The crossing loose wires between one pair of nodes
-(connector or splice, `AnchorNode`) form one `LooseSlot`, a lane each,
-ordered by midpoint y and centred on their centroid as a box's rows are.
-Boxes and slots are then stacked along the spine together
-(`HarnessLayout::occupy_spine`, `Occupant::stack`: sorted by top edge,
-ties in source order by each one's first conductor, then swept top-down,
-gap `CABLE_GAP`), and every lane's straight run spans the **spine
-column** — the widest box or lane, all centred on the spine — so a
-lane's leads end beyond every box's edge and, staying within their
-endpoints' x-span, never enter a box, and the annotation sits over the
-run's middle (`LooseWire::annotation_at`). A loose wire that stays on
-one side of the spine is one bezier pin to pin, annotated at its
-midpoint; it can only meet a box when one of its ends lies inside the
-spine column. The lanes are the only avoidance: leads still cross other
-leads, and a lane's lead can cross a strand's lead or another lane's.
-Lanes add their run's ends to the viewBox, so the canvas `check` sizes
-(`viewbox`) grows with them. A loose wire is drawn as one path per layer
-(`Cubic::chain_d`, class `cable-wire`, in a `<g class="cable">`).
+draw as one bezier pin to pin, annotated at its midpoint — unless that
+curve, or its annotation, would **meet a cable box**
+(`LooseWire::meets`: the curve sampled against the box grown by half the
+wire's stroke, the annotation's text box against the box), where it would
+read as that cable's conductor or be hidden by it. Then a wire whose two
+ends lie either side of the spine (`Crossing`) gets a **lane**
+(`layout::Lane`) there instead: a row of its own in the spine's
+occupancy, like a one-conductor box without the box. The laned wires
+between one pair of nodes (connector or splice, `AnchorNode`) form one
+`LooseSlot`, a lane each, ordered by midpoint y and centred on their
+centroid as a box's rows are; boxes and slots are stacked along the spine
+together (`Occupant::stack`: sorted by top edge, ties in source order by
+each one's first conductor, swept top-down, gap `CABLE_GAP`). A slot can
+push a box onto another wire's curve, so `HarnessLayout::occupy_spine`
+repeats — boxes back home, the laned wires' slots stacked with them, the
+remaining curves tested against the boxes as they now stand — until no
+further wire needs a lane; wires only ever go from direct to laned, so it
+ends, and a view with no cable box draws every loose wire exactly as a
+bezier. Each lane's straight run is centred on the spine and spans the
+widest box or its own annotation, whichever is wider
+(`LooseWire::take_lane`), so its leads end beyond every box's edge and,
+staying within their endpoints' x-span, never enter a box; the
+annotation sits over the run's middle (`LooseWire::annotation_at`). The
+run is kept inside the gap between the wire's ends, short of
+`LANE_MIN_LEAD` each side, where the widest box allows: an annotation
+wider than that is cut short with an ellipsis (`draw::shorten`,
+`Lane::fit`), the full text in a `<title>`. Loose wires draw over the
+boxes, so one that still meets a box — it stays on one side of the
+spine, which only happens when one of its ends lies inside the box
+column — crosses it visibly rather than hiding behind it. The lanes are
+the only avoidance: leads still cross other leads, and stacking only
+pushes down, so a slot can push the boxes below it (and their leads)
+further down. Lanes add their run's ends to the viewBox, so the canvas
+`check` sizes (`viewbox`) grows with them. A loose wire is drawn as one
+path per layer (`Cubic::chain_d`, class `cable-wire`, in a
+`<g class="cable">`).
 
 Every wire segment is one horizontally-flexed cubic bezier (`bezier.rs::flex`,
 `FLEX = 0.4`): a cabled conductor is lead-in → straight box run → lead-out,
