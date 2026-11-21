@@ -1,13 +1,14 @@
 ---
 id: jkx.r7
 title: "Pinout: sorted rows, viewing-side note, component in header, label fit"
-status: open
+status: done
 priority: P1
 created: "2026-11-20T21:40:32.056895233Z"
-updated: "2026-11-20T21:40:32.056895233Z"
+updated: "2026-11-21T12:01:08.035694012Z"
 tags:
   - render
   - pinout
+attempts: 1
 ---
 
 ## Summary
