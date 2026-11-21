@@ -493,8 +493,18 @@ fit level, such as a ganged `1,2,3` on the default grid or a two-digit
 pin on a grid of 10. The minimum grid is therefore unchanged by long
 designators. What a long text can still meet is what lies beyond the
 stub's first grid step: the wire's own first bend, wires in the channel in
-front of the box, a `wire-code`, and the component title above a north
-side (the router and the code placement do not see annotations). The
+front of the box, and a `wire-code` (the router and the code placement do
+not see annotations). The component title above a box is kept clear: a
+north-side annotation whose area would meet `PlacedComponent::title_extent`
+moves out along its stub (`PinAnnotation::clear_title`, a `lift` rounded
+up to a whole unit) until its near end, the pin number of a turned text,
+sits `PIN_TITLE_GAP` above the title; one clear of the title keeps its
+place, and an enclosure's ports, which have no title over them, never
+move. The move only lengthens the annotation's reach, which
+`PlacedPort::pin_extent` reports, so off-view stubs still start past it
+and the canvas still holds it. A wire that turns at the end of its
+one-step stub leaves a moved text standing a few units past the bend,
+beside no wire, and a horizontal run in the channel above can cross it. The
 canvas (`Placement::viewbox`) keeps every annotation `PIN_CANVAS_PAD`
 inside it, applied after the margin so a view whose annotations the
 margin already holds keeps its canvas; `view_too_large` sees the same
