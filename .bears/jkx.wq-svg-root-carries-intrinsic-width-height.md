@@ -1,12 +1,13 @@
 ---
 id: jkx.wq
 title: SVG root carries intrinsic width/height
-status: open
+status: done
 priority: P2
 created: "2026-11-20T21:40:32.067540501Z"
-updated: "2026-11-20T21:40:32.067540501Z"
+updated: "2026-11-21T16:05:17.108251227Z"
 tags:
   - render
+attempts: 1
 ---
 
 ## Summary
