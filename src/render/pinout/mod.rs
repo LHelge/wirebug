@@ -9,11 +9,13 @@ use svg::Document;
 use svg::node::element::{Group, Line, Rectangle, Style, Text};
 
 use crate::dsl::ir::{
-    Connector, ConnectorLayout, ConnectorName, Design, Instance, Pin, PortName, View,
+    Connector, ConnectorLayout, ConnectorName, Design, Include, Instance, Pin, PortName, View,
 };
-use crate::error::{Error, Result};
-use crate::render::SvgMode;
+use crate::error::{ViewErrorKind, ViewResult};
+use crate::render::geometry::{Bounds, Point};
+use crate::render::lint::{IncludeBox, ViewLayout};
 use crate::render::stamp::{STAMP_HEIGHT, STAMP_INSET, stamp_element};
+use crate::render::{Canvas, GridFault, SvgMode};
 
 const DEFAULT_GRID: f64 = 20.0;
 const HEADER_HEIGHT: f64 = 44.0;
@@ -54,33 +56,13 @@ impl PinoutRenderer {
         subject: &Instance,
         view: &View,
         mode: SvgMode,
-    ) -> Result<String> {
-        let step = view.grid.unwrap_or(DEFAULT_GRID);
-        if step <= 0.0 {
-            return Err(Error::NonPositiveGrid { grid: step });
-        }
+    ) -> ViewResult<String> {
+        let step = GridFault::positive_step(view, DEFAULT_GRID)?;
+        let tables = Table::all(subject, view, step)?;
 
-        let mut tables = Vec::new();
-        for inc in &view.includes {
-            let name = inc.instance.as_str();
-            let connector_name = ConnectorName::from(name);
-            let connector =
-                subject
-                    .connectors
-                    .get(&connector_name)
-                    .ok_or_else(|| Error::UnknownConnector {
-                        subject: subject.type_name.to_string(),
-                        connector: name.to_string(),
-                    })?;
-            tables.push(Table::new(connector, subject, inc.x * step, inc.y * step));
-        }
-
-        let has_title = !view.title.is_empty() && mode.titled();
-        let mut vb = viewbox(&tables, has_title);
-        let manifest = mode.stamped().then_some(design.manifest.as_ref()).flatten();
-        if manifest.is_some() {
-            vb.height += STAMP_HEIGHT;
-        }
+        let has_title = mode.shows_title(view);
+        let vb = viewbox(design, view, &tables, mode);
+        let manifest = mode.stamp(design);
 
         let mut doc = Document::new()
             .set("xmlns", "http://www.w3.org/2000/svg")
@@ -117,6 +99,40 @@ impl PinoutRenderer {
         }
         Ok(doc.add(group).to_string())
     }
+
+    /// Each include's table box, sized as [`Self::render`] sizes it, and
+    /// the canvas of the standalone SVG, or only the fault for a
+    /// non-positive grid. An include naming no connector on the subject is
+    /// skipped, and leaves no canvas: rendering reports it.
+    pub(super) fn layout(&self, design: &Design, subject: &Instance, view: &View) -> ViewLayout {
+        let step = match GridFault::positive_step(view, DEFAULT_GRID) {
+            Ok(step) => step,
+            Err(fault) => return ViewLayout::bad_grid(fault),
+        };
+        let boxes = view
+            .includes
+            .iter()
+            .enumerate()
+            .filter_map(|(include, inc)| {
+                let connector = subject
+                    .connectors
+                    .get(&ConnectorName::from(inc.instance.as_str()))?;
+                Some(IncludeBox {
+                    include,
+                    bounds: Table::new(connector, subject, inc, step).bounds(),
+                })
+            })
+            .collect();
+        let canvas = Table::all(subject, view, step).ok().map(|tables| {
+            let vb = viewbox(design, view, &tables, SvgMode::Standalone);
+            Canvas::new(vb.width, vb.height)
+        });
+        ViewLayout {
+            boxes,
+            canvas,
+            ..ViewLayout::default()
+        }
+    }
 }
 
 struct Table {
@@ -131,7 +147,30 @@ struct Table {
 }
 
 impl Table {
-    fn new(connector: &Connector, subject: &Instance, cx: f64, cy: f64) -> Self {
+    /// One table per include of `view`, in include order, on a grid of
+    /// `step` world units; fails on an include naming no connector of
+    /// `subject`.
+    fn all(subject: &Instance, view: &View, step: f64) -> ViewResult<Vec<Self>> {
+        view.includes
+            .iter()
+            .map(|inc| {
+                let name = inc.instance.as_str();
+                let connector = subject
+                    .connectors
+                    .get(&ConnectorName::from(name))
+                    .ok_or_else(|| ViewErrorKind::UnknownConnector {
+                        subject: subject.type_name.to_string(),
+                        connector: name.to_string(),
+                    })?;
+                Ok(Self::new(connector, subject, inc, step))
+            })
+            .collect()
+    }
+
+    /// The table for `connector`, centred where `inc` places it on a grid
+    /// of `step` world units.
+    fn new(connector: &Connector, subject: &Instance, inc: &Include, step: f64) -> Self {
+        let (cx, cy) = (inc.x * step, inc.y * step);
         let title = connector.name.to_string();
         let subtitle = connector_subtitle(connector);
         let rows = connector
@@ -172,6 +211,14 @@ impl Table {
             y: cy - height / 2.0,
             width,
             height,
+        }
+    }
+
+    fn bounds(&self) -> Bounds {
+        Bounds {
+            origin: Point::new(self.x, self.y),
+            width: self.width,
+            height: self.height,
         }
     }
 }
@@ -583,7 +630,17 @@ fn render_face(face: &Face, x: f64, y: f64) -> Group {
     group
 }
 
-fn viewbox(tables: &[Table], has_title: bool) -> ViewBox {
+/// The viewBox `view` is drawn in under `mode`: its tables, with room for
+/// the title and the identity stamp when the mode draws them.
+fn viewbox(design: &Design, view: &View, tables: &[Table], mode: SvgMode) -> ViewBox {
+    let mut vb = tables_viewbox(tables, mode.shows_title(view));
+    if mode.stamp(design).is_some() {
+        vb.height += STAMP_HEIGHT;
+    }
+    vb
+}
+
+fn tables_viewbox(tables: &[Table], has_title: bool) -> ViewBox {
     if tables.is_empty() {
         return ViewBox {
             x: 0.0,
@@ -620,6 +677,7 @@ fn viewbox(tables: &[Table], has_title: bool) -> ViewBox {
 mod tests {
     use super::*;
     use crate::dsl::ir::{Include, InstanceName, TypeName, ViewKind};
+    use crate::dsl::span::{FileId, Span};
     use crate::render::schematic::tests::design_from;
 
     fn pinout_view(subject: &str, includes: &[(&str, f64, f64)]) -> View {
@@ -627,6 +685,7 @@ mod tests {
             kind: ViewKind::Pinout,
             title: "Pinout".to_string(),
             grid: None,
+            span: Span::new(FileId(0), 0, 0),
             subject: TypeName::from(subject),
             has_enclosure: false,
             enclosure: Vec::new(),
@@ -639,6 +698,7 @@ mod tests {
                     x: *x,
                     y: *y,
                     ports: Vec::new(),
+                    span: Span::new(FileId(0), 0, 0),
                 })
                 .collect(),
             texts: Vec::new(),
@@ -768,7 +828,8 @@ component m {
             .get(&ConnectorName::from("x1"))
             .expect("connector");
 
-        let table = Table::new(connector, subject, 0.0, 0.0);
+        let view = pinout_view("m", &[("x1", 0.0, 0.0)]);
+        let table = Table::new(connector, subject, &view.includes[0], DEFAULT_GRID);
         let face = table.face.as_ref().expect("face");
 
         assert_eq!(table.width, face.width() + 2.0 * FACE_PAD);
@@ -880,6 +941,6 @@ component m {
                 SvgMode::Standalone,
             )
             .expect_err("unknown connector");
-        assert!(matches!(err, Error::UnknownConnector { .. }));
+        assert!(matches!(err, ViewErrorKind::UnknownConnector { .. }));
     }
 }

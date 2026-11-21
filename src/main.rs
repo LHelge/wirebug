@@ -4,11 +4,11 @@
 //! `render` writes one SVG (or PNG) per view in the design — or, with
 //! `--pdf`, a single multi-page A4 PDF — and `serve` runs a live-reloading
 //! dev server. Each discovers the project by walking up to `wirebug.toml`
-//! when given no target.
+//! when given no target. A view that fails to render is reported by title
+//! and left out; the others are still written, and `render` exits non-zero.
 
 mod cli;
 
-use std::fs;
 use std::net::IpAddr;
 use std::path::Path;
 use std::process::ExitCode;
@@ -21,66 +21,8 @@ use tracing_subscriber::EnvFilter;
 use cli::{Cli, Command, ManifestCommand};
 use wirebug::dsl::diagnostics::Problem;
 use wirebug::dsl::{self, CheckReport, Format};
-use wirebug::error::Error;
-
-#[derive(Debug, Clone, Copy)]
-enum RenderFormat {
-    Svg,
-    Png { scale: f32 },
-}
-
-impl RenderFormat {
-    fn from_png_flag(png: bool) -> Self {
-        if png {
-            Self::Png { scale: 2.0 }
-        } else {
-            Self::Svg
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Svg => "svg",
-            Self::Png { .. } => "png",
-        }
-    }
-
-    fn write_views(
-        self,
-        views: Vec<wirebug::render::RenderedView>,
-        out_dir: &Path,
-    ) -> Result<Vec<wirebug::render::RenderedView>> {
-        match self {
-            Self::Svg => {
-                for view in &views {
-                    write_file(out_dir, &view.filename, view.svg.as_bytes())?;
-                }
-                Ok(views)
-            }
-            Self::Png { scale } => {
-                let rasterizer = wirebug::render::png::PngRasterizer::new();
-                let mut index_views = Vec::with_capacity(views.len());
-                for view in views {
-                    let filename = Path::new(&view.filename)
-                        .with_extension("png")
-                        .to_string_lossy()
-                        .into_owned();
-                    let bytes = rasterizer
-                        .to_png(&view.svg, scale)
-                        .context("rasterising view to PNG")?;
-                    write_file(out_dir, &filename, &bytes)?;
-                    index_views.push(wirebug::render::RenderedView {
-                        title: view.title,
-                        filename,
-                        kind: view.kind,
-                        svg: String::new(),
-                    });
-                }
-                Ok(index_views)
-            }
-        }
-    }
-}
+use wirebug::render::output::{Output, ViewFormat};
+use wirebug::render::png::PNG_SCALE;
 
 fn main() -> ExitCode {
     match run(Cli::parse()) {
@@ -141,7 +83,7 @@ fn serve_command(target: Option<&Path>, host: IpAddr, port: u16) -> Result<ExitC
 }
 
 fn check_command(target: Option<&Path>, strict: bool, format: Format) -> ExitCode {
-    let report = dsl::check_project(target);
+    let report = wirebug::check_project(target);
     let counts = report.counts();
 
     match format {
@@ -183,7 +125,7 @@ fn render_command(
     pdf: bool,
     embed: bool,
 ) -> Result<ExitCode> {
-    let report = dsl::check_project(target);
+    let report = wirebug::check_project(target);
     let counts = report.counts();
 
     // Surface any check problems first; an erroring project (or, under
@@ -202,82 +144,27 @@ fn render_command(
         return Ok(ExitCode::FAILURE);
     };
 
-    // PDF page furniture carries the view title and project identity at
-    // a fixed size, so its SVGs render plain for a homogeneous look.
-    let mode = if pdf {
-        wirebug::render::SvgMode::Plain
-    } else if embed {
-        wirebug::render::SvgMode::Embed
+    let output = if pdf {
+        Output::Pdf
     } else {
-        wirebug::render::SvgMode::Standalone
+        let format = if png {
+            ViewFormat::Png { scale: PNG_SCALE }
+        } else {
+            ViewFormat::Svg
+        };
+        Output::Views { format, embed }
     };
-    let views = wirebug::render_views(design, mode).context("rendering views")?;
-
-    fs::create_dir_all(out_dir).map_err(|source| Error::Write {
-        path: out_dir.to_path_buf(),
-        source,
-    })?;
-
-    // PDF is one artifact for the whole design, not per-view files plus a
-    // sidecar, so it exits before the per-view format machinery.
-    if pdf {
-        let bytes = wirebug::render::pdf::PdfExporter::new()
-            .to_pdf(&views, design.manifest.as_ref())
-            .context("exporting views to PDF")?;
-        let filename = wirebug::render::pdf_filename(design.manifest.as_ref());
-        write_file(out_dir, &filename, &bytes)?;
-        eprintln!(
-            "rendered {} view(s) as pdf to {} ({})",
-            views.len(),
-            out_dir.display(),
-            out_dir.join(&filename).display(),
-        );
-        return Ok(ExitCode::SUCCESS);
+    let written = output.write(design, out_dir)?;
+    for failure in &written.failures {
+        eprintln!("error: {failure}");
     }
-
-    let render_format = RenderFormat::from_png_flag(png);
-    let index_views = render_format.write_views(views, out_dir)?;
-
-    // Embed-mode writes a structured manifest sidecar for a downstream
-    // host (e.g. a static site generator). The HTML index is for
-    // wirebug's own browsing UI and would only get in the host's way.
-    let sidecar_path = if embed {
-        let manifest = wirebug::render::embed_manifest(&index_views, design.manifest.as_ref());
-        let json = serde_json::to_string_pretty(&manifest).context("serializing embed manifest")?;
-        let path = out_dir.join(wirebug::render::EMBED_MANIFEST_FILENAME);
-        write_file(
-            out_dir,
-            wirebug::render::EMBED_MANIFEST_FILENAME,
-            json.as_bytes(),
-        )?;
-        write_file(
-            out_dir,
-            wirebug::render::EMBED_STYLESHEET_FILENAME,
-            wirebug::render::embed_stylesheet().as_bytes(),
-        )?;
-        path
+    eprintln!("{written}");
+    // A render that left out a failed view fails, so scripts and CI notice.
+    Ok(if written.failures.is_empty() {
+        ExitCode::SUCCESS
     } else {
-        let index = wirebug::index_html(&index_views, design.manifest.as_ref(), false)
-            .context("rendering HTML index")?;
-        let path = out_dir.join(wirebug::render::INDEX_FILENAME);
-        write_file(out_dir, wirebug::render::INDEX_FILENAME, index.as_bytes())?;
-        path
-    };
-
-    eprintln!(
-        "rendered {} view(s) as {} to {} ({})",
-        index_views.len(),
-        render_format.label(),
-        out_dir.display(),
-        sidecar_path.display(),
-    );
-    Ok(ExitCode::SUCCESS)
-}
-
-fn write_file(out_dir: &Path, filename: &str, contents: &[u8]) -> Result<()> {
-    let path = out_dir.join(filename);
-    fs::write(&path, contents).map_err(|source| Error::Write { path, source })?;
-    Ok(())
+        ExitCode::FAILURE
+    })
 }
 
 /// Print the project's manifest version (`v<version>`) to stdout, or the

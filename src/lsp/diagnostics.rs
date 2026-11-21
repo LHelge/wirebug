@@ -16,7 +16,7 @@ use crate::dsl::lex::{lex, significant};
 use crate::dsl::parse::parse_file;
 use crate::dsl::project::{self, Overlay};
 use crate::dsl::span::FileId;
-use crate::dsl::{elaborate, resolve, validate};
+use crate::pipeline;
 
 use super::complete::{self, CompletionIndex};
 use super::line_index::LineIndex;
@@ -79,7 +79,7 @@ pub(crate) fn check_open_documents<'a>(
         };
         if let Ok(lexemes) = lex(&text, FileId(0)) {
             let tokens = significant(&lexemes);
-            if let Some(file) = parse_file(tokens, FileId(0), text.len()).file {
+            if let Some(file) = parse_file(tokens, FileId(0), &text).file {
                 index.add_unlinked(canonical, &file);
             }
         }
@@ -107,8 +107,9 @@ fn unlinked(entry: &Path) -> Diagnostic {
 }
 
 /// Run the pipeline for one project entry — `check_project`'s stages over
-/// the overlay — converting each problem to a located diagnostic and
-/// snapshotting the resolved registry for completion. Every file the load
+/// the overlay, through the same `pipeline::check_loaded` — converting each
+/// problem to a located diagnostic and snapshotting the resolved registry
+/// for completion. Every file the load
 /// pulled in is recorded (by its loader-canonical path) into `loaded`, so
 /// the caller can spot open documents no project reached.
 fn check_one(
@@ -129,12 +130,9 @@ fn check_one(
             }
         }
 
-        let mut resolved = resolve::resolve(project);
-        problems.append(&mut resolved.problems);
-        index = Some(complete::build_index(project, &resolved));
-        let (_, elab_problems) = elaborate::elaborate(&resolved);
-        problems.extend(elab_problems);
-        problems.extend(validate::validate(&resolved));
+        let checked = pipeline::check_loaded(project, std::mem::take(&mut problems));
+        index = Some(complete::build_index(project, &checked.resolved));
+        problems = checked.problems;
     }
 
     let located = problems
@@ -147,8 +145,8 @@ fn check_one(
 type FileTable<'a> = HashMap<String, (Uri, LineIndex, &'a str)>;
 
 /// Convert one [`Problem`] to `(uri, diagnostic)` via its miette surface:
-/// the primary label gives the range, secondary labels become related
-/// information, and a span-less problem anchors at the top of the entry
+/// the primary label gives the range, secondary labels and the labels of
+/// related notes become related information, and a span-less problem anchors at the top of the entry
 /// file.
 fn convert(problem: &Problem, files: &FileTable, entry: &Path) -> Option<(Uri, Diagnostic)> {
     let labels: Vec<miette::LabeledSpan> =
@@ -159,11 +157,22 @@ fn convert(problem: &Problem, files: &FileTable, entry: &Path) -> Option<(Uri, D
         None => (uri::to_uri(entry)?, Range::default()),
     };
 
-    let related: Vec<DiagnosticRelatedInformation> = labels
-        .iter()
+    // Secondary labels share the problem's file; a related note (e.g. the
+    // first of two same-titled views) brings its own, possibly another, file.
+    let secondary = labels
+        .into_iter()
         .skip(1)
-        .filter_map(|label| {
-            let (uri, range) = locate(problem, label, files)?;
+        .map(|label| (problem as &dyn miette::Diagnostic, label));
+    let notes = problem.related().into_iter().flatten().flat_map(|note| {
+        note.labels()
+            .into_iter()
+            .flatten()
+            .map(move |label| (note, label))
+    });
+    let related: Vec<DiagnosticRelatedInformation> = secondary
+        .chain(notes)
+        .filter_map(|(owner, label)| {
+            let (uri, range) = locate(owner, &label, files)?;
             Some(DiagnosticRelatedInformation {
                 location: Location { uri, range },
                 message: label.label().unwrap_or("related").to_string(),
@@ -198,12 +207,12 @@ fn convert(problem: &Problem, files: &FileTable, entry: &Path) -> Option<(Uri, D
 }
 
 /// Resolve one label to a file URI and range. The label's file comes back
-/// out of the problem's own `#[source_code]` (its `NamedSource` name is the
+/// out of its diagnostic's own `#[source_code]` (its `NamedSource` name is the
 /// path string the loader stamped); a file the project also loaded gets a
 /// precise UTF-16 range via its [`LineIndex`], anything else (e.g.
 /// `wirebug.toml`) falls back to miette's char-counted line/column.
 fn locate(
-    problem: &Problem,
+    problem: &dyn miette::Diagnostic,
     label: &miette::LabeledSpan,
     files: &FileTable,
 ) -> Option<(Uri, Range)> {
@@ -289,6 +298,47 @@ mod tests {
         assert_ne!(unknown.range.start, unknown.range.end, "non-empty span");
     }
 
+    /// Every broken statement of a buffer gets its own squiggle at once,
+    /// with none for what the skipped statements leave missing (the wire
+    /// to `p`, whose port is the first broken line).
+    #[test]
+    fn each_broken_statement_is_its_own_diagnostic() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        manifest(dir.path());
+        write(
+            dir.path(),
+            "lamp.wb",
+            "component Lamp { pub port a \"A\"; pub port b \"B\"; }\n",
+        );
+        let main = write(
+            dir.path(),
+            "main.wb",
+            "use Lamp from \"lamp.wb\";\ncomponent Root { l: Lamp; }\n",
+        );
+
+        let mut overlay = Overlay::default();
+        overlay.insert(
+            &main,
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n    pub port p \"P\" pin;\n    wire red [p, l.a];\n    wire red 1 [p, l.a];\n}\nview schematic \"S\" {\n    include l at (0 0);\n}\n"
+                .to_string(),
+        );
+        let (by_uri, _) = check_open_documents([main.clone()].iter(), &overlay);
+        let main_uri = uri::to_uri(&main.canonicalize().unwrap()).unwrap();
+        let lines: Vec<(String, u32)> = by_uri
+            .get(&main_uri)
+            .expect("diagnostics on main.wb")
+            .iter()
+            .map(|d| {
+                let Some(NumberOrString::String(code)) = &d.code else {
+                    panic!("diagnostic without a code: {d:?}");
+                };
+                (code.clone(), d.range.start.line)
+            })
+            .collect();
+        let parse = || "wirebug::parse".to_string();
+        assert_eq!(lines, [(parse(), 3), (parse(), 4), (parse(), 8)]);
+    }
+
     /// The overlay drives the check: an error introduced only in the
     /// buffer must surface without touching the disk.
     #[test]
@@ -309,6 +359,85 @@ mod tests {
             by_uri.get(&main_uri).is_some_and(|d| !d.is_empty()),
             "expected the overlay's lex error: {by_uri:?}"
         );
+    }
+
+    /// Two views titled alike in different files: the warning lands on the
+    /// repeat's file and points at the first view, in the other file, as
+    /// related information.
+    #[test]
+    fn duplicate_view_title_relates_the_first_view_in_another_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        manifest(dir.path());
+        let main = write(
+            dir.path(),
+            "main.wb",
+            "use Root from \"more.wb\";\ncomponent Root { }\nview schematic \"S\" { }\n",
+        );
+        let more = write(
+            dir.path(),
+            "more.wb",
+            "extend Root { }\nview schematic \"S\" { }\n",
+        );
+
+        let (by_uri, _) = check_open_documents([main.clone()].iter(), &Overlay::default());
+        let main_uri = uri::to_uri(&main.canonicalize().unwrap()).unwrap();
+        let more_uri = uri::to_uri(&more.canonicalize().unwrap()).unwrap();
+        let diags = by_uri.get(&more_uri).expect("diagnostics on more.wb");
+        let dup = diags
+            .iter()
+            .find(|d| {
+                matches!(&d.code, Some(NumberOrString::String(c)) if c == "wirebug::duplicate_view_title")
+            })
+            .expect("a duplicate_view_title diagnostic");
+        assert_eq!(dup.severity, Some(DiagnosticSeverity::WARNING));
+        assert_eq!(dup.range.start.line, 1, "the repeat's view line");
+        let related = dup.related_information.as_deref().expect("related info");
+        let [first] = related else {
+            panic!("expected one related location, got {related:?}");
+        };
+        assert_eq!(first.location.uri, main_uri);
+        assert_eq!(first.location.range.start.line, 2, "the first view's line");
+        assert_eq!(first.message, "first titled here");
+    }
+
+    #[test]
+    fn overlapping_includes_are_published_with_both_includes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        manifest(dir.path());
+        write(
+            dir.path(),
+            "lamp.wb",
+            "component Lamp { pub port a \"A\"; }\n",
+        );
+        let main = write(
+            dir.path(),
+            "main.wb",
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n    m: Lamp;\n}\nview schematic \"S\" {\n    include l at (0, 0);\n    include m at (1, 1);\n}\n",
+        );
+
+        let (by_uri, _) = check_open_documents([main.clone()].iter(), &Overlay::default());
+        let main_uri = uri::to_uri(&main.canonicalize().unwrap()).unwrap();
+        let diags = by_uri.get(&main_uri).expect("diagnostics on main.wb");
+        let overlap = diags
+            .iter()
+            .find(|d| {
+                matches!(&d.code, Some(NumberOrString::String(c)) if c == "wirebug::overlapping_includes")
+            })
+            .expect("an overlapping_includes diagnostic");
+        assert_eq!(overlap.severity, Some(DiagnosticSeverity::ERROR));
+        assert_eq!(overlap.range.start.line, 7, "the later include's line");
+        let related = overlap
+            .related_information
+            .as_deref()
+            .expect("related info");
+        let [first] = related else {
+            panic!("expected one related location, got {related:?}");
+        };
+        assert_eq!(
+            first.location.range.start.line, 6,
+            "the earlier include's line"
+        );
+        assert_eq!(first.message, "`l` is placed here");
     }
 
     #[test]

@@ -399,9 +399,9 @@ wire <color>[/<tracer>] <gauge_mm2> ["<label>"] [<endpoint>, <endpoint>, ...];
 ```
 
 - `color` — bare identifier from the IEC 60757 vocabulary: `black`, `brown`, `red`, `orange`, `yellow`, `green`, `blue`, `violet`, `grey`, `white`, `pink`, `turquoise`, `gold`, `silver` (synonyms `purple` and `gray` normalise to `violet`/`grey`). Any other name still renders verbatim but raises a `check` warning (fatal under `--strict`). A two-tone (tracer/striped) wire writes base and tracer separated by a slash — `green/yellow` — and draws as the base colour with a dashed tracer overlay; colour-code annotations join the IEC 60757 codes with a slash (`GN/YE`).
-- `gauge_mm2` — number in mm² (e.g., `50`, `4`, `0.5`, `0.25`).
+- `gauge_mm2` — number in mm² (e.g., `50`, `4`, `0.5`, `0.25`). It must be positive: `check` rejects `0` or a negative gauge (`invalid_gauge`).
 - `"<label>"` — optional signal name (e.g., `"HV+"`, `"CAN H"`), shown on the wire in a harness drawing. Omit it when the net name adds nothing.
-- The bracketed list contains two or more endpoints. Each endpoint is `instance.port` or just `port` if referencing the enclosing component's own port (a `pub` port being wired to internals).
+- The bracketed list contains two or more endpoints. Each endpoint is `instance.port` or just `port` if referencing the enclosing component's own port (a `pub` port being wired to internals). An endpoint may appear only once per wire: `check` rejects `[ecu.gnd, ecu.gnd]` (`duplicate_endpoint`). Two separate wires ending on the same port are fine — that is a double crimp.
 
 ```
 // two-endpoint wire
@@ -439,7 +439,8 @@ Format:
 - `cable <name> ["<label>"] { <properties> <wires> }` — `name` is a snake_case designator (unique within the component, like a connector's); the optional quoted label is shown on the cable box (the designator is used when omitted).
 - Properties are `key: value;` lines, before the wires. Two keys are supported:
   - `type: "<string>";` — a free-text construction note (e.g. `"Twisted pair"`).
-  - `length: <number>;` — length in **metres** (a bare number, e.g. `2.5`; no unit suffix).
+  - `length: <number>;` — length in **metres** (a bare number, e.g. `2.5`; no unit suffix). It must be positive: `check` rejects `0` or a negative length (`invalid_length`).
+- A cable needs at least one conductor: `check` warns on a cable with no wires (`empty_cable`).
 - Each `wire` uses the exact same syntax as a loose wire, **but must have exactly two endpoints** — a cable conductor is one physical run from one pin to another. (A shared rail that fans out to three+ pins is not a single conductor; keep it a loose multi-endpoint `wire`, outside any cable.)
 - A `twisted { <wire> <wire> }` group wraps exactly two conductors that are twisted together as a pair. Groups and plain wires may interleave freely, so one cable can carry straight power conductors alongside a twisted signal pair:
 
@@ -466,6 +467,8 @@ A cable's wires are still ordinary connections: they show in schematic views lik
 
 A view declares a rendering target — what to render, at what positions, with what grid scale. There are three kinds: **`schematic`** (component boxes with ports on authored sides), **`harness`** (WireViz-style connector pin tables with cable bundles), and **`pinout`** (physical connector faces plus pin tables). They differ in what an `include` selects.
 
+A view documents its file's single top-level component, and is drawn against an instance of it: a view of a component the design never instantiates (say, in a library file used only for its connector types) is the `uninstantiated_view_subject` error.
+
 ### Schematic views
 
 Each `schematic` include also says which of that component's ports to show, on which side, and in what order.
@@ -490,8 +493,8 @@ view schematic "System Overview" {
 
 Format:
 
-- `view <kind> "<title>" { ... }` — `kind` is `schematic`, `harness`, or `pinout`.
-- `grid: <n>;` — pixels per grid cell. Optional; a sensible default applies.
+- `view <kind> "<title>" { ... }` — `kind` is `schematic`, `harness`, or `pinout`. Titles are unique across the project: a repeated title (in any file) is the `duplicate_view_title` warning; the repeat still renders, to a `_2`-suffixed file.
+- `grid: <n>;` — pixels per grid cell. Optional; a sensible default applies. It must be positive (`invalid_grid`), and in a `schematic` at least 7.5: ports sit two steps apart and the pitch must clear a port label, so `check` rejects a finer grid (`grid_too_fine`, naming the minimum). Harness and pinout views take any positive grid.
 - `include <name> at (x, y);` or `include <name> at (x, y) ports { ... }` — place a component by its instance name in the surrounding scope, at grid-cell coordinates (negative is fine). A bare include is a statement and ends with `;`; an include with a `ports { }` block ends at the closing brace, with **no** trailing `;` (like any other brace block).
 - `ports { <side>: <port>, <port>; ... }` — optional. Each line lists the ports on one `side` (`north`, `east`, `south`, `west`), in the order they should appear on that edge. A `west: a, b;` line puts `a` above `b` on the west edge. List the same side more than once and the lines concatenate.
 
@@ -500,6 +503,10 @@ Format:
 **Wires are NOT listed in views.** A wire from the model is drawn only when *both* of a segment's endpoints are listed ports on included components; otherwise that segment drops silently. So a listed port whose wire goes to an unlisted (or excluded) port shows as a bare stub with no line.
 
 Sides are authored, never guessed: place a port on the side facing the box it wires to, and line the two boxes up so the wire runs straight (ports sit two grid steps apart, centred on each side). Private (non-`pub`) ports cannot be placed in a view, the same as they cannot be wired from outside.
+
+Leave room between boxes. `check` lays each view out with the renderer's own box sizes and rejects includes whose boxes overlap (`overlapping_includes`, in every view kind; touching edges are fine). In a schematic a wire leaves its port by one grid step and keeps one step clear of every other box, so a wired port needs **two grid steps** of space before the box it faces (`include_too_close`), and boxes closer than two steps to each other leave no gap to route through (`unroutable_wire` when a wire is walled in). The enclosure is never in the way.
+
+Keep a view compact: its drawing may span at most 8192 units on a side, margins, title and stamp included (`view_too_large`, an error in every view kind, naming the size and labelled on the title and the includes farthest apart). Positions count grid steps, so `at (1000, 0)` on `grid: 20;` is already 20000 units out; split a sprawling drawing into several views instead.
 
 ### Harness views
 
@@ -520,6 +527,8 @@ view harness "Main HV harness" {
 - A connector must have a designator to be included (see Connector blocks). Including the same instance's other connectors is just more `include` lines.
 
 **Cables are derived, like schematic wires.** A wire renders as a cable strand only when *both* of its endpoints land on *included* connectors; ends on connectorless ports, excluded connectors, or the parent's own ports drop silently. So connectorize the external `pub port`s you want to see in a harness (wrap them in a named `connector` block).
+
+**Every conductor belongs in some harness view.** Once a component has at least one harness view, `check` warns about each wire segment between connectors of two of its children that none of its harness views draws (`undrawn_conductor`, fatal under `--strict`) — the conductor would be missing from every build drawing. A multi-endpoint rail is judged per chain segment (`[a, b, c]` → `a–b`, `b–c`); an inline connector is covered when a view includes either half; segments with an end on the parent's own port or a connectorless port, and jumpers within one connector, are not harness conductors. A component with no harness view is never reported. Fix it by adding the missing connectors to a loom's view, or a view for the missing loom.
 
 A wire that belongs to a declared `cable` (see Cables) draws WireViz-style: a labelled cable box sits between the two connectors it spans, titled with the cable's label and its `type · length`, one coloured strand per conductor. Loose wires between the same connector pair instead bundle into a plain strand group, each strand drawn in its `color` and annotated with its `label` and gauge.
 
@@ -552,6 +561,15 @@ Views live in the same file as the component they primarily document — like un
 - **Port names** are short, snake_case: `hv_pos`, `coil_p`, `iso_spi_up_h`. Polarity suffixes: `_p`/`_n` for signal pairs, `_pos`/`_neg` for power, `_h`/`_l` for differential pairs.
 - **Port labels** are short, human-readable, quoted: `"HV+"`, `"COIL+"`, `"ISO SPI+"`.
 - **Instance names** can carry role: `c_main_pos`, `c_precharge`, `module_1`, `inv`. Short is fine when context is clear.
+
+### Reserved and contextual words
+
+Keywords come in two kinds. Words are case-sensitive, so `Layout` or `Wire` is never a keyword.
+
+- **Reserved** — the words that declare the design: `use`, `component`, `extend`, `connector_type`, `connector`, `inline`, `port`, `pub`, `pin`, `pins`, `wire`, `cable`, `twisted`, `view`. They can never name anything; `pub port wire "W";` is an error, `'wire' is a reserved word`. Pick another name (`wire_1`, `w`).
+- **Contextual** — words that mean something only inside a view, a `connector_type` layout, a cavity line or a `use` line: `from`, `include`, `text`, `at`, `grid`, `enclosure`, `ports`, `layout`, `face`, `cavity`, `rows`, `cols`, `numbering`, `size`. Anywhere a name belongs they are ordinary names, so `pub port size "SIZE";`, an instance `grid: Sensor;`, `connector layout: Plug { … }`, `cable text { … }` and `include at at (1, 2);` are all valid.
+
+Other words the grammar reads in one place only (`schematic`, `harness`, `pinout`, `type`, `length`, `part`, `male`, `female`, `north`, `east`, `south`, `west`, the wire colors, the numbering modes, `large`) are not keywords at all.
 
 ## Common patterns
 

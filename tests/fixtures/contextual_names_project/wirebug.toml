@@ -1,0 +1,4 @@
+[project]
+name = "contextual-names-project"
+version = "0.1.0"
+description = "Fixture naming ports, instances, connectors and cables with contextual keywords"

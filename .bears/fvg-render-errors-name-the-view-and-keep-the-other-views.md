@@ -1,16 +1,17 @@
 ---
 id: fvg
 title: Render errors name the view and keep the other views
-status: open
+status: done
 priority: P2
 created: "2026-11-20T21:40:31.977782301Z"
-updated: "2026-11-20T21:40:31.977782301Z"
+updated: "2026-11-20T22:56:43.759746748Z"
 tags:
   - render
   - cli
 depends_on:
   - "2xa"
 parent: kss
+attempts: 1
 ---
 
 ## Summary

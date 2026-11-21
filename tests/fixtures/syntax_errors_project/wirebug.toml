@@ -1,0 +1,4 @@
+[project]
+name = "syntax-errors-project"
+version = "0.1.0"
+description = "Fixture with several syntax errors across two files"

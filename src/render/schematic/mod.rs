@@ -15,13 +15,14 @@ mod route;
 use svg::Document;
 use svg::node::element::{Group, Style, Text};
 
-use crate::dsl::ir::{Design, Instance, View};
-use crate::error::{Error, Result};
-use crate::render::SvgMode;
+use crate::dsl::ir::{Design, Instance, InstanceName, View};
+use crate::error::{ViewErrorKind, ViewResult};
 use crate::render::geometry::Point;
+use crate::render::lint::{CrowdedPort, IncludeBox, UnroutableWire, ViewLayout, WireEndAt};
 use crate::render::stamp::{STAMP_HEIGHT, STAMP_INSET, stamp_element};
+use crate::render::{Canvas, SvgMode};
 
-use layout::{Grid, Placement};
+use layout::{Connection, Grid, PlacedPort, Placement, ViewBox};
 use route::Router;
 
 /// Grid step (world units) used when a view doesn't specify one. Ports
@@ -82,32 +83,15 @@ impl SchematicRenderer {
         subject: &Instance,
         view: &View,
         mode: SvgMode,
-    ) -> Result<String> {
-        let step = view.grid.unwrap_or(DEFAULT_GRID);
-        if step <= 0.0 {
-            return Err(Error::NonPositiveGrid { grid: step });
-        }
-        // Ports sit two steps apart, so that pitch must clear a port
-        // label or adjacent labels would overlap.
-        let min_step = MIN_PORT_PITCH / 2.0;
-        if step < min_step {
-            return Err(Error::GridTooSmall {
-                grid: step,
-                minimum: min_step,
-            });
-        }
-        let grid = Grid::new(step);
+    ) -> ViewResult<String> {
+        let grid = Grid::of_view(view)?;
         let placement = Placement::compute(design, subject, view, grid)?;
 
         // Route before sizing the canvas: wires can detour outside the
         // component bounds, so the viewBox has to enclose them too.
-        let router = Router::build(&placement, step);
+        let router = Router::build(&placement, grid.step());
         let connections = placement.connections();
-        let pairs: Vec<_> = connections.iter().map(|c| (c.a, c.b)).collect();
-        // Spread parallel wires in a shared channel by the port pitch (two
-        // steps), so a nudged bundle matches the spacing of the ports it
-        // fans out from rather than packing twice as tight.
-        let wires = router.route_all(&pairs, grid.pitch())?;
+        let wires = route(&router, &connections, grid)?;
 
         let mut doc = Document::new().set("xmlns", "http://www.w3.org/2000/svg");
         if mode.is_embed() {
@@ -116,12 +100,9 @@ impl SchematicRenderer {
             doc = doc.add(Style::new(STYLE));
         }
 
-        let has_title = !view.title.is_empty() && mode.titled();
-        let mut viewbox = placement.viewbox(has_title, &wires);
-        let manifest = mode.stamped().then_some(design.manifest.as_ref()).flatten();
-        if manifest.is_some() {
-            viewbox.height += STAMP_HEIGHT;
-        }
+        let has_title = mode.shows_title(view);
+        let viewbox = viewbox(design, view, &placement, &wires, mode);
+        let manifest = mode.stamp(design);
         doc = doc.set(
             "viewBox",
             format!(
@@ -187,12 +168,124 @@ impl SchematicRenderer {
 
         Ok(doc.to_string())
     }
+
+    /// What `check` needs from `view`'s layout: each include's box, every
+    /// wired port whose wire [`Self::render`] could not route because
+    /// another box sits inside its clearance, every wire the router finds
+    /// no path for, and, when every wire routes, the canvas of the
+    /// standalone SVG. Nothing but the fault when the grid is invalid: no
+    /// box can be laid out on it.
+    pub(super) fn layout(&self, design: &Design, subject: &Instance, view: &View) -> ViewLayout {
+        let grid = match Grid::of_view(view) {
+            Ok(grid) => grid,
+            Err(fault) => return ViewLayout::bad_grid(fault),
+        };
+        let Ok(placement) = Placement::compute(design, subject, view, grid) else {
+            return ViewLayout::default();
+        };
+        let include_named =
+            |name: &InstanceName| view.includes.iter().position(|inc| &inc.instance == name);
+        let include_of = |component: usize| {
+            let (name, _) = placement.components.get_index(component)?;
+            include_named(name)
+        };
+        let boxes = placement
+            .components
+            .values()
+            .enumerate()
+            .filter_map(|(component, pc)| {
+                Some(IncludeBox {
+                    include: include_of(component)?,
+                    bounds: pc.bounds(),
+                })
+            })
+            .collect();
+        let router = Router::build(&placement, grid.step());
+        let crowded: Vec<_> = router
+            .blocked_stubs(&placement)
+            .into_iter()
+            .filter_map(|blocked| {
+                Some(CrowdedPort {
+                    include: include_of(blocked.owner)?,
+                    port: blocked.port.port.clone(),
+                    by: include_of(blocked.blocker)?,
+                })
+            })
+            .collect();
+        let end = |owner: Option<&InstanceName>, port: &PlacedPort| WireEndAt {
+            include: owner.and_then(include_named),
+            port: port.port.clone(),
+        };
+        let connections = placement.connections();
+        let unroutable: Vec<_> = connections
+            .iter()
+            .filter(|c| !router.connects(c.a, c.b))
+            .map(|c| UnroutableWire {
+                ends: [end(c.owners[0], c.a), end(c.owners[1], c.b)],
+            })
+            .collect();
+        // The canvas encloses the routed wires, and only a view whose every
+        // wire routes is drawn at all.
+        let canvas = if crowded.is_empty() && unroutable.is_empty() {
+            route(&router, &connections, grid).ok().map(|wires| {
+                let vb = viewbox(design, view, &placement, &wires, SvgMode::Standalone);
+                Canvas::new(vb.width, vb.height)
+            })
+        } else {
+            None
+        };
+        ViewLayout {
+            boxes,
+            crowded,
+            unroutable,
+            canvas,
+            ..ViewLayout::default()
+        }
+    }
+}
+
+/// Route every connection as [`SchematicRenderer::render`] draws it, or
+/// name the wire that has no route.
+fn route(
+    router: &Router,
+    connections: &[Connection<'_>],
+    grid: Grid,
+) -> ViewResult<Vec<Vec<Point>>> {
+    let pairs: Vec<_> = connections.iter().map(|c| (c.a, c.b)).collect();
+    // Spread parallel wires in a shared channel by the port pitch (two
+    // steps), so a nudged bundle matches the spacing of the ports it fans
+    // out from rather than packing twice as tight.
+    router.route_all(&pairs, grid.pitch()).map_err(|unrouted| {
+        let [from, to] = connections[unrouted.pair].ends();
+        ViewErrorKind::RouteFailed { from, to }
+    })
+}
+
+/// The viewBox `view` is drawn in under `mode`: `placement` and its routed
+/// `wires`, with room for the title and the identity stamp when the mode
+/// draws them.
+fn viewbox(
+    design: &Design,
+    view: &View,
+    placement: &Placement,
+    wires: &[Vec<Point>],
+    mode: SvgMode,
+) -> ViewBox {
+    let mut viewbox = placement.viewbox(mode.shows_title(view), wires);
+    if mode.stamp(design).is_some() {
+        viewbox.height += STAMP_HEIGHT;
+    }
+    viewbox
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::dsl::ir::{Include, InstanceName, PortName, Side, TextBox, TypeName, ViewKind};
+    use crate::dsl::ir::{
+        Include, InstanceName, PortName, Side, TextBox, TypeName, ViewGrid, ViewKind,
+    };
+    use crate::dsl::span::{FileId, Span};
+    use crate::error::ViewErrorKind;
 
     /// Elaborate a single-file `.wb` source into a [`Design`]. The source
     /// must have a single top-level component (the views are built
@@ -217,6 +310,7 @@ pub(crate) mod tests {
             kind: ViewKind::Schematic,
             title: "T".to_string(),
             grid: None,
+            span: Span::new(FileId(0), 0, 0),
             subject: TypeName::from(subject),
             has_enclosure: false,
             enclosure: Vec::new(),
@@ -232,13 +326,14 @@ pub(crate) mod tests {
                         .iter()
                         .map(|(p, side)| (PortName::from(*p), *side))
                         .collect(),
+                    span: Span::new(FileId(0), 0, 0),
                 })
                 .collect(),
             texts: Vec::new(),
         }
     }
 
-    fn render(design: &Design, view: &View) -> Result<String> {
+    fn render(design: &Design, view: &View) -> ViewResult<String> {
         let subject = design
             .instances
             .values()
@@ -367,10 +462,13 @@ component sys {
         let design = two_box_design();
         // Pitch is 2 steps, so a step of 5 gives pitch 10 < MIN_PORT_PITCH.
         let mut view = view_of("sys", &[("a", 0.0, 0.0, &[("p", Side::East)])]);
-        view.grid = Some(5.0);
+        view.grid = Some(ViewGrid {
+            step: 5.0,
+            span: Span::new(FileId(0), 0, 0),
+        });
         assert!(matches!(
             render(&design, &view),
-            Err(Error::GridTooSmall { .. })
+            Err(ViewErrorKind::GridTooSmall { .. })
         ));
     }
 
@@ -383,7 +481,7 @@ component sys {
         assert!(!svg.contains("class=\"wire\""));
     }
 
-    fn render_embed(design: &Design, view: &View) -> Result<String> {
+    fn render_embed(design: &Design, view: &View) -> ViewResult<String> {
         let subject = design
             .instances
             .values()

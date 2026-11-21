@@ -2,11 +2,12 @@
 //! plus a token-stack scan of the live buffer.
 //!
 //! The index is rebuilt from [`Resolved`] after every check and kept as
-//! *last-good* when the current buffer is too broken to load — mid-edit
-//! buffers usually are, and the instance/port sets are stable across a
-//! keystroke. The buffer at the cursor, by contrast, is always the live
-//! overlay text: it is lexed (not parsed) and a block stack derives the
-//! completion context, so completion works in code the parser rejects.
+//! *last-good* when the current buffer is too broken to load, or loads
+//! without statements the parser skipped — mid-edit buffers usually are,
+//! and the instance/port sets are stable across a keystroke. The buffer at
+//! the cursor, by contrast, is always the live overlay text: it is lexed
+//! (not parsed) and a block stack derives the completion context, so
+//! completion works in code the parser rejects.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -50,6 +51,10 @@ struct FileScope {
     own_connector_types: Vec<String>,
     /// The file's lone top-level component — the subject of its views.
     subject: Option<ComponentKey>,
+    /// Built from a buffer whose broken statements the parser skipped, so
+    /// it lacks what they declared (and, where a `;` was missing, the
+    /// statement after).
+    holes: bool,
 }
 
 #[derive(Default)]
@@ -147,7 +152,10 @@ pub(crate) fn build_index(project: &Project, resolved: &Resolved) -> CompletionI
 
     let mut files = HashMap::new();
     for (fi, file) in project.files.iter().enumerate() {
-        let mut scope = FileScope::default();
+        let mut scope = FileScope {
+            holes: file.holes,
+            ..FileScope::default()
+        };
         let mut top_level_here = Vec::new();
         for (id, def) in resolved.defs.iter().enumerate() {
             if def.file == FileId(fi) && def.parent.is_none() {
@@ -246,8 +254,13 @@ impl CompletionIndex {
     /// their previous scope and the component data it references. A buffer
     /// mid-edit routinely fails to parse, which drops its file from the
     /// load — without this, one broken keystroke kills completion in that
-    /// file (and a broken entry file would kill the whole project's).
-    pub(crate) fn update_with(&mut self, new: CompletionIndex) {
+    /// file (and a broken entry file would kill the whole project's). A
+    /// file `new` holds only with holes (statements the parser skipped)
+    /// keeps its previous scope too, when it has one: the last good scope
+    /// still has what the statement being typed broke.
+    pub(crate) fn update_with(&mut self, mut new: CompletionIndex) {
+        new.files
+            .retain(|path, scope| !(scope.holes && self.files.contains_key(path)));
         self.files.retain(|path, _| !new.files.contains_key(path));
         if self.files.is_empty() {
             *self = new;
@@ -408,10 +421,6 @@ impl CompletionIndex {
     }
 
     fn items(&self, doc: &Path, scope: &FileScope, cursor: &Cursor) -> Vec<CompletionItem> {
-        // `numbering: ` takes its closed mode set wherever it appears.
-        if cursor.after(&[Token::Numbering, Token::Colon]) {
-            return constants(&NUMBERING_MODES);
-        }
         if cursor.after(&[Token::View]) {
             return constants(&VIEW_KINDS);
         }
@@ -430,7 +439,9 @@ impl CompletionIndex {
             let Some(component) = component else {
                 return Vec::new();
             };
-            if let [.., Token::Ident(instance), Token::Dot] = cursor.tail() {
+            if let [.., instance, Token::Dot] = cursor.tail()
+                && let Some(instance) = instance.as_name()
+            {
                 return self.instance_ports(component, instance);
             }
             let mut items = self.instances(component);
@@ -441,7 +452,9 @@ impl CompletionIndex {
 
         match cursor.blocks.last() {
             None => {
-                if let [.., Token::Use, Token::Ident(_)] = cursor.tail() {
+                if let [.., Token::Use, name] = cursor.tail()
+                    && name.as_name().is_some()
+                {
                     return keywords(&["from"]);
                 }
                 if let [.., Token::Use] = cursor.tail() {
@@ -456,12 +469,14 @@ impl CompletionIndex {
                 Vec::new()
             }
             Some(Block::Component { .. }) => match cursor.tail() {
-                [.., Token::Connector, Token::Ident(_), Token::Colon] => scope
+                [.., Token::Connector, name, Token::Colon] if name.as_name().is_some() => scope
                     .connector_types
                     .iter()
                     .map(|name| item(name, CompletionItemKind::INTERFACE, "connector type"))
                     .collect(),
-                [.., Token::Ident(_), Token::Colon] => self.visible_types(scope, cursor),
+                [.., name, Token::Colon] if name.as_name().is_some() => {
+                    self.visible_types(scope, cursor)
+                }
                 [.., Token::Pub] => keywords(&["port"]),
                 _ if cursor.at_statement_start() => keywords(&[
                     "pub",
@@ -495,10 +510,14 @@ impl CompletionIndex {
                 _ => Vec::new(),
             },
             Some(Block::View { kind }) => match cursor.tail() {
-                [.., Token::Include, Token::Ident(instance), Token::Dot] => scope
-                    .subject
-                    .map(|s| self.instance_connectors(s, instance))
-                    .unwrap_or_default(),
+                [.., Token::Include, instance, Token::Dot] => {
+                    match (scope.subject, instance.as_name()) {
+                        (Some(subject), Some(instance)) => {
+                            self.instance_connectors(subject, instance)
+                        }
+                        _ => Vec::new(),
+                    }
+                }
                 [.., Token::Include] => {
                     let Some(subject) = scope.subject else {
                         return Vec::new();
@@ -558,6 +577,9 @@ impl CompletionIndex {
                 _ => Vec::new(),
             },
             Some(Block::LayoutGrid) => {
+                if cursor.after(&[Token::Numbering, Token::Colon]) {
+                    return constants(&NUMBERING_MODES);
+                }
                 if cursor.at_statement_start() {
                     return ["rows", "cols", "numbering"]
                         .iter()
@@ -826,25 +848,31 @@ fn classify(before: &[Token]) -> Block {
     for (i, token) in before.iter().enumerate().rev() {
         match token {
             Token::Component | Token::Extend => {
-                let name = match before.get(i + 1) {
-                    Some(Token::Ident(name)) => name.clone(),
-                    _ => String::new(),
-                };
+                let name = name_at(before, i + 1).unwrap_or_default();
                 return Block::Component { name };
             }
             Token::View => {
-                let kind = match before.get(i + 1) {
-                    Some(Token::Ident(kind)) => Some(kind.clone()),
-                    _ => None,
+                return Block::View {
+                    kind: name_at(before, i + 1),
                 };
-                return Block::View { kind };
             }
-            Token::Ports => {
+            // `ports {` opens a placement block only after an include's
+            // `(x, y)`; anywhere else `ports` is a name (`connector ports {`).
+            Token::Ports if matches!(before.get(i.wrapping_sub(1)), Some(Token::RParen)) => {
                 return Block::Ports {
                     instance: include_instance(&before[..i]),
                 };
             }
-            Token::Enclosure => return Block::Enclosure,
+            // `enclosure {` is a statement of its own; after a declaring
+            // keyword it is a name (`cable enclosure {`).
+            Token::Enclosure
+                if matches!(
+                    before.get(i.wrapping_sub(1)),
+                    None | Some(Token::LBrace | Token::RBrace | Token::Semicolon)
+                ) =>
+            {
+                return Block::Enclosure;
+            }
             Token::Cable => return Block::Cable,
             Token::Twisted => return Block::Twisted,
             Token::Connector => return Block::Connector,
@@ -857,15 +885,17 @@ fn classify(before: &[Token]) -> Block {
             Token::Face if matches!(before.get(i.wrapping_sub(1)), Some(Token::Layout)) => {
                 return Block::LayoutFace;
             }
-            // Header tokens between the keyword and its `{`.
+            // Header tokens between the keyword and its `{`. A contextual
+            // keyword not caught above is a name here (or the `at` of an
+            // include's coordinates).
             Token::Ident(_)
             | Token::Str(_)
             | Token::Number(_)
             | Token::Colon
             | Token::Comma
-            | Token::At
             | Token::LParen
             | Token::RParen => {}
+            token if token.is_contextual() => {}
             _ => return Block::Other,
         }
     }
@@ -877,17 +907,21 @@ fn classify(before: &[Token]) -> Block {
 fn include_instance(before: &[Token]) -> Option<String> {
     for (i, token) in before.iter().enumerate().rev() {
         match token {
-            Token::Include => {
-                return match before.get(i + 1) {
-                    Some(Token::Ident(name)) => Some(name.clone()),
-                    _ => None,
-                };
-            }
+            Token::Include => return name_at(before, i + 1),
             Token::Semicolon | Token::LBrace | Token::RBrace => return None,
             _ => {}
         }
     }
     None
+}
+
+/// The name the token at `index` spells, if it is one (an identifier or a
+/// contextual keyword).
+fn name_at(tokens: &[Token], index: usize) -> Option<String> {
+    tokens
+        .get(index)
+        .and_then(Token::as_name)
+        .map(str::to_string)
 }
 
 fn is_wordlike(token: &Token) -> bool {
@@ -1110,6 +1144,59 @@ mod tests {
         assert!(labels.contains(&"anode".to_string()), "{labels:?}");
     }
 
+    /// A project whose instance and connector are named with contextual
+    /// keywords (`size`, `ports`).
+    const CONTEXTUAL: (&str, &str) = (
+        "main.wb",
+        "use Lamp from \"lamp.wb\";\ncomponent Root {\n    size: Lamp;\n    wire red 1 [size.anode, size.cathode];\n}\nview harness \"H\" {\n    include size.plug at (0, 0);\n}\n",
+    );
+
+    #[test]
+    fn endpoint_dot_after_an_instance_named_with_a_contextual_keyword() {
+        let labels = complete_in(
+            &[LAMP, CONTEXTUAL],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    size: Lamp;\n    wire red 1 [size.‸];\n}\n",
+        );
+        assert!(labels.contains(&"anode".to_string()), "{labels:?}");
+    }
+
+    #[test]
+    fn include_dot_after_an_instance_named_with_a_contextual_keyword() {
+        let labels = complete_in(
+            &[LAMP, CONTEXTUAL],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    size: Lamp;\n}\nview harness \"H\" {\n    include size.‸\n}\n",
+        );
+        assert_eq!(labels, ["plug"]);
+    }
+
+    #[test]
+    fn instance_named_with_a_layout_keyword_offers_types_not_layout_values() {
+        let labels = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    numbering: ‸\n}\n",
+        );
+        assert!(labels.contains(&"Lamp".to_string()), "{labels:?}");
+        assert!(!labels.contains(&"row_major".to_string()), "{labels:?}");
+    }
+
+    #[test]
+    fn connector_named_ports_opens_a_connector_body_not_a_placement_block() {
+        let labels = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    connector ports \"P\" {\n        ‸\n    }\n}\n",
+        );
+        assert_eq!(labels, ["pub", "port"]);
+    }
+
+    #[test]
+    fn cable_named_enclosure_opens_a_cable_body() {
+        let labels = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    cable enclosure {\n        ‸\n    }\n}\n",
+        );
+        assert!(labels.contains(&"twisted".to_string()), "{labels:?}");
+    }
+
     #[test]
     fn connector_colon_offers_connector_types() {
         let files = [
@@ -1208,7 +1295,7 @@ mod tests {
     fn numbering_colon_offers_modes() {
         let labels = complete_in(
             &[LAMP, MAIN],
-            "connector_type C \"c\" {\n    layout: grid {\n        numbering: ‸\n    }\n}\n",
+            "connector_type C \"c\" {\n    layout grid {\n        numbering: ‸\n    }\n}\n",
         );
         assert_eq!(labels, NUMBERING_MODES);
     }
@@ -1402,6 +1489,29 @@ mod tests {
             "    wire orange 50 \"HV+\" [pack.‸];",
         );
         assert_ne!(live, disk, "replacement target must exist in the fixture");
+        let labels = fixture_complete(FIXTURE_ENTRY, &live);
+        assert!(labels.iter().any(|l| l == "hv_pos"), "{labels:?}");
+    }
+
+    #[test]
+    fn mid_edit_statement_that_swallows_the_next_keeps_the_last_good_scope() {
+        // `oops` lacks its `: Type;`, so the parser skips to the next `;`,
+        // taking `pack`'s declaration with it: the buffer loads, but
+        // without `pack`. Its last good scope still knows `pack`.
+        let disk =
+            std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join(FIXTURE_ENTRY))
+                .unwrap();
+        let live = disk
+            .replace(
+                "    pack: Battery  \"Battery\";",
+                "    oops\n    pack: Battery  \"Battery\";",
+            )
+            .replace(
+                "    wire orange 50 \"HV+\" [pack.hv_pos, inv.dc_pos];",
+                "    wire orange 50 \"HV+\" [pack.‸];",
+            );
+        assert_eq!(live.matches("oops").count(), 1, "first replacement target");
+        assert!(live.contains('‸'), "second replacement target");
         let labels = fixture_complete(FIXTURE_ENTRY, &live);
         assert!(labels.iter().any(|l| l == "hv_pos"), "{labels:?}");
     }

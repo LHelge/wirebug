@@ -1,0 +1,85 @@
+// Views whose includes collide once laid out. `check` reports each one;
+// nothing reaches `render`.
+use Module from "components/module.wb";
+
+component Vehicle {
+    left:  Module "Left";
+    right: Module "Right";
+    rear:  Module "Rear";
+
+    // Walls for the "Walled In" view.
+    wall_n: Module;
+    wall_s: Module;
+    wall_e: Module;
+
+    wire red 1 [left.sig, right.sig];
+    wire black 1 [left.gnd, rear.gnd];
+}
+
+// The boxes do not overlap, but `left.sig` and `right.sig` face each other
+// one grid step apart: no room for either wire to leave its port. `render`
+// used to fail here with a routing error after a clean `check`.
+view schematic "Crowded" {
+    grid: 20;
+
+    include left at (0, 0) ports {
+        east: sig;
+    }
+
+    include right at (9, 0) ports {
+        west: sig;
+    }
+}
+
+view schematic "Overlap" {
+    grid: 20;
+
+    include left at (0, 0);
+    include rear at (4, 1);
+}
+
+// Clean: `rear` touches `left` edge to edge, and the enclosure that wraps
+// them all is not an obstacle.
+view schematic "Touching" {
+    grid: 20;
+
+    enclosure {
+    }
+
+    include left at (0, 0) ports {
+        east: sig;
+    }
+
+    include rear at (0, 4);
+
+    include right at (12, 0) ports {
+        west: sig;
+    }
+}
+
+// Every box keeps its distance from `left.gnd`, but the walls stand less
+// than two grid steps from each other and from `left`, closing every way
+// out for its wire.
+view schematic "Walled In" {
+    grid: 20;
+
+    include left at (0, 0) ports {
+        east: gnd;
+    }
+
+    include wall_n at (8, -3);
+    include wall_s at (8, 3);
+    include wall_e at (16, 0);
+
+    include rear at (30, 0) ports {
+        west: gnd;
+    }
+}
+
+view harness "Harness" {
+    grid: 20;
+
+    include left.x1  at (4, 4);
+    include right.x1 at (4, 4);
+    include rear.x1  at (20, 4);
+}

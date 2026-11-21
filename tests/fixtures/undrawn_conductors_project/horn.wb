@@ -1,0 +1,7 @@
+// The horn feed, authored in its own file: its conductor is reported
+// here, where it is written.
+extend Car {
+    cable horn_feed "Horn feed" {
+        wire red 1 "HORN" [ecu.horn, horn.sig];
+    }
+}

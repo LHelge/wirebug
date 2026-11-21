@@ -24,10 +24,10 @@ mod nudge;
 mod visibility;
 
 use geometry::{Dir, Rect};
+use pathfinding::prelude::bfs;
 use visibility::Ovg;
 
 use super::layout::{PlacedPort, Placement};
-use crate::error::{Error, Result};
 use crate::render::geometry::Point;
 
 const EPS: f64 = 1e-6;
@@ -88,42 +88,80 @@ impl Router {
         }
     }
 
-    /// Route a single connection through the graph.
+    /// Every wired child port of `placement` whose stub falls inside
+    /// another component's keepout — the router's own precondition for
+    /// attaching a port, read from the obstacles [`Self::route_all`] routes
+    /// around. Enclosure ports are not checked: the enclosure stands four
+    /// grid steps off the child boxes, so their inward stubs always clear
+    /// every keepout.
+    pub(super) fn blocked_stubs<'p>(&self, placement: &'p Placement) -> Vec<BlockedStub<'p>> {
+        let mut blocked = Vec::new();
+        for (owner, (name, component)) in placement.components.iter().enumerate() {
+            for port in &component.ports {
+                if !placement.is_wired(name, &port.port) {
+                    continue;
+                }
+                let at = stub(port, self.clearance);
+                let swallowed = self
+                    .obstacles
+                    .iter()
+                    .enumerate()
+                    .find(|&(i, keepout)| i != owner && keepout.contains_point(at));
+                if let Some((blocker, _)) = swallowed {
+                    blocked.push(BlockedStub {
+                        owner,
+                        port,
+                        blocker,
+                    });
+                }
+            }
+        }
+        blocked
+    }
+
+    /// Whether [`Self::route_all`] finds a route between `a` and `b`: both
+    /// stubs have a graph node and the graph connects them. The search
+    /// only weighs bends, crossings and guide overlaps, never forbids an
+    /// edge, so it fails exactly when the stubs are disconnected — walled
+    /// in by keepouts that meet.
+    pub(super) fn connects(&self, a: &PlacedPort, b: &PlacedPort) -> bool {
+        let (Some(from), Some(to)) = (
+            self.ovg.node_at(stub(a, self.clearance)),
+            self.ovg.node_at(stub(b, self.clearance)),
+        ) else {
+            return false;
+        };
+        bfs(
+            &from,
+            |&node| self.ovg.neighbours(node).iter().map(|&(next, _)| next),
+            |&node| node == to,
+        )
+        .is_some()
+    }
+
+    /// Route a single connection through the graph, or `None` when it has
+    /// no route.
     fn route_one_avoiding(
         &self,
         a: &PlacedPort,
         b: &PlacedPort,
         avoid: &[Vec<Point>],
-    ) -> Result<RawRoute> {
-        let out_a = out_dir(a);
-        let in_b = out_dir(b).opposite();
-
-        let route_error = || Error::RouteFailed {
-            from: port_name(a),
-            to: port_name(b),
-        };
-        let stub_a = self
-            .ovg
-            .node_at(stub(a, self.clearance))
-            .ok_or_else(route_error)?;
-        let stub_b = self
-            .ovg
-            .node_at(stub(b, self.clearance))
-            .ok_or_else(route_error)?;
+    ) -> Option<RawRoute> {
+        let stub_a = self.ovg.node_at(stub(a, self.clearance))?;
+        let stub_b = self.ovg.node_at(stub(b, self.clearance))?;
         let nodes = astar::find_route_avoiding(
             &self.ovg,
             a.pos,
-            out_a,
+            out_dir(a),
             stub_a,
             b.pos,
-            in_b,
+            out_dir(b).opposite(),
             stub_b,
             avoid,
             &self.soft_avoid,
-        )
-        .ok_or_else(route_error)?;
+        )?;
 
-        Ok(RawRoute {
+        Some(RawRoute {
             a: a.pos,
             b: b.pos,
             nodes,
@@ -135,15 +173,21 @@ impl Router {
     /// minimum spacing between parallel wires in a shared channel — the
     /// port pitch (two grid steps), so a nudged bundle stays grid-aligned
     /// and matches the spacing of the ports it fans out from.
+    ///
+    /// Fails on the first pair with no route, naming it by its index in
+    /// `pairs`: the router sees only placed ports, so the caller, which
+    /// knows the wire each pair came from, names its ends.
     pub(super) fn route_all(
         &self,
         pairs: &[(&PlacedPort, &PlacedPort)],
         gap: f64,
-    ) -> Result<Vec<Vec<Point>>> {
+    ) -> Result<Vec<Vec<Point>>, Unrouted> {
         let mut raws = Vec::with_capacity(pairs.len());
         let mut routed = Vec::with_capacity(pairs.len());
-        for &(a, b) in pairs {
-            let raw = self.route_one_avoiding(a, b, &routed)?;
+        for (pair, &(a, b)) in pairs.iter().enumerate() {
+            let raw = self
+                .route_one_avoiding(a, b, &routed)
+                .ok_or(Unrouted { pair })?;
             routed.push(self.raw_points(&raw));
             raws.push(raw);
         }
@@ -159,6 +203,24 @@ impl Router {
     }
 }
 
+/// The connection [`Router::route_all`] found no route for.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct Unrouted {
+    /// Index of the connection in the pairs passed to `route_all`.
+    pub(super) pair: usize,
+}
+
+/// A wired port whose wire cannot leave it: its stub lies strictly inside
+/// another component's keepout, so the visibility graph has no node there
+/// and [`Router::route_all`] would fail with [`Unrouted`].
+pub(super) struct BlockedStub<'p> {
+    /// Index of the port's own component, in `component_bounds` order.
+    pub(super) owner: usize,
+    pub(super) port: &'p PlacedPort,
+    /// Index of the component whose keepout swallows the stub.
+    pub(super) blocker: usize,
+}
+
 fn outline(r: Rect) -> Vec<Point> {
     vec![
         Point::new(r.x, r.y),
@@ -167,10 +229,6 @@ fn outline(r: Rect) -> Vec<Point> {
         Point::new(r.x, r.y + r.h),
         Point::new(r.x, r.y),
     ]
-}
-
-fn port_name(p: &PlacedPort) -> String {
-    format!("{} ({})", p.port, p.label)
 }
 
 /// The direction a wire leaves a port: outward from its box, or inward for an
@@ -300,12 +358,16 @@ component sys {
     }
 
     #[test]
-    fn route_errors_when_a_stub_is_inside_an_obstacle() {
+    fn route_fails_when_a_stub_is_inside_an_obstacle() {
         use crate::dsl::ir::PortName;
 
         let obstacle = Rect::new(0.0, 0.0, 100.0, 100.0);
+        // `b` and `c` (below) sit clear of the obstacle, their stubs on
+        // graph nodes; `a`'s stub lies inside it.
+        let clear = [(150.0, 50.0), (140.0, 50.0), (150.0, 80.0), (140.0, 80.0)]
+            .map(|(x, y)| Point::new(x, y));
         let router = Router {
-            ovg: Ovg::build(&[obstacle], &[]),
+            ovg: Ovg::build(&[obstacle], &clear),
             obstacles: vec![obstacle],
             soft_avoid: Vec::new(),
             clearance: 10.0,
@@ -327,10 +389,20 @@ component sys {
             inverted: false,
         };
 
-        assert!(matches!(
-            router.route_one_avoiding(&a, &b, &[]),
-            Err(crate::error::Error::RouteFailed { .. })
-        ));
+        assert!(router.route_one_avoiding(&a, &b, &[]).is_none());
+        // `route_all` names the failing pair by its position.
+        let c = PlacedPort {
+            port: PortName::from("c"),
+            side: Side::West,
+            pos: Point::new(150.0, 80.0),
+            pin: None,
+            label: "C".to_string(),
+            inverted: false,
+        };
+        assert_eq!(
+            router.route_all(&[(&b, &c), (&a, &b)], 10.0).err(),
+            Some(Unrouted { pair: 1 })
+        );
     }
 
     #[test]

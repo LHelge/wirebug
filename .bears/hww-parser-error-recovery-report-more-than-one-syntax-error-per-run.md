@@ -1,14 +1,15 @@
 ---
 id: hww
 title: "Parser error recovery: report more than one syntax error per run"
-status: open
+status: done
 priority: P3
 created: "2026-11-20T21:40:31.985091667Z"
-updated: "2026-11-20T21:40:31.985091667Z"
+updated: "2026-11-21T00:57:43.875789464Z"
 tags:
   - dsl
   - parse
 parent: kss
+attempts: 1
 ---
 
 ## Summary

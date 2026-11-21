@@ -1,13 +1,14 @@
 ---
 id: xs9
 title: Warn on duplicate view titles
-status: open
+status: done
 priority: P3
 created: "2026-11-20T21:40:31.975489018Z"
-updated: "2026-11-20T21:40:31.975489018Z"
+updated: "2026-11-20T22:23:08.607806279Z"
 tags:
   - check
 parent: kss
+attempts: 1
 ---
 
 ## Summary

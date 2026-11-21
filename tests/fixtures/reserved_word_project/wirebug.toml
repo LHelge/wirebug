@@ -1,0 +1,4 @@
+[project]
+name = "reserved-word-project"
+version = "0.1.0"
+description = "Fixture naming a port with a reserved word"

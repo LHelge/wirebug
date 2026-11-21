@@ -17,7 +17,7 @@ use crate::dsl::ast;
 use crate::dsl::diagnostics::Problem;
 use crate::dsl::lex::{lex, significant};
 use crate::dsl::manifest::{self, Manifest};
-use crate::dsl::parse::parse_file;
+use crate::dsl::parse::{Completeness, ParseError, parse_file};
 use crate::dsl::span::FileId;
 
 /// One loaded source file. `files[id.0]` is the file with that [`FileId`].
@@ -25,6 +25,10 @@ pub struct LoadedFile {
     pub path: PathBuf,
     pub src: String,
     pub ast: ast::File,
+    /// Whether the parser skipped statements of this file it could not
+    /// read (each reported as a syntax error), so `ast` lacks what they
+    /// declared.
+    pub holes: bool,
 }
 
 impl LoadedFile {
@@ -40,6 +44,10 @@ pub struct Project {
     pub root: FileId,
     pub files: Vec<LoadedFile>,
     pub manifest: Option<Manifest>,
+    /// Whether every reachable file lexed and parsed whole. When not, a
+    /// statement the parser skipped, or a file it could not load, may have
+    /// declared what a later phase finds missing.
+    pub parsed_whole: bool,
 }
 
 impl Project {
@@ -51,6 +59,17 @@ impl Project {
     /// The source of `id`, wrapped for miette diagnostics.
     pub fn source(&self, id: FileId) -> NamedSource<String> {
         self.file(id).named_source()
+    }
+
+    /// Drop from `problems` those a source that did not parse whole can
+    /// cause on its own ([`Problem::reports_an_absence`]): a name that
+    /// resolves to nothing may have been declared in a skipped statement.
+    /// The syntax errors stand for them until they are fixed. A project
+    /// that parsed whole keeps every problem.
+    pub(crate) fn drop_parse_cascades(&self, problems: &mut Vec<Problem>) {
+        if !self.parsed_whole {
+            problems.retain(|problem| !problem.reports_an_absence());
+        }
     }
 }
 
@@ -154,11 +173,15 @@ pub fn load_with(entry: &Path, overlay: &Overlay) -> (Option<Project>, Vec<Probl
         by_path: HashMap::new(),
         attempted: HashSet::new(),
         problems: Vec::new(),
+        parsed_whole: true,
     };
     let entry = canonical(entry);
     let root = loader.load_file(&entry);
     let Loader {
-        files, problems, ..
+        files,
+        problems,
+        parsed_whole,
+        ..
     } = loader;
 
     let project_dir = entry.parent().unwrap_or(Path::new("."));
@@ -172,6 +195,7 @@ pub fn load_with(entry: &Path, overlay: &Overlay) -> (Option<Project>, Vec<Probl
                 root,
                 files,
                 manifest,
+                parsed_whole,
             }),
             problems,
         ),
@@ -195,12 +219,16 @@ struct Loader<'a> {
     /// exactly once.
     attempted: HashSet<PathBuf>,
     problems: Vec<Problem>,
+    /// No file so far failed to lex or parse whole.
+    parsed_whole: bool,
 }
 
 impl Loader<'_> {
     /// Load one canonical path (and its imports), returning its id. Reuses
     /// an already-loaded file. Returns `None` if the file can't be read or
-    /// parsed into an AST.
+    /// lexed, or its braces don't balance (its AST would put statements in
+    /// the wrong blocks, so it is left out, as if it did not parse at all).
+    /// A file with statements the parser skipped loads without them.
     fn load_file(&mut self, path: &Path) -> Option<FileId> {
         // Process each path once, whether or not it loads successfully —
         // otherwise a file imported via two `use`s re-reports its errors.
@@ -230,19 +258,39 @@ impl Loader<'_> {
                     src: named(),
                     at: err.span().into(),
                 });
+                self.parsed_whole = false;
                 return None;
             }
         };
 
-        let parsed = parse_file(significant(&lexemes), id, src.len());
+        let parsed = parse_file(significant(&lexemes), id, &src);
         for err in parsed.errors {
-            self.problems.push(Problem::Parse {
-                message: err.message,
-                src: named(),
-                at: err.span.into(),
+            self.problems.push(match err {
+                ParseError::Syntax { span, message } => Problem::Parse {
+                    message,
+                    src: named(),
+                    at: span.into(),
+                },
+                ParseError::ReservedWord { span, word } => Problem::ReservedWord {
+                    word,
+                    src: named(),
+                    at: span.into(),
+                },
             });
         }
-        let ast = parsed.file?;
+        let holes = match parsed.completeness {
+            Completeness::Whole => false,
+            Completeness::Holes => true,
+            Completeness::Misnested => {
+                self.parsed_whole = false;
+                return None;
+            }
+        };
+        let Some(ast) = parsed.file else {
+            self.parsed_whole = false;
+            return None;
+        };
+        self.parsed_whole &= !holes;
 
         // Register before following imports so a `use` cycle terminates.
         // `files` index stays equal to the FileId because parsing doesn't
@@ -256,6 +304,7 @@ impl Loader<'_> {
             path: path.to_path_buf(),
             src,
             ast,
+            holes,
         });
         self.by_path.insert(path.to_path_buf(), id);
 
@@ -392,6 +441,71 @@ mod tests {
             lex_errors, 1,
             "diamond import should report once: {problems:?}"
         );
+    }
+
+    #[test]
+    fn file_with_a_broken_statement_loads_without_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("lamp.wb"),
+            "component Lamp { pub port a \"A\" pin; pub port b \"B\"; }\n",
+        )
+        .expect("write lamp.wb");
+        let main = dir.path().join("main.wb");
+        std::fs::write(
+            &main,
+            "use Lamp from \"lamp.wb\";\ncomponent m { l: Lamp; }\n",
+        )
+        .expect("write main.wb");
+
+        let (project, problems) = load(&main);
+        let parse_errors = problems
+            .iter()
+            .filter(|p| matches!(p, Problem::Parse { .. }))
+            .count();
+        assert_eq!(parse_errors, 1, "{problems:?}");
+        let project = project.expect("project loaded");
+        assert!(!project.parsed_whole);
+        let lamp = &project.files[1];
+        assert!(lamp.holes);
+        let ast::Item::Definition(def) = &lamp.ast.items[0] else {
+            panic!("expected Lamp");
+        };
+        assert_eq!(def.members.len(), 1, "port b stays, port a is skipped");
+        assert!(!project.files[0].holes);
+    }
+
+    #[test]
+    fn file_whose_braces_do_not_balance_is_left_out() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("lamp.wb"),
+            "component Lamp { pub port a \"A\";\n",
+        )
+        .expect("write lamp.wb");
+        let main = dir.path().join("main.wb");
+        std::fs::write(
+            &main,
+            "use Lamp from \"lamp.wb\";\ncomponent m { l: Lamp; }\n",
+        )
+        .expect("write main.wb");
+
+        let (project, problems) = load(&main);
+        assert!(
+            problems.iter().any(|p| matches!(p, Problem::Parse { .. })),
+            "{problems:?}"
+        );
+        let project = project.expect("main.wb loads");
+        assert_eq!(project.files.len(), 1, "lamp.wb is left out");
+        assert!(!project.parsed_whole);
+    }
+
+    #[test]
+    fn a_whole_project_is_marked_parsed_whole() {
+        let (project, _) = load(&fixture_main());
+        let project = project.expect("project loaded");
+        assert!(project.parsed_whole);
+        assert!(project.files.iter().all(|f| !f.holes));
     }
 
     #[test]

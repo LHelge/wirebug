@@ -15,11 +15,17 @@ One pipeline, shared by every command (`check`, `render`, `serve`, `lsp`):
 
 ```
 .wb files → lex → parse (AST) → load project → resolve (registry)
-          → elaborate (ir::Design) → validate → render (SVG per view)
+          → elaborate (ir::Design) → validate → layout checks
+          → render (SVG per view)
 ```
 
 - `src/dsl/` — everything up to and including `validate`; problems are
   miette `Diagnostic`s (`dsl::diagnostics::Problem`).
+- `src/pipeline.rs` — `check_loaded`, the one place the stages after
+  loading are sequenced (the `dsl` stages, then the layout checks in
+  `src/render/lint.rs`, which ask the renderers' layout code and so sit in
+  `render`; `dsl` never depends on `render`). `check_project` and the LSP
+  both go through it; a new stage goes there.
 - `src/render/` — consumes `ir::Design` only; one renderer per view kind
   (`schematic/`, `harness/`, `pinout/`) plus `png.rs`, `pdf.rs`, embed output.
 - `src/serve/` — live-reloading dev server (the only async code).

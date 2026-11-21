@@ -251,7 +251,11 @@ view schematic "Overview" { }
             out.to_str().unwrap(),
         ])
         .assert()
-        .success();
+        // `check` warns on the repeat, which doesn't block a render.
+        .success()
+        .stderr(predicate::str::contains(
+            "duplicate view title \"Overview\"",
+        ));
 
     assert!(out.join("overview.svg").is_file());
     assert!(out.join("overview_2.svg").is_file());
@@ -318,6 +322,550 @@ fn check_accepts_the_fixture_project() {
         .args(["check", FIXTURE_ROOT])
         .assert()
         .success();
+}
+
+const INVALID_VALUES_ROOT: &str = "tests/fixtures/invalid_values_project";
+
+#[test]
+fn check_rejects_non_positive_gauges_and_cable_length() {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--format", "json", INVALID_VALUES_ROOT])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+    let main =
+        std::fs::read_to_string(format!("{INVALID_VALUES_ROOT}/main.wb")).expect("fixture main.wb");
+
+    // Each problem is an error labelled on the offending number itself.
+    let found: Vec<(&str, &str)> = problems
+        .iter()
+        .map(|p| {
+            assert_eq!(p["severity"], "error", "{p}");
+            let span = &p["labels"][0]["span"];
+            let offset = span["offset"].as_u64().expect("offset") as usize;
+            let length = span["length"].as_u64().expect("length") as usize;
+            (
+                p["code"].as_str().expect("code"),
+                &main[offset..offset + length],
+            )
+        })
+        .collect();
+    assert_eq!(
+        found,
+        [
+            ("wirebug::invalid_gauge", "-1"),
+            ("wirebug::invalid_gauge", "0"),
+            ("wirebug::invalid_length", "-2"),
+        ]
+    );
+}
+
+#[test]
+fn render_refuses_a_non_positive_cable_length() {
+    let tmp = tempdir().expect("tempdir");
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args([
+            "render",
+            INVALID_VALUES_ROOT,
+            "--out",
+            tmp.path().to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("length must be positive, got -2"))
+        .stderr(predicate::str::contains("not rendering"));
+}
+
+const DEGENERATE_WIRES_ROOT: &str = "tests/fixtures/degenerate_wires_project";
+
+#[test]
+fn check_rejects_a_repeated_endpoint_and_warns_on_an_empty_cable() {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--format", "json", DEGENERATE_WIRES_ROOT])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+    let main = std::fs::read_to_string(format!("{DEGENERATE_WIRES_ROOT}/main.wb"))
+        .expect("fixture main.wb");
+
+    /// A problem as (code, severity, the offset and text of every label).
+    type Found<'a> = (&'a str, &'a str, Vec<(usize, &'a str)>);
+    let found: Vec<Found> = problems
+        .iter()
+        .map(|p| {
+            let labels = p["labels"]
+                .as_array()
+                .expect("labels")
+                .iter()
+                .map(|l| {
+                    let offset = l["span"]["offset"].as_u64().expect("offset") as usize;
+                    let length = l["span"]["length"].as_u64().expect("length") as usize;
+                    (offset, &main[offset..offset + length])
+                })
+                .collect();
+            (
+                p["code"].as_str().expect("code"),
+                p["severity"].as_str().expect("severity"),
+                labels,
+            )
+        })
+        .collect();
+
+    // Both occurrences in the looping wire are named; the double crimp on
+    // `pump.gnd` is not reported.
+    let looping = main
+        .find("[ecu.gnd, ecu.gnd]")
+        .expect("looping wire in fixture");
+    let first = looping + 1;
+    let again = looping + "[ecu.gnd, ".len();
+    let spare = main.find("spare").expect("empty cable in fixture");
+    assert_eq!(
+        found,
+        [
+            (
+                "wirebug::duplicate_endpoint",
+                "error",
+                vec![(again, "ecu.gnd"), (first, "ecu.gnd")],
+            ),
+            ("wirebug::empty_cable", "warning", vec![(spare, "spare")]),
+        ]
+    );
+}
+
+const DUPLICATE_TITLES_ROOT: &str = "tests/fixtures/duplicate_titles_project";
+
+#[test]
+fn check_warns_on_a_view_title_repeated_in_another_file() {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--format", "json", DUPLICATE_TITLES_ROOT])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+    let read = |name: &str| {
+        std::fs::read_to_string(format!("{DUPLICATE_TITLES_ROOT}/{name}")).expect("fixture file")
+    };
+    let (main, body) = (read("main.wb"), read("body.wb"));
+
+    /// A diagnostic as (code, severity, file name, the text of its labels).
+    fn summary<'a>(
+        p: &'a serde_json::Value,
+        src: &'a str,
+    ) -> (&'a str, &'a str, &'a str, Vec<&'a str>) {
+        let file = p["filename"].as_str().expect("filename");
+        let labels = p["labels"]
+            .as_array()
+            .expect("labels")
+            .iter()
+            .map(|l| {
+                let offset = l["span"]["offset"].as_u64().expect("offset") as usize;
+                let length = l["span"]["length"].as_u64().expect("length") as usize;
+                &src[offset..offset + length]
+            })
+            .collect();
+        (
+            p["code"].as_str().unwrap_or(""),
+            p["severity"].as_str().expect("severity"),
+            file.rsplit('/').next().expect("file name"),
+            labels,
+        )
+    }
+
+    // The repeat in body.wb is the warning; the first view, in main.wb, is
+    // its related note.
+    let [problem] = problems.as_slice() else {
+        panic!("expected one problem, got {problems:?}");
+    };
+    assert_eq!(
+        summary(problem, &body),
+        (
+            "wirebug::duplicate_view_title",
+            "warning",
+            "body.wb",
+            vec!["\"Overview\""]
+        )
+    );
+    let [first] = problem["related"].as_array().expect("related").as_slice() else {
+        panic!("expected one related note: {problem}");
+    };
+    assert_eq!(
+        summary(first, &main),
+        ("", "advice", "main.wb", vec!["\"Overview\""])
+    );
+}
+
+#[test]
+fn check_strict_fails_on_a_duplicate_view_title() {
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--strict", DUPLICATE_TITLES_ROOT])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "duplicate view title \"Overview\"",
+        ));
+}
+
+const UNDRAWN_CONDUCTORS_ROOT: &str = "tests/fixtures/undrawn_conductors_project";
+
+#[test]
+fn check_warns_on_conductors_no_harness_view_draws() {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--format", "json", UNDRAWN_CONDUCTORS_ROOT])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+    let read = |name: &str| {
+        std::fs::read_to_string(format!("{UNDRAWN_CONDUCTORS_ROOT}/{name}")).expect("fixture file")
+    };
+    let (main, horn) = (read("main.wb"), read("horn.wb"));
+
+    // A problem as (code, severity, file name, message, the text of every
+    // label).
+    let found: Vec<(&str, &str, &str, &str, Vec<&str>)> = problems
+        .iter()
+        .map(|p| {
+            let file = p["filename"].as_str().expect("filename");
+            let src = if file.ends_with("horn.wb") {
+                &horn
+            } else {
+                &main
+            };
+            let labels = p["labels"]
+                .as_array()
+                .expect("labels")
+                .iter()
+                .map(|l| {
+                    let offset = l["span"]["offset"].as_u64().expect("offset") as usize;
+                    let length = l["span"]["length"].as_u64().expect("length") as usize;
+                    &src[offset..offset + length]
+                })
+                .collect();
+            (
+                p["code"].as_str().expect("code"),
+                p["severity"].as_str().expect("severity"),
+                file.rsplit('/').next().expect("file name"),
+                p["message"].as_str().expect("message"),
+                labels,
+            )
+        })
+        .collect();
+
+    // The rail's undrawn segment and the cable conductor in the other file,
+    // each on its own wire; the drawn segment, the drawn loose wire and the
+    // wire of `Dash` (no harness view) are not reported.
+    assert_eq!(
+        found,
+        vec![
+            (
+                "wirebug::undrawn_conductor",
+                "warning",
+                "main.wb",
+                "wire from `lamp.gnd` to `horn.gnd` is in no harness view of `Car`",
+                vec!["wire black 1 [ecu.gnd, lamp.gnd, horn.gnd];"]
+            ),
+            (
+                "wirebug::undrawn_conductor",
+                "warning",
+                "horn.wb",
+                "cable `horn_feed` conductor \"HORN\" from `ecu.horn` to `horn.sig` is in no harness view of `Car`",
+                vec!["wire red 1 \"HORN\" [ecu.horn, horn.sig];"]
+            ),
+        ]
+    );
+}
+
+#[test]
+fn check_strict_fails_on_an_undrawn_conductor() {
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--strict", UNDRAWN_CONDUCTORS_ROOT])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "include `lamp.x1` and `horn.x1` in one harness view of `Car`",
+        ));
+}
+
+const CROWDED_VIEWS_ROOT: &str = "tests/fixtures/crowded_views_project";
+
+#[test]
+fn check_rejects_includes_that_overlap_or_leave_a_wire_no_route() {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--format", "json", CROWDED_VIEWS_ROOT])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+    let read = |name: &str| {
+        std::fs::read_to_string(format!("{CROWDED_VIEWS_ROOT}/{name}")).expect("fixture file")
+    };
+    let (main, module) = (read("main.wb"), read("components/module.wb"));
+
+    // A problem as (code, severity, file name, the text of every label).
+    let found: Vec<(&str, &str, &str, Vec<&str>)> = problems
+        .iter()
+        .map(|p| {
+            let file = p["filename"].as_str().expect("filename");
+            let src = if file.ends_with("module.wb") {
+                &module
+            } else {
+                &main
+            };
+            let labels = p["labels"]
+                .as_array()
+                .expect("labels")
+                .iter()
+                .map(|l| {
+                    let offset = l["span"]["offset"].as_u64().expect("offset") as usize;
+                    let length = l["span"]["length"].as_u64().expect("length") as usize;
+                    &src[offset..offset + length]
+                })
+                .collect();
+            (
+                p["code"].as_str().expect("code"),
+                p["severity"].as_str().expect("severity"),
+                file.rsplit('/').next().expect("file name"),
+                labels,
+            )
+        })
+        .collect();
+
+    // Each colliding pair is named by both includes, the later one first,
+    // and the walled-in wire by the includes it ends on; the clean
+    // "Touching" view (boxes edge to edge inside an enclosure) reports
+    // nothing.
+    assert_eq!(
+        found,
+        vec![
+            (
+                "wirebug::include_too_close",
+                "error",
+                "main.wb",
+                vec!["right", "left"]
+            ),
+            (
+                "wirebug::overlapping_includes",
+                "error",
+                "main.wb",
+                vec!["rear", "left"]
+            ),
+            (
+                "wirebug::unroutable_wire",
+                "error",
+                "main.wb",
+                vec!["left", "rear"]
+            ),
+            (
+                "wirebug::overlapping_includes",
+                "error",
+                "main.wb",
+                vec!["right.x1", "left.x1"]
+            ),
+            (
+                "wirebug::overlapping_includes",
+                "error",
+                "module.wb",
+                vec!["x2", "x1"]
+            ),
+        ]
+    );
+    assert!(
+        problems[0]["message"]
+            .as_str()
+            .expect("message")
+            .contains("`left.sig`, `right.sig`"),
+        "the crowded ports are named: {}",
+        problems[0]
+    );
+}
+
+#[test]
+fn render_stops_at_check_instead_of_failing_to_route() {
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("svg");
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["render", CROWDED_VIEWS_ROOT, "--out", out.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("include_too_close"))
+        .stderr(predicate::str::contains("not rendering"))
+        .stderr(predicate::str::contains("failed to route").not());
+    assert!(!out.exists(), "nothing is written");
+}
+
+/// Views whose `grid:` their renderer cannot draw: too fine for a
+/// schematic's port labels, zero for a harness, negative for a pinout. A
+/// project that passes `check` renders every view, so how `render` writes
+/// around a view that fails is tested on hand-built designs
+/// (`render::output`, `serve::build`).
+const INVALID_GRIDS_ROOT: &str = "tests/fixtures/invalid_grids_project";
+
+#[test]
+fn check_rejects_a_grid_its_renderer_cannot_draw() {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--format", "json", INVALID_GRIDS_ROOT])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+    let main =
+        std::fs::read_to_string(format!("{INVALID_GRIDS_ROOT}/main.wb")).expect("fixture main.wb");
+
+    // Each is an error labelled on the grid's number; the valid view
+    // reports nothing.
+    let found: Vec<(&str, &str, &str)> = problems
+        .iter()
+        .map(|p| {
+            let span = &p["labels"][0]["span"];
+            let offset = span["offset"].as_u64().expect("offset") as usize;
+            let length = span["length"].as_u64().expect("length") as usize;
+            (
+                p["code"].as_str().expect("code"),
+                p["severity"].as_str().expect("severity"),
+                &main[offset..offset + length],
+            )
+        })
+        .collect();
+    assert_eq!(
+        found,
+        [
+            ("wirebug::grid_too_fine", "error", "5"),
+            ("wirebug::invalid_grid", "error", "0"),
+            ("wirebug::invalid_grid", "error", "-10"),
+        ]
+    );
+    assert_eq!(
+        problems[0]["message"],
+        "grid step 5 is too fine for a schematic view; ports need at least 7.5 per step"
+    );
+}
+
+#[test]
+fn render_stops_at_check_instead_of_failing_on_a_grid() {
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("out");
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["render", INVALID_GRIDS_ROOT, "--out", out.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("grid_too_fine"))
+        .stderr(predicate::str::contains("not rendering"))
+        .stderr(predicate::str::contains("error: view").not());
+    assert!(!out.exists(), "nothing is written");
+}
+
+/// Views whose includes sit a thousand grid steps apart, past the canvas
+/// `--png` will rasterise: a schematic too wide, a harness too tall, a
+/// pinout both (a pixmap of 6.5 GB), beside one that fits. How `--png` refuses such a view while writing the
+/// others is tested on a hand-built design (`render::output`).
+const OVERSIZED_VIEWS_ROOT: &str = "tests/fixtures/oversized_views_project";
+
+#[test]
+fn check_rejects_a_view_too_large_to_rasterise() {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--format", "json", OVERSIZED_VIEWS_ROOT])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+    let main = std::fs::read_to_string(format!("{OVERSIZED_VIEWS_ROOT}/main.wb"))
+        .expect("fixture main.wb");
+
+    // Each is an error labelled on the view's title, then on the includes
+    // farthest apart along its longer side; the view that fits reports
+    // nothing.
+    let found: Vec<(&str, &str, Vec<&str>)> = problems
+        .iter()
+        .map(|p| {
+            let labels = p["labels"]
+                .as_array()
+                .expect("labels")
+                .iter()
+                .map(|l| {
+                    let offset = l["span"]["offset"].as_u64().expect("offset") as usize;
+                    let length = l["span"]["length"].as_u64().expect("length") as usize;
+                    &main[offset..offset + length]
+                })
+                .collect();
+            (
+                p["code"].as_str().expect("code"),
+                p["severity"].as_str().expect("severity"),
+                labels,
+            )
+        })
+        .collect();
+    let too_large = |labels: &[&'static str]| ("wirebug::view_too_large", "error", labels.to_vec());
+    assert_eq!(
+        found,
+        [
+            too_large(&["\"Wide\"", "left", "right"]),
+            too_large(&["\"Tall\"", "left.x1", "right.x1"]),
+            too_large(&["\"Service\"", "x8", "x9"]),
+        ]
+    );
+    assert_eq!(
+        problems[0]["message"],
+        "view \"Wide\" is 20256 × 218 units, more than the 8192 a view may span on a side"
+    );
+}
+
+#[test]
+fn render_png_stops_at_check_instead_of_running_out_of_memory() {
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("out");
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args([
+            "render",
+            OVERSIZED_VIEWS_ROOT,
+            "--out",
+            out.to_str().unwrap(),
+            "--png",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("view_too_large"))
+        .stderr(predicate::str::contains("not rendering"))
+        .stderr(predicate::str::contains("error: view").not());
+    assert!(!out.exists(), "nothing is written");
 }
 
 #[test]
@@ -457,4 +1005,219 @@ view harness "H" { include ic.female at (0, 0); }
         .assert()
         .failure()
         .stderr(predicate::str::contains("undeclared_inline_half"));
+}
+
+/// A view in `parts.wb` of a component the design never instantiates; only
+/// the file's connector type is used, so nothing else flags it.
+const UNINSTANTIATED_SUBJECT_ROOT: &str = "tests/fixtures/uninstantiated_subject_project";
+
+#[test]
+fn check_rejects_a_view_of_a_component_the_design_never_instantiates() {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args([
+            "check",
+            "--strict",
+            "--format",
+            "json",
+            UNINSTANTIATED_SUBJECT_ROOT,
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+    let parts = std::fs::read_to_string(format!("{UNINSTANTIATED_SUBJECT_ROOT}/parts.wb"))
+        .expect("fixture parts.wb");
+    let [problem] = problems.as_slice() else {
+        panic!("expected one problem, got {problems:?}");
+    };
+    let span = &problem["labels"][0]["span"];
+    let offset = span["offset"].as_u64().expect("offset") as usize;
+    let length = span["length"].as_u64().expect("length") as usize;
+    assert_eq!(problem["code"], "wirebug::uninstantiated_view_subject");
+    assert_eq!(problem["severity"], "error");
+    assert!(
+        problem["filename"]
+            .as_str()
+            .expect("filename")
+            .ends_with("parts.wb")
+    );
+    assert_eq!(&parts[offset..offset + length], "\"Spare Detail\"");
+}
+
+#[test]
+fn render_stops_at_check_instead_of_failing_on_an_uninstantiated_subject() {
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("out");
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args([
+            "render",
+            UNINSTANTIATED_SUBJECT_ROOT,
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("uninstantiated_view_subject"))
+        .stderr(predicate::str::contains("not rendering"))
+        .stderr(predicate::str::contains("has no instance in the design").not());
+    assert!(!out.exists(), "nothing is written");
+}
+
+/// Ports, instances, a connector and a cable named with contextual keywords
+/// (`at`, `from`, `size`, `grid`, `layout`, `text`, `ports`).
+const CONTEXTUAL_NAMES_ROOT: &str = "tests/fixtures/contextual_names_project";
+
+#[test]
+fn check_accepts_contextual_keywords_as_names() {
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--strict", CONTEXTUAL_NAMES_ROOT])
+        .assert()
+        .success();
+}
+
+#[test]
+fn render_draws_a_project_named_with_contextual_keywords() {
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("out");
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args([
+            "render",
+            CONTEXTUAL_NAMES_ROOT,
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let overview = std::fs::read_to_string(out.join("overview.svg")).expect("overview.svg");
+    assert!(overview.contains("FROM"), "port label drawn");
+    assert!(
+        overview.contains("Two sensors on one loom"),
+        "text box drawn"
+    );
+    assert!(out.join("loom.svg").exists(), "harness view drawn");
+}
+
+/// A port named with the reserved word `wire`.
+const RESERVED_WORD_ROOT: &str = "tests/fixtures/reserved_word_project";
+
+#[test]
+fn check_says_a_reserved_word_cannot_be_a_name() {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--format", "json", RESERVED_WORD_ROOT])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+    let main =
+        std::fs::read_to_string(format!("{RESERVED_WORD_ROOT}/main.wb")).expect("fixture main.wb");
+    let [problem] = problems.as_slice() else {
+        panic!("expected one problem, got {problems:?}");
+    };
+    assert_eq!(problem["code"], "wirebug::reserved_word");
+    assert_eq!(problem["severity"], "error");
+    assert_eq!(problem["message"], "'wire' is a reserved word");
+    assert!(
+        problem["help"]
+            .as_str()
+            .is_some_and(|help| help.contains("rename it")),
+        "{problem}"
+    );
+    let span = &problem["labels"][0]["span"];
+    let offset = span["offset"].as_u64().expect("offset") as usize;
+    let length = span["length"].as_u64().expect("length") as usize;
+    assert_eq!(&main[offset..offset + length], "wire");
+}
+
+#[test]
+fn check_text_output_explains_the_reserved_word() {
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", RESERVED_WORD_ROOT])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("'wire' is a reserved word"))
+        .stderr(predicate::str::contains("help:"));
+}
+
+/// Two broken statements in `lamp.wb` and two in `main.wb`, plus a wire of
+/// gauge zero in `main.wb`.
+const SYNTAX_ERRORS_ROOT: &str = "tests/fixtures/syntax_errors_project";
+
+#[test]
+fn check_reports_every_syntax_error_and_what_else_is_wrong() {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--format", "json", SYNTAX_ERRORS_ROOT])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+
+    // Each problem as (file, code, the text under its label, its line).
+    let found: Vec<(String, String, String, usize)> = problems
+        .iter()
+        .map(|p| {
+            let path = p["filename"].as_str().expect("filename");
+            let src = std::fs::read_to_string(path).expect("fixture file");
+            let span = &p["labels"][0]["span"];
+            let offset = span["offset"].as_u64().expect("offset") as usize;
+            let length = span["length"].as_u64().expect("length") as usize;
+            let file = std::path::Path::new(path)
+                .file_name()
+                .expect("file name")
+                .to_string_lossy()
+                .into_owned();
+            (
+                file,
+                p["code"].as_str().expect("code").to_string(),
+                src[offset..offset + length].to_string(),
+                src[..offset].lines().count(),
+            )
+        })
+        .collect();
+    let at = |file: &str, code: &str, text: &str, line: usize| {
+        (file.to_string(), code.to_string(), text.to_string(), line)
+    };
+    // No `unknown_port` for `lamp.anode`, whose declaration is the broken
+    // line 4 of lamp.wb, and no `unknown_include` cascade either.
+    assert_eq!(
+        found,
+        [
+            at("main.wb", "wirebug::parse", "[", 11),
+            at("main.wb", "wirebug::parse", "2", 15),
+            at("lamp.wb", "wirebug::parse", ";", 4),
+            at("lamp.wb", "wirebug::parse", ";", 6),
+            at("main.wb", "wirebug::invalid_gauge", "0", 10),
+        ]
+    );
+}
+
+#[test]
+fn render_refuses_a_project_with_syntax_errors() {
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("svg");
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["render", SYNTAX_ERRORS_ROOT, "--out", out.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not rendering"));
+    let drawn = std::fs::read_dir(&out).map_or(0, |entries| entries.count());
+    assert_eq!(drawn, 0, "nothing is drawn");
 }

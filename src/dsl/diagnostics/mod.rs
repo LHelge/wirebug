@@ -33,6 +33,24 @@ pub enum Problem {
         at: SourceSpan,
     },
 
+    /// A reserved keyword written where a name belongs
+    /// (`pub port wire "W";`). Contextual keywords (`size`, `grid`, …) are
+    /// ordinary names there; reserved ones never are.
+    #[error("'{word}' is a reserved word")]
+    #[diagnostic(
+        code(wirebug::reserved_word),
+        help(
+            "`{word}` declares part of the design, so it cannot also be a name; rename it, for example `{word}_1`"
+        )
+    )]
+    ReservedWord {
+        word: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("reserved word used as a name")]
+        at: SourceSpan,
+    },
+
     /// A `use` referenced a file that couldn't be found.
     #[error("cannot find imported file `{target}`")]
     #[diagnostic(
@@ -325,6 +343,169 @@ pub enum Problem {
         first: SourceSpan,
     },
 
+    /// Two includes of one view draw boxes that overlap. Box sizes follow
+    /// from ports, labels and pin rows in the renderer's layout, so this is
+    /// found by laying the view out (`render::lint`), not from the DSL.
+    #[error("`{include}` overlaps `{other}` in view \"{view}\"")]
+    #[diagnostic(
+        code(wirebug::overlapping_includes),
+        help(
+            "boxes are sized from their ports and labels; move one include so the boxes no longer overlap (touching edges are fine)"
+        )
+    )]
+    OverlappingIncludes {
+        include: String,
+        other: String,
+        view: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("overlaps `{other}`")]
+        at: SourceSpan,
+        #[label("`{other}` is placed here")]
+        first: SourceSpan,
+    },
+
+    /// A schematic include sits so close to another that a wired port has
+    /// no room for its wire: the router leaves each port by one grid step
+    /// and keeps one step clear of every box, so that stub lands inside the
+    /// other box's clearance and the wire cannot be routed.
+    #[error("no room to route {ports}: `{include}` is too close to `{other}` in view \"{view}\"")]
+    #[diagnostic(
+        code(wirebug::include_too_close),
+        help(
+            "a wire leaves its port by one grid step and keeps one grid step clear of every other box, so leave at least two grid steps between a wired port and the box it faces"
+        )
+    )]
+    IncludeTooClose {
+        include: String,
+        other: String,
+        view: String,
+        /// The blocked ports, as a list of backticked `inst.port`s.
+        ports: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("too close to `{other}`")]
+        at: SourceSpan,
+        #[label("`{other}` is placed here")]
+        first: SourceSpan,
+    },
+
+    /// A schematic wire the router finds no path for, though both its
+    /// ports have room to leave: boxes less than two grid steps apart close
+    /// the gaps between them, walling one end in. Labelled on the includes
+    /// the wire ends on (an enclosure end has none).
+    #[error("no route for the wire from `{from}` to `{to}` in view \"{view}\"")]
+    #[diagnostic(
+        code(wirebug::unroutable_wire),
+        help(
+            "wires keep one grid step clear of every box, so boxes less than two grid steps apart leave no gap between them; open a gap of at least two grid steps in the boxes around the walled-in end"
+        )
+    )]
+    UnroutableWire {
+        from: String,
+        to: String,
+        view: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("the wire ends here")]
+        at: SourceSpan,
+        #[label("and here")]
+        other: Option<SourceSpan>,
+    },
+
+    /// A view's `grid:` step is zero or negative, so no renderer can draw
+    /// it. Found by asking the view's renderer (`render::lint`), like the
+    /// other layout problems.
+    #[error("grid step must be positive, got {value}")]
+    #[diagnostic(
+        code(wirebug::invalid_grid),
+        help(
+            "the grid step is drawing units per grid cell, e.g. `grid: 20;`; omit `grid:` for the default"
+        )
+    )]
+    InvalidGrid {
+        value: f64,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("not a positive step")]
+        at: SourceSpan,
+    },
+
+    /// A view's `grid:` step is finer than its renderer can draw: ports sit
+    /// two steps apart, and that pitch must clear a port label. The
+    /// `minimum` is the renderer's own (`render::lint` asks it).
+    #[error(
+        "grid step {value} is too fine for a {kind} view; ports need at least {minimum} per step"
+    )]
+    #[diagnostic(
+        code(wirebug::grid_too_fine),
+        help(
+            "ports sit two grid steps apart, so a finer grid overlaps their labels; use `grid: {minimum};` or coarser, or omit `grid:` for the default"
+        )
+    )]
+    GridTooFine {
+        value: f64,
+        minimum: f64,
+        kind: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("finer than {minimum}")]
+        at: SourceSpan,
+    },
+
+    /// A view's canvas is longer on a side than `render::MAX_CANVAS`, the
+    /// most `--png` will rasterise (its pixmap is allocated whole, so a
+    /// view whose includes sit far apart would exhaust memory). Held in
+    /// every output mode, so a project that passes `check` renders in each.
+    /// Found by laying the view out (`render::lint`), labelled on the title
+    /// and on the includes farthest apart along the longer side.
+    #[error(
+        "view \"{view}\" is {width} × {height} units, more than the {limit} a view may span on a side"
+    )]
+    #[diagnostic(
+        code(wirebug::view_too_large),
+        help(
+            "include positions count grid steps, so `at (1000, 0)` on `grid: 20;` lies 20000 units out; place the includes closer together, or split the drawing into several views"
+        )
+    )]
+    ViewTooLarge {
+        view: String,
+        width: f64,
+        height: f64,
+        limit: f64,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("{width} × {height} units")]
+        at: SourceSpan,
+        #[label("from here")]
+        first: Option<SourceSpan>,
+        #[label("to here")]
+        last: Option<SourceSpan>,
+    },
+
+    /// A conductor between connectors of two of a component's children that
+    /// none of the component's harness views draws: no view includes both
+    /// ends' connectors, so the build drawings miss it. A warning: the
+    /// design is sound, its drawings incomplete.
+    #[error("{conductor} from `{from}` to `{to}` is in no harness view of `{component}`")]
+    #[diagnostic(severity(Warning), code(wirebug::undrawn_conductor))]
+    UndrawnConductor {
+        /// `wire` or ``cable `<name>` conductor``, with its quoted label
+        /// when it has one.
+        conductor: String,
+        from: String,
+        to: String,
+        component: String,
+        /// The includes that would draw it, or, for an inline connector
+        /// that declares no half, that it must declare one first.
+        #[help]
+        advice: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("drawn in no harness view")]
+        at: SourceSpan,
+    },
+
     /// Two connectors in one component share a designator.
     #[error("duplicate connector designator `{name}`")]
     #[diagnostic(
@@ -460,6 +641,40 @@ pub enum Problem {
         at: SourceSpan,
     },
 
+    /// One wire lists the same endpoint twice: it connects a port to
+    /// itself. (Two *different* wires on one port are a deliberate double
+    /// crimp and are fine.)
+    #[error("wire lists endpoint `{endpoint}` twice")]
+    #[diagnostic(
+        code(wirebug::duplicate_endpoint),
+        help("remove the repeat, or name the endpoint this wire was meant to reach")
+    )]
+    DuplicateEndpoint {
+        endpoint: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("listed again here")]
+        at: SourceSpan,
+        #[label("first listed here")]
+        first: SourceSpan,
+    },
+
+    /// A cable carries no conductors. Nothing breaks (a harness view just
+    /// draws no cable box for it), so this is a warning.
+    #[error("cable `{name}` has no conductors")]
+    #[diagnostic(
+        severity(Warning),
+        code(wirebug::empty_cable),
+        help("add its conductors as `wire <color> <gauge> [a, b];` lines, or remove the cable")
+    )]
+    EmptyCable {
+        name: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("this cable")]
+        at: SourceSpan,
+    },
+
     /// A cable property uses a key other than `type` or `length`.
     #[error("unknown cable property `{key}`")]
     #[diagnostic(
@@ -497,6 +712,34 @@ pub enum Problem {
         #[source_code]
         src: NamedSource<String>,
         #[label("wrong value type")]
+        at: SourceSpan,
+    },
+
+    /// A wire's gauge (its cross-section in mm²) is zero or negative.
+    #[error("wire gauge must be positive, got {value}")]
+    #[diagnostic(
+        code(wirebug::invalid_gauge),
+        help("the gauge is the conductor cross-section in mm², e.g. `0.5` or `4`")
+    )]
+    InvalidGauge {
+        value: f64,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("not a positive cross-section")]
+        at: SourceSpan,
+    },
+
+    /// A `length` (in metres) is zero or negative.
+    #[error("length must be positive, got {value}")]
+    #[diagnostic(
+        code(wirebug::invalid_length),
+        help("a length is in metres, e.g. `length: 2.5;`")
+    )]
+    InvalidLength {
+        value: f64,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("not a positive length")]
         at: SourceSpan,
     },
 
@@ -573,6 +816,26 @@ pub enum Problem {
         first: SourceSpan,
     },
 
+    /// Two views in the project share a title. Both still render (the
+    /// repeat to a suffixed file), but the index shows two identically named
+    /// sections. The first view is a related note, since it may sit in
+    /// another file than the repeat.
+    #[error("duplicate view title \"{title}\"")]
+    #[diagnostic(
+        severity(Warning),
+        code(wirebug::duplicate_view_title),
+        help("give each view its own title; the repeat otherwise renders to a `_2`-suffixed file")
+    )]
+    DuplicateViewTitle {
+        title: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("titled again here")]
+        at: SourceSpan,
+        #[related]
+        first: [FirstViewTitle; 1],
+    },
+
     /// Text boxes are currently schematic-only.
     #[error("text boxes are not supported in `{kind}` views")]
     #[diagnostic(
@@ -624,6 +887,24 @@ pub enum Problem {
         #[source_code]
         src: NamedSource<String>,
         #[label("this component")]
+        at: SourceSpan,
+    },
+
+    /// A view documents a component the design never instantiates, so
+    /// there is no instance to draw it against.
+    #[error("view \"{view}\" documents `{subject}`, which the design never instantiates")]
+    #[diagnostic(
+        code(wirebug::uninstantiated_view_subject),
+        help(
+            "a view is drawn against an instance of its file's top-level component; instantiate `{subject}` under the root component, or remove the view"
+        )
+    )]
+    UninstantiatedViewSubject {
+        view: String,
+        subject: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("`{subject}` has no instance")]
         at: SourceSpan,
     },
 
@@ -702,10 +983,107 @@ pub enum Problem {
     },
 }
 
+/// The first view to use a title, attached to [`Problem::DuplicateViewTitle`]
+/// as a related note: a miette diagnostic carries one source file, and the
+/// two views may be in different files.
+#[derive(Debug, Error, Diagnostic)]
+#[error("first view titled \"{title}\"")]
+#[diagnostic(severity(Advice))]
+pub struct FirstViewTitle {
+    pub title: String,
+    #[source_code]
+    pub src: NamedSource<String>,
+    #[label("first titled here")]
+    pub at: SourceSpan,
+}
+
 impl Problem {
     /// True for problems that fail the run (severity error). Warnings
     /// return false unless the caller is running `--strict`.
     pub fn is_error(&self) -> bool {
         !matches!(self.severity(), Some(miette::Severity::Warning))
+    }
+
+    /// True for problems that report something missing: a name that
+    /// resolves to nothing, a component with no root or no instance, an
+    /// import nothing uses, a cable with no conductors, a port without
+    /// `pub`. A statement the parser skipped may have declared or used
+    /// that very thing (a `;` too early parts `pub ; port a "A";` into a
+    /// skipped `pub` and a private port), so while a file has syntax
+    /// errors these may be their echo, not mistakes of their own
+    /// ([`Project::drop_parse_cascades`]).
+    ///
+    /// The rest report something present that is wrong, which skipping a
+    /// statement cannot cause. The match lists every variant so that a new
+    /// one has to be sorted.
+    ///
+    /// [`Project::drop_parse_cascades`]: crate::dsl::project::Project::drop_parse_cascades
+    pub(crate) fn reports_an_absence(&self) -> bool {
+        match self {
+            Problem::UndefinedType { .. }
+            | Problem::UndefinedConnectorType { .. }
+            | Problem::UnresolvedImport { .. }
+            | Problem::OrphanFragment { .. }
+            | Problem::UnknownInstance { .. }
+            | Problem::UnknownPort { .. }
+            | Problem::PrivatePort { .. }
+            | Problem::UnknownInclude { .. }
+            | Problem::ViewSubject { .. }
+            | Problem::UndeclaredInlineHalf { .. }
+            | Problem::EmptyCable { .. }
+            | Problem::UnknownConnector { .. }
+            | Problem::NoRoot
+            | Problem::UninstantiatedViewSubject { .. }
+            | Problem::UnusedImport { .. }
+            | Problem::UndrawnConductor { .. } => true,
+            Problem::Lex { .. }
+            | Problem::Parse { .. }
+            | Problem::ReservedWord { .. }
+            | Problem::UseNotFound { .. }
+            | Problem::NoProject { .. }
+            | Problem::Io { .. }
+            | Problem::ManifestMissing { .. }
+            | Problem::ManifestParse { .. }
+            | Problem::DuplicateConnectorType { .. }
+            | Problem::DuplicateType { .. }
+            | Problem::NestedExtend { .. }
+            | Problem::DuplicateInstance { .. }
+            | Problem::DuplicatePort { .. }
+            | Problem::UnknownPortSide { .. }
+            | Problem::DuplicateViewPort { .. }
+            | Problem::DuplicateViewInclude { .. }
+            | Problem::OverlappingIncludes { .. }
+            | Problem::IncludeTooClose { .. }
+            | Problem::UnroutableWire { .. }
+            | Problem::InvalidGrid { .. }
+            | Problem::GridTooFine { .. }
+            | Problem::ViewTooLarge { .. }
+            | Problem::DuplicateConnectorName { .. }
+            | Problem::DuplicateConnectorPin { .. }
+            | Problem::UnknownInlineProperty { .. }
+            | Problem::DuplicateInlineHalf { .. }
+            | Problem::UnknownInlineHalf { .. }
+            | Problem::InlinePubPort { .. }
+            | Problem::DuplicateCableName { .. }
+            | Problem::CableWireArity { .. }
+            | Problem::DuplicateEndpoint { .. }
+            | Problem::UnknownCableProperty { .. }
+            | Problem::DuplicateCableProperty { .. }
+            | Problem::CablePropertyType { .. }
+            | Problem::InvalidGauge { .. }
+            | Problem::InvalidLength { .. }
+            | Problem::WrongIncludeForm { .. }
+            | Problem::UnknownViewKind { .. }
+            | Problem::DuplicateViewItem { .. }
+            | Problem::DuplicateViewText { .. }
+            | Problem::DuplicateViewTitle { .. }
+            | Problem::UnsupportedViewText { .. }
+            | Problem::EnclosureAnchor { .. }
+            | Problem::ContainmentCycle { .. }
+            | Problem::WireArity { .. }
+            | Problem::InvalidPin { .. }
+            | Problem::BarePortPin { .. }
+            | Problem::UnknownWireColor { .. } => false,
+        }
     }
 }

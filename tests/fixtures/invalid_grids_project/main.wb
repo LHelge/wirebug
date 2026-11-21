@@ -1,0 +1,56 @@
+// Views whose `grid:` their renderer cannot draw, beside one it can:
+// `check` rejects each on its number, so `render` never gets to fail.
+component Vehicle {
+    left:  Module "Left";
+    right: Module "Right";
+
+    connector x9 "Service 1p" {
+        pub port svc "SVC" pin 1;
+    }
+
+    wire red 1 [left.sig, right.sig];
+
+    component Module {
+        connector x1 "Signal 1p" {
+            pub port sig "SIG" pin 1;
+        }
+    }
+}
+
+view schematic "Overview" {
+    grid: 20;
+
+    include left at (0, 0) ports {
+        east: sig;
+    }
+
+    include right at (16, 0) ports {
+        west: sig;
+    }
+}
+
+// Ports sit two steps apart; a 5-unit step leaves their labels no room.
+view schematic "Fine Grid" {
+    grid: 5;
+
+    include left at (0, 0) ports {
+        east: sig;
+    }
+
+    include right at (64, 0) ports {
+        west: sig;
+    }
+}
+
+view harness "Harness" {
+    grid: 0;
+
+    include left.x1  at (0, 0);
+    include right.x1 at (20, 0);
+}
+
+view pinout "Service" {
+    grid: -10;
+
+    include x9 at (0, 0);
+}

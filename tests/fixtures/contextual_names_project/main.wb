@@ -1,0 +1,49 @@
+// Every name here is also a keyword somewhere else. Words that mean
+// something only inside a view, a connector_type layout or a cavity line
+// are ordinary names everywhere else, so this project checks clean.
+connector_type Grid2p "Grid 2p" {
+    layout grid {
+        rows: 1;
+        cols: 2;
+        numbering: row_major;
+    }
+}
+
+component Car {
+    size: Sensor "Size sensor";
+    grid: Sensor "Grid sensor";
+
+    cable text "Loom" {
+        length: 1.5;
+        wire red 1 "SIG" [size.at, grid.at];
+        wire black 1 "GND" [size.from, grid.from];
+    }
+
+    component Sensor {
+        connector layout: Grid2p {
+            pub port at   "AT"   pin 1;
+            pub port from "FROM" pin 2;
+        }
+    }
+}
+
+view schematic "Overview" {
+    grid: 20;
+
+    include size at (6, 8) ports {
+        east: at, from;
+    }
+
+    include grid at (26, 8) ports {
+        west: at, from;
+    }
+
+    text ports at (6, 14) "Two sensors on one loom";
+}
+
+view harness "Loom" {
+    grid: 20;
+
+    include size.layout at (4, 8);
+    include grid.layout at (28, 8);
+}

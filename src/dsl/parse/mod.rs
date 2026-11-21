@@ -4,9 +4,29 @@
 //! is `definition` (components nest), handled with [`recursive`]. Errors
 //! are chumsky `Rich` values carrying a span and an expected-set; we copy
 //! them into owned [`ParseError`]s so no parser lifetime escapes.
+//!
+//! Names go through two productions, `ident` (a name after a keyword) and
+//! `leading_name` (a name that starts a statement): an identifier, or a
+//! contextual keyword ([`Token::is_contextual`]) read as a name. A reserved
+//! keyword in name position is read as the name too, so the parse carries
+//! on, and recorded in the parser state: every occurrence gets its own
+//! reserved-word error.
+//!
+//! A statement that does not parse is reported and skipped, and the parse
+//! reads on, so one run reports every broken statement (see `block`). The
+//! skipped statement leaves a hole in the AST; [`Completeness`] says
+//! whether a file has holes, or braces that do not balance.
 
-use chumsky::input::{Input, Stream, ValueInput};
-use chumsky::prelude::{IterParser, Parser, Rich, choice, end, extra, just, recursive, select};
+use chumsky::error::RichPattern;
+use chumsky::input::{Input, MapExtra, Stream, ValueInput};
+use chumsky::inspector::TruncateState;
+use chumsky::label::LabelError;
+use chumsky::prelude::{
+    IterParser, Parser, Rich, any, choice, end, extra, just, recursive, select,
+};
+use chumsky::primitive::custom;
+use chumsky::recovery::via_parser;
+use chumsky::util::MaybeRef;
 
 use crate::dsl::ast::*;
 use crate::dsl::lex::Token;
@@ -39,25 +59,90 @@ impl chumsky::span::Span for Span {
     }
 }
 
-/// An owned parse error (span + rendered message), independent of any
-/// parser lifetime. Becomes a miette diagnostic in the diagnostics layer.
+/// What the parse notes beside the AST, in the parser state.
+#[derive(Debug, Clone)]
+enum Note {
+    /// A reserved keyword read as a name.
+    Reserved(Spanned<Token>),
+    /// A statement that did not parse, skipped: the span of its tokens,
+    /// and whether it starts with a reserved keyword.
+    Skipped { span: Span, keyword_led: bool },
+    /// A block that the end of input closed.
+    Unclosed,
+}
+
+/// The notes of a parse. A `TruncateState` forgets the notes taken on a
+/// branch the parser backtracks out of, and the same rewind drops the
+/// errors chumsky emitted there, so the notes that remain are those of the
+/// parse that stood, and each recovery's note pairs, in order, with the
+/// syntax error it emitted.
+type Notes = TruncateState<Note>;
+
+/// The parser's extra: `Rich` errors, plus the notes.
+type Extra<'tok> = extra::Full<Rich<'tok, Token, Span>, Notes, ()>;
+
+/// An owned parse error, independent of any parser lifetime. Becomes a
+/// miette diagnostic in the diagnostics layer.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParseError {
-    pub span: Span,
-    pub message: String,
+pub enum ParseError {
+    /// A syntax error: the span and chumsky's rendered reason.
+    Syntax { span: Span, message: String },
+    /// A reserved keyword written where a name belongs
+    /// (`pub port wire "W";`). The parse took it as the name and went on.
+    ReservedWord { span: Span, word: String },
+}
+
+impl ParseError {
+    /// Where in the source the error points.
+    pub fn span(&self) -> Span {
+        match self {
+            ParseError::Syntax { span, .. } | ParseError::ReservedWord { span, .. } => *span,
+        }
+    }
 }
 
 /// Result of parsing one file: the AST (absent only on unrecoverable
-/// failure) and any errors encountered.
+/// failure), any errors encountered, in source order, and how much of the
+/// source the AST stands for.
 #[derive(Debug)]
 pub struct Parsed {
     pub file: Option<File>,
     pub errors: Vec<ParseError>,
+    pub completeness: Completeness,
 }
 
 impl Parsed {
     pub fn is_ok(&self) -> bool {
         self.errors.is_empty()
+    }
+}
+
+/// How much of its source a file's AST stands for, once the parser has
+/// skipped the statements it could not read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Completeness {
+    /// Every statement parsed (a reserved word read as a name included).
+    Whole,
+    /// Each statement reported as a syntax error was skipped: the AST lacks
+    /// what it declared, and the rest stands as written.
+    Holes,
+    /// The braces do not balance, so from the unmatched one on the AST
+    /// puts statements in other blocks than the author meant.
+    Misnested,
+}
+
+impl Completeness {
+    fn of(balanced: bool, errors: &[ParseError]) -> Self {
+        if !balanced {
+            Completeness::Misnested
+        } else if errors
+            .iter()
+            .any(|e| matches!(e, ParseError::Syntax { .. }))
+        {
+            Completeness::Holes
+        } else {
+            Completeness::Whole
+        }
     }
 }
 
@@ -97,36 +182,370 @@ enum InlineItem {
     Port(Port),
 }
 
-/// Parse the significant token stream of one file into an [`ast::File`].
-pub fn parse_file(tokens: Vec<(Token, Span)>, file: FileId, src_len: usize) -> Parsed {
+/// Parse the significant token stream of one file, lexed from `src`, into
+/// an [`ast::File`].
+pub fn parse_file(tokens: Vec<(Token, Span)>, file: FileId, src: &str) -> Parsed {
     let eoi = Span {
         file,
-        start: src_len,
-        end: src_len,
+        start: src.len(),
+        end: src.len(),
     };
+    let balanced = braces_balance(&tokens);
+    let layout = TokenLayout::new(src, &tokens);
     let stream = Stream::from_iter(tokens).map(eoi, |(t, s)| (t, s));
-    let (file, errors) = parser().parse(stream).into_output_errors();
+    let mut notes = Notes::from(Vec::new());
+    let (file, syntax) = parser()
+        .parse_with_state(stream, &mut notes)
+        .into_output_errors();
+
+    let mut reserved = Vec::new();
+    let mut recoveries = Vec::new();
+    for note in notes.0 {
+        match note {
+            Note::Reserved(word) => reserved.push(word),
+            recovery => recoveries.push(recovery),
+        }
+    }
+    let mut syntax = without_tails(syntax, &recoveries, &layout);
+    if !balanced {
+        // An unmatched brace puts every statement after it in another
+        // block, and each would report an error of its own: keep the first
+        // error alone, as the parse did before it could recover.
+        syntax.sort_by_key(|e| e.span().start);
+        syntax.truncate(1);
+        let first = syntax.first().map_or(usize::MAX, |e| e.span().start);
+        reserved.retain(|word| word.span.start < first);
+    }
+    let mut errors: Vec<ParseError> = reserved
+        .into_iter()
+        .map(|word| ParseError::ReservedWord {
+            span: word.span,
+            word: word.node.to_string(),
+        })
+        .chain(syntax)
+        .collect();
+    errors.sort_by_key(|e| e.span().start);
+    let completeness = Completeness::of(balanced, &errors);
     Parsed {
         file,
-        errors: errors
-            .into_iter()
-            .map(|e| ParseError {
-                span: *e.span(),
-                message: e.reason().to_string(),
-            })
-            .collect(),
+        errors,
+        completeness,
     }
 }
 
-#[allow(clippy::type_complexity)]
-fn parser<'tok, I>() -> impl Parser<'tok, I, File, extra::Err<Rich<'tok, Token, Span>>>
+/// The syntax errors to report: each recovered statement's, except where a
+/// statement is the rest of the one before it. A statement that fails right
+/// after one that failed on its own `;` is that statement's tail when it
+/// goes on where the `;` cut it ([`TokenLayout::continues`]), unless it
+/// starts with a reserved keyword and so is a statement of its own; its
+/// error would only repeat the first.
+///
+/// `recoveries` are the recovery notes, one per emitted error and in the
+/// same order.
+fn without_tails(
+    syntax: Vec<Rich<'_, Token, Span>>,
+    recoveries: &[Note],
+    layout: &TokenLayout,
+) -> Vec<ParseError> {
+    let mut reported = Vec::new();
+    // The span of the statement skipped last, and whether it failed on the
+    // `;` that ends it.
+    let mut previous: Option<(Span, bool)> = None;
+    for (error, recovery) in syntax
+        .into_iter()
+        .zip(recoveries.iter().map(Some).chain(std::iter::repeat(None)))
+    {
+        let span = *error.span();
+        let tail = match recovery {
+            Some(Note::Skipped {
+                span: skipped,
+                keyword_led,
+            }) => {
+                let tail = !keyword_led
+                    && previous.is_some_and(|(before, on_semicolon)| {
+                        on_semicolon && layout.continues(before, skipped.start)
+                    });
+                let on_semicolon =
+                    error.found() == Some(&Token::Semicolon) && span.end == skipped.end;
+                previous = Some((*skipped, on_semicolon));
+                tail
+            }
+            _ => {
+                previous = None;
+                false
+            }
+        };
+        if !tail {
+            reported.push(ParseError::Syntax {
+                span,
+                message: error.reason().to_string(),
+            });
+        }
+    }
+    reported
+}
+
+/// Where a file's tokens sit in its source, to tell the tail of a statement
+/// a `;` cut short from the statement after it.
+struct TokenLayout<'src> {
+    src: &'src str,
+    /// The start of every token, in order.
+    starts: Vec<usize>,
+    /// How many `[` and `(` are open before each token (and, last, after
+    /// the final one).
+    open_brackets: Vec<usize>,
+}
+
+impl<'src> TokenLayout<'src> {
+    fn new(src: &'src str, tokens: &[(Token, Span)]) -> Self {
+        let starts = tokens.iter().map(|(_, span)| span.start).collect();
+        let open_brackets = std::iter::once(0)
+            .chain(tokens.iter().scan(0usize, |open, (token, _)| {
+                *open = match token {
+                    Token::LBracket | Token::LParen => *open + 1,
+                    Token::RBracket | Token::RParen => open.saturating_sub(1),
+                    _ => *open,
+                };
+                Some(*open)
+            }))
+            .collect();
+        TokenLayout {
+            src,
+            starts,
+            open_brackets,
+        }
+    }
+
+    /// The index of the first token at or after byte `at`.
+    fn index_at(&self, at: usize) -> usize {
+        self.starts.partition_point(|&start| start < at)
+    }
+
+    /// Whether the statement starting at byte `at` goes on where `cut`, a
+    /// statement that failed on its own `;`, stopped: it starts at the next
+    /// token, and on the same line (`pub port ; a "A";`) or inside a `[` or
+    /// `(` that `cut` left open (a `;` at a line end inside a wire's
+    /// endpoint list). On the next line, outside any bracket, it is the
+    /// author's next statement however the one before ended (`pub port a
+    /// "A" pin;` cut short, then `l Lamp;`), and reports its own error.
+    fn continues(&self, cut: Span, at: usize) -> bool {
+        let next = self.index_at(cut.end);
+        if self.starts.get(next) != Some(&at) {
+            return false;
+        }
+        let same_line = self
+            .src
+            .get(cut.end..at)
+            .is_some_and(|gap| !gap.contains('\n'));
+        same_line || self.open_brackets[next] > self.open_brackets[self.index_at(cut.start)]
+    }
+}
+
+/// Whether every `}` closes a `{` and every `{` is closed. Recovery only
+/// ever skips whole `{ … }` groups, so when this holds each block of the
+/// AST holds what the author put in it.
+fn braces_balance(tokens: &[(Token, Span)]) -> bool {
+    tokens
+        .iter()
+        .try_fold(0usize, |depth, (token, _)| match token {
+            Token::LBrace => Some(depth + 1),
+            Token::RBrace => depth.checked_sub(1),
+            _ => Some(depth),
+        })
+        == Some(0)
+}
+
+/// A parser that never matches, and that says a block may end here: where
+/// `close` (the block's `}`, or the file's end) is next it fails without a
+/// word, and anywhere else `close` fails first and adds itself to the
+/// expected set. Tried after a block's statements, it keeps the error of a
+/// statement that does not parse what it was before recovery: "expected
+/// <the statements>, or '}'".
+fn never_but_expect<'tok, I, C, O>(
+    close: impl Parser<'tok, I, C, Extra<'tok>> + Clone,
+) -> impl Parser<'tok, I, O, Extra<'tok>> + Clone
+where
+    I: ValueInput<'tok, Token = Token, Span = Span>,
+{
+    close.try_map(|_, span: Span| {
+        Err(LabelError::<'tok, I, RichPattern<'tok, Token>>::expected_found([], None, span))
+    })
+}
+
+/// Skip a statement that does not parse: up to and including the first `;`
+/// outside braces, or through the `{ … }` block it opens, stopping before a
+/// `}` that closes the enclosing block. Yields the statement's first token.
+/// Fails, consuming nothing, at a `}` or the end of input, so a block's
+/// close is never skipped as a statement. The skipped tokens are not read
+/// as names, so they note no reserved words.
+fn skip_statement<'tok, I>() -> impl Parser<'tok, I, Token, Extra<'tok>> + Clone
+where
+    I: ValueInput<'tok, Token = Token, Span = Span>,
+{
+    custom(|inp| {
+        let start = inp.cursor();
+        let mut first = None;
+        let mut depth = 0usize;
+        loop {
+            let token = match (inp.peek(), depth) {
+                (None, _) | (Some(Token::RBrace), 0) => break,
+                (Some(token), _) => token,
+            };
+            inp.skip();
+            let ends = match token {
+                Token::Semicolon => depth == 0,
+                Token::LBrace => {
+                    depth += 1;
+                    false
+                }
+                Token::RBrace => {
+                    depth -= 1;
+                    depth == 0
+                }
+                _ => false,
+            };
+            first.get_or_insert(token);
+            if ends {
+                break;
+            }
+        }
+        match first {
+            Some(token) => Ok(token),
+            None => {
+                let found = inp.peek_maybe();
+                let span = inp.span_since(&start);
+                Err(
+                    LabelError::<'tok, I, RichPattern<'tok, Token>>::expected_found(
+                        [],
+                        found,
+                        span,
+                    ),
+                )
+            }
+        }
+    })
+}
+
+/// `skip`, as the recovery of a statement that does not parse: it notes the
+/// skipped statement, and stands for no item.
+fn skipped<'tok, I, O>(
+    skip: impl Parser<'tok, I, Token, Extra<'tok>> + Clone,
+) -> impl Parser<'tok, I, Option<O>, Extra<'tok>> + Clone
+where
+    I: ValueInput<'tok, Token = Token, Span = Span>,
+{
+    skip.map_with(|first, e| {
+        let span = e.span();
+        e.state().push(Note::Skipped {
+            span,
+            keyword_led: first.is_reserved(),
+        });
+        None
+    })
+}
+
+/// A `{ item* }` block that reports every statement it cannot parse.
+///
+/// A statement that does not parse is reported, with the error the block
+/// gave before recovery (the furthest point any statement got to, and what
+/// would have been accepted there, the block's `}` included), and skipped
+/// by [`skip_statement`]; the block reads on. The parser rewinds out of the
+/// failed attempt before it skips, and the rewind forgets the reserved
+/// words that attempt noted, so a skipped statement reports its syntax
+/// error alone. A block still open at the end of input is reported there
+/// and closed, so the errors already reported inside it stand.
+fn block<'tok, I, O>(
+    item: impl Parser<'tok, I, O, Extra<'tok>> + 'tok,
+) -> impl Parser<'tok, I, Vec<O>, Extra<'tok>> + Clone
+where
+    I: ValueInput<'tok, Token = Token, Span = Span> + 'tok,
+    O: 'tok,
+{
+    let unclosed = end().map_with(|(), e: &mut MapExtra<'tok, '_, I, Extra<'tok>>| {
+        e.state().push(Note::Unclosed);
+    });
+    choice((item.map(Some), never_but_expect(just(Token::RBrace))))
+        .recover_with(via_parser(skipped(skip_statement())))
+        .repeated()
+        .collect::<Vec<Option<O>>>()
+        .map(|items| items.into_iter().flatten().collect())
+        .delimited_by(
+            just(Token::LBrace),
+            just(Token::RBrace)
+                .ignored()
+                .recover_with(via_parser(unclosed)),
+        )
+        .boxed()
+}
+
+/// Read the reserved keyword `word` as a name, recording it for the
+/// reserved-word error.
+fn reserved_as_name<'tok, I>(
+    word: Token,
+    e: &mut MapExtra<'tok, '_, I, Extra<'tok>>,
+) -> Spanned<Ident>
+where
+    I: ValueInput<'tok, Token = Token, Span = Span>,
+{
+    let span = e.span();
+    let name = Ident(word.to_string());
+    e.state().push(Note::Reserved(Spanned::new(word, span)));
+    Spanned::new(name, span)
+}
+
+fn parser<'tok, I>() -> impl Parser<'tok, I, File, Extra<'tok>>
 where
     I: ValueInput<'tok, Token = Token, Span = Span>,
 {
     // --- Leaves ---
 
-    let ident = select! { Token::Ident(name) => name }
-        .map_with(|name, e| Spanned::new(Ident(name), e.span()));
+    // An identifier, or a contextual keyword read as a name.
+    let plain_name = select! {
+        Token::Ident(name) => name,
+        token if token.is_contextual() => token.to_string(),
+    }
+    .map_with(|name, e| Spanned::new(Ident(name), e.span()));
+
+    let reserved_word = select! { token if Token::is_reserved(&token) => token };
+
+    // A name after a keyword (`port <name>`, `include <name>`, `[<name>.…`).
+    // A reserved word there is still read as the name, and recorded so
+    // each occurrence gets a reserved-word error; the parse goes on past it.
+    let ident = choice((
+        plain_name,
+        reserved_word.map_with(|word, e| reserved_as_name(word, e)),
+    ))
+    .boxed();
+
+    // A name that starts a statement: `<name>: Type;`, `<key>: value;`,
+    // `<side>: ports;`, `<port> at (…);`. Here a reserved word is the name
+    // only when `separator` follows it. Otherwise the branch fails on the
+    // keyword itself without consuming it, so a misplaced keyword (`view`
+    // inside a component) gets the error of the statements that could
+    // start there, on the keyword, and not "expected ':'" one token on.
+    let leading_name = |separator: Token| {
+        choice((
+            plain_name,
+            reserved_word
+                .then(any().rewind().or_not())
+                .try_map_with(move |(word, next), e| {
+                    if next.as_ref() == Some(&separator) {
+                        Ok(reserved_as_name(word, e))
+                    } else {
+                        // Expecting nothing itself, this error leaves the
+                        // other statements' expected set as it was.
+                        Err(
+                            LabelError::<'tok, I, RichPattern<'tok, Token>>::expected_found(
+                                [],
+                                Some(MaybeRef::Val(word)),
+                                e.span(),
+                            ),
+                        )
+                    }
+                }),
+        ))
+        .boxed()
+    };
 
     let string = select! { Token::Str(s) => s }.map_with(|s, e| Spanned::new(s, e.span()));
 
@@ -142,7 +561,7 @@ where
             .map_err(|_| Rich::custom(span, format!("pin must be a whole number, got `{n}`")))
     });
 
-    let connector_property = ident
+    let connector_property = leading_name(Token::Colon)
         .then_ignore(just(Token::Colon))
         .then(choice((
             string.map(ConnectorPropertyValue::Str),
@@ -171,7 +590,7 @@ where
                 .then(
                     just(Token::Numbering)
                         .ignore_then(just(Token::Colon))
-                        .ignore_then(ident)
+                        .ignore_then(ident.clone())
                         .then_ignore(just(Token::Semicolon))
                         .or_not(),
                 )
@@ -195,7 +614,7 @@ where
                 .then(number)
                 .delimited_by(just(Token::LParen), just(Token::RParen)),
         )
-        .then(just(Token::Size).ignore_then(ident).or_not())
+        .then(just(Token::Size).ignore_then(ident.clone()).or_not())
         .then_ignore(just(Token::Semicolon))
         .map_with(|((pin, (x, y)), size), e| ConnectorCavity {
             pin,
@@ -228,14 +647,9 @@ where
     ));
 
     let connector_type = just(Token::ConnectorType)
-        .ignore_then(ident)
+        .ignore_then(ident.clone())
         .then(string)
-        .then(
-            connector_type_item
-                .repeated()
-                .collect::<Vec<_>>()
-                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
-        )
+        .then(block(connector_type_item))
         .map_with(|((name, description), items), e| {
             let mut properties = Vec::new();
             let mut layout = None;
@@ -272,7 +686,7 @@ where
     let port = just(Token::Pub)
         .or_not()
         .then_ignore(just(Token::Port))
-        .then(ident)
+        .then(ident.clone())
         .then(string)
         .then(pins)
         .then_ignore(just(Token::Semicolon))
@@ -290,14 +704,9 @@ where
         .boxed();
 
     let connector = just(Token::Connector)
-        .ignore_then(ident)
+        .ignore_then(ident.clone())
         .then(string.or_not())
-        .then(
-            port.clone()
-                .repeated()
-                .collect::<Vec<_>>()
-                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
-        )
+        .then(block(port.clone()))
         .map_with(|((name, description), ports), e| Connector {
             name,
             description,
@@ -307,15 +716,10 @@ where
         .boxed();
 
     let connector_instance = just(Token::Connector)
-        .ignore_then(ident)
+        .ignore_then(ident.clone())
         .then_ignore(just(Token::Colon))
-        .then(ident)
-        .then(
-            port.clone()
-                .repeated()
-                .collect::<Vec<_>>()
-                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
-        )
+        .then(ident.clone())
+        .then(block(port.clone()))
         .map_with(|((name, type_name), ports), e| ConnectorInstance {
             name,
             type_name,
@@ -329,9 +733,9 @@ where
     // A `<key>: <Type>;` housing-half line. The key is any identifier here
     // (`male`/`female` are validated in resolve, not the grammar) so a typo
     // gets a targeted diagnostic instead of a generic parse error.
-    let inline_half = ident
+    let inline_half = leading_name(Token::Colon)
         .then_ignore(just(Token::Colon))
-        .then(ident)
+        .then(ident.clone())
         .then_ignore(just(Token::Semicolon))
         .map_with(|(key, type_name), e| InlineHalfDecl {
             key,
@@ -347,14 +751,9 @@ where
     ));
 
     let inline = just(Token::Inline)
-        .ignore_then(ident)
+        .ignore_then(ident.clone())
         .then(string.or_not())
-        .then(
-            inline_item
-                .repeated()
-                .collect::<Vec<InlineItem>>()
-                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
-        )
+        .then(block(inline_item))
         .map_with(|((name, label), items), e| {
             let mut halves = Vec::new();
             let mut ports = Vec::new();
@@ -376,9 +775,9 @@ where
 
     // --- Instances ---
 
-    let instance = ident
+    let instance = leading_name(Token::Colon)
         .then_ignore(just(Token::Colon))
-        .then(ident)
+        .then(ident.clone())
         .then(string.or_not())
         .then_ignore(just(Token::Semicolon))
         .map_with(|((name, type_name), label), e| Instance {
@@ -392,7 +791,8 @@ where
     // --- Wires ---
 
     let endpoint = ident
-        .then(just(Token::Dot).ignore_then(ident).or_not())
+        .clone()
+        .then(just(Token::Dot).ignore_then(ident.clone()).or_not())
         .map_with(|(first, second), e| match second {
             Some(port) => Endpoint {
                 instance: Some(first),
@@ -408,8 +808,8 @@ where
 
     // A color is `base` or two-tone `base/tracer` (`green/yellow`).
     let wire = just(Token::Wire)
-        .ignore_then(ident)
-        .then(just(Token::Slash).ignore_then(ident).or_not())
+        .ignore_then(ident.clone())
+        .then(just(Token::Slash).ignore_then(ident.clone()).or_not())
         .then(number)
         .then(string.or_not())
         .then(
@@ -433,12 +833,12 @@ where
 
     // --- Cables ---
 
-    let cable_property = ident
+    let cable_property = leading_name(Token::Colon)
         .then_ignore(just(Token::Colon))
         .then(choice((
             string.map(CablePropertyValue::Str),
             number.map(CablePropertyValue::Number),
-            ident.map(CablePropertyValue::Ident),
+            ident.clone().map(CablePropertyValue::Ident),
         )))
         .then_ignore(just(Token::Semicolon))
         .map_with(|(key, value), e| CableProperty {
@@ -480,14 +880,9 @@ where
     ));
 
     let cable = just(Token::Cable)
-        .ignore_then(ident)
+        .ignore_then(ident.clone())
         .then(string.or_not())
-        .then(
-            cable_item
-                .repeated()
-                .collect::<Vec<CableItem>>()
-                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
-        )
+        .then(block(cable_item))
         .map_with(|((name, label), items), e| {
             let mut properties = Vec::new();
             let mut members = Vec::new();
@@ -511,10 +906,11 @@ where
 
     // A `<side>: <port>, <port>;` line, flattened to one placement per port
     // (all sharing the line's side and span).
-    let port_line = ident
+    let port_line = leading_name(Token::Colon)
         .then_ignore(just(Token::Colon))
         .then(
             ident
+                .clone()
                 .separated_by(just(Token::Comma))
                 .allow_trailing()
                 .at_least(1)
@@ -534,23 +930,19 @@ where
         });
 
     let ports_block = just(Token::Ports)
-        .ignore_then(
-            port_line
-                .repeated()
-                .collect::<Vec<Vec<PortPlacement>>>()
-                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
-        )
+        .ignore_then(block(port_line))
         .map(|lines| lines.into_iter().flatten().collect::<Vec<PortPlacement>>());
 
     // One anchor slot: a grid coordinate or a side keyword. Resolve checks
     // that exactly one of an enclosure port's two slots is a side.
-    let anchor = choice((number.map(Anchor::Coord), ident.map(Anchor::Edge)));
+    let anchor = choice((number.map(Anchor::Coord), ident.clone().map(Anchor::Edge)));
 
     // `<port> at (<x>, <y>);` — a subject port placed on the enclosure edge.
-    let enclosure_port = ident
+    let enclosure_port = leading_name(Token::At)
         .then_ignore(just(Token::At))
         .then(
             anchor
+                .clone()
                 .then_ignore(just(Token::Comma))
                 .then(anchor)
                 .delimited_by(just(Token::LParen), just(Token::RParen)),
@@ -564,17 +956,12 @@ where
         });
 
     let enclosure_block = just(Token::Enclosure)
-        .ignore_then(
-            enclosure_port
-                .repeated()
-                .collect::<Vec<EnclosurePort>>()
-                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
-        )
+        .ignore_then(block(enclosure_port))
         .map_with(|ports, e| Spanned::new(ports, e.span()));
 
     let include = just(Token::Include)
-        .ignore_then(ident)
-        .then(just(Token::Dot).ignore_then(ident).or_not())
+        .ignore_then(ident.clone())
+        .then(just(Token::Dot).ignore_then(ident.clone()).or_not())
         .then_ignore(just(Token::At))
         .then(
             number
@@ -597,7 +984,7 @@ where
         });
 
     let text_box = just(Token::Text)
-        .ignore_then(ident)
+        .ignore_then(ident.clone())
         .then_ignore(just(Token::At))
         .then(
             number
@@ -630,14 +1017,9 @@ where
     ));
 
     let view = just(Token::View)
-        .ignore_then(ident)
+        .ignore_then(ident.clone())
         .then(string)
-        .then(
-            view_item
-                .repeated()
-                .collect::<Vec<ViewItem>>()
-                .delimited_by(just(Token::LBrace), just(Token::RBrace)),
-        )
+        .then(block(view_item))
         .map_with(|((kind, title), items), e| {
             let mut grid = None;
             let mut enclosure = None;
@@ -690,13 +1072,8 @@ where
             just(Token::Component).to(DefKind::Component),
             just(Token::Extend).to(DefKind::Extend),
         ));
-        head.then(ident)
-            .then(
-                member
-                    .repeated()
-                    .collect::<Vec<_>>()
-                    .delimited_by(just(Token::LBrace), just(Token::RBrace)),
-            )
+        head.then(ident.clone())
+            .then(block(member))
             .map_with(|((kind, name), members), e| Definition {
                 kind,
                 name,
@@ -726,14 +1103,19 @@ where
 
     let file_entry = choice((use_decl.map(FileEntry::Use), item.map(FileEntry::Item)));
 
-    file_entry
+    // The file reads like a block that ends at the end of input: a broken
+    // entry is reported and skipped (a stray `}` alone, since no block
+    // here could close on it), and the parse reads on.
+    let stray_close = just(Token::RBrace);
+    choice((file_entry.map(Some), never_but_expect(end())))
+        .recover_with(via_parser(skipped(choice((stray_close, skip_statement())))))
         .repeated()
-        .collect::<Vec<FileEntry>>()
+        .collect::<Vec<Option<FileEntry>>>()
         .then_ignore(end())
         .map_with(|entries, e| {
             let mut uses = Vec::new();
             let mut items = Vec::new();
-            for entry in entries {
+            for entry in entries.into_iter().flatten() {
                 match entry {
                     FileEntry::Use(use_decl) => uses.push(use_decl),
                     FileEntry::Item(item) => items.push(item),
@@ -756,7 +1138,7 @@ mod tests {
 
     fn parse_str(src: &str) -> Parsed {
         let lexemes = lex(src, FileId(0)).expect("lexes");
-        parse_file(significant(&lexemes), FileId(0), src.len())
+        parse_file(significant(&lexemes), FileId(0), src)
     }
 
     fn parse_ok(src: &str) -> File {
@@ -1420,9 +1802,360 @@ component b { }
     }
 
     #[test]
+    fn contextual_keywords_are_names_wherever_a_name_belongs() {
+        let file = parse_ok(
+            r#"use from from "from.wb";
+            component c {
+                pub port size "SIZE";
+                grid: Lamp;
+                connector layout "L" { pub port text "T" pin 1; }
+                connector face: Plug { pub port rows "R" pin 2; }
+                inline cavity { female: Plug; port numbering "N" pin 3; }
+                cable ports { wire red 1 [at.from, size]; }
+            }
+            view schematic "V" {
+                include at at (1, 2) ports { west: cols, enclosure; }
+                enclosure { include at (west, 1); }
+                text grid at (0, 4) "note";
+            }"#,
+        );
+        assert_eq!(file.uses[0].name.node.as_str(), "from");
+        let names: Vec<&str> = members(&file)
+            .iter()
+            .map(|m| match m {
+                Member::Port(p) => p.name.node.as_str(),
+                Member::Instance(i) => i.name.node.as_str(),
+                Member::Connector(c) => c.name.node.as_str(),
+                Member::ConnectorInstance(c) => c.name.node.as_str(),
+                Member::Inline(i) => i.name.node.as_str(),
+                Member::Cable(c) => c.name.node.as_str(),
+                other => panic!("unexpected member {other:?}"),
+            })
+            .collect();
+        assert_eq!(names, ["size", "grid", "layout", "face", "cavity", "ports"]);
+        let Item::View(v) = &file.items[1] else {
+            panic!("expected a view");
+        };
+        assert_eq!(v.includes[0].instance.node.as_str(), "at");
+        let placed: Vec<&str> = v.includes[0]
+            .ports
+            .iter()
+            .map(|p| p.port.node.as_str())
+            .collect();
+        assert_eq!(placed, ["cols", "enclosure"]);
+        assert_eq!(v.enclosure[0].port.node.as_str(), "include");
+        assert_eq!(v.texts[0].name.node.as_str(), "grid");
+    }
+
+    #[test]
+    fn reserved_word_as_a_name_is_reported_on_the_word_and_parsed_through() {
+        let src = r#"component c { pub port wire "W" pin 1; port ok "OK"; }"#;
+        let parsed = parse_str(src);
+        let [ParseError::ReservedWord { span, word }] = parsed.errors.as_slice() else {
+            panic!("expected one reserved-word error, got {:?}", parsed.errors);
+        };
+        assert_eq!(word, "wire");
+        assert_eq!(&src[span.start..span.end], "wire");
+        // The parse carried on: both ports are in the AST.
+        let file = parsed.file.expect("a file");
+        assert_eq!(members(&file).len(), 2);
+    }
+
+    #[test]
+    fn reserved_word_as_an_instance_name_is_reported() {
+        let parsed = parse_str("component c { cable: Lamp; }");
+        let words: Vec<&str> = parsed
+            .errors
+            .iter()
+            .map(|e| match e {
+                ParseError::ReservedWord { word, .. } => word.as_str(),
+                ParseError::Syntax { message, .. } => message.as_str(),
+            })
+            .collect();
+        assert_eq!(words, ["cable"]);
+    }
+
+    /// Each error of `src` as `<the text under its span>: <message>`.
+    fn errors_at(src: &str) -> Vec<String> {
+        parse_str(src)
+            .errors
+            .iter()
+            .map(|e| {
+                let span = e.span();
+                let message = match e {
+                    ParseError::Syntax { message, .. } => message.clone(),
+                    ParseError::ReservedWord { word, .. } => format!("reserved word `{word}`"),
+                };
+                format!("{}: {message}", &src[span.start..span.end])
+            })
+            .collect()
+    }
+
+    #[test]
+    fn misplaced_keyword_at_a_statement_start_fails_on_the_keyword() {
+        // A reserved word may lead a `<name>:` statement only when the `:`
+        // follows; anywhere else the error is the one the statements that
+        // could start there give, on the keyword itself.
+        let cases = [
+            r#"component C { view schematic "V" { } }"#,
+            r#"component C { use X from "x.wb"; }"#,
+            r#"component C { connector_type T "t" { } }"#,
+            "component C { twisted { } }",
+            "component C { pin 1; }",
+            r#"component C { cable k { port a "A"; } }"#,
+            r#"connector_type T "t" { wire "x"; }"#,
+            "component C { inline ic { cable Plug; } }",
+            r#"view schematic "V" { include a at (0, 0) ports { view west: a; } }"#,
+            r#"view schematic "V" { enclosure { wire (west, 1); } }"#,
+        ];
+        let report: Vec<String> = cases.iter().flat_map(|src| errors_at(src)).collect();
+        insta::assert_snapshot!(report.join("\n"), @r"
+        view: found 'view' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'component', 'extend', something else, or '}'
+        use: found 'use' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'component', 'extend', something else, or '}'
+        connector_type: found 'connector_type' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'component', 'extend', something else, or '}'
+        twisted: found 'twisted' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'component', 'extend', something else, or '}'
+        pin: found 'pin' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'component', 'extend', something else, or '}'
+        port: found 'port' expected something else, 'twisted', 'wire', or '}'
+        wire: found 'wire' expected 'layout', something else, or '}'
+        cable: found 'cable' expected something else, 'pub', 'port', or '}'
+        view: found 'view' expected something else, or '}'
+        wire: found 'wire' expected something else, or '}'
+        ");
+    }
+
+    #[test]
+    fn reserved_word_leading_a_name_statement_is_a_reserved_word_error() {
+        let cases = [
+            "component C { pin: Plug; }",
+            r#"connector_type T "t" { port: "x"; }"#,
+            "component C { inline ic { wire: Plug; } }",
+            r#"component C { cable k { view: "x"; } }"#,
+            r#"view schematic "V" { include a at (0, 0) ports { wire: a; } }"#,
+            r#"view schematic "V" { enclosure { wire at (west, 1); } }"#,
+        ];
+        let report: Vec<String> = cases.iter().flat_map(|src| errors_at(src)).collect();
+        assert_eq!(
+            report,
+            [
+                "pin: reserved word `pin`",
+                "port: reserved word `port`",
+                "wire: reserved word `wire`",
+                "view: reserved word `view`",
+                "wire: reserved word `wire`",
+                "wire: reserved word `wire`",
+            ]
+        );
+    }
+
+    #[test]
+    fn reserved_words_read_as_names_on_an_abandoned_branch_are_not_reported() {
+        // An inline body and a cable body try a `<name>:` line before the
+        // statement that starts with `port`/`wire`/`twisted`; that attempt
+        // backtracks and must leave no error behind.
+        let parsed = parse_str(
+            r#"component c {
+                inline ic { port a "A" pin 1; pub port b "B" pin 2; }
+                cable cab {
+                    wire red 1 [x.a, y.a];
+                    twisted { wire red 1 [x.b, y.b]; wire blue 1 [x.c, y.c]; }
+                }
+            }"#,
+        );
+        assert!(parsed.is_ok(), "{:?}", parsed.errors);
+    }
+
+    #[test]
     fn missing_semicolon_is_a_parse_error() {
         let parsed = parse_str(r#"component c { pub port a "A" }"#);
         assert!(!parsed.errors.is_empty());
+    }
+
+    /// One broken statement in each kind of block, and one at the top.
+    const BROKEN_EVERYWHERE: &str = r#"use Lamp from ;
+connector_type Plug "P" { part "x"; cavities: 2; }
+component C {
+    pub port a "A" pin;
+    pub port b "B" pin 1;
+    connector x1: Plug { pub port c "C" pin; pub port d "D" pin 2; }
+    connector grp { port e "E" pins [1,; port f "F"; }
+    inline ic { male Plug; port g "G" pin 1; }
+    cable k { length: ; wire red 1 [l.a, b]; }
+    wire red [a, b];
+    l: Lamp;
+}
+view schematic "V" {
+    include l at (0 0);
+    include l at (1, 1) ports { west a; east: a; }
+    enclosure { a at (west 1); b at (west, 2); }
+    grid: 10;
+}
+"#;
+
+    #[test]
+    fn every_broken_statement_reports_its_own_error() {
+        insta::assert_snapshot!(errors_at(BROKEN_EVERYWHERE).join("\n"), @r#"
+        ;: found ';' expected something else
+        "x": found '"x"' expected ':'
+        ;: found ';' expected something else
+        ;: found ';' expected something else
+        ;: found ';' expected something else, or ']'
+        Plug: found 'Plug' expected ':'
+        ;: found ';' expected something else
+        [: found '[' expected '/', or something else
+        0: found '0' expected ','
+        a: found 'a' expected ':'
+        1: found '1' expected ','
+        "#);
+    }
+
+    #[test]
+    fn a_semicolon_too_early_reports_the_statement_once() {
+        // The `;` ends the skip, and what follows it is the rest of the
+        // broken statement, not a statement of its own.
+        for body in [
+            r#"pub port ; c0 "C0" pin 1;"#,
+            r#"pub port c0 ; "C0" pin 1;"#,
+            "wire red 1 [a.b; c.d];",
+            "wire red 1 ; [a.b, c.d];",
+            // Inside an open `[`, the next line still belongs to the wire.
+            "wire red 1 [\n    a.b, ;\n    c.d,\n];",
+        ] {
+            let src = format!("component C {{ {body} pub port ok \"OK\"; }}");
+            assert_eq!(errors_at(&src).len(), 1, "{body}: {:?}", errors_at(&src));
+        }
+    }
+
+    #[test]
+    fn a_statement_after_a_truncated_one_reports_its_own_error() {
+        // A keyword starts a statement of its own, however the one before
+        // it ended; so does a statement after one that broke before its `;`.
+        let report = [
+            r#"component C { pub port a "A" pin; wire "x"; }"#,
+            r#"component C { pub port a "A" pin; pin 1; }"#,
+            r#"component C { pub port a pin 1; b Lamp; }"#,
+        ]
+        .iter()
+        .map(|src| errors_at(src).join(" | "))
+        .collect::<Vec<_>>();
+        insta::assert_snapshot!(report.join("\n"), @r#"
+        ;: found ';' expected something else | "x": found '"x"' expected something else
+        ;: found ';' expected something else | pin: found 'pin' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'component', 'extend', something else, or '}'
+        pin: found 'pin' expected something else | Lamp: found 'Lamp' expected ':'
+        "#);
+    }
+
+    #[test]
+    fn a_statement_on_the_line_after_a_cut_short_one_reports_its_own_error() {
+        // `pin;` fails on its own `;`, but a name-led statement on the next
+        // line is the author's next statement, not the tail of that one.
+        let report = [
+            "component C {\n    pub port a \"A\" pin;\n    l Lamp;\n}",
+            "component C {\n    pub port a \"A\" pin;\n    lamp: Lamp \"L\" extra;\n}",
+        ]
+        .iter()
+        .map(|src| errors_at(src).join(" | "))
+        .collect::<Vec<_>>();
+        insta::assert_snapshot!(report.join("\n"), @r"
+        ;: found ';' expected something else | Lamp: found 'Lamp' expected ':'
+        ;: found ';' expected something else | extra: found 'extra' expected ';'
+        ");
+    }
+
+    #[test]
+    fn reserved_words_outside_a_skipped_statement_are_still_reported() {
+        // The skipped statement's own reserved word goes with it (the
+        // parser rewinds out of the attempt); the words of the statements
+        // around it, read before and after the skip, all stand.
+        let report = errors_at(
+            r#"component C {
+                pub port view "V";
+                pub port wire "W" pin;
+                pub port cable "C";
+            }"#,
+        );
+        assert_eq!(
+            report,
+            [
+                "view: reserved word `view`",
+                ";: found ';' expected something else",
+                "cable: reserved word `cable`",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_reserved_word_alone_leaves_the_file_whole() {
+        let parsed = parse_str(r#"component C { pub port wire "W"; }"#);
+        assert_eq!(parsed.completeness, Completeness::Whole);
+        assert_eq!(
+            parse_str("component C { }").completeness,
+            Completeness::Whole
+        );
+    }
+
+    #[test]
+    fn unbalanced_braces_report_the_first_error_alone() {
+        // A missing or extra `}` moves every statement after it into
+        // another block, where each would fail: only the first error is
+        // reported, and the file is marked misnested.
+        for src in [
+            r#"component C { cable k { wire red 1 [a.b, c.d]; } pub port a "A"; "#,
+            r#"component C { } pub port a "A"; pub port b "B"; }"#,
+            r#"component C { pub port a "A" pin; cable k { wire red 1 [a.b, c.d]; } "#,
+        ] {
+            let parsed = parse_str(src);
+            assert_eq!(parsed.completeness, Completeness::Misnested, "{src}");
+            assert_eq!(parsed.errors.len(), 1, "{src}: {:?}", parsed.errors);
+        }
+    }
+
+    #[test]
+    fn a_block_left_open_keeps_the_first_error_inside_it() {
+        // The end of input closes the open block, so the error reported is
+        // the broken statement inside it, as before recovery, not the
+        // missing `}`.
+        assert_eq!(
+            errors_at(r#"component C { pub port a "A" pin; pub port b "B";"#),
+            [";: found ';' expected something else"]
+        );
+    }
+
+    #[test]
+    fn a_skipped_statement_leaves_the_rest_of_its_block_in_the_ast() {
+        let parsed = parse_str(BROKEN_EVERYWHERE);
+        assert_eq!(parsed.completeness, Completeness::Holes);
+        let file = parsed.file.expect("a file");
+        assert!(file.uses.is_empty());
+        let Item::ConnectorType(plug) = &file.items[0] else {
+            panic!("expected the connector type");
+        };
+        assert_eq!(plug.properties.len(), 1, "cavities: 2 stays");
+        let Item::Definition(component) = &file.items[1] else {
+            panic!("expected the component");
+        };
+        let names: Vec<String> = component
+            .members
+            .iter()
+            .map(|m| match m {
+                Member::Port(p) => format!("port {}", p.name.node),
+                Member::ConnectorInstance(c) => format!("{} {}", c.name.node, c.ports.len()),
+                Member::Connector(c) => format!("{} {}", c.name.node, c.ports.len()),
+                Member::Inline(i) => format!("{} {}", i.name.node, i.ports.len() + i.halves.len()),
+                Member::Cable(c) => {
+                    format!("{} {}", c.name.node, c.properties.len() + c.members.len())
+                }
+                Member::Instance(i) => format!("{}: {}", i.name.node, i.type_name.node),
+                other => panic!("unexpected member {other:?}"),
+            })
+            .collect();
+        assert_eq!(names, ["port b", "x1 1", "grp 1", "ic 1", "k 1", "l: Lamp"]);
+        let Item::View(view) = &file.items[2] else {
+            panic!("expected the view");
+        };
+        assert_eq!(view.includes.len(), 1);
+        assert_eq!(view.includes[0].ports.len(), 1, "east: a stays");
+        assert_eq!(view.enclosure.len(), 1);
+        assert!(view.grid.is_some());
     }
 
     #[test]

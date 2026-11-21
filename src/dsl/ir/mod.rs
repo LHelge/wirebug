@@ -8,7 +8,9 @@ use std::fmt;
 
 use indexmap::IndexMap;
 
+use crate::dsl::ast;
 use crate::dsl::manifest::Manifest;
+use crate::dsl::span::Span;
 
 macro_rules! name_newtype {
     ($name:ident, $doc:literal) => {
@@ -344,6 +346,18 @@ impl Design {
     pub fn get(&self, path: &InstancePath) -> Option<&Instance> {
         self.instances.get(path)
     }
+
+    /// The instance `view` is drawn against: the first one of the type it
+    /// documents (the root for a view of the root component). Synthetic
+    /// inline-connector instances are skipped — their `type_name` is the
+    /// inline's designator, which could shadow a real component type, and
+    /// an inline is never a view subject. `None` when the design never
+    /// instantiates the type.
+    pub(crate) fn subject_of(&self, view: &View) -> Option<&Instance> {
+        self.instances
+            .values()
+            .find(|inst| inst.inline.is_none() && inst.type_name == view.subject)
+    }
 }
 
 /// One elaborated instance (one node per placement).
@@ -551,10 +565,13 @@ pub struct Wire {
     /// cable in source order. Wires of one cable sharing an index are
     /// twisted together; the harness renderer braids two-conductor groups.
     pub twisted_group: Option<u32>,
+    /// The authored `wire` statement (inside its cable, for a conductor),
+    /// so a check over the drawings can point back at the source.
+    pub span: Span,
 }
 
 /// A resolved wire endpoint.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum WireEnd {
     /// The enclosing component's own port.
     Own(PortName),
@@ -563,6 +580,33 @@ pub enum WireEnd {
         instance: InstanceName,
         port: PortName,
     },
+}
+
+/// The endpoint an authored reference names in the enclosing component's
+/// flat namespace: a bare `port` is the component's own, `inst.port` a
+/// child's. Elaboration and validation share this mapping, so both agree on
+/// which references are the same endpoint.
+impl From<&ast::Endpoint> for WireEnd {
+    fn from(ep: &ast::Endpoint) -> Self {
+        let port = PortName::from(ep.port.node.as_str());
+        match &ep.instance {
+            None => Self::Own(port),
+            Some(inst) => Self::Child {
+                instance: InstanceName::from(inst.node.as_str()),
+                port,
+            },
+        }
+    }
+}
+
+/// The endpoint as authored: `port` or `inst.port`.
+impl fmt::Display for WireEnd {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Own(port) => write!(f, "{port}"),
+            Self::Child { instance, port } => write!(f, "{instance}.{port}"),
+        }
+    }
 }
 
 /// A dotted instance path, e.g. `vehicle.front.module_1.pack`.
@@ -610,7 +654,11 @@ impl fmt::Debug for InstancePath {
 pub struct View {
     pub kind: ViewKind,
     pub title: String,
-    pub grid: Option<f64>,
+    /// The authored `grid:`; `None` leaves the renderer's default.
+    pub grid: Option<ViewGrid>,
+    /// Where the view's title is written, for a diagnostic about the whole
+    /// view.
+    pub span: Span,
     pub subject: TypeName,
     /// Whether the view authored an `enclosure { }` block. Kept separate from
     /// the port list so an empty enclosure still draws the subject boundary.
@@ -621,6 +669,14 @@ pub struct View {
     pub enclosure: Vec<EnclosurePort>,
     pub includes: Vec<Include>,
     pub texts: Vec<TextBox>,
+}
+
+/// A view's authored `grid:` step — drawing units per grid cell — and where
+/// its number is written, so a check over the step can point at it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ViewGrid {
+    pub step: f64,
+    pub span: Span,
 }
 
 /// A named annotation box placed at grid coordinates in a schematic view.
@@ -662,6 +718,21 @@ pub struct Include {
     pub x: f64,
     pub y: f64,
     pub ports: Vec<(PortName, Side)>,
+    /// Where the include names its target (`inst` or `inst.connector`), so
+    /// a check over the laid-out view can point back at the source.
+    pub span: Span,
+}
+
+/// An include displays as its target, as authored: `inst`, `inst.connector`,
+/// or, for an inline connector, `inst.male` / `inst.female`.
+impl fmt::Display for Include {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match (self.half, &self.connector) {
+            (Some(half), _) => write!(f, "{}.{}", self.instance, half.as_str()),
+            (None, Some(connector)) => write!(f, "{}.{connector}", self.instance),
+            (None, None) => write!(f, "{}", self.instance),
+        }
+    }
 }
 
 /// Which side of a component box a port sits on, named by compass direction.
@@ -732,6 +803,27 @@ mod tests {
     fn wire_color_code_matching_ignores_case() {
         assert_eq!(WireColor::from("White").code(), "WH");
         assert_eq!(WireColor::from("RED").code(), "RD");
+    }
+
+    #[test]
+    fn include_displays_as_its_authored_target() {
+        let include = |connector: Option<&str>, half: Option<Half>| Include {
+            instance: InstanceName::from("ecu"),
+            connector: connector.map(ConnectorName::from),
+            half,
+            x: 0.0,
+            y: 0.0,
+            ports: Vec::new(),
+            span: Span::new(crate::dsl::span::FileId(0), 0, 0),
+        };
+        assert_eq!(include(None, None).to_string(), "ecu");
+        assert_eq!(include(Some("x1"), None).to_string(), "ecu.x1");
+        // An inline include's connector is normalized to the designator;
+        // the half is what the author wrote.
+        assert_eq!(
+            include(Some("ecu"), Some(Half::Female)).to_string(),
+            "ecu.female"
+        );
     }
 
     #[test]

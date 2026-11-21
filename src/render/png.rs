@@ -10,7 +10,14 @@
 //! (the load is slow, so it's amortised across every view) and resolves our
 //! `sans-serif` labels through fontdb's generic-family fallback.
 
-use crate::error::{Error, Result};
+use resvg::tiny_skia::{IntSize, Pixmap};
+use resvg::usvg::Tree;
+
+use super::Canvas;
+use crate::error::{ViewErrorKind, ViewResult};
+
+/// How many pixels `render --png` draws per world unit.
+pub const PNG_SCALE: f32 = 2.0;
 
 /// Rasterises SVGs to PNG, holding a font database loaded once up front.
 pub struct PngRasterizer {
@@ -53,14 +60,15 @@ impl PngRasterizer {
     }
 
     /// Rasterise `svg` to a PNG byte stream at `scale` × intrinsic size.
-    pub fn to_png(&self, svg: &str, scale: f32) -> Result<Vec<u8>> {
-        let tree = resvg::usvg::Tree::from_str(svg, &self.options)
-            .map_err(|e| Error::SvgParse(e.to_string()))?;
+    /// A canvas over `render::MAX_CANVAS` is refused before any pixel is
+    /// allocated, and a pixmap the allocator cannot provide is an error,
+    /// not an abort.
+    pub fn to_png(&self, svg: &str, scale: f32) -> ViewResult<Vec<u8>> {
+        let tree = self.admitted(svg)?;
         let size = tree.size();
         let w = (size.width() * scale).round().max(1.0) as u32;
         let h = (size.height() * scale).round().max(1.0) as u32;
-        let mut pixmap = resvg::tiny_skia::Pixmap::new(w, h)
-            .ok_or_else(|| Error::PngEncode(format!("pixmap allocation failed for {w}x{h}")))?;
+        let mut pixmap = blank_pixmap(w, h)?;
         resvg::render(
             &tree,
             resvg::tiny_skia::Transform::from_scale(scale, scale),
@@ -68,8 +76,36 @@ impl PngRasterizer {
         );
         pixmap
             .encode_png()
-            .map_err(|e| Error::PngEncode(e.to_string()))
+            .map_err(|e| ViewErrorKind::PngEncode(e.to_string()))
     }
+
+    /// `svg` parsed, unless its canvas is too large to rasterise: the
+    /// check [`Self::to_png`] makes before it allocates anything.
+    pub(crate) fn admitted(&self, svg: &str) -> ViewResult<Tree> {
+        let tree = Tree::from_str(svg, &self.options)
+            .map_err(|e| ViewErrorKind::SvgParse(e.to_string()))?;
+        let size = tree.size();
+        Canvas::new(f64::from(size.width()), f64::from(size.height())).admit()?;
+        Ok(tree)
+    }
+}
+
+/// A transparent `w` × `h` pixmap. `Pixmap::new` allocates with `vec!`,
+/// which aborts the process when the allocator says no; reserving first
+/// turns that into an error.
+fn blank_pixmap(w: u32, h: u32) -> ViewResult<Pixmap> {
+    let refused =
+        |why: String| ViewErrorKind::PngEncode(format!("cannot allocate a {w}×{h} pixmap: {why}"));
+    let size = IntSize::from_wh(w, h).ok_or_else(|| refused("empty".to_string()))?;
+    let len = (w as usize)
+        .checked_mul(h as usize)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| refused("too many bytes".to_string()))?;
+    let mut data = Vec::new();
+    data.try_reserve_exact(len)
+        .map_err(|e| refused(e.to_string()))?;
+    data.resize(len, 0);
+    Pixmap::from_vec(data, size).ok_or_else(|| refused("wider than tiny-skia allows".to_string()))
 }
 
 impl Default for PngRasterizer {
@@ -118,10 +154,47 @@ mod tests {
     }
 
     #[test]
+    fn to_png_refuses_a_canvas_over_the_limit_before_allocating() {
+        // Rasterised, this would be a 4000000 × 20 pixmap of 320 MB; the
+        // refusal comes before any of it is allocated.
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 2000000 10"/>"#;
+        let refused = PngRasterizer::new().to_png(svg, 2.0);
+        let Err(ViewErrorKind::CanvasTooLarge {
+            width,
+            height,
+            limit,
+        }) = refused
+        else {
+            panic!("expected CanvasTooLarge, got {refused:?}");
+        };
+        assert_eq!(
+            (width, height, limit),
+            (2_000_000.0, 10.0, super::super::MAX_CANVAS)
+        );
+    }
+
+    #[test]
+    fn a_canvas_exactly_at_the_limit_is_admitted() {
+        let r = PngRasterizer::new();
+        let side = super::super::MAX_CANVAS;
+        let at = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {side} 10"/>"#);
+        assert!(r.admitted(&at).is_ok());
+        let over = at.replace(&format!(" {side} "), &format!(" {} ", side + 1.0));
+        assert!(r.admitted(&over).is_err());
+    }
+
+    #[test]
+    fn a_blank_pixmap_has_the_size_asked_for() {
+        let pixmap = blank_pixmap(3, 2).expect("allocates");
+        assert_eq!((pixmap.width(), pixmap.height()), (3, 2));
+        assert_eq!(pixmap.data().len(), 3 * 2 * 4);
+    }
+
+    #[test]
     fn to_png_rejects_malformed_input() {
         assert!(matches!(
             PngRasterizer::new().to_png("not svg at all", 2.0),
-            Err(Error::SvgParse(_))
+            Err(ViewErrorKind::SvgParse(_))
         ));
     }
 }

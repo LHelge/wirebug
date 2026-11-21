@@ -17,12 +17,12 @@
 
 use std::collections::HashMap;
 
-use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref, Str, TextStr};
+use pdf_writer::{Chunk, Content, Finish, Name, Pdf, Rect, Ref, Str, TextStr};
 
-use super::RenderedView;
 use super::stamp::stamp_text;
+use super::{RenderedView, ViewOutcome};
 use crate::dsl::manifest::Manifest;
-use crate::error::{Error, Result};
+use crate::error::{ViewError, ViewErrorKind, ViewResult};
 
 /// A4 short edge (210 mm) in PDF points.
 const A4_SHORT_PT: f32 = 595.276;
@@ -94,7 +94,8 @@ impl PdfExporter {
         Self { options }
     }
 
-    /// Export `views` into one PDF, one A4 page per view in order.
+    /// Export `views` (as [`super::render_views`] returns them) into one
+    /// PDF, one A4 page per rendered view in order.
     ///
     /// `manifest` supplies the document title (`<name> v<version>`) and
     /// the footer's project-identity stamp; pass `None` for synthetic
@@ -102,14 +103,17 @@ impl PdfExporter {
     /// ([`super::SvgMode::Plain`]) — the page header carries the view
     /// title and the footer the identity stamp plus a `<page> / <total>`
     /// number, so every page reads the same regardless of view scale.
-    pub fn to_pdf(&self, views: &[RenderedView], manifest: Option<&Manifest>) -> Result<Vec<u8>> {
+    ///
+    /// A view that failed to render, or fails to convert, is left out — the
+    /// pages that remain number `1 / n` among themselves — and named in
+    /// [`PdfExport::failures`], in view order.
+    pub fn to_pdf(&self, views: Vec<ViewOutcome>, manifest: Option<&Manifest>) -> PdfExport {
         let mut alloc = Ref::new(1);
         let catalog_id = alloc.bump();
         let page_tree_id = alloc.bump();
         let footer_font_id = alloc.bump();
         let header_font_id = alloc.bump();
         let mut pdf = Pdf::new();
-        let mut page_ids = Vec::with_capacity(views.len());
 
         // Page-furniture fonts, both from the PDF's built-in set and
         // WinAnsi-encoded (the stamp's `·` separator is Latin-1 0xB7):
@@ -122,48 +126,45 @@ impl PdfExporter {
             .base_font(Name(b"Helvetica-Bold"))
             .encoding_predefined(Name(b"WinAnsiEncoding"));
 
-        for (index, view) in views.iter().enumerate() {
-            let tree = svg2pdf::usvg::Tree::from_str(&view.svg, &self.options)
-                .map_err(|e| Error::SvgParse(e.to_string()))?;
-            let layout = PageLayout::fit(tree.size());
+        // Convert every view before laying out any page, so the footer's
+        // page total counts only the views that made it.
+        let mut failures = Vec::new();
+        let mut pages = Vec::new();
+        for view in views {
+            match view.and_then(|view| self.convert(view, &mut alloc)) {
+                Ok(page) => pages.push(page),
+                Err(failure) => failures.push(failure),
+            }
+        }
 
-            let conversion = svg2pdf::ConversionOptions {
-                embed_text: false,
-                ..Default::default()
-            };
-            let (chunk, svg_ref) = svg2pdf::to_chunk(&tree, conversion)
-                .map_err(|e| Error::PdfConvert(e.to_string()))?;
-            let mut map = HashMap::new();
-            let chunk = chunk.renumber(|old| *map.entry(old).or_insert_with(|| alloc.bump()));
-            let svg_id = map.get(&svg_ref).copied().ok_or_else(|| {
-                Error::PdfConvert("svg root object missing after renumber".into())
-            })?;
-            pdf.extend(&chunk);
+        let mut page_ids = Vec::with_capacity(pages.len());
+        for (index, page) in pages.iter().enumerate() {
+            pdf.extend(&page.chunk);
 
             // Resources are per-page, so one XObject name suffices.
             let content_id = alloc.bump();
             let mut content = Content::new();
             content.save_state();
-            content.transform(layout.matrix);
+            content.transform(page.layout.matrix);
             content.x_object(Name(b"V"));
             content.restore_state();
-            header(&mut content, &layout, &view.title);
-            footer(&mut content, &layout, index + 1, views.len(), manifest);
+            header(&mut content, &page.layout, &page.title);
+            footer(&mut content, &page.layout, index + 1, pages.len(), manifest);
             pdf.stream(content_id, &content.finish());
 
             let page_id = alloc.bump();
-            let mut page = pdf.page(page_id);
-            page.media_box(Rect::new(0.0, 0.0, layout.width, layout.height));
-            page.parent(page_tree_id);
-            page.contents(content_id);
-            let mut resources = page.resources();
-            resources.x_objects().pair(Name(b"V"), svg_id);
+            let mut writer = pdf.page(page_id);
+            writer.media_box(Rect::new(0.0, 0.0, page.layout.width, page.layout.height));
+            writer.parent(page_tree_id);
+            writer.contents(content_id);
+            let mut resources = writer.resources();
+            resources.x_objects().pair(Name(b"V"), page.svg_id);
             let mut fonts = resources.fonts();
             fonts.pair(Name(b"F"), footer_font_id);
             fonts.pair(Name(b"H"), header_font_id);
             fonts.finish();
             resources.finish();
-            page.finish();
+            writer.finish();
             page_ids.push(page_id);
         }
 
@@ -180,8 +181,77 @@ impl PdfExporter {
         info.producer(TextStr(&format!("wirebug {}", super::stamp::APP_VERSION)));
         info.finish();
 
-        Ok(pdf.finish())
+        PdfExport {
+            bytes: pdf.finish(),
+            pages: pages.len(),
+            failures,
+        }
     }
+
+    /// Convert one view's SVG into a Form XObject chunk numbered from
+    /// `alloc`, with the page geometry that fits it; a failure names the
+    /// view.
+    fn convert(&self, view: RenderedView, alloc: &mut Ref) -> Result<Page, ViewError> {
+        match self.convert_svg(&view.svg, alloc) {
+            Ok((layout, chunk, svg_id)) => Ok(Page {
+                title: view.title,
+                layout,
+                chunk,
+                svg_id,
+            }),
+            Err(cause) => Err(view.failed(cause)),
+        }
+    }
+
+    /// The conversion half of [`Self::convert`], before the view is named.
+    fn convert_svg(&self, svg: &str, alloc: &mut Ref) -> ViewResult<(PageLayout, Chunk, Ref)> {
+        let tree = svg2pdf::usvg::Tree::from_str(svg, &self.options)
+            .map_err(|e| ViewErrorKind::SvgParse(e.to_string()))?;
+        let conversion = svg2pdf::ConversionOptions {
+            embed_text: false,
+            ..Default::default()
+        };
+        let (chunk, svg_ref) = svg2pdf::to_chunk(&tree, conversion)
+            .map_err(|e| ViewErrorKind::PdfConvert(e.to_string()))?;
+        let mut map = HashMap::new();
+        let chunk = chunk.renumber(|old| *map.entry(old).or_insert_with(|| alloc.bump()));
+        let svg_id = map.get(&svg_ref).copied().ok_or_else(|| {
+            ViewErrorKind::PdfConvert("svg root object missing after renumber".into())
+        })?;
+        Ok((PageLayout::fit(tree.size()), chunk, svg_id))
+    }
+}
+
+/// What [`PdfExporter::to_pdf`] produced: the document, how many pages it
+/// holds, and the views left out because they failed to render or
+/// convert. The bytes are reached only through [`Self::document`], which
+/// decides whether there is a document worth writing.
+#[derive(Debug)]
+#[must_use]
+pub struct PdfExport {
+    bytes: Vec<u8>,
+    /// Pages in the document: one per view that rendered and converted.
+    pub pages: usize,
+    /// The views left out, each naming why.
+    pub failures: Vec<ViewError>,
+}
+
+impl PdfExport {
+    /// The PDF to write, or `None` when every view failed: a document of
+    /// no pages would stand in for drawings that were never made. A design
+    /// with no views at all still gets its (empty) document.
+    #[must_use]
+    pub fn document(&self) -> Option<&[u8]> {
+        (self.pages > 0 || self.failures.is_empty()).then_some(self.bytes.as_slice())
+    }
+}
+
+/// One converted view, ready to place on its page.
+struct Page {
+    title: String,
+    layout: PageLayout,
+    chunk: Chunk,
+    svg_id: Ref,
 }
 
 impl Default for PdfExporter {
@@ -307,6 +377,11 @@ mod tests {
         }
     }
 
+    /// `views` as `render_views` hands them over: every one rendered.
+    fn rendered(views: impl IntoIterator<Item = RenderedView>) -> Vec<ViewOutcome> {
+        views.into_iter().map(Ok).collect()
+    }
+
     fn contains(haystack: &[u8], needle: &[u8]) -> bool {
         haystack.windows(needle.len()).any(|w| w == needle)
     }
@@ -361,7 +436,7 @@ mod tests {
                 r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 200"><rect x="10" y="10" width="80" height="180" fill="blue"/></svg>"#,
             ),
         ];
-        let pdf = PdfExporter::new().to_pdf(&views, None).expect("exports");
+        let pdf = PdfExporter::new().to_pdf(rendered(views), None).bytes;
         assert!(pdf.starts_with(b"%PDF-"), "missing PDF magic header");
         assert!(contains(&pdf, b"/Count 2"), "expected a two-page tree");
     }
@@ -373,10 +448,8 @@ mod tests {
             r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"><text x="20" y="50" font-family="sans-serif" font-size="16">Battery Pack</text></svg>"#,
         );
         let exporter = PdfExporter::new();
-        let blank_pdf = exporter.to_pdf(&[blank], None).expect("exports blank");
-        let labelled_pdf = exporter
-            .to_pdf(&[labelled], None)
-            .expect("exports labelled");
+        let blank_pdf = exporter.to_pdf(rendered([blank]), None).bytes;
+        let labelled_pdf = exporter.to_pdf(rendered([labelled]), None).bytes;
         // Outlined glyph paths add real bytes; if text were silently
         // dropped the two documents would be nearly identical.
         assert!(
@@ -392,7 +465,7 @@ mod tests {
         let views = [view(
             r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"></svg>"#,
         )];
-        let pdf = PdfExporter::new().to_pdf(&views, None).expect("exports");
+        let pdf = PdfExporter::new().to_pdf(rendered(views), None).bytes;
         // The `view` helper titles its view "Test"; the header shows it
         // literally in the uncompressed page content stream.
         assert!(contains(&pdf, b"(Test)"), "view title header missing");
@@ -404,7 +477,7 @@ mod tests {
             view(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"></svg>"#),
             view(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 200"></svg>"#),
         ];
-        let pdf = PdfExporter::new().to_pdf(&views, None).expect("exports");
+        let pdf = PdfExporter::new().to_pdf(rendered(views), None).bytes;
         // Page content streams are uncompressed, so the footer's shown
         // strings appear literally.
         assert!(contains(&pdf, b"(1 / 2)"), "page 1 number missing");
@@ -427,8 +500,8 @@ mod tests {
             view(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 200"></svg>"#),
         ];
         let pdf = PdfExporter::new()
-            .to_pdf(&views, Some(&manifest))
-            .expect("exports");
+            .to_pdf(rendered(views), Some(&manifest))
+            .bytes;
         // The stamp text sits in each page's content stream; pdf-writer
         // hex-encodes strings with non-ASCII bytes (the `·` is WinAnsi
         // 0xB7), so match the hex form. The stamp always ends with the
@@ -450,8 +523,20 @@ mod tests {
     }
 
     #[test]
-    fn to_pdf_rejects_malformed_input() {
-        let result = PdfExporter::new().to_pdf(&[view("this is not svg")], None);
-        assert!(matches!(result, Err(Error::SvgParse(_))));
+    fn to_pdf_leaves_out_a_view_that_fails_to_convert() {
+        let good = view(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"></svg>"#);
+        let mut bad = view("this is not svg");
+        bad.title = "Broken".to_string();
+        let export = PdfExporter::new().to_pdf(rendered([bad, good]), None);
+
+        assert_eq!(export.pages, 1);
+        assert!(contains(&export.bytes, b"/Count 1"), "one page left");
+        // The remaining page numbers itself among the pages written.
+        assert!(contains(&export.bytes, b"(1 / 1)"), "page numbered 1 / 1");
+        let [failure] = export.failures.as_slice() else {
+            panic!("one failure expected: {:?}", export.failures);
+        };
+        assert_eq!(failure.title, "Broken");
+        assert!(matches!(*failure.cause, ViewErrorKind::SvgParse(_)));
     }
 }

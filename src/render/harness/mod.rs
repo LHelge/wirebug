@@ -22,11 +22,12 @@ use svg::Document;
 use svg::node::element::{Group, Style, Text};
 
 use crate::dsl::ir::{Design, Instance, View};
-use crate::error::{Error, Result};
-use crate::render::SvgMode;
+use crate::error::ViewResult;
+use crate::render::lint::{Conductor, IncludeBox, ViewLayout};
 use crate::render::stamp::{STAMP_HEIGHT, STAMP_INSET, stamp_element};
+use crate::render::{Canvas, GridFault, SvgMode};
 
-use layout::HarnessLayout;
+use layout::{HarnessConductor, HarnessLayout, ViewBox};
 
 /// Grid step (world units) used when a harness view omits one.
 pub(super) const DEFAULT_GRID: f64 = 20.0;
@@ -111,12 +112,8 @@ impl HarnessRenderer {
         subject: &Instance,
         view: &View,
         mode: SvgMode,
-    ) -> Result<String> {
-        let step = view.grid.unwrap_or(DEFAULT_GRID);
-        if step <= 0.0 {
-            return Err(Error::NonPositiveGrid { grid: step });
-        }
-
+    ) -> ViewResult<String> {
+        let step = GridFault::positive_step(view, DEFAULT_GRID)?;
         let layout = HarnessLayout::compute(design, subject, view, step);
 
         let mut doc = Document::new().set("xmlns", "http://www.w3.org/2000/svg");
@@ -126,12 +123,9 @@ impl HarnessRenderer {
             doc = doc.add(Style::new(STYLE));
         }
 
-        let has_title = !view.title.is_empty() && mode.titled();
-        let mut vb = layout.viewbox(has_title);
-        let manifest = mode.stamped().then_some(design.manifest.as_ref()).flatten();
-        if manifest.is_some() {
-            vb.height += STAMP_HEIGHT;
-        }
+        let has_title = mode.shows_title(view);
+        let vb = viewbox(design, view, &layout, mode);
+        let manifest = mode.stamp(design);
         doc = doc.set(
             "viewBox",
             format!("{} {} {} {}", vb.x, vb.y, vb.width, vb.height),
@@ -173,12 +167,75 @@ impl HarnessRenderer {
 
         Ok(doc.to_string())
     }
+
+    /// Each include's pin-table box, the conductors drawn and the canvas of
+    /// the standalone SVG, from the same layout [`Self::render`] draws. A
+    /// non-positive grid lays out no boxes and no canvas, only the fault;
+    /// which conductors a view draws does not depend on its grid, so they
+    /// are still counted.
+    pub(super) fn layout(&self, design: &Design, subject: &Instance, view: &View) -> ViewLayout {
+        let (step, fault) = match GridFault::positive_step(view, DEFAULT_GRID) {
+            Ok(step) => (step, None),
+            Err(fault) => (DEFAULT_GRID, Some(fault)),
+        };
+        let layout = HarnessLayout::compute(design, subject, view, step);
+        let (boxes, canvas) = match fault {
+            Some(_) => (Vec::new(), None),
+            None => {
+                let boxes = layout
+                    .nodes
+                    .iter()
+                    .map(|node| IncludeBox {
+                        include: node.include,
+                        bounds: node.bounds(),
+                    })
+                    .collect();
+                let vb = viewbox(design, view, &layout, SvgMode::Standalone);
+                (boxes, Some(Canvas::new(vb.width, vb.height)))
+            }
+        };
+        ViewLayout {
+            boxes,
+            drawn: layout.drawn,
+            grid: fault,
+            canvas,
+            ..ViewLayout::default()
+        }
+    }
+
+    /// Every conductor a harness view of `subject` can draw, in wire order:
+    /// the set the views' [`ViewLayout::drawn`] segments are checked against.
+    pub(super) fn conductors<'d>(
+        &self,
+        design: &'d Design,
+        subject: &'d Instance,
+    ) -> Vec<Conductor<'d>> {
+        HarnessConductor::all(design, subject)
+            .map(|c| Conductor {
+                segment: c.segment,
+                wire: c.wire,
+                ends: c.ends.each_ref().map(|end| end.end),
+                targets: c.ends.each_ref().map(|end| end.target()),
+            })
+            .collect()
+    }
+}
+
+/// The viewBox `view` is drawn in under `mode`: the laid-out drawing, with
+/// room for the title and the identity stamp when the mode draws them.
+fn viewbox(design: &Design, view: &View, layout: &HarnessLayout, mode: SvgMode) -> ViewBox {
+    let mut vb = layout.viewbox(mode.shows_title(view));
+    if mode.stamp(design).is_some() {
+        vb.height += STAMP_HEIGHT;
+    }
+    vb
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::dsl::ir::{ConnectorName, Include, InstanceName, TypeName, ViewKind};
+    use crate::dsl::span::{FileId, Span};
     use crate::render::schematic::tests::design_from;
 
     /// A harness view over `subject`, including `(instance, connector, x, y)`.
@@ -187,6 +244,7 @@ mod tests {
             kind: ViewKind::Harness,
             title: "Harness".to_string(),
             grid: None,
+            span: Span::new(FileId(0), 0, 0),
             subject: TypeName::from(subject),
             has_enclosure: false,
             enclosure: Vec::new(),
@@ -199,6 +257,7 @@ mod tests {
                     x: *x,
                     y: *y,
                     ports: Vec::new(),
+                    span: Span::new(FileId(0), 0, 0),
                 })
                 .collect(),
             texts: Vec::new(),
@@ -634,6 +693,41 @@ component sys {
         let view = harness_view("sys", &[("a", "hv", 0.0, 0.0)]);
         let svg = render(&design, &view);
         assert!(!svg.contains("class=\"cable-wire\""));
+    }
+
+    /// What `check` counts as drawn is exactly what the drawing carries:
+    /// one segment per loose wire and cable strand, none for a wire whose
+    /// far end is not included.
+    #[test]
+    fn drawn_segments_are_the_conductors_the_view_draws() {
+        use crate::render::lint::Segment;
+        let design = design_from(
+            r#"
+component sys {
+    a: src;
+    b: src;
+    c: src;
+    cable feed "Feed" {
+        wire orange 50 [a.pos, b.pos];
+    }
+    wire black 50 [a.neg, b.neg, c.neg];
+    component src {
+        connector hv "HV 2p" {
+            pub port pos "V+" pin 1;
+            pub port neg "V-" pin 2;
+        }
+    }
+}
+"#,
+        );
+        let view = harness_view("sys", &[("a", "hv", 0.0, 0.0), ("b", "hv", 16.0, 0.0)]);
+        let layout = compute(&design, &view);
+        assert_eq!(
+            layout.drawn,
+            [Segment { wire: 0, index: 0 }, Segment { wire: 1, index: 0 }]
+        );
+        let strands: usize = layout.cable_boxes.iter().map(|b| b.strands.len()).sum();
+        assert_eq!(strands + layout.loose.len(), layout.drawn.len());
     }
 
     #[test]

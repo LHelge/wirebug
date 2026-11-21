@@ -10,9 +10,11 @@
 //! **spine** midway between the connectors; each node faces the spine,
 //! declared cables stack along it as boxes, and wires run pin → cable → pin
 //! (or pin → pin for loose wires). Each subject wire is chain-decomposed
-//! into consecutive pairs (`[a, b, c]` → `a–b, b–c`); a pair is kept only
-//! when both ends land on *included* connectors. Connectorless ports, `Own`
-//! ends, and ends on excluded connectors drop silently.
+//! into consecutive pairs (`[a, b, c]` → `a–b, b–c`), its
+//! [`HarnessConductor`]s; a pair is kept only when both ends land on
+//! *included* connectors. Connectorless ports, `Own` ends, and ends on
+//! excluded connectors drop silently from the drawing; `check` reports a
+//! conductor that no harness view of its component keeps.
 
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -26,12 +28,13 @@ use super::{
 };
 use crate::dsl::ir::{
     CableMeta, CableName, ConnectorName, ConnectorPropertyValue, Design, Half, Instance,
-    InstanceName, Pin, PortName, WireColor, WireEnd,
+    InstanceName, Pin, PortName, Wire, WireColor, WireEnd,
 };
-use crate::render::geometry::{Point, Side};
+use crate::render::geometry::{Bounds, Point, Side};
+use crate::render::lint::{DeclaredHalves, EndTarget, IncludeTarget, Segment};
 
 /// A node's identity within a harness view: which instance, which connector.
-type NodeKey = (InstanceName, ConnectorName);
+type NodeKey<'d> = (&'d InstanceName, &'d ConnectorName);
 
 /// One pin of a connector node, as a table row.
 pub(super) struct PinRow {
@@ -51,6 +54,8 @@ pub(super) struct PinRow {
 
 /// A connector drawn as a pin table.
 pub(super) struct ConnectorNode {
+    /// Index of the include that placed this node, in `view.includes`.
+    pub(super) include: usize,
     /// Instance label (or instance name) shown as the node title.
     pub(super) title: String,
     /// `<designator> · <part>`, the connector subtitle.
@@ -68,6 +73,15 @@ pub(super) struct ConnectorNode {
 }
 
 impl ConnectorNode {
+    /// The pin table's box, header included.
+    pub(super) fn bounds(&self) -> Bounds {
+        Bounds {
+            origin: self.origin,
+            width: self.width,
+            height: self.height,
+        }
+    }
+
     fn centre(&self) -> Point {
         Point::new(
             self.origin.x + self.width / 2.0,
@@ -140,6 +154,94 @@ pub(super) struct HarnessLayout {
     pub(super) nodes: Vec<ConnectorNode>,
     pub(super) cable_boxes: Vec<CableBox>,
     pub(super) loose: Vec<LooseWire>,
+    /// The conductors drawn, cabled and loose alike, in wire order: what
+    /// `check` counts as covered by this view.
+    pub(super) drawn: Vec<Segment>,
+}
+
+/// A wire end on a connector of one of the subject's children: an end a
+/// harness view can draw, once it includes that connector.
+pub(super) struct ConnectorEnd<'d> {
+    pub(super) end: &'d WireEnd,
+    pub(super) instance: &'d InstanceName,
+    pub(super) connector: &'d ConnectorName,
+    pub(super) port: &'d PortName,
+    /// The child instance the connector is on.
+    pub(super) child: &'d Instance,
+}
+
+impl<'d> ConnectorEnd<'d> {
+    /// `end`'s connector, or `None` for an end no harness view can draw:
+    /// the subject's own port, or a port on no connector.
+    fn of(design: &'d Design, subject: &'d Instance, end: &'d WireEnd) -> Option<Self> {
+        let WireEnd::Child { instance, port } = end else {
+            return None;
+        };
+        let child = subject.children.get(instance).and_then(|p| design.get(p))?;
+        let connector = &child.ports.get(port)?.connector.as_ref()?.name;
+        Some(Self {
+            end,
+            instance,
+            connector,
+            port,
+            child,
+        })
+    }
+
+    /// The node this end draws in.
+    fn node(&self) -> NodeKey<'d> {
+        (self.instance, self.connector)
+    }
+
+    /// How a harness view can include this end's connector. An inline
+    /// connector is included through a half it declares, either one
+    /// drawing it; one that declares no half cannot be included at all.
+    pub(super) fn target(&self) -> EndTarget<'d> {
+        let Some(inline) = &self.child.inline else {
+            return EndTarget::Include(IncludeTarget::Connector {
+                instance: self.instance,
+                connector: self.connector,
+            });
+        };
+        match DeclaredHalves::of(inline) {
+            Some(halves) => EndTarget::Include(IncludeTarget::Inline {
+                instance: self.instance,
+                halves,
+            }),
+            None => EndTarget::HalflessInline(self.instance),
+        }
+    }
+}
+
+/// One conductor a harness view of the subject can draw: a chain segment of
+/// a subject wire (`[a, b, c]` → `a–b`, `b–c`) between connectors of two
+/// different children.
+pub(super) struct HarnessConductor<'d> {
+    pub(super) segment: Segment,
+    pub(super) wire: &'d Wire,
+    pub(super) ends: [ConnectorEnd<'d>; 2],
+}
+
+impl<'d> HarnessConductor<'d> {
+    /// Every conductor of `subject`, in wire order. A segment with an end on
+    /// no connector is not a harness conductor, and neither is one within a
+    /// single connector: that is a jumper inside the housing, not a cable.
+    pub(super) fn all(design: &'d Design, subject: &'d Instance) -> impl Iterator<Item = Self> {
+        subject.wires.iter().enumerate().flat_map(move |(w, wire)| {
+            wire.endpoints
+                .windows(2)
+                .enumerate()
+                .filter_map(move |(index, pair)| {
+                    let from = ConnectorEnd::of(design, subject, &pair[0])?;
+                    let to = ConnectorEnd::of(design, subject, &pair[1])?;
+                    (from.node() != to.node()).then_some(Self {
+                        segment: Segment { wire: w, index },
+                        wire,
+                        ends: [from, to],
+                    })
+                })
+        })
+    }
 }
 
 /// A pending connection between two pin rows, before facing (and thus the
@@ -171,40 +273,29 @@ impl HarnessLayout {
         let mut nodes = Vec::new();
         let mut index: HashMap<NodeKey, usize> = HashMap::new();
 
-        // Auto-scope pre-pass: which ports of each included connector carry
-        // a conductor in this view. Mirrors `locate` below, but keyed by
-        // names — the nodes it scopes don't exist yet.
+        // The conductors this view draws: those whose two connectors are
+        // both included.
         let included: HashSet<NodeKey> = view
             .includes
             .iter()
-            .filter_map(|inc| Some((inc.instance.clone(), inc.connector.clone()?)))
+            .filter_map(|inc| Some((&inc.instance, inc.connector.as_ref()?)))
             .collect();
-        let end_key = |end: &WireEnd| -> Option<(NodeKey, PortName)> {
-            let WireEnd::Child { instance, port } = end else {
-                return None;
-            };
-            let child = subject.children.get(instance).and_then(|p| design.get(p))?;
-            let conn = child.ports.get(port)?.connector.as_ref()?.name.clone();
-            let key = (instance.clone(), conn);
-            included.contains(&key).then_some((key, port.clone()))
-        };
+        let kept: Vec<HarnessConductor> = HarnessConductor::all(design, subject)
+            .filter(|c| c.ends.iter().all(|end| included.contains(&end.node())))
+            .collect();
+
+        // Auto-scope: which ports of each included connector carry a kept
+        // conductor.
         let mut wired: HashMap<NodeKey, HashSet<PortName>> = HashMap::new();
-        for wire in &subject.wires {
-            for pair in wire.endpoints.windows(2) {
-                let (Some((ka, pa)), Some((kb, pb))) = (end_key(&pair[0]), end_key(&pair[1]))
-                else {
-                    continue;
-                };
-                if ka == kb {
-                    continue; // a wire within one connector isn't a cable
-                }
-                wired.entry(ka).or_default().insert(pa);
-                wired.entry(kb).or_default().insert(pb);
-            }
+        for end in kept.iter().flat_map(|c| &c.ends) {
+            wired
+                .entry(end.node())
+                .or_default()
+                .insert(end.port.clone());
         }
 
         let no_pins = HashSet::new();
-        for inc in &view.includes {
+        for (i, inc) in view.includes.iter().enumerate() {
             let Some(conn) = &inc.connector else { continue };
             let Some(child) = subject
                 .children
@@ -213,51 +304,43 @@ impl HarnessLayout {
             else {
                 continue;
             };
-            let visible = wired
-                .get(&(inc.instance.clone(), conn.clone()))
-                .unwrap_or(&no_pins);
-            let Some(node) = build_node(child, conn, visible, inc.x * step, inc.y * step, inc.half)
-            else {
+            let key = (&inc.instance, conn);
+            let visible = wired.get(&key).unwrap_or(&no_pins);
+            let centre = Point::new(inc.x * step, inc.y * step);
+            let Some(node) = build_node(i, child, conn, visible, centre, inc.half) else {
                 continue;
             };
-            index.insert((inc.instance.clone(), conn.clone()), nodes.len());
+            index.insert(key, nodes.len());
             nodes.push(node);
         }
 
-        // Locate a wire endpoint's (node, pin row), if it lands on an
-        // included connector.
-        let locate = |end: &WireEnd| -> Option<(usize, usize)> {
-            let WireEnd::Child { instance, port } = end else {
-                return None;
-            };
-            let child = subject.children.get(instance).and_then(|p| design.get(p))?;
-            let conn = child.ports.get(port)?.connector.as_ref()?.name.clone();
-            let &ni = index.get(&(instance.clone(), conn))?;
-            let ri = nodes[ni].pins.iter().position(|r| &r.port == port)?;
+        // An end's (node, pin row).
+        let locate = |end: &ConnectorEnd| -> Option<(usize, usize)> {
+            let &ni = index.get(&end.node())?;
+            let ri = nodes[ni].pins.iter().position(|r| &r.port == end.port)?;
             Some((ni, ri))
         };
 
         let mut raws: Vec<RawWire> = Vec::new();
-        for wire in &subject.wires {
-            for pair in wire.endpoints.windows(2) {
-                let (Some((a, ra)), Some((b, rb))) = (locate(&pair[0]), locate(&pair[1])) else {
-                    continue;
-                };
-                if a == b {
-                    continue; // a wire within one connector isn't a cable
-                }
-                raws.push(RawWire {
-                    a,
-                    ra,
-                    b,
-                    rb,
-                    color: wire.color.clone(),
-                    gauge: wire.gauge,
-                    label: wire.label.clone(),
-                    cable: wire.cable.clone(),
-                    twisted_group: wire.twisted_group,
-                });
-            }
+        let mut drawn = Vec::new();
+        for conductor in kept {
+            let [from, to] = &conductor.ends;
+            let (Some((a, ra)), Some((b, rb))) = (locate(from), locate(to)) else {
+                continue;
+            };
+            let wire = conductor.wire;
+            raws.push(RawWire {
+                a,
+                ra,
+                b,
+                rb,
+                color: wire.color.clone(),
+                gauge: wire.gauge,
+                label: wire.label.clone(),
+                cable: wire.cable.clone(),
+                twisted_group: wire.twisted_group,
+            });
+            drawn.push(conductor.segment);
         }
 
         // The spine is the vertical line midway between the connectors. Each
@@ -286,6 +369,7 @@ impl HarnessLayout {
             nodes,
             cable_boxes,
             loose,
+            drawn,
         }
     }
 
@@ -455,18 +539,19 @@ pub(super) struct ViewBox {
 }
 
 /// Build one connector node from `child`'s ports that belong to connector
-/// `conn`, centred at world (`cx`, `cy`). Returns `None` if the connector
-/// has no ports on this instance (already reported by resolve as unknown).
+/// `conn`, placed by include number `include` and centred at world
+/// `centre`. Returns `None` if the connector has no ports on this instance
+/// (already reported by resolve as unknown).
 ///
 /// `half` is the housing half an inline-connector include selected: the
 /// node's subtitle carries that half's part identity (each loom's drawing
 /// shows the half crimped onto it) and its header gets an M/F chip.
 fn build_node(
+    include: usize,
     child: &Instance,
     conn: &ConnectorName,
     visible: &HashSet<PortName>,
-    cx: f64,
-    cy: f64,
+    centre: Point,
     half: Option<Half>,
 ) -> Option<ConnectorNode> {
     // `found` (the connector exists on this child, with its optional
@@ -544,7 +629,7 @@ fn build_node(
     let width = body_width.max(header_width).max(MIN_NODE_WIDTH);
     let height = HEADER_HEIGHT + rows.len() as f64 * ROW_HEIGHT;
 
-    let origin = Point::new(cx - width / 2.0, cy - height / 2.0);
+    let origin = Point::new(centre.x - width / 2.0, centre.y - height / 2.0);
     let pins = rows
         .into_iter()
         .enumerate()
@@ -559,6 +644,7 @@ fn build_node(
         .collect();
 
     Some(ConnectorNode {
+        include,
         title,
         subtitle,
         origin,
@@ -814,6 +900,7 @@ component Root {
             kind: crate::dsl::ir::ViewKind::Harness,
             title: "Harness".to_string(),
             grid: None,
+            span: crate::dsl::span::Span::new(crate::dsl::span::FileId(0), 0, 0),
             subject: TypeName::from("Root"),
             has_enclosure: false,
             enclosure: Vec::new(),
@@ -825,6 +912,7 @@ component Root {
                     x: 0.0,
                     y: 0.0,
                     ports: Vec::new(),
+                    span: crate::dsl::span::Span::new(crate::dsl::span::FileId(0), 0, 0),
                 },
                 crate::dsl::ir::Include {
                     instance: InstanceName::from("right"),
@@ -833,6 +921,7 @@ component Root {
                     x: 30.0,
                     y: 0.0,
                     ports: Vec::new(),
+                    span: crate::dsl::span::Span::new(crate::dsl::span::FileId(0), 0, 0),
                 },
             ],
             texts: Vec::new(),
@@ -929,7 +1018,8 @@ component Root {
         };
 
         let visible: HashSet<PortName> = [PortName::from("p")].into_iter().collect();
-        let node = build_node(&instance, &connector, &visible, 0.0, 0.0, None).expect("node");
+        let node =
+            build_node(0, &instance, &connector, &visible, Point::ORIGIN, None).expect("node");
         let expected = title.chars().count() as f64 * CHAR_WIDTH + 2.0 * NODE_PAD;
         assert!(node.width >= expected);
     }
@@ -972,12 +1062,20 @@ component Root {
         let visible: HashSet<PortName> = [PortName::from("a"), PortName::from("c")]
             .into_iter()
             .collect();
-        let node = build_node(&instance, &connector, &visible, 0.0, 0.0, None).expect("node");
+        let node =
+            build_node(0, &instance, &connector, &visible, Point::ORIGIN, None).expect("node");
         let rows: Vec<&str> = node.pins.iter().map(|r| r.port.as_str()).collect();
         assert_eq!(rows, ["a", "c"], "only wired pins, still in pin order");
 
-        let node =
-            build_node(&instance, &connector, &HashSet::new(), 0.0, 0.0, None).expect("node");
+        let node = build_node(
+            0,
+            &instance,
+            &connector,
+            &HashSet::new(),
+            Point::ORIGIN,
+            None,
+        )
+        .expect("node");
         assert!(node.pins.is_empty(), "unwired include is a header-only box");
         assert_eq!(node.height, HEADER_HEIGHT);
     }
