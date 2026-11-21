@@ -11,7 +11,9 @@
 //! starts in its own block at its desired position. Repeatedly take the
 //! most-violated constraint joining two different blocks and merge them,
 //! making that constraint tight; a block's position is always the
-//! weighted average that minimises its members' cost. Merge-only (no
+//! average of the desired positions of its strongest tier present
+//! ([`Strength`]: `Wall` over `Pin` over `Pull`), offset by each member's
+//! place in the block, so weaker members yield entirely. Merge-only (no
 //! split) matches the paper's approximate projection and is optimal for
 //! the chain/tree constraints nudging produces.
 
