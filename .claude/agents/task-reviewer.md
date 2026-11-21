@@ -83,7 +83,7 @@ epic and the titles of its tasks, then the whole diff of the range, and check:
   the epic added the same way, rather than each doing its own version; what the epic made
   public is what the crate boundary needs, and no more;
 - an existing project: what happens to a `.wb` project that the released version accepts.
-  `cargo run -- check examples` and a render of it still succeed; every new error or
+  `cargo run -- check --strict examples` and a render of it still succeed; every new error or
   warning it would meet is one the epic intends; a break is documented and recognisable
   from a commit subject;
 - nothing a later task replaced was left behind (dead code, unused public items, unused
