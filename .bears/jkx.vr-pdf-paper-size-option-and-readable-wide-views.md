@@ -1,14 +1,15 @@
 ---
 id: jkx.vr
 title: "PDF: paper size option and readable wide views"
-status: open
+status: done
 priority: P2
 created: "2026-11-20T21:40:32.071141627Z"
-updated: "2026-11-20T21:40:32.071141627Z"
+updated: "2026-11-21T13:03:11.480102366Z"
 tags:
   - render
   - pdf
   - cli
+attempts: 1
 ---
 
 ## Summary
