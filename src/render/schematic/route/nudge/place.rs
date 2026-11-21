@@ -15,13 +15,8 @@ use super::super::geometry::Rect;
 use super::EPS;
 use super::order::Channel;
 use super::segments::{Orientation, Segment};
-use super::vpsc::{self, Constraint, Var};
+use super::vpsc::{self, Constraint, Strength, Var};
 use crate::render::geometry::Point;
-
-/// Weight that pins a port-touching segment to its connection point.
-const PIN_WEIGHT: f64 = 1e6;
-/// Weight of an (immovable) obstacle boundary.
-const WALL_WEIGHT: f64 = 1e9;
 
 /// Solve both axes, writing each segment's final `perp`. The horizontal
 /// pass runs first and its result is applied before the vertical pass:
@@ -101,7 +96,11 @@ fn solve_axis(
                 var_of.insert((ri, si), vars.len());
                 vars.push(Var {
                     desired: seg.perp,
-                    weight: if seg.is_end { PIN_WEIGHT } else { 1.0 },
+                    strength: if seg.is_end {
+                        Strength::Pin
+                    } else {
+                        Strength::Pull
+                    },
                 });
                 owner.push((ri, si));
             }
@@ -159,7 +158,7 @@ fn solve_axis(
                 let wall = vars.len();
                 vars.push(Var {
                     desired: wall_pos,
-                    weight: WALL_WEIGHT,
+                    strength: Strength::Wall,
                 });
                 // `seg_below_wall` means the segment sits at a smaller
                 // coordinate than the wall, i.e. `wall - seg >= 0`.

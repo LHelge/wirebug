@@ -1248,7 +1248,11 @@ Nudging (§6) is implemented for the case our router produces — wires
 sharing *collinear* channels (straight bundles): §6.1 orders a channel
 by where each route enters it, and §6.2 spreads segments with a VPSC
 solver that pins port ends and adds wall constraints keeping interior
-segments outside the clearance-inflated boxes. Not implemented: the
+segments outside the clearance-inflated boxes. Walls outrank pins, and
+pins outrank free segments, as strength tiers (`vpsc::Strength`), not
+large weights: a block sits exactly where its strongest members put it,
+so a segment pushed against a wall lands on the wall's grid line rather
+than a weight's rounding error off it. Not implemented: the
 paper's general branching-tree ordering (pseudo-direction + split
 points) and alley-midpoint recentring. Revisit if a view needs them.
 
