@@ -79,12 +79,16 @@ impl Printer {
         }
     }
 
-    /// A statement that is not part of an aligned run: a block, or a
-    /// statement with a comment inside it.
+    /// A statement that is not part of an aligned run: a block, a statement
+    /// with a comment inside it, or one with a list split over lines.
     fn statement(&mut self, statement: &Statement<'_, '_>, depth: usize) {
+        if let Some(tokens) = statement.one_line() {
+            self.tokens(tokens, depth);
+            return;
+        }
         match statement {
             Statement::Simple(tokens) => self.tokens(tokens, depth),
-            Statement::Block { header, body } => {
+            Statement::Block { header, body, .. } => {
                 let open = &header[header.len() - 1];
                 let empty = body.statements.is_empty()
                     && open.trailing.is_none()
@@ -122,42 +126,146 @@ impl Printer {
 
     /// `tokens` from the start of a line at `depth`, single-spaced, and the
     /// last one's comment; the line is left open. A comment inside them
-    /// ends its line, and the statement goes on a level deeper on the next.
-    fn tokens_then(&mut self, tokens: &[Attached<'_>], depth: usize) {
+    /// ends its line, and the statement goes on a level deeper on the next;
+    /// a `[ … ]` list the author split over lines is written one item a
+    /// line ([`split_list`](Self::split_list)).
+    fn tokens_then<'t>(&mut self, tokens: &'t [Attached<'_>], depth: usize) {
         self.indent(depth);
-        // On a fresh line that a comment ended the one before, and before
-        // its indent.
-        let mut fresh = false;
-        let mut prev: Option<&Token> = None;
-        let kept: Vec<&Attached<'_>> = Kept::new(tokens).map(|(_, token)| token).collect();
-        for (at, token) in kept.iter().enumerate() {
-            if at > 0 && token.leading.contains_comment() {
-                if !fresh {
-                    self.out.push('\n');
+        let mut pen = Pen {
+            fresh: false,
+            prev: None,
+        };
+        let mut at = 0;
+        while let Some(token) = tokens.get(at) {
+            let split = (token.token == Token::LBracket)
+                .then(|| split_close(tokens, at))
+                .flatten();
+            let last = match split {
+                Some(close) => {
+                    self.split_list(&tokens[at..=close], depth, &mut pen);
+                    at = close;
+                    &tokens[close]
                 }
-                for item in &token.leading {
-                    if let Leading::Comment(comment) = item {
-                        self.line(depth + 1, comment);
+                None if dangling(tokens, at) => {
+                    at += 1;
+                    continue;
+                }
+                None => {
+                    if at > 0 {
+                        self.comments_before(token, depth + 1, &mut pen);
                     }
+                    self.text(token, depth + 1, &mut pen);
+                    token
                 }
-                fresh = true;
+            };
+            at += 1;
+            if at == tokens.len() {
+                self.trailing(last.trailing);
+            } else {
+                self.break_after(last, &mut pen);
             }
-            if fresh {
-                self.indent(depth + 1);
-                fresh = false;
-            } else if prev.is_some_and(|prev| spaced(prev, &token.token)) {
-                self.out.push(' ');
+        }
+    }
+
+    /// A `[ … ]` list the author split over lines: the `[` ends its line,
+    /// each item takes a line of its own a level deeper than the statement,
+    /// with a comma after it (the last one's added), and the `]` starts the
+    /// statement's last line. The `]`'s own comment is left to the caller.
+    fn split_list<'t>(&mut self, list: &'t [Attached<'_>], depth: usize, pen: &mut Pen<'t>) {
+        let (open, rest) = list
+            .split_first()
+            .map_or((None, list), |(o, r)| (Some(o), r));
+        let (close, inner) = rest
+            .split_last()
+            .map_or((None, rest), |(c, i)| (Some(c), i));
+        let item_depth = depth + 1;
+        if let Some(open) = open {
+            self.comments_before(open, item_depth, pen);
+            self.text(open, item_depth, pen);
+            self.trailing(open.trailing);
+            self.out.push('\n');
+            pen.fresh = true;
+        }
+        for (item, comma) in Items::new(inner) {
+            let Some((last, init)) = item.split_last() else {
+                continue;
+            };
+            for (at, token) in init.iter().enumerate() {
+                let line_depth = if at == 0 { item_depth } else { item_depth + 1 };
+                self.comments_before(token, line_depth, pen);
+                self.text(token, line_depth, pen);
+                self.break_after(token, pen);
             }
-            self.out.push_str(token.text);
-            prev = Some(&token.token);
-            if at + 1 == kept.len() {
-                self.trailing(token.trailing);
-            } else if let Some(comment) = token.trailing {
-                self.out.push(' ');
-                self.out.push_str(comment);
-                self.out.push('\n');
-                fresh = true;
+            let line_depth = if init.is_empty() {
+                item_depth
+            } else {
+                item_depth + 1
+            };
+            self.comments_before(last, line_depth, pen);
+            self.text(last, line_depth, pen);
+            if let Some(comma) = comma {
+                self.comments_before(comma, item_depth, pen);
+                if pen.fresh {
+                    self.indent(item_depth);
+                }
             }
+            self.out.push(',');
+            let mut comments = [last.trailing, comma.and_then(|comma| comma.trailing)]
+                .into_iter()
+                .flatten();
+            self.trailing(comments.next());
+            self.out.push('\n');
+            for comment in comments {
+                self.line(item_depth, comment);
+            }
+            pen.fresh = true;
+        }
+        if let Some(close) = close {
+            for item in &close.leading {
+                if let Leading::Comment(comment) = item {
+                    self.line(item_depth, comment);
+                }
+            }
+            self.text(close, depth, pen);
+        }
+    }
+
+    /// The own-line comments before a token inside a statement: they end
+    /// the line, each takes one at `depth`, and the token starts the next.
+    fn comments_before(&mut self, token: &Attached<'_>, depth: usize, pen: &mut Pen<'_>) {
+        if !token.leading.contains_comment() {
+            return;
+        }
+        if !pen.fresh {
+            self.out.push('\n');
+        }
+        for item in &token.leading {
+            if let Leading::Comment(comment) = item {
+                self.line(depth, comment);
+            }
+        }
+        pen.fresh = true;
+    }
+
+    /// A token's text: at `depth` on a fresh line, else after a space
+    /// where one goes.
+    fn text<'t>(&mut self, token: &'t Attached<'_>, depth: usize, pen: &mut Pen<'t>) {
+        if pen.fresh {
+            self.indent(depth);
+            pen.fresh = false;
+        } else if pen.prev.is_some_and(|prev| spaced(prev, &token.token)) {
+            self.out.push(' ');
+        }
+        self.out.push_str(token.text);
+        pen.prev = Some(&token.token);
+    }
+
+    /// A token's comment inside a statement, which ends the line there.
+    fn break_after(&mut self, token: &Attached<'_>, pen: &mut Pen<'_>) {
+        if let Some(comment) = token.trailing {
+            self.trailing(Some(comment));
+            self.out.push('\n');
+            pen.fresh = true;
         }
     }
 
@@ -232,17 +340,95 @@ impl<'t, 'src> Iterator for Kept<'t, 'src> {
             let at = self.at;
             let token = self.tokens.get(at)?;
             self.at += 1;
-            let dangling = token.token == Token::Comma
-                && token.trailing.is_none()
-                && !token.leading.contains_comment()
-                && self
-                    .tokens
-                    .get(at + 1)
-                    .is_some_and(|next| matches!(next.token, Token::RBracket | Token::RParen));
-            if !dangling {
+            if !dangling(self.tokens, at) {
                 return Some((at, token));
             }
         }
+    }
+}
+
+/// Whether the token at `at` is a comma right before a closing bracket
+/// with no comment on it, which a list on one line is written without.
+fn dangling(tokens: &[Attached<'_>], at: usize) -> bool {
+    tokens.get(at).is_some_and(|token| {
+        token.token == Token::Comma
+            && token.trailing.is_none()
+            && !token.leading.contains_comment()
+            && tokens
+                .get(at + 1)
+                .is_some_and(|next| matches!(next.token, Token::RBracket | Token::RParen))
+    })
+}
+
+/// The index of the `]` closing the `[` at `open` when the author broke a
+/// line anywhere inside the list; `None` for a list written on one line.
+fn split_close(tokens: &[Attached<'_>], open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (at, token) in tokens.iter().enumerate().skip(open) {
+        match token.token {
+            Token::LBracket => depth += 1,
+            Token::RBracket => {
+                depth -= 1;
+                if depth == 0 {
+                    return tokens[open + 1..=at]
+                        .iter()
+                        .any(|token| token.newline_before)
+                        .then_some(at);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Where the writing of a statement stands.
+struct Pen<'t> {
+    /// On a fresh line, its indent not yet written.
+    fresh: bool,
+    /// The token written last, which decides the space before the next.
+    prev: Option<&'t Token>,
+}
+
+/// The items of a list's inside, each with the comma after it (none after
+/// the last, unless the author wrote one).
+struct Items<'t, 'src> {
+    tokens: &'t [Attached<'src>],
+}
+
+impl<'t, 'src> Items<'t, 'src> {
+    fn new(tokens: &'t [Attached<'src>]) -> Self {
+        Items { tokens }
+    }
+}
+
+impl<'t, 'src> Iterator for Items<'t, 'src> {
+    type Item = (&'t [Attached<'src>], Option<&'t Attached<'src>>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.tokens.is_empty() {
+            return None;
+        }
+        let mut depth = 0usize;
+        let comma = self.tokens.iter().position(|token| {
+            match token.token {
+                Token::LBracket | Token::LParen => depth += 1,
+                Token::RBracket | Token::RParen => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+            depth == 0 && token.token == Token::Comma
+        });
+        let tokens = self.tokens;
+        Some(match comma {
+            Some(at) => {
+                self.tokens = &tokens[at + 1..];
+                (&tokens[..at], Some(&tokens[at]))
+            }
+            None => {
+                self.tokens = &[];
+                (tokens, None)
+            }
+        })
     }
 }
 
@@ -280,15 +466,16 @@ struct Row<'src> {
 }
 
 impl<'src> Row<'src> {
-    /// The row of a statement that ends with `;` and holds no comment but
-    /// the one ending it; `None` for any other statement.
+    /// The row of a statement that prints on one line
+    /// ([`Statement::one_line`]) and holds no comment but the one ending it
+    /// and no list split over lines; `None` for any other statement.
     fn of(statement: &Statement<'_, 'src>) -> Option<Self> {
-        let Statement::Simple(tokens) = statement else {
-            return None;
-        };
+        let tokens = statement.one_line()?;
         let (last, inner) = tokens.split_last()?;
         if tokens[1..].iter().any(|t| t.leading.contains_comment())
             || inner.iter().any(|t| t.trailing.is_some())
+            || (0..tokens.len())
+                .any(|at| tokens[at].token == Token::LBracket && split_close(tokens, at).is_some())
         {
             return None;
         }
