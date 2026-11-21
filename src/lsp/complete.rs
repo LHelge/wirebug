@@ -569,7 +569,7 @@ impl CompletionIndex {
                     return units;
                 }
                 if cursor.at_statement_start() {
-                    let mut items = keywords(&["wire", "twisted"]);
+                    let mut items = keywords(&["wire", "twisted", "shield"]);
                     items.extend(properties(PropertyOwner::Cable));
                     return items;
                 }
@@ -577,7 +577,7 @@ impl CompletionIndex {
             }
             Some(Block::Twisted) => {
                 if cursor.at_statement_start() {
-                    return keywords(&["wire"]);
+                    return keywords(&["wire", "shield"]);
                 }
                 Vec::new()
             }
@@ -1684,7 +1684,7 @@ mod tests {
             &[LAMP, MAIN],
             "use Lamp from \"lamp.wb\";\ncomponent Root {\n    cable c \"C\" {\n        ‸\n    }\n}\n",
         );
-        for expected in ["wire", "twisted", "type", "length"] {
+        for expected in ["wire", "twisted", "shield", "type", "length"] {
             assert!(
                 labels.contains(&expected.to_string()),
                 "{expected}: {labels:?}"
@@ -1693,12 +1693,38 @@ mod tests {
     }
 
     #[test]
-    fn twisted_block_offers_wire() {
+    fn twisted_block_offers_wire_and_shield() {
         let labels = complete_in(
             &[LAMP, MAIN],
             "use Lamp from \"lamp.wb\";\ncomponent Root {\n    cable c \"C\" {\n        twisted {\n            ‸\n        }\n    }\n}\n",
         );
-        assert_eq!(labels, ["wire"]);
+        assert_eq!(labels, ["wire", "shield"]);
+    }
+
+    #[test]
+    fn shield_ends_complete_like_wire_endpoints() {
+        // In a cable body and in a twisted pair alike: the instances and own
+        // ports, then an instance's pub ports after its dot.
+        for (cable_body, close) in [
+            ("", ""),
+            ("twisted {\n wire white 0.5 [l.anode, l.anode];\n ", "}\n"),
+        ] {
+            let names = complete_in(
+                &[LAMP, MAIN],
+                &format!(
+                    "use Lamp from \"lamp.wb\";\ncomponent Root {{\n    l: Lamp;\n    cable c {{\n        {cable_body}shield [‸]\n{close}    }}\n}}\n"
+                ),
+            );
+            assert!(names.contains(&"l".to_string()), "{names:?}");
+            assert!(names.contains(&"feed".to_string()), "{names:?}");
+            let ports = complete_in(
+                &[LAMP, MAIN],
+                &format!(
+                    "use Lamp from \"lamp.wb\";\ncomponent Root {{\n    l: Lamp;\n    cable c {{\n        {cable_body}shield \"S\" [l.‸]\n{close}    }}\n}}\n"
+                ),
+            );
+            assert!(ports.contains(&"anode".to_string()), "{ports:?}");
+        }
     }
 
     #[test]

@@ -134,32 +134,30 @@ fn find(resolved: &Resolved, file: FileId, offset: usize) -> Option<Span> {
         }
 
         for member in &def.ast.members {
-            let wires: Vec<&ast::Wire> = match member {
-                Member::Wire(wire) => vec![wire],
-                Member::Cable(cable) => cable.wires().collect(),
+            let endpoints: Vec<&ast::Endpoint> = match member {
+                Member::Wire(wire) => wire.endpoints.iter().collect(),
+                Member::Cable(cable) => cable.endpoints().collect(),
                 _ => continue,
             };
-            for wire in wires {
-                for ep in &wire.endpoints {
-                    if let Some(inst) = &ep.instance {
-                        if hit(inst.span) {
-                            if let Some(inline) = find_inline(resolved, d, inst.node.as_str()) {
-                                return Some(inline.ast.name.span);
-                            }
-                            return find_instance(resolved, d, inst.node.as_str())
-                                .map(|f| f.ast.name.span);
+            for ep in endpoints {
+                if let Some(inst) = &ep.instance {
+                    if hit(inst.span) {
+                        if let Some(inline) = find_inline(resolved, d, inst.node.as_str()) {
+                            return Some(inline.ast.name.span);
                         }
-                        if hit(ep.port.span) {
-                            if let Some(inline) = find_inline(resolved, d, inst.node.as_str()) {
-                                let port = PortName::from(ep.port.node.as_str());
-                                return inline.ports.get(&port).map(|p| p.span);
-                            }
-                            let t = find_instance(resolved, d, inst.node.as_str())?.type_id?;
-                            return find_port(resolved, t, ep.port.node.as_str());
-                        }
-                    } else if hit(ep.port.span) {
-                        return find_port(resolved, d, ep.port.node.as_str());
+                        return find_instance(resolved, d, inst.node.as_str())
+                            .map(|f| f.ast.name.span);
                     }
+                    if hit(ep.port.span) {
+                        if let Some(inline) = find_inline(resolved, d, inst.node.as_str()) {
+                            let port = PortName::from(ep.port.node.as_str());
+                            return inline.ports.get(&port).map(|p| p.span);
+                        }
+                        let t = find_instance(resolved, d, inst.node.as_str())?.type_id?;
+                        return find_port(resolved, t, ep.port.node.as_str());
+                    }
+                } else if hit(ep.port.span) {
+                    return find_port(resolved, d, ep.port.node.as_str());
                 }
             }
         }
@@ -417,6 +415,27 @@ mod tests {
         let main = (
             "main.wb",
             "use Leaf from \"leaf.wb\";\ncomponent Root {\n    l: Leaf;\n    pub port own \"O\";\n    wire red 1 [ow‸n, l.a];\n}\n",
+        );
+        assert_eq!(
+            target_of(&[LEAF, main], "main.wb"),
+            Some(("main.wb".into(), "own".into()))
+        );
+    }
+
+    #[test]
+    fn shield_ends_jump_like_wire_endpoints() {
+        let main = (
+            "main.wb",
+            "use Leaf from \"leaf.wb\";\ncomponent Root {\n    l: Leaf;\n    pub port own \"O\";\n    cable c {\n        wire red 1 [own, l.a];\n        twisted { wire red 1 [own, l.a]; wire red 1 [l.a, own]; shield [l.a‸]; }\n    }\n}\n",
+        );
+        assert_eq!(
+            target_of(&[LEAF, main], "main.wb"),
+            Some(("leaf.wb".into(), "a".into()))
+        );
+
+        let main = (
+            "main.wb",
+            "use Leaf from \"leaf.wb\";\ncomponent Root {\n    l: Leaf;\n    pub port own \"O\";\n    cable c {\n        wire red 1 [own, l.a];\n        shield \"S\" [ow‸n];\n    }\n}\n",
         );
         assert_eq!(
             target_of(&[LEAF, main], "main.wb"),
