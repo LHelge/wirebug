@@ -2,9 +2,10 @@
 //! connector types plus whatever its `use` declarations import. A same-name
 //! component collision is a merge (when either side is an `extend`) — that
 //! discovery happens here, feeding the merge machinery in [`super::merge`].
+//! A `fragment` imports no name: it merges the target file's `extend`s with
+//! the components of their names already in scope.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 use crate::dsl::ast;
 use crate::dsl::diagnostics::Problem;
@@ -14,7 +15,8 @@ use super::{ComponentScope, ConnectorTypeId, ConnectorTypeScope, DefId, Resolver
 
 impl<'a> Resolver<'a> {
     /// Build each file's type-name scope: its own top-level definitions
-    /// plus the names brought in by `use`.
+    /// plus the names brought in by `use`; then merge in the `extend`s of
+    /// the files its `fragment`s pull in.
     pub(super) fn build_scopes(
         &mut self,
         roots_by_file: &[Vec<DefId>],
@@ -23,14 +25,6 @@ impl<'a> Resolver<'a> {
         HashMap<FileId, ComponentScope>,
         HashMap<FileId, ConnectorTypeScope>,
     ) {
-        let path_to_file: HashMap<PathBuf, FileId> = self
-            .project
-            .files
-            .iter()
-            .enumerate()
-            .map(|(i, f)| (f.path.clone(), FileId(i)))
-            .collect();
-
         let mut scopes: HashMap<FileId, HashMap<String, DefId>> = HashMap::new();
         let mut connector_type_scopes: HashMap<FileId, HashMap<String, ConnectorTypeId>> =
             HashMap::new();
@@ -59,14 +53,9 @@ impl<'a> Resolver<'a> {
             }
 
             for use_decl in &file.ast.uses {
-                let dir = file
-                    .path
-                    .parent()
-                    .unwrap_or_else(|| std::path::Path::new("."));
-                let Ok(target) = dir.join(&use_decl.path.node).canonicalize() else {
-                    continue; // loader already reported the missing file
-                };
-                let Some(&tfid) = path_to_file.get(&target) else {
+                // A path that names no loaded file was reported by the loader
+                // (not found), or its file failed to load (its own errors).
+                let Some(tfid) = self.project.import_target(fid, &use_decl.path.node) else {
                     continue;
                 };
                 let wanted = use_decl.name.node.as_str();
@@ -98,10 +87,65 @@ impl<'a> Resolver<'a> {
                 }
             }
 
+            // With the scope complete, whatever order the lines come in, each
+            // `fragment` merges into the components it holds.
+            let mut fragmented: HashMap<FileId, Span> = HashMap::new();
+            for fragment in &file.ast.fragments {
+                let Some(tfid) = self.project.import_target(fid, &fragment.path.node) else {
+                    continue;
+                };
+                if let Some(&first) = fragmented.get(&tfid) {
+                    self.problems.push(Problem::DuplicateFragment {
+                        target: fragment.path.node.clone(),
+                        src: self.project.source(fid),
+                        at: fragment.path.span.into(),
+                        first: first.into(),
+                    });
+                    continue;
+                }
+                fragmented.insert(tfid, fragment.path.span);
+                self.merge_fragment(fragment, tfid, fid, &scope, &roots_by_file[tfid.0]);
+            }
+
             scopes.insert(fid, scope);
             connector_type_scopes.insert(fid, connector_type_scope);
         }
         (scopes, connector_type_scopes)
+    }
+
+    /// Merge each top-level `extend` of file `target` (whose top-level
+    /// definitions are `target_roots`) into the component of its name in
+    /// `scope`: the scope of `file`, whose `fragment` names `target`. No
+    /// name enters the scope. A line that merges nothing, naming a file with
+    /// no view, is reported unused.
+    fn merge_fragment(
+        &mut self,
+        fragment: &ast::Fragment,
+        target: FileId,
+        file: FileId,
+        scope: &ComponentScope,
+        target_roots: &[DefId],
+    ) {
+        let mut merged = false;
+        for &id in target_roots {
+            if self.defs[id].kind != ast::DefKind::Extend {
+                continue;
+            }
+            // A file that names itself finds its own `extend` in its scope.
+            if let Some(&into) = scope.get(self.defs[id].name)
+                && into != id
+            {
+                self.groups.link(into, id);
+                merged = true;
+            }
+        }
+        if !merged && !self.project.file(target).ast.has_views() {
+            self.problems.push(Problem::UnusedFragment {
+                target: fragment.path.node.clone(),
+                src: self.project.source(file),
+                at: fragment.path.span.into(),
+            });
+        }
     }
 
     fn insert_type(
@@ -183,7 +227,10 @@ impl<'a> Resolver<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::dsl::resolve::testkit::{codes, has, problems};
+    use miette::Diagnostic;
+
+    use crate::dsl::ast;
+    use crate::dsl::resolve::testkit::{LEAF, codes, has, problems, with_resolved};
 
     #[test]
     fn unresolved_import_is_reported() {
@@ -195,6 +242,172 @@ mod tests {
             ("leaf.wb", "component other { pub port a \"A\"; }\n"),
         ]);
         assert!(has(&p, "wirebug::unresolved_import"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn fragment_merges_the_files_extend_into_the_component_in_scope() {
+        with_resolved(
+            &[
+                (
+                    "main.wb",
+                    "fragment \"systems/traction.wb\";\nuse leaf from \"leaf.wb\";\n\
+                     component vehicle { pack: leaf \"Pack\"; }\n",
+                ),
+                (
+                    "systems/traction.wb",
+                    "use leaf from \"../leaf.wb\";\n\
+                     extend vehicle { inv: leaf \"Inv\"; wire red 1 [pack.a, inv.a]; }\n",
+                ),
+                ("leaf.wb", LEAF),
+            ],
+            |r| {
+                assert!(r.problems.is_empty(), "problems: {:?}", codes(&r.problems));
+                let root = r.root.expect("vehicle is the root");
+                assert_eq!(r.fragments(root).len(), 2, "the extend merged");
+            },
+        );
+    }
+
+    #[test]
+    fn fragment_merges_into_a_component_a_later_use_brings_in() {
+        // The scope is complete before any `fragment` merges: the line order
+        // does not matter.
+        with_resolved(
+            &[
+                (
+                    "main.wb",
+                    "fragment \"a.wb\";\nuse vehicle from \"vehicle.wb\";\n\
+                     component shell { v: vehicle; }\n",
+                ),
+                ("vehicle.wb", "component vehicle { }\n"),
+                ("a.wb", "extend vehicle { pub port x \"X\"; }\n"),
+            ],
+            |r| {
+                assert!(r.problems.is_empty(), "problems: {:?}", codes(&r.problems));
+                let vehicle = r
+                    .defs
+                    .iter()
+                    .position(|d| d.name == "vehicle" && d.kind == ast::DefKind::Component)
+                    .expect("vehicle");
+                assert_eq!(r.fragments(vehicle).len(), 2, "the extend merged");
+            },
+        );
+    }
+
+    #[test]
+    fn fragment_imports_no_name() {
+        // `lamp.wb` is loaded, but its component is not in main.wb's scope.
+        let p = problems(&[
+            (
+                "main.wb",
+                "fragment \"lamp.wb\";\ncomponent m { l: lamp; }\n\
+                 view schematic \"M\" { }\n",
+            ),
+            (
+                "lamp.wb",
+                "component lamp { }\nview schematic \"Lamp\" for lamp { }\n",
+            ),
+        ]);
+        assert_eq!(codes(&p), ["wirebug::undefined_type"]);
+    }
+
+    #[test]
+    fn fragment_of_a_missing_file_is_not_found_on_the_path() {
+        let src = "fragment \"systems/nope.wb\";\ncomponent m { }\n";
+        let p = problems(&[("main.wb", src)]);
+        assert_eq!(codes(&p), ["wirebug::use_not_found"]);
+        let at = p[0].labels().expect("a label").next().expect("one label");
+        assert_eq!(
+            &src[at.offset()..at.offset() + at.len()],
+            "\"systems/nope.wb\""
+        );
+    }
+
+    #[test]
+    fn fragment_of_a_file_that_adds_nothing_warns() {
+        let p = problems(&[
+            ("main.wb", "fragment \"lamp.wb\";\ncomponent m { }\n"),
+            ("lamp.wb", "component lamp { }\n"),
+        ]);
+        assert_eq!(codes(&p), ["wirebug::unused_fragment"]);
+        assert!(!p[0].is_error(), "a warning");
+    }
+
+    #[test]
+    fn fragment_whose_extend_has_no_component_in_scope_warns() {
+        // `other` is extended, but main.wb has no `other` to merge it into.
+        let p = problems(&[
+            ("main.wb", "fragment \"a.wb\";\ncomponent m { }\n"),
+            ("a.wb", "extend other { }\n"),
+        ]);
+        assert!(has(&p, "wirebug::unused_fragment"), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn fragment_of_a_file_of_views_is_used() {
+        let p = problems(&[
+            ("main.wb", "fragment \"docs.wb\";\ncomponent m { }\n"),
+            (
+                "docs.wb",
+                "use m from \"main.wb\";\nview schematic \"M\" for m { }\n",
+            ),
+        ]);
+        assert!(p.is_empty(), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn second_fragment_of_one_file_warns_once() {
+        let src = "fragment \"a.wb\";\nfragment \"./a.wb\";\ncomponent m { }\n";
+        let p = problems(&[("main.wb", src), ("a.wb", "extend m { }\n")]);
+        assert_eq!(codes(&p), ["wirebug::duplicate_fragment"]);
+        assert!(!p[0].is_error(), "a warning");
+        let labels: Vec<&str> = p[0]
+            .labels()
+            .expect("labels")
+            .map(|l| &src[l.offset()..l.offset() + l.len()])
+            .collect();
+        assert_eq!(labels, ["\"./a.wb\"", "\"a.wb\""]);
+    }
+
+    #[test]
+    fn fragment_and_use_of_one_file_is_fine() {
+        let p = problems(&[
+            (
+                "main.wb",
+                "fragment \"a.wb\";\nuse lamp from \"a.wb\";\ncomponent m { l: lamp; }\n",
+            ),
+            ("a.wb", "component lamp { }\nextend m { }\n"),
+        ]);
+        assert!(p.is_empty(), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn fragment_cycle_loads_each_file_once() {
+        let p = problems(&[
+            (
+                "main.wb",
+                "fragment \"a.wb\";\ncomponent m { }\nview schematic \"M\" { }\n",
+            ),
+            (
+                "a.wb",
+                "fragment \"main.wb\";\nextend m { pub port x \"X\"; }\n",
+            ),
+        ]);
+        assert!(p.is_empty(), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn use_as_a_merge_trigger_still_merges() {
+        with_resolved(
+            &[
+                ("main.wb", "use m from \"a.wb\";\ncomponent m { }\n"),
+                ("a.wb", "extend m { pub port x \"X\"; }\n"),
+            ],
+            |r| {
+                assert!(r.problems.is_empty(), "problems: {:?}", codes(&r.problems));
+                assert_eq!(r.fragments(r.root.expect("root")).len(), 2);
+            },
+        );
     }
 
     #[test]

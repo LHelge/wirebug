@@ -53,11 +53,11 @@ pub enum Problem {
         at: SourceSpan,
     },
 
-    /// A `use` referenced a file that couldn't be found.
+    /// A `use` or a `fragment` named a file that couldn't be found.
     #[error("cannot find imported file `{target}`")]
     #[diagnostic(
         code(wirebug::use_not_found),
-        help("paths in `use` are relative to the importing file")
+        help("paths in `use` and `fragment` are relative to the file that names them")
     )]
     UseNotFound {
         target: String,
@@ -203,6 +203,42 @@ pub enum Problem {
         src: NamedSource<String>,
         #[label("nested `extend`")]
         at: SourceSpan,
+    },
+
+    /// A `fragment` of a file that adds nothing through it: the file has no
+    /// view, and no top-level `extend` of a component in the including
+    /// file's scope for the line to merge.
+    #[error("`fragment \"{target}\"` adds nothing")]
+    #[diagnostic(
+        severity(Warning),
+        code(wirebug::unused_fragment),
+        help(
+            "a `fragment` renders a file's views and merges its `extend`s into the components of their names in scope here, and `{target}` has neither; remove the line, or `use` a component it defines by name"
+        )
+    )]
+    UnusedFragment {
+        target: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("nothing to merge or render")]
+        at: SourceSpan,
+    },
+
+    /// A file pulled in by two `fragment` lines of one file.
+    #[error("`{target}` is already pulled in by a `fragment` in this file")]
+    #[diagnostic(
+        severity(Warning),
+        code(wirebug::duplicate_fragment),
+        help("a file loads once however often it is named; remove the repeated line")
+    )]
+    DuplicateFragment {
+        target: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("pulled in again here")]
+        at: SourceSpan,
+        #[label("first pulled in here")]
+        first: SourceSpan,
     },
 
     /// Two instances in one component share a name.
@@ -1219,10 +1255,10 @@ impl Problem {
 
     /// True for problems that report something missing: a name that
     /// resolves to nothing, a component with no root or no instance, an
-    /// import nothing uses, a cable with no conductors, a port without
-    /// `pub`. A statement the parser skipped may have declared or used
-    /// that very thing (a `;` too early parts `pub ; port a "A";` into a
-    /// skipped `pub` and a private port), so while a file has syntax
+    /// import or a `fragment` nothing uses, a cable with no conductors, a
+    /// port without `pub`. A statement the parser skipped may have declared
+    /// or used that very thing (a `;` too early parts `pub ; port a "A";`
+    /// into a skipped `pub` and a private port), so while a file has syntax
     /// errors these may be their echo, not mistakes of their own
     /// ([`Project::drop_parse_cascades`]).
     ///
@@ -1249,6 +1285,7 @@ impl Problem {
             | Problem::NoRoot
             | Problem::UninstantiatedViewSubject { .. }
             | Problem::UnusedImport { .. }
+            | Problem::UnusedFragment { .. }
             | Problem::UndrawnConductor { .. } => true,
             Problem::Lex { .. }
             | Problem::Parse { .. }
@@ -1261,6 +1298,7 @@ impl Problem {
             | Problem::DuplicateConnectorType { .. }
             | Problem::DuplicateType { .. }
             | Problem::NestedExtend { .. }
+            | Problem::DuplicateFragment { .. }
             | Problem::DuplicateInstance { .. }
             | Problem::DuplicatePort { .. }
             | Problem::UnknownPortSide { .. }

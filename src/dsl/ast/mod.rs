@@ -35,14 +35,35 @@ impl fmt::Display for Ident {
     }
 }
 
-/// A parsed `.wb` file: its imports, then its top-level definitions and
-/// views, in source order.
+/// A parsed `.wb` file: its imports (`use` and `fragment` statements), then
+/// its top-level definitions and views, each in source order.
 #[derive(Debug, Clone)]
 pub struct File {
     pub id: FileId,
     pub uses: Vec<Use>,
+    pub fragments: Vec<Fragment>,
     pub items: Vec<Item>,
     pub span: Span,
+}
+
+impl File {
+    /// Every statement that names another file, `use` and `fragment` alike,
+    /// in source order: the order the loader follows them in.
+    pub fn imports(&self) -> Vec<Import<'_>> {
+        let mut imports: Vec<Import<'_>> = self
+            .uses
+            .iter()
+            .map(Import::Use)
+            .chain(self.fragments.iter().map(Import::Fragment))
+            .collect();
+        imports.sort_by_key(|import| import.path().span.start);
+        imports
+    }
+
+    /// Whether the file holds a view.
+    pub fn has_views(&self) -> bool {
+        self.items.iter().any(|item| matches!(item, Item::View(_)))
+    }
 }
 
 /// `use <name> from "<path>"` — brings one top-level definition into scope.
@@ -51,6 +72,33 @@ pub struct Use {
     pub name: Spanned<Ident>,
     pub path: Spanned<String>,
     pub span: Span,
+}
+
+/// `fragment "<path>";` — loads a file into the project, as a `use` of it
+/// would, without bringing any name into scope: the file's top-level
+/// `extend`s merge with the components of their names in this file's
+/// scope, and its views render.
+#[derive(Debug, Clone)]
+pub struct Fragment {
+    pub path: Spanned<String>,
+    pub span: Span,
+}
+
+/// One statement of a [`File`] that names another file.
+#[derive(Debug, Clone, Copy)]
+pub enum Import<'a> {
+    Use(&'a Use),
+    Fragment(&'a Fragment),
+}
+
+impl<'a> Import<'a> {
+    /// The path the statement names, as written (relative to its file).
+    pub fn path(&self) -> &'a Spanned<String> {
+        match self {
+            Import::Use(use_decl) => &use_decl.path,
+            Import::Fragment(fragment) => &fragment.path,
+        }
+    }
 }
 
 /// A top-level item: a component definition or a view.

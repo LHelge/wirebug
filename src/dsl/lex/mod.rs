@@ -344,6 +344,7 @@ mod tests {
     fn view_and_layout_words_are_contextual_names() {
         for word in [
             "from",
+            "fragment",
             "for",
             "include",
             "text",

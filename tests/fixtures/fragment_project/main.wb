@@ -1,0 +1,23 @@
+// The `Vehicle` root is authored across three files. `fragment` loads
+// `systems/traction.wb` without importing a name; its `extend Vehicle`
+// merges into the `component` here, and its views render.
+use Battery from "components/battery.wb";
+fragment "systems/traction.wb";
+
+component Vehicle {
+    pack: Battery "Battery";
+}
+
+// The overview sees the whole merged component: `inv` is declared in the
+// traction fragment.
+view schematic "System Overview" {
+    grid: 20;
+
+    include pack at (6, 8) ports {
+        east: hv_pos, hv_neg;
+    }
+
+    include inv at (26, 8) ports {
+        west: dc_pos, dc_neg;
+    }
+}

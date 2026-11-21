@@ -1,6 +1,6 @@
 ---
 source: src/dsl/parse/mod.rs
-assertion_line: 2549
+assertion_line: 2883
 expression: file
 ---
 File {
@@ -8,6 +8,7 @@ File {
         0,
     ),
     uses: [],
+    fragments: [],
     items: [
         Definition(
             Definition {

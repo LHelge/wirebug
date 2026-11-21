@@ -123,7 +123,7 @@ pub(crate) fn check_loaded(project: &Project) -> Checked<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use miette::NamedSource;
+    use miette::{Diagnostic, NamedSource};
     use std::path::PathBuf;
 
     fn fixture(name: &str) -> PathBuf {
@@ -160,6 +160,38 @@ mod tests {
         let (manifest, problems) = load_manifest(Some(dir.path()));
         assert!(manifest.is_none());
         assert!(!problems.is_empty(), "expected a discovery problem");
+    }
+
+    #[test]
+    fn a_fragment_whose_extend_was_skipped_is_not_reported_unused() {
+        // `systems/a.wb` lost its `extend` to a syntax error: the parse
+        // error stands for the `unused_fragment` it would otherwise cause.
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("wirebug.toml"),
+            "[project]\nname = \"t\"\nversion = \"0.0.0\"\n",
+        )
+        .expect("write wirebug.toml");
+        std::fs::create_dir(dir.path().join("systems")).expect("mkdir");
+        std::fs::write(
+            dir.path().join("systems/a.wb"),
+            "extend { pub port x \"X\"; }\n",
+        )
+        .expect("write a.wb");
+        std::fs::write(
+            dir.path().join("main.wb"),
+            "fragment \"systems/a.wb\";\ncomponent m { }\n",
+        )
+        .expect("write main.wb");
+
+        let (project, load_problems) = project::load(&dir.path().join("main.wb"));
+        let project = project.expect("loads");
+        let codes: Vec<String> = load_problems
+            .iter()
+            .chain(&check_loaded(&project).problems)
+            .filter_map(|p| p.code().map(|c| c.to_string()))
+            .collect();
+        assert_eq!(codes, ["wirebug::parse"]);
     }
 
     #[test]

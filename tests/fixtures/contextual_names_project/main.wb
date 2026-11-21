@@ -13,6 +13,9 @@ component Car {
     size: Sensor "Size sensor";
     grid: Sensor "Grid sensor";
 
+    // `fragment` starts a top-level statement, and is a name in here.
+    pub port fragment "FRAGMENT";
+
     cable text "Loom" {
         length: 1.5;
         wire red 1 "SIG" [size.at, grid.at];

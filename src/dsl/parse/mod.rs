@@ -174,9 +174,10 @@ enum NamedTail {
 }
 
 /// One top-level file entry, parsed in source order and folded into
-/// [`File::uses`] plus [`File::items`].
+/// [`File::uses`], [`File::fragments`] and [`File::items`].
 enum FileEntry {
     Use(Use),
+    Fragment(Fragment),
     Item(Item),
 }
 
@@ -1215,7 +1216,19 @@ where
             span: e.span(),
         });
 
-    let file_entry = choice((use_decl.map(FileEntry::Use), item.map(FileEntry::Item)));
+    let fragment_decl = just(Token::Fragment)
+        .ignore_then(string)
+        .then_ignore(just(Token::Semicolon))
+        .map_with(|path, e| Fragment {
+            path,
+            span: e.span(),
+        });
+
+    let file_entry = choice((
+        use_decl.map(FileEntry::Use),
+        fragment_decl.map(FileEntry::Fragment),
+        item.map(FileEntry::Item),
+    ));
 
     // The file reads like a block that ends at the end of input: a broken
     // entry is reported and skipped (a stray `}` alone, since no block
@@ -1228,10 +1241,12 @@ where
         .then_ignore(end())
         .map_with(|entries, e| {
             let mut uses = Vec::new();
+            let mut fragments = Vec::new();
             let mut items = Vec::new();
             for entry in entries.into_iter().flatten() {
                 match entry {
                     FileEntry::Use(use_decl) => uses.push(use_decl),
+                    FileEntry::Fragment(fragment) => fragments.push(fragment),
                     FileEntry::Item(item) => items.push(item),
                 }
             }
@@ -1239,6 +1254,7 @@ where
             File {
                 id: span.file,
                 uses,
+                fragments,
                 items,
                 span,
             }
@@ -2377,6 +2393,97 @@ component b { }
         assert!(matches!(file.items[0], Item::Definition(_)));
         assert!(matches!(file.items[1], Item::View(_)));
         assert!(matches!(file.items[2], Item::Definition(_)));
+    }
+
+    #[test]
+    fn fragment_declaration_names_a_path_and_no_name() {
+        let src = "fragment \"systems/traction.wb\";\ncomponent c { }\n";
+        let file = parse_ok(src);
+        let [fragment] = file.fragments.as_slice() else {
+            panic!("expected one fragment, got {:?}", file.fragments);
+        };
+        assert_eq!(fragment.path.node, "systems/traction.wb");
+        assert_eq!(
+            &src[fragment.path.span.start..fragment.path.span.end],
+            "\"systems/traction.wb\""
+        );
+        assert_eq!(
+            &src[fragment.span.start..fragment.span.end],
+            "fragment \"systems/traction.wb\";"
+        );
+        assert!(file.uses.is_empty());
+        assert_eq!(file.items.len(), 1);
+    }
+
+    #[test]
+    fn imports_list_use_and_fragment_lines_in_source_order() {
+        let file = parse_ok(
+            r#"
+fragment "a.wb";
+use Lamp from "lamp.wb";
+component c { }
+fragment "b.wb";
+use Relay from "relay.wb";
+"#,
+        );
+        let paths: Vec<(&str, bool)> = file
+            .imports()
+            .iter()
+            .map(|import| {
+                (
+                    import.path().node.as_str(),
+                    matches!(import, Import::Fragment(_)),
+                )
+            })
+            .collect();
+        assert_eq!(
+            paths,
+            [
+                ("a.wb", true),
+                ("lamp.wb", false),
+                ("b.wb", true),
+                ("relay.wb", false)
+            ]
+        );
+    }
+
+    #[test]
+    fn fragment_is_a_name_wherever_a_name_belongs() {
+        let file = parse_ok(
+            r#"use fragment from "fragment.wb";
+            component c {
+                pub port fragment "FRAGMENT";
+                fragment: Lamp;
+                wire red 1 [fragment.a, fragment];
+            }"#,
+        );
+        assert_eq!(file.uses[0].name.node.as_str(), "fragment");
+        let Member::Port(port) = &members(&file)[0] else {
+            panic!("expected a port");
+        };
+        assert_eq!(port.name.node.as_str(), "fragment");
+        let Member::Instance(instance) = &members(&file)[1] else {
+            panic!("expected an instance");
+        };
+        assert_eq!(instance.name.node.as_str(), "fragment");
+        assert!(file.fragments.is_empty());
+    }
+
+    #[test]
+    fn a_broken_top_level_statement_expects_the_file_statements() {
+        let report = [
+            r#"pub port a "A";"#,
+            "fragment systems;",
+            r#"fragment "x.wb""#,
+        ]
+        .iter()
+        .flat_map(|src| errors_at(src))
+        .collect::<Vec<_>>();
+        insta::assert_snapshot!(report.join("\n"), @r"
+        pub: found 'pub' expected 'use', 'fragment', 'component', 'extend', 'connector_type', 'view', or end of input
+        systems: found 'systems' expected something else
+        : found end of input expected ';'
+        ");
     }
 
     #[test]
