@@ -18,13 +18,17 @@ Four CLI commands share it:
   grids a renderer rejects, includes that collide and conductors no harness
   view draws (see DSL validation). Turns a multi-file `.wb`
   project into an elaborated IR (`ir::Design`) and reports problems via
-  miette. The entry every command calls is `pipeline::check_project`
-  (re-exported as `wirebug::check_project`; the LSP runs the same stages
-  itself, with `pipeline::extend_with_layout_problems` for the last one).
-  It lives outside `dsl` because the layout checks need `render`: `dsl`
-  ends at `dsl::check_loaded` (resolve → elaborate → validate) and never
-  depends on `render`, while `render::lint` depends on `dsl` like the rest
-  of `render` does; `pipeline` is where both are visible.
+  miette. One function sequences every stage after loading:
+  `pipeline::check_loaded(&Project, load_problems) -> dsl::Checked`
+  (the resolved registry, the design and all problems). The CLI, `serve`
+  and tests reach it through `wirebug::check_project` (discover + load +
+  `check_loaded`); the LSP loads through its overlay and calls
+  `check_loaded` itself, keeping `Checked.resolved` for its completion
+  index — so both drop a partial design and both get every new stage.
+  `pipeline` lives outside `dsl` because the layout checks need `render`:
+  `dsl` ends at `dsl::check_loaded` (resolve → elaborate → validate) and
+  never depends on `render`, while `render::lint` depends on `dsl` like
+  the rest of `render` does; `pipeline` is where both are visible.
 - **`render` (`src/render/`)** — runs the same DSL pipeline, then draws
   every view in the resulting `ir::Design` to SVG (one file per view) plus
   an `index.html` (`render::index_html`) that embeds them all for browsing,
@@ -63,7 +67,8 @@ Four CLI commands share it:
   for editor integration (the VSCode extension in `editors/vscode/`).
   Synchronous (lsp-server's channel loop; stdout is the protocol, logs go
   to stderr). Per change it re-runs the whole check pipeline with open
-  buffers shadowing the disk (`project::Overlay`), publishes per-file
+  buffers shadowing the disk (`project::Overlay`), through the same
+  `pipeline::check_loaded` as `check`, publishes per-file
   diagnostics (miette `Problem` → LSP via each problem's labels/severity/
   code, with explicit empty publishes so fixed files clear cross-file),
   and serves context-aware completion: an owned snapshot of `Resolved`
@@ -381,8 +386,8 @@ so one run reports many. Errors fail the run; warnings fail only under
   or unused imports, no root, a view of nothing, an empty cable, a port
   without `pub` — a `;` too early parts `pub ; port a "A";` into a skipped
   `pub` and a private port) are dropped (`Project::drop_parse_cascades`,
-  in `dsl::check_loaded` and the LSP), and come back once the syntax is
-  fixed. The problems that report something present and wrong (a bad
+  in `dsl::check_loaded`, so for the CLI and the LSP alike), and come
+  back once the syntax is fixed. The problems that report something present and wrong (a bad
   gauge, a duplicate, an unknown color) are still reported: skipping a
   statement cannot cause them. Such a project yields no design
   (`check_loaded` drops it), so it never renders.
@@ -568,12 +573,12 @@ has errors (or, under `--strict`, warnings).
 src/
 ├── main.rs          # clap CLI: `check`, `render`, `serve`, `lsp`, `manifest version` (all over the .wb DSL)
 ├── lib.rs           # re-exports; check_project + render::render_views
-├── pipeline.rs      # check_project: dsl::check_loaded, then render::lint
-│                    #   (the layout checks) — the entry every command uses
+├── pipeline.rs      # check_loaded: dsl::check_loaded, then render::lint
+│                    #   (the layout checks) — shared by check_project and lsp
 │
 │  # ── DSL parse-and-check pipeline (the only input: .wb) ──
 ├── dsl/
-│   ├── mod.rs           # check_loaded: resolve→elaborate→validate; CheckReport
+│   ├── mod.rs           # check_loaded → Checked: resolve→elaborate→validate; CheckReport
 │   ├── span.rs          # FileId, Span, Spanned<T>; Span→miette + chumsky::Span impl
 │   ├── lex/
 │   │   ├── mod.rs       # lex() → Vec<SpannedLexeme>; significant() = the trivia dial

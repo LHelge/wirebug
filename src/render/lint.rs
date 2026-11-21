@@ -438,7 +438,9 @@ mod tests {
         let (project, problems) = crate::dsl::project::load(&main);
         assert!(problems.is_empty(), "load problems: {problems:?}");
         let project = project.expect("project loads");
-        let (design, problems) = crate::dsl::check_loaded(&project);
+        let crate::dsl::Checked {
+            design, problems, ..
+        } = crate::dsl::check_loaded(&project);
         assert!(
             !problems.iter().any(Problem::is_error),
             "check errors: {problems:?}"
