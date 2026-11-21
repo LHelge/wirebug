@@ -425,18 +425,19 @@ impl<'d> HarnessConductor<'d> {
     /// not a cable.
     pub(super) fn all(design: &'d Design, subject: &'d Instance) -> impl Iterator<Item = Self> {
         subject.wires.iter().enumerate().flat_map(move |(w, wire)| {
-            wire.endpoints
-                .windows(2)
-                .enumerate()
-                .filter_map(move |(index, pair)| {
-                    let from = HarnessEnd::of(design, subject, &pair[0])?;
-                    let to = HarnessEnd::of(design, subject, &pair[1])?;
-                    (from.node() != to.node()).then_some(Self {
-                        segment: Segment { wire: w, index },
-                        wire,
-                        ends: [from, to],
-                    })
+            wire.segments().filter_map(move |segment| {
+                let [from, to] = segment.ends;
+                let from = HarnessEnd::of(design, subject, from)?;
+                let to = HarnessEnd::of(design, subject, to)?;
+                (from.node() != to.node()).then_some(Self {
+                    segment: Segment {
+                        wire: w,
+                        index: segment.index,
+                    },
+                    wire,
+                    ends: [from, to],
                 })
+            })
         })
     }
 }
