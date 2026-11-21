@@ -1,14 +1,15 @@
 ---
 id: t6a
 title: "`render --png` aborts on a huge canvas instead of reporting an error"
-status: open
+status: done
 priority: P1
 created: "2026-11-20T23:26:27.410934113Z"
-updated: "2026-11-21T01:16:23.244965663Z"
+updated: "2026-11-21T01:31:35.408698496Z"
 tags:
   - render
   - check
 parent: kss
+attempts: 1
 ---
 
 ## Summary
