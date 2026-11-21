@@ -254,3 +254,22 @@ fn a_reference_beside_its_wire_stays_with_its_own_port() {
     );
     assert!(at("7.5").is_empty());
 }
+
+#[test]
+fn a_short_drawn_wire_keeps_its_port_s_reference() {
+    // The BMS's CAN pair runs straight to the lamp close by, and on to a
+    // lamp the views leave out; its long pin numbers (`signals:11`) and
+    // the drawn wires' own codes leave each reference its text, beside
+    // the drawn wire, across and under a long title alike.
+    let views = limits();
+    for title in ["Short wire", "Under a long title"] {
+        assert_eq!(
+            references(&view(&views, title)),
+            [
+                reference("bms.can_h", "→ farl.pwr", "farl.pwr"),
+                reference("bms.can_l", "→ farl.gnd", "farl.gnd")
+            ],
+            "{title}"
+        );
+    }
+}
