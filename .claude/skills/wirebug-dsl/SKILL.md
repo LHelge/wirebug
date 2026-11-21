@@ -49,7 +49,7 @@ A `.wb` file contains zero or more of, in any order:
 
 Comments are `//` line comments only. Block comments are not supported.
 
-Statements end with `;`; brace blocks end at the closing brace with no trailing `;`. Comma-separated lists — `pins [ ]`, wire endpoint lists, and view `ports` side lists — allow a trailing comma, so multi-line lists diff cleanly. Numbers may be negative (`at (-2, 4)`); there is no other arithmetic.
+Statements end with `;`; brace blocks end at the closing brace with no trailing `;` (so a wire with a property body ends at its `}`). Comma-separated lists — `pins [ ]`, wire endpoint lists, and view `ports` side lists — allow a trailing comma, so multi-line lists diff cleanly. Numbers may be negative (`at (-2, 4)`); there is no other arithmetic.
 
 ## Imports
 
@@ -396,6 +396,7 @@ The instance name (`pack`, `inv`) is what wires reference. The label (`"HV Batte
 
 ```
 wire <color>[/<tracer>] <gauge_mm2> ["<label>"] [<endpoint>, <endpoint>, ...];
+wire <color>[/<tracer>] <gauge_mm2> ["<label>"] [<endpoint>, <endpoint>, ...] { <properties> }
 ```
 
 - `color` — bare identifier from the IEC 60757 vocabulary: `black`, `brown`, `red`, `orange`, `yellow`, `green`, `blue`, `violet`, `grey`, `white`, `pink`, `turquoise`, `gold`, `silver` (synonyms `purple` and `gray` normalise to `violet`/`grey`). Any other name still renders verbatim but raises a `check` warning (fatal under `--strict`). A two-tone (tracer/striped) wire writes base and tracer separated by a slash — `green/yellow` — and draws as the base colour with a dashed tracer overlay; colour-code annotations join the IEC 60757 codes with a slash (`GN/YE`).
@@ -418,6 +419,24 @@ wire orange 50 [hv_pos, c_main_pos.out];
 ```
 
 Multi-endpoint wires model shared rails (HV power bus, enable signals to parallel coils). The renderer derives junction dots from the topology — don't try to add junction nodes manually.
+
+### Wire properties
+
+A wire may end in a `{ }` body of `key: value;` lines instead of its `;` — the same shape as a cable's properties, and like any brace block it takes **no** `;` after the `}`. The body carries the physical data a wire list or BOM needs:
+
+```
+wire red 0.5 "12V" [fuses.ecu, ecu.b_pos] {
+    length: 1.2;
+    type:   "FLRY-B";
+    part:   "FLRY-B-0.5-RD";
+}
+```
+
+- `length: <number>;` — the wire's length in **metres** (a bare number, no unit suffix). It must be positive (`invalid_length`).
+- `type: "<string>";` — the insulation/construction type, free text (e.g. `"FLRY-B"`).
+- `part: "<string>";` — the part number.
+
+All three are optional, and each may appear once. Any other key is an error (`unknown_cable_property`, the code cable and wire bodies share), as is a key set twice (`duplicate_cable_property`) or a value of the wrong kind — a string for `length`, a number for `type` or `part` (`cable_property_type`). The positional form without a body is unchanged.
 
 ## Cables
 
@@ -442,13 +461,16 @@ Format:
   - `length: <number>;` — length in **metres** (a bare number, e.g. `2.5`; no unit suffix). It must be positive: `check` rejects `0` or a negative length (`invalid_length`).
 - A cable needs at least one conductor: `check` warns on a cable with no wires (`empty_cable`).
 - Each `wire` uses the exact same syntax as a loose wire, **but must have exactly two endpoints** — a cable conductor is one physical run from one pin to another. (A shared rail that fans out to three+ pins is not a single conductor; keep it a loose multi-endpoint `wire`, outside any cable.)
+- A conductor may carry a property body like any wire (see Wire properties), inside a `twisted { }` group too. A conductor's own `length` **overrides** its cable's `length` for that conductor — a phase lead that routes further than its siblings, say; the conductors without one take the cable's. The cable's own `length` stays what the cable box shows. A cable body itself takes only `type` and `length` (`part` is a wire key).
 - A `twisted { <wire> <wire> }` group wraps exactly two conductors that are twisted together as a pair. Groups and plain wires may interleave freely, so one cable can carry straight power conductors alongside a twisted signal pair:
 
 ```
 cable sensor_loom "Sensor loom" {
     length: 2.0;
 
-    wire red 1.5 "12V" [ecu.pwr, sensor.pwr];
+    wire red 1.5 "12V" [ecu.pwr, sensor.pwr] {
+        length: 2.3;                // routes round the bracket: longer than the loom
+    }
     twisted {
         wire white/blue 0.5 "SIG H" [ecu.h, sensor.h];
         wire white/red 0.5 "SIG L" [ecu.l, sensor.l];
@@ -616,6 +638,7 @@ wire orange 50 [pack.hv_neg, inv.dc_neg, charger.hv_neg, conv.hv_neg];
 - **Do not** introduce new keywords or option fields that aren't documented in this skill or already used in the project's `.wb` files. If something is awkward to express, raise it with the user rather than inventing syntax.
 - **Do not** add junction nodes by hand — multi-endpoint wires imply junctions automatically.
 - **Do not** put `pub` on an inline connector's ports, include both halves of one inline in a single harness view, or include an inline in a schematic view.
+- **Do not** write a `;` after a wire's property body (`[a, b] { length: 1; }`, not `{ … };`), or put `part` on a cable — it is a per-wire key.
 - **Do not** put a multi-endpoint wire inside a `cable` — cable conductors are point-to-point (exactly two endpoints). Keep fan-out rails as loose wires.
 - **Do not** use block comments (`/* */`). Line comments (`//`) only.
 - **Do not** mix grid coordinates with pixel coordinates. View positions are in grid cells.

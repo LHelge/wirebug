@@ -258,7 +258,8 @@ pub struct Instance {
     pub span: Span,
 }
 
-/// `wire <colour>[/<tracer>] <gauge> ["<label>"] [ <endpoint>, … ] ;`
+/// `wire <colour>[/<tracer>] <gauge> ["<label>"] [ <endpoint>, … ] ;`, or
+/// the same with a `{ <property>* }` body in place of the `;`.
 #[derive(Debug, Clone)]
 pub struct Wire {
     pub color: Spanned<Ident>,
@@ -269,6 +270,10 @@ pub struct Wire {
     /// Optional signal name, shown on each wire in a harness drawing.
     pub label: Option<Spanned<String>>,
     pub endpoints: Vec<Endpoint>,
+    /// The `key: value;` lines of the optional body (`length`, `type`,
+    /// `part`), kept faithful like a cable's: keys and value kinds are
+    /// checked in validate. Empty when the wire has no body.
+    pub properties: Vec<Property>,
     pub span: Span,
 }
 
@@ -289,7 +294,7 @@ pub struct Endpoint {
 pub struct Cable {
     pub name: Spanned<Ident>,
     pub label: Option<Spanned<String>>,
-    pub properties: Vec<CableProperty>,
+    pub properties: Vec<Property>,
     pub members: Vec<CableMember>,
     pub span: Span,
 }
@@ -300,17 +305,18 @@ impl Cable {
     /// resolution, arity, colors).
     pub fn wires(&self) -> impl Iterator<Item = &Wire> {
         self.members.iter().flat_map(|m| match m {
-            CableMember::Wire(w) => std::slice::from_ref(w),
+            CableMember::Wire(w) => std::slice::from_ref(&**w),
             CableMember::Twisted(t) => t.wires.as_slice(),
         })
     }
 }
 
 /// One conductor entry of a cable body: a plain wire, or a `twisted { }`
-/// group of wires that are twisted together (a pair, typically).
+/// group of wires that are twisted together (a pair, typically). The wire
+/// is boxed, like the pair, so the two variants stay close in size.
 #[derive(Debug, Clone)]
 pub enum CableMember {
-    Wire(Wire),
+    Wire(Box<Wire>),
     Twisted(TwistedGroup),
 }
 
@@ -325,30 +331,31 @@ pub struct TwistedGroup {
     pub span: Span,
 }
 
-/// `<key>: <value>;` inside a `cable` body. Keys are validated in elaboration.
+/// `<key>: <value>;` inside a `cable` body or a wire's body. Keys and value
+/// kinds are checked in validate, per owner.
 #[derive(Debug, Clone)]
-pub struct CableProperty {
+pub struct Property {
     pub key: Spanned<Ident>,
-    pub value: CablePropertyValue,
+    pub value: PropertyValue,
     pub span: Span,
 }
 
-/// The right-hand side of a cable property — a quoted string, a number,
-/// or a bare identifier (`twisted: true;` — booleans and future keyword
-/// values parse faithfully; validation types them per key).
+/// The right-hand side of a property — a quoted string, a number, or a
+/// bare identifier (`twisted: true;` — booleans and future keyword values
+/// parse faithfully; validation types them per key).
 #[derive(Debug, Clone)]
-pub enum CablePropertyValue {
+pub enum PropertyValue {
     Str(Spanned<String>),
     Number(Spanned<f64>),
     Ident(Spanned<Ident>),
 }
 
-impl CablePropertyValue {
+impl PropertyValue {
     pub fn span(&self) -> Span {
         match self {
-            CablePropertyValue::Str(s) => s.span,
-            CablePropertyValue::Number(n) => n.span,
-            CablePropertyValue::Ident(i) => i.span,
+            PropertyValue::Str(s) => s.span,
+            PropertyValue::Number(n) => n.span,
+            PropertyValue::Ident(i) => i.span,
         }
     }
 }

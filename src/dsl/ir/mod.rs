@@ -384,6 +384,20 @@ pub struct Instance {
     pub inline: Option<InlineMeta>,
 }
 
+impl Instance {
+    /// The length that applies to `wire`, one of this instance's wires: its
+    /// own `length`, else that of the cable it belongs to. `None` when
+    /// neither sets one.
+    pub fn effective_length(&self, wire: &Wire) -> Option<f64> {
+        wire.length.or_else(|| {
+            wire.cable
+                .as_ref()
+                .and_then(|cable| self.cables.get(cable))
+                .and_then(|meta| meta.length)
+        })
+    }
+}
+
 /// Physical metadata for a declared cable. Its conductor wires live in
 /// [`Instance::wires`], each tagged with the cable's [`CableName`].
 #[derive(Debug, Clone)]
@@ -565,6 +579,14 @@ pub struct Wire {
     /// cable in source order. Wires of one cable sharing an index are
     /// twisted together; the harness renderer braids two-conductor groups.
     pub twisted_group: Option<u32>,
+    /// The wire's own length in metres, from its body. For a cable
+    /// conductor it overrides the cable's; [`Instance::effective_length`]
+    /// answers the length that applies.
+    pub length: Option<f64>,
+    /// Free-text insulation/construction type from the body, e.g. `"FLRY-B"`.
+    pub r#type: Option<String>,
+    /// Part number from the body.
+    pub part: Option<String>,
     /// The authored `wire` statement (inside its cable, for a conductor),
     /// so a check over the drawings can point back at the source.
     pub span: Span,

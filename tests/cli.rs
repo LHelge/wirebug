@@ -327,7 +327,7 @@ fn check_accepts_the_fixture_project() {
 const INVALID_VALUES_ROOT: &str = "tests/fixtures/invalid_values_project";
 
 #[test]
-fn check_rejects_non_positive_gauges_and_cable_length() {
+fn check_rejects_non_positive_gauges_and_lengths() {
     let output = Command::cargo_bin("wirebug")
         .expect("binary present")
         .args(["check", "--format", "json", INVALID_VALUES_ROOT])
@@ -360,6 +360,7 @@ fn check_rejects_non_positive_gauges_and_cable_length() {
         [
             ("wirebug::invalid_gauge", "-1"),
             ("wirebug::invalid_gauge", "0"),
+            ("wirebug::invalid_length", "-0.5"),
             ("wirebug::invalid_length", "-2"),
         ]
     );
