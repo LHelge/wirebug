@@ -1,9 +1,10 @@
 //! One-dimensional separation-constraint projection — the `satisfy_VPSC`
 //! step of paper §6.2.
 //!
-//! Given variables with desired positions and weights, and separation
+//! Given variables with desired positions and strengths, and separation
 //! constraints `x[right] − x[left] ≥ gap`, find positions that satisfy
-//! every constraint while minimising `Σ wᵢ (xᵢ − dᵢ)²`.
+//! every constraint while minimising `Σ (xᵢ − dᵢ)²` over the strongest
+//! variables first, then the next tier, and so on.
 //!
 //! Method: the block-merge active-set algorithm of Dwyer, Marriott &
 //! Stuckey, *Fast Node Overlap Removal* (LNCS 3843). Each variable
@@ -14,10 +15,34 @@
 //! split) matches the paper's approximate projection and is optimal for
 //! the chain/tree constraints nudging produces.
 
-/// A variable to place: pulled toward `desired` with strength `weight`.
+/// How firmly a variable holds its desired position. A block of
+/// variables sits where the members of its strongest tier want it on
+/// average; weaker members yield to them entirely. That is the limit of
+/// weights growing apart without bound, solved exactly: large finite
+/// weights would leave a held position off by `(d − held) / weight`,
+/// enough to put a wire at `360.00000002` instead of on its grid line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum Strength {
+    /// An interior segment, free to be nudged.
+    Pull,
+    /// A segment anchored at a port.
+    Pin,
+    /// An obstacle boundary.
+    Wall,
+}
+
+impl Strength {
+    const COUNT: usize = 3;
+
+    fn tier(self) -> usize {
+        self as usize
+    }
+}
+
+/// A variable to place: held at `desired` with `strength`.
 pub(super) struct Var {
     pub(super) desired: f64,
-    pub(super) weight: f64,
+    pub(super) strength: Strength,
 }
 
 /// `position[right] − position[left] ≥ gap`.
@@ -29,17 +54,28 @@ pub(super) struct Constraint {
 
 const TOL: f64 = 1e-9;
 
+/// The members of one strength tier in a block.
+#[derive(Clone, Copy, Default)]
+struct Tier {
+    count: f64,
+    /// Σ (desired − offset) over the tier's members.
+    sum: f64,
+}
+
 struct Block {
-    /// Σ weight over members.
-    wsum: f64,
-    /// Σ weight·(desired − offset) over members; block position = wpos/wsum.
-    wpos: f64,
+    /// Indexed by [`Strength::tier`].
+    tiers: [Tier; Strength::COUNT],
     members: Vec<usize>,
 }
 
 impl Block {
+    /// The average reference position of the strongest tier present.
     fn position(&self) -> f64 {
-        self.wpos / self.wsum
+        self.tiers
+            .iter()
+            .rev()
+            .find(|tier| tier.count > 0.0)
+            .map_or(0.0, |tier| tier.sum / tier.count)
     }
 }
 
@@ -47,11 +83,19 @@ impl Block {
 /// order as `vars`).
 pub(super) fn solve(vars: &[Var], constraints: &[Constraint]) -> Vec<f64> {
     let n = vars.len();
-    let mut blocks: Vec<Block> = (0..n)
-        .map(|i| Block {
-            wsum: vars[i].weight,
-            wpos: vars[i].weight * vars[i].desired,
-            members: vec![i],
+    let mut blocks: Vec<Block> = vars
+        .iter()
+        .enumerate()
+        .map(|(i, var)| {
+            let mut tiers = [Tier::default(); Strength::COUNT];
+            tiers[var.strength.tier()] = Tier {
+                count: 1.0,
+                sum: var.desired,
+            };
+            Block {
+                tiers,
+                members: vec![i],
+            }
         })
         .collect();
     let mut block_of: Vec<usize> = (0..n).collect();
@@ -87,16 +131,16 @@ pub(super) fn solve(vars: &[Var], constraints: &[Constraint]) -> Vec<f64> {
         // constraint tight: x[right] = x[left] + gap.
         let shift = (offset[c.left] + c.gap) - offset[c.right];
         let moved = std::mem::take(&mut blocks[br].members);
-        let (r_wsum, r_wpos) = (blocks[br].wsum, blocks[br].wpos);
+        let right = std::mem::take(&mut blocks[br].tiers);
         for &m in &moved {
             offset[m] += shift;
             block_of[m] = bl;
         }
         blocks[bl].members.extend(moved);
-        blocks[bl].wsum += r_wsum;
-        blocks[bl].wpos += r_wpos - shift * r_wsum;
-        blocks[br].wsum = 0.0;
-        blocks[br].wpos = 0.0;
+        for (tier, r) in blocks[bl].tiers.iter_mut().zip(right) {
+            tier.count += r.count;
+            tier.sum += r.sum - shift * r.count;
+        }
     }
 
     (0..n)
@@ -111,7 +155,7 @@ mod tests {
     fn var(desired: f64) -> Var {
         Var {
             desired,
-            weight: 1.0,
+            strength: Strength::Pull,
         }
     }
 
@@ -155,12 +199,12 @@ mod tests {
     }
 
     #[test]
-    fn heavy_variable_barely_moves() {
-        // Pin var 0 with a large weight; var 1 must sit 10 to its right.
+    fn a_stronger_variable_holds_exactly_while_a_weaker_one_yields() {
+        // Pin var 0; var 1 must sit 10 to its right.
         let vars = [
             Var {
                 desired: 0.0,
-                weight: 1e6,
+                strength: Strength::Pin,
             },
             var(0.0),
         ];
@@ -170,7 +214,54 @@ mod tests {
             gap: 10.0,
         }];
         let x = solve(&vars, &cons);
-        assert!(x[0].abs() < 1e-3, "pinned var moved: {}", x[0]);
-        assert!(close(x[1] - x[0], 10.0), "{x:?}");
+        assert_eq!(x, [0.0, 10.0]);
+    }
+
+    #[test]
+    fn a_segment_pushed_against_a_wall_lands_exactly_on_it() {
+        // A segment that wants 380 and a neighbour that wants 360 must be
+        // 40 apart, below a wall at 360: the wall holds, both yield to it.
+        let vars = [
+            var(380.0),
+            var(360.0),
+            Var {
+                desired: 360.0,
+                strength: Strength::Wall,
+            },
+        ];
+        let cons = [
+            Constraint {
+                left: 1,
+                right: 0,
+                gap: 40.0,
+            },
+            Constraint {
+                left: 0,
+                right: 2,
+                gap: 0.0,
+            },
+        ];
+        let x = solve(&vars, &cons);
+        assert_eq!(x, [360.0, 320.0, 360.0]);
+    }
+
+    #[test]
+    fn a_wall_outweighs_a_pin() {
+        let vars = [
+            Var {
+                desired: 20.0,
+                strength: Strength::Pin,
+            },
+            Var {
+                desired: 0.0,
+                strength: Strength::Wall,
+            },
+        ];
+        let cons = [Constraint {
+            left: 0,
+            right: 1,
+            gap: 0.0,
+        }];
+        assert_eq!(solve(&vars, &cons), [0.0, 0.0]);
     }
 }
