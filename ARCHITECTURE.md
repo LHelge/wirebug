@@ -340,8 +340,10 @@ so one run reports many. Errors fail the run; warnings fail only under
 - **Load** — file not found for a `use`; no `wirebug.toml`; IO.
 - **Parse/lex** — syntax and lexical errors (with expected-token sets),
   and a reserved keyword written where a name belongs (`reserved_word`,
-  on the word, with a rename hint; the parse takes the word as the name
-  and goes on, so one misused word is one error).
+  on the word, with a rename hint). The parse takes the word as the name
+  and goes on, so every occurrence of the word is reported, and the later
+  phases check the name like any other (an `include wire` of an instance
+  that does not exist is also an `unknown_include`).
 - **Resolve** — undefined type, unresolved import, duplicate
   type/instance/port, unknown instance/port in a wire endpoint,
   private-port access (a non-`pub` port referenced from outside), unknown
@@ -642,14 +644,20 @@ DSL pipeline notes:
   one `KEYWORDS` table in `lex/token.rs` drives both lexing and display).
   Contextual ones — the view, `connector_type` layout and cavity words,
   plus `from` — mean something only in their own production; everywhere a
-  name belongs they are names. Every name goes through the one boxed
-  `ident` production, which takes an identifier or a contextual keyword
-  (`Token::as_name`). The reserved ones (the words that declare the design:
-  `component`, `port`, `pin`, `wire`, `cable`, `view`, …) are taken as
-  names too but recorded in the parser state, a chumsky `TruncateState`
-  that forgets what a backtracked branch recorded; `parse_file` turns them
-  into `ParseError::ReservedWord`. A new keyword is reserved unless listed
-  as contextual. LSP completion reads names through `Token::as_name` and
+  name belongs they are names. Names go through two boxed productions,
+  both taking an identifier or a contextual keyword (`Token::as_name`):
+  `ident` for a name after a keyword, and `leading_name(separator)` for a
+  name that starts a statement (`name: Type;`, `key: value;`,
+  `side: ports;`, `port at (…);`). The reserved ones (the words that
+  declare the design: `component`, `port`, `pin`, `wire`, `cable`, `view`,
+  …) are taken as names too but recorded in the parser state, a chumsky
+  `TruncateState` that forgets what a backtracked branch recorded;
+  `parse_file` turns them into `ParseError::ReservedWord`. At a statement
+  start a reserved word is a name only when the separator follows it;
+  otherwise `leading_name` fails on the keyword without consuming it, so a
+  misplaced keyword (`view` inside a component) keeps the error of the
+  statements that could start there, on the keyword. A new keyword is
+  reserved unless listed as contextual. LSP completion reads names through `Token::as_name` and
   only treats `ports {`/`enclosure {` as their blocks in their own
   position, so a connector named `ports` stays a connector body.
 - Files are loaded once each (by canonical path), so a `use` cycle or a
