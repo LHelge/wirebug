@@ -64,13 +64,13 @@ include pack at (2, 5) ports {
     east: hv_pos, hv_neg;
 }
 
-include inv at (15, 2) ports {
+include inv at (20, 2) ports {
     west:  dc_pos, dc_neg;
     east:  phase_u, phase_v, phase_w;
     south: enable;
 }
 
-include conv at (15, 18);
+include conv at (20, 18);
 ```
 
 `include <instance> at (<x>, <y>) [ports { … }]` places an instance of the
