@@ -101,6 +101,80 @@ fn copy_tree(from: &std::path::Path, to: &std::path::Path) {
     }
 }
 
+#[test]
+fn render_with_no_arguments_writes_into_out_in_the_project_root() {
+    let tmp = tempdir().expect("tempdir");
+    let root = tmp.path().join("basic_project");
+    copy_tree(std::path::Path::new(FIXTURE_ROOT), &root);
+
+    // Run from a subdirectory: the default is the project's `out`, not the
+    // current directory's.
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .arg("render")
+        .current_dir(root.join("components"))
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("rendered"));
+
+    assert!(root.join("out/system_overview.svg").is_file());
+    assert!(root.join("out/index.html").is_file());
+    assert!(!root.join("components/out").exists());
+}
+
+#[test]
+fn render_of_a_named_project_defaults_to_its_root_not_the_current_directory() {
+    let tmp = tempdir().expect("tempdir");
+    let root = tmp.path().join("basic_project");
+    copy_tree(std::path::Path::new(FIXTURE_ROOT), &root);
+    let elsewhere = tmp.path().join("elsewhere");
+    std::fs::create_dir(&elsewhere).expect("cwd created");
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["render", root.join("wirebug.toml").to_str().unwrap()])
+        .current_dir(&elsewhere)
+        .assert()
+        .success();
+
+    assert!(root.join("out/system_overview.svg").is_file());
+    assert!(!elsewhere.join("out").exists());
+}
+
+#[test]
+fn render_with_a_relative_out_writes_relative_to_the_current_directory() {
+    let tmp = tempdir().expect("tempdir");
+    let root = tmp.path().join("basic_project");
+    copy_tree(std::path::Path::new(FIXTURE_ROOT), &root);
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["render", "--out", "drawings"])
+        .current_dir(root.join("components"))
+        .assert()
+        .success();
+
+    assert!(
+        root.join("components/drawings/system_overview.svg")
+            .is_file()
+    );
+    assert!(!root.join("out").exists());
+}
+
+#[test]
+fn render_help_says_where_out_defaults_to() {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["render", "--help"])
+        .output()
+        .expect("runs");
+    assert!(output.status.success());
+    insta::assert_snapshot!(
+        "render_help",
+        String::from_utf8(output.stdout).expect("utf-8")
+    );
+}
+
 /// A copy of the basic fixture in `dir` whose manifest authors its
 /// revision. The stamp then never asks git, whose answer depends on the
 /// environment: with `HOME` and `XDG_CONFIG_HOME` moved, git stops reading

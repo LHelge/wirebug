@@ -127,9 +127,12 @@ pub enum Command {
         /// to the project containing the current directory (found by
         /// walking up to `wirebug.toml`).
         target: Option<PathBuf>,
-        /// Directory to write the per-view SVGs into (created if absent).
+        /// Directory to write the rendered views into (created if absent).
+        /// Defaults to `out` in the project root, the directory holding
+        /// `wirebug.toml`, wherever the command runs from; a relative path
+        /// given here is taken from the current directory.
         #[arg(long)]
-        out: PathBuf,
+        out: Option<PathBuf>,
         /// Treat warnings as errors.
         #[arg(long)]
         strict: bool,

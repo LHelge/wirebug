@@ -1,0 +1,41 @@
+---
+source: tests/cli.rs
+expression: "String::from_utf8(output.stdout).expect(\"utf-8\")"
+---
+Render every view in a project to SVG
+
+Usage: wirebug render [OPTIONS] [TARGET]
+
+Arguments:
+  [TARGET]
+          A project manifest, project directory, or `.wb` file. Defaults to the project containing the current directory (found by walking up to `wirebug.toml`)
+
+Options:
+      --out <OUT>
+          Directory to write the rendered views into (created if absent). Defaults to `out` in the project root, the directory holding `wirebug.toml`, wherever the command runs from; a relative path given here is taken from the current directory
+
+      --strict
+          Treat warnings as errors
+
+      --png
+          Rasterise each view to PNG instead of writing SVG. PNGs are at 2× the SVG's intrinsic size; the HTML index references the `.png` files
+
+      --pdf
+          Export every view into a single PDF (one page per view, on the `--paper` size, portrait or landscape chosen per view by aspect ratio) named after the project (`<name>.pdf`), instead of per-view SVGs and the HTML index
+
+      --paper <PAPER>
+          The paper size of the `--pdf` pages. Each view is scaled to fit its page; a view whose smallest text would print below 5 pt is named in a warning with a paper size that would print it legibly. The warning neither stops the PDF nor fails the run, even under `--strict`, which concerns the project's own warnings
+
+          Possible values:
+          - a4:      ISO A4, 210 × 297 mm
+          - a3:      ISO A3, 297 × 420 mm
+          - letter:  US Letter, 8.5 × 11 in
+          - tabloid: US Tabloid (ledger), 11 × 17 in
+          
+          [default: a4]
+
+      --embed
+          Emit SVGs suitable for embedding into another document or site: the built-in `<style>` is dropped (the host owns the look), the project-identity stamp is suppressed, and the root `<svg>` is class-tagged `wirebug wirebug-{kind}` so a host stylesheet can scope rules under `.wirebug`. Writes a `manifest.json` sidecar in place of the HTML index
+
+  -h, --help
+          Print help (see a summary with '-h')

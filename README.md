@@ -271,12 +271,15 @@ connector_type InverterControl "Inverter control 47+13p" {
 ```
 
 ```sh
-wirebug render                       # discovers wirebug.toml by walking up from the CWD
-wirebug render examples --out out/                  # one SVG per view, into out/
+wirebug render                       # discovers wirebug.toml by walking up from the CWD; writes <project root>/out/
+wirebug render examples                             # one SVG per view, into examples/out/
+wirebug render examples --out out/                  # the same, into out/ under the current directory
 wirebug render examples --out out/ --pdf            # one A4 PDF, one view per page
 wirebug render examples --out out/ --pdf --paper a3 # the same on A3 (a4, a3, letter, tabloid)
 wirebug render examples/wirebug.toml --out out/ --embed  # naked SVGs + manifest.json
 ```
+
+Without `--out`, `render` writes into `out/` in the project root — the directory holding `wirebug.toml` — whichever directory it is run from, creating it if need be. A relative `--out` is taken from the current directory.
 
 `--pdf` lays each view on a page of the `--paper` size (A4 unless told otherwise), landscape for a view wider than tall and portrait otherwise, and scales it to fit inside the margins — down as far as it takes, up by at most 2×. A wide view fitted to a small sheet shrinks its text with it, so `render` warns of every page whose smallest text (a schematic's wire codes, a harness's cable labels, a pinout's shrunk cavity labels) would print under 5 pt. It names the smallest paper that prints it legibly, or, when none does, the paper that comes closest and the size it gives there, so a near miss reads differently from a view that needs redrawing:
 

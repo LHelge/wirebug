@@ -14,7 +14,7 @@ mod cli;
 
 use std::io::{ErrorKind, Write};
 use std::net::IpAddr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
@@ -25,6 +25,7 @@ use tracing_subscriber::EnvFilter;
 use cli::{Cli, Command, ExportArgs, ManifestCommand, PaperArg};
 use wirebug::dsl::diagnostics::Problem;
 use wirebug::dsl::ir::Design;
+use wirebug::dsl::project;
 use wirebug::dsl::{self, CheckReport, Format};
 use wirebug::export::{Export, Table};
 use wirebug::render::output::{Output, ViewFormat};
@@ -58,7 +59,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             embed,
         } => render_command(
             target.as_deref(),
-            &out,
+            out.as_deref(),
             strict,
             png,
             pdf.then_some(paper.into()),
@@ -139,7 +140,7 @@ fn check_command(target: Option<&Path>, strict: bool, format: Format) -> Result<
 
 fn render_command(
     target: Option<&Path>,
-    out_dir: &Path,
+    out_dir: Option<&Path>,
     strict: bool,
     png: bool,
     pdf: Option<Paper>,
@@ -148,6 +149,10 @@ fn render_command(
     let report = wirebug::check_project(target);
     let Some(design) = checked_design(&report, strict, "render") else {
         return Ok(ExitCode::FAILURE);
+    };
+    let out_dir = match out_dir {
+        Some(dir) => dir.to_path_buf(),
+        None => default_out_dir(target)?,
     };
 
     let output = if let Some(paper) = pdf {
@@ -160,7 +165,7 @@ fn render_command(
         };
         Output::Views { format, embed }
     };
-    let written = output.write(design, out_dir)?;
+    let written = output.write(design, &out_dir)?;
     for failure in &written.failures {
         eprintln!("error: {failure}");
     }
@@ -181,6 +186,19 @@ fn render_command(
     } else {
         ExitCode::FAILURE
     })
+}
+
+/// `out` in the project root, the directory of the entry file that
+/// discovery finds (beside `wirebug.toml`), so `render` run from anywhere in
+/// a project writes to the same place.
+fn default_out_dir(target: Option<&Path>) -> Result<PathBuf> {
+    let entry = project::discover(target)
+        .map_err(|problem| anyhow::anyhow!("{problem}"))
+        .context("locating the project")?;
+    let root = entry
+        .parent()
+        .context("project root has no parent directory")?;
+    Ok(root.join("out"))
 }
 
 /// Write one build table of the project to stdout, or to `--out` with a
