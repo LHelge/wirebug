@@ -563,7 +563,8 @@ so one run reports many. Errors fail the run; warnings fail only under
   syntax error (`Project.parsed_whole` is false: a hole, a misnested file,
   or a lex error) the problems that report an absence
   (`Problem::reports_an_absence`: unknown or undefined names, unresolved
-  or unused imports and unused fragments, no root, a view of nothing, an
+  or unused imports and unused fragments (but for a `fragment` naming its
+  own file), no root, a view of nothing, an
   empty cable, a splice that joins nothing, a port without `pub` — a `;` too early parts `pub ; port a "A";` into a skipped
   `pub` and a private port) are dropped (`Project::drop_parse_cascades`,
   in `dsl::check_loaded`, so for the CLI and the LSP alike), and come
@@ -609,15 +610,28 @@ so one run reports many. Errors fail the run; warnings fail only under
   A `text` box outside a schematic view is `unsupported_view_text`; two
   boxes of one view sharing a name are `duplicate_view_text` (only the
   deprecated named form has a name to clash).
-  As warnings: a `fragment` that adds nothing — it names its own file, or
-  a file with no view and no `fragment` of its own (an aggregating file's
-  lines are judged where they are written) whose top-level `extend`s the
-  line merged none of (`unused_fragment`, on the path; a stale line, in the
-  spirit of `unused_import`). The variant carries why
-  (`diagnostics::UnusedFragmentReason`): `Empty` (no `extend` at all),
-  `NotInScope` (naming the extended components missing from the naming
-  file's scope, the help telling to `use` them there or move the line) or
-  `ItsOwnFile`; a second
+  As warnings: a `fragment` that adds nothing (`unused_fragment`, on the
+  path; a stale line, in the spirit of `unused_import`). A line is useful
+  when it merges one of its target's top-level `extend`s, or when the
+  target contributes something: a view, a merge its own scope makes (a
+  `use` collision or one of its `fragment` lines), or a `fragment` line
+  naming a file that contributes. Files already loaded on the way — the
+  entry file, the file the line is written in, the files followed to get
+  there — contribute nothing again (`FragmentGraph::contributes`, a search
+  with a visited set, run once every scope is built), so two files that
+  only name each other are both reported, and an aggregating file of
+  `fragment` lines that `use`s their component is not. A line naming its
+  own file is always reported. The variant carries why
+  (`diagnostics::UnusedFragmentReason`): `Empty` (no view, `extend` or
+  `fragment` line), `ItsFragmentsAddNothing` (only `fragment` lines, none
+  adding anything), `NotInScope` (naming the extended components missing
+  from the naming file's scope, the help telling to `use` them there or
+  move the line), `Imported` (the scope entry of the extended name is that
+  same `extend`, brought in by a `use` of the file, so there is no
+  component to merge it into), `TheEntryFile` or `ItsOwnFile`. All but
+  `ItsOwnFile` report an absence, dropped while a file has syntax errors
+  (`Problem::reports_an_absence`); a line naming its own file is wrong
+  whatever a skipped statement held. A second
   `fragment` in one file naming a file an earlier one did, compared by the
   loaded file so `./x.wb` repeats `x.wb` (`duplicate_fragment`, on both
   paths; a `use` of the same file is no repeat, since a file loads once

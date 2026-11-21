@@ -205,10 +205,11 @@ pub enum Problem {
         at: SourceSpan,
     },
 
-    /// A `fragment` of a file that adds nothing through it: the file has no
-    /// view and no `fragment` of its own, and the line merges none of its
-    /// top-level `extend`s, because it has none or their components are not
-    /// in the naming file's scope (`reason`).
+    /// A `fragment` line that adds nothing: it names its own file, or it
+    /// merges none of its file's top-level `extend`s and the file
+    /// contributes nothing on its own (no view, no merge in its scope, no
+    /// `fragment` line naming a file not yet loaded on the way that
+    /// contributes). `reason` says why.
     #[error("`fragment \"{target}\"` adds nothing")]
     #[diagnostic(
         severity(Warning),
@@ -1310,13 +1311,26 @@ pub enum PropertyOwner {
 /// Why a `fragment` line adds nothing ([`Problem::UnusedFragment`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UnusedFragmentReason {
-    /// The file holds no view and no top-level `extend`.
+    /// The file holds no view, no top-level `extend` and no `fragment`
+    /// line.
     Empty,
+    /// The file holds no view and no top-level `extend`, and its own
+    /// `fragment` lines add nothing either: each names a file already
+    /// loaded on the way to it, or one that adds nothing through it.
+    ItsFragmentsAddNothing,
     /// The file extends components none of which is in the naming file's
     /// scope: these, in the file's order. Merging does not pass through a
     /// file, so a `fragment` merges an `extend` only where its component is
     /// in scope.
     NotInScope(Vec<String>),
+    /// The file extends components whose scope entry in the naming file is
+    /// that very `extend`, imported with `use`: these, in the file's order.
+    /// With no component of the name in scope, there is nothing to merge
+    /// it into.
+    Imported(Vec<String>),
+    /// The line names the project's entry file, which is loaded whatever
+    /// names it, and merges none of its `extend`s.
+    TheEntryFile,
     /// The line names the file it is written in.
     ItsOwnFile,
 }
@@ -1327,25 +1341,58 @@ impl UnusedFragmentReason {
             UnusedFragmentReason::Empty => format!(
                 "`{target}` has no view and no `extend`, so pulling it in adds nothing; remove the line, or `use` a component it defines by name"
             ),
+            UnusedFragmentReason::ItsFragmentsAddNothing => format!(
+                "`{target}` has no view and no `extend`, and its own `fragment` lines add nothing either: each names a file already loaded on the way here, or one that adds nothing through it; remove the line"
+            ),
             UnusedFragmentReason::NotInScope(components) => {
-                let quoted: Vec<String> =
-                    components.iter().map(|name| format!("`{name}`")).collect();
-                let (names, which, them) = match quoted.as_slice() {
-                    [rest @ .., last] if !rest.is_empty() => (
-                        format!("{} and {last}", rest.join(", ")),
-                        "which are",
-                        "them",
-                    ),
-                    _ => (quoted.concat(), "which is", "it"),
+                let (names, plural) = Self::quoted(components);
+                let (which, them) = if plural {
+                    ("which are", "them")
+                } else {
+                    ("which is", "it")
                 };
                 format!(
                     "`{target}` extends {names}, {which} not in scope here, and a `fragment` merges an `extend` only into a component in scope where the line is written: `use` {them} in this file, or write the line in a file that has {them} in scope, such as the one that defines {them}"
                 )
             }
+            UnusedFragmentReason::Imported(components) => {
+                let (names, plural) = Self::quoted(components);
+                if plural {
+                    format!(
+                        "`{target}` extends {names}, but the {names} in scope here are those same `extend`s, imported with `use`, so there are no components to merge them into; import the components themselves, from the files that define them"
+                    )
+                } else {
+                    format!(
+                        "`{target}` extends {names}, but the {names} in scope here is that same `extend`, imported with `use`, so there is no component to merge it into; import the component itself, from the file that defines it"
+                    )
+                }
+            }
+            UnusedFragmentReason::TheEntryFile => format!(
+                "`{target}` is the project's entry file, which is loaded whatever names it, and the line merges none of its `extend`s; remove the line"
+            ),
             UnusedFragmentReason::ItsOwnFile => format!(
                 "`{target}` is the file this line is written in, which is already loaded; remove the line"
             ),
         }
+    }
+
+    /// `names` quoted and joined into prose (`` `a`, `b` and `c` ``), and
+    /// whether they are more than one.
+    fn quoted(names: &[String]) -> (String, bool) {
+        let quoted: Vec<String> = names.iter().map(|name| format!("`{name}`")).collect();
+        match quoted.as_slice() {
+            [rest @ .., last] if !rest.is_empty() => {
+                (format!("{} and {last}", rest.join(", ")), true)
+            }
+            _ => (quoted.concat(), false),
+        }
+    }
+
+    /// Whether the line may be the echo of a statement the parser skipped
+    /// ([`Problem::reports_an_absence`]): every reason but a line naming
+    /// its own file, which is wrong whatever the file holds.
+    fn reports_an_absence(&self) -> bool {
+        !matches!(self, UnusedFragmentReason::ItsOwnFile)
     }
 }
 
@@ -1549,9 +1596,9 @@ impl Problem {
             | Problem::NoRoot
             | Problem::UninstantiatedViewSubject { .. }
             | Problem::UnusedImport { .. }
-            | Problem::UnusedFragment { .. }
             | Problem::SpliceJoinsNothing { .. }
             | Problem::UndrawnConductor { .. } => true,
+            Problem::UnusedFragment { reason, .. } => reason.reports_an_absence(),
             Problem::Lex { .. }
             | Problem::Parse { .. }
             | Problem::ReservedWord { .. }

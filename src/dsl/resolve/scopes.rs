@@ -3,12 +3,14 @@
 //! component collision is a merge (when either side is an `extend`) — that
 //! discovery happens here, feeding the merge machinery in [`super::merge`].
 //! A `fragment` imports no name: it merges the target file's `extend`s with
-//! the components of their names already in scope.
+//! the components of their names already in scope. Once every file's scope
+//! is built, each line is judged for whether it adds anything.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::dsl::ast;
 use crate::dsl::diagnostics::{Problem, UnusedFragmentReason};
+use crate::dsl::project::Project;
 use crate::dsl::span::{FileId, Span};
 
 use super::{ComponentScope, ConnectorTypeId, ConnectorTypeScope, DefId, Resolver};
@@ -16,7 +18,8 @@ use super::{ComponentScope, ConnectorTypeId, ConnectorTypeScope, DefId, Resolver
 impl<'a> Resolver<'a> {
     /// Build each file's type-name scope: its own top-level definitions
     /// plus the names brought in by `use`; then merge in the `extend`s of
-    /// the files its `fragment`s pull in.
+    /// the files its `fragment`s pull in. Last, report the `fragment` lines
+    /// that repeat a line or add nothing.
     pub(super) fn build_scopes(
         &mut self,
         roots_by_file: &[Vec<DefId>],
@@ -28,6 +31,8 @@ impl<'a> Resolver<'a> {
         let mut scopes: HashMap<FileId, HashMap<String, DefId>> = HashMap::new();
         let mut connector_type_scopes: HashMap<FileId, HashMap<String, ConnectorTypeId>> =
             HashMap::new();
+        let mut graph = FragmentGraph::new(self.project);
+        let mut lines: Vec<(FileId, FragmentLine<'a>)> = Vec::new();
         for (fi, file) in self.project.files.iter().enumerate() {
             let fid = FileId(fi);
             let mut scope: HashMap<String, DefId> = HashMap::new();
@@ -105,23 +110,29 @@ impl<'a> Resolver<'a> {
                 let Some(tfid) = self.project.import_target(fid, &fragment.path.node) else {
                     continue;
                 };
-                if let Some(&first) = fragmented.get(&tfid) {
-                    self.problems.push(Problem::DuplicateFragment {
-                        target: fragment.path.node.clone(),
-                        src: self.project.source(fid),
-                        at: fragment.path.span.into(),
-                        first: first.into(),
-                    });
-                    continue;
-                }
-                fragmented.insert(tfid, fragment.path.span);
-                self.merge_fragment(
-                    fragment,
-                    (tfid, &roots_by_file[tfid.0]),
-                    (fid, &scope),
-                    &mut merges,
-                );
+                graph.targets[fi].push(tfid);
+                let fate = match fragmented.get(&tfid) {
+                    Some(&first) => FragmentFate::Repeats(first),
+                    None => {
+                        fragmented.insert(tfid, fragment.path.span);
+                        FragmentFate::Merges(self.merge_fragment(
+                            fragment,
+                            &roots_by_file[tfid.0],
+                            &scope,
+                            &mut merges,
+                        ))
+                    }
+                };
+                lines.push((
+                    fid,
+                    FragmentLine {
+                        fragment,
+                        target: tfid,
+                        fate,
+                    },
+                ));
             }
+            graph.merges_in_scope[fi] = !merges.is_empty();
             merges.sort_by_key(|&(at, ..)| at);
             for (_, into, extra) in merges {
                 self.groups.link(into, extra);
@@ -130,58 +141,96 @@ impl<'a> Resolver<'a> {
             scopes.insert(fid, scope);
             connector_type_scopes.insert(fid, connector_type_scope);
         }
+        for (file, line) in lines {
+            self.report_fragment_line(file, line, &graph);
+        }
         (scopes, connector_type_scopes)
     }
 
     /// Record in `merges` (at the line's start) a merge of each top-level
-    /// `extend` of file `target` (whose top-level definitions are
-    /// `target_roots`) into the component of its name in `scope`: the scope
-    /// of `file`, whose `fragment` names `target`. No name enters the
-    /// scope. A line naming its own file, or one that merges nothing,
-    /// naming a file with no view and no `fragment` of its own (whose lines
-    /// are judged in that file), is reported unused, with the reason.
+    /// `extend` among `target_roots` (the top-level definitions of the file
+    /// `fragment` names) into the component of its name in `scope` (the
+    /// scope of the file the line is written in), and return what merged.
+    /// No name enters the scope.
     fn merge_fragment(
-        &mut self,
+        &self,
         fragment: &ast::Fragment,
-        (target, target_roots): (FileId, &[DefId]),
-        (file, scope): (FileId, &ComponentScope),
+        target_roots: &[DefId],
+        scope: &ComponentScope,
         merges: &mut Vec<(usize, DefId, DefId)>,
-    ) {
-        let mut merged = false;
-        let mut not_in_scope: Vec<String> = Vec::new();
+    ) -> FragmentMerge {
+        let mut merge = FragmentMerge::default();
         for &id in target_roots {
             if self.defs[id].kind != ast::DefKind::Extend {
                 continue;
             }
             let name = self.defs[id].name;
-            match scope.get(name) {
-                // A file that names itself finds its own `extend` here.
+            let unmerged = match scope.get(name) {
                 Some(&into) if into != id => {
                     merges.push((fragment.span.start, into, id));
-                    merged = true;
+                    merge.merged = true;
+                    continue;
                 }
-                Some(_) => {}
-                None if !not_in_scope.iter().any(|n| n == name) => {
-                    not_in_scope.push(name.to_string());
-                }
-                None => {}
+                // The scope entry is this very `extend`: the line names its
+                // own file, or a `use` of this file imported it.
+                Some(_) => &mut merge.imported,
+                None => &mut merge.not_in_scope,
+            };
+            if !unmerged.iter().any(|n| n == name) {
+                unmerged.push(name.to_string());
             }
         }
+        merge
+    }
+
+    /// Report `line`, written in `file`, if it repeats an earlier line of
+    /// the file (`duplicate_fragment`) or adds nothing (`unused_fragment`,
+    /// with the reason).
+    fn report_fragment_line(
+        &mut self,
+        file: FileId,
+        FragmentLine {
+            fragment,
+            target,
+            fate,
+        }: FragmentLine<'a>,
+        graph: &FragmentGraph<'a>,
+    ) {
+        let src = self.project.source(file);
+        let at = fragment.path.span.into();
+        let merge = match fate {
+            FragmentFate::Repeats(first) => {
+                self.problems.push(Problem::DuplicateFragment {
+                    target: fragment.path.node.clone(),
+                    src,
+                    at,
+                    first: first.into(),
+                });
+                return;
+            }
+            FragmentFate::Merges(merge) => merge,
+        };
         let target_ast = &self.project.file(target).ast;
         let reason = if target == file {
             UnusedFragmentReason::ItsOwnFile
-        } else if merged || target_ast.has_views() || !target_ast.fragments.is_empty() {
+        } else if merge.merged || graph.contributes(target, file) {
             return;
-        } else if not_in_scope.is_empty() {
-            UnusedFragmentReason::Empty
+        } else if target == self.project.root {
+            UnusedFragmentReason::TheEntryFile
+        } else if !merge.not_in_scope.is_empty() {
+            UnusedFragmentReason::NotInScope(merge.not_in_scope)
+        } else if !merge.imported.is_empty() {
+            UnusedFragmentReason::Imported(merge.imported)
+        } else if !target_ast.fragments.is_empty() {
+            UnusedFragmentReason::ItsFragmentsAddNothing
         } else {
-            UnusedFragmentReason::NotInScope(not_in_scope)
+            UnusedFragmentReason::Empty
         };
         self.problems.push(Problem::UnusedFragment {
             target: fragment.path.node.clone(),
             reason,
-            src: self.project.source(file),
-            at: fragment.path.span.into(),
+            src,
+            at,
         });
     }
 
@@ -266,11 +315,86 @@ impl<'a> Resolver<'a> {
     }
 }
 
+/// A `fragment` line, as resolved in the file it is written in.
+struct FragmentLine<'a> {
+    fragment: &'a ast::Fragment,
+    /// The file the line names.
+    target: FileId,
+    fate: FragmentFate,
+}
+
+/// What became of a `fragment` line.
+enum FragmentFate {
+    /// It names the file an earlier line of the same file names, whose
+    /// path is at this span.
+    Repeats(Span),
+    /// It is the first line of its file to name its target, and merged
+    /// this.
+    Merges(FragmentMerge),
+}
+
+/// What a `fragment` line made of its target's top-level `extend`s.
+#[derive(Default)]
+struct FragmentMerge {
+    /// Whether it merged at least one.
+    merged: bool,
+    /// The components extended there that are not in the naming file's
+    /// scope, in the target's order.
+    not_in_scope: Vec<String>,
+    /// The components extended there whose scope entry in the naming file
+    /// is that same `extend`, in the target's order.
+    imported: Vec<String>,
+}
+
+/// The files the `fragment` lines name, and the files that contribute to
+/// the design on their own, for judging whether a line adds anything.
+struct FragmentGraph<'a> {
+    project: &'a Project,
+    /// By file: the files its `fragment` lines name.
+    targets: Vec<Vec<FileId>>,
+    /// By file: whether its scope made a merge (from a `use` collision or
+    /// a `fragment` line).
+    merges_in_scope: Vec<bool>,
+}
+
+impl<'a> FragmentGraph<'a> {
+    fn new(project: &'a Project) -> Self {
+        Self {
+            project,
+            targets: vec![Vec::new(); project.files.len()],
+            merges_in_scope: vec![false; project.files.len()],
+        }
+    }
+
+    /// Whether `target`, named by a `fragment` line of `from`, contributes
+    /// something: a view, a merge its own scope makes, or a `fragment` line
+    /// naming a file that contributes. The files already loaded on the way
+    /// (the entry file, `from`, and those followed to get here) contribute
+    /// nothing again, so a cycle adds nothing of itself.
+    fn contributes(&self, target: FileId, from: FileId) -> bool {
+        let mut seen: HashSet<FileId> = HashSet::from([self.project.root, from]);
+        let mut todo = vec![target];
+        while let Some(file) = todo.pop() {
+            if !seen.insert(file) {
+                continue;
+            }
+            if self.merges_in_scope[file.0] || self.project.file(file).ast.has_views() {
+                return true;
+            }
+            todo.extend(&self.targets[file.0]);
+        }
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use miette::Diagnostic;
 
     use crate::dsl::ast;
+    use crate::dsl::diagnostics::Problem;
     use crate::dsl::resolve::testkit::{LEAF, codes, has, problems, with_resolved};
 
     #[test]
@@ -366,9 +490,7 @@ mod tests {
                     .problems
                     .iter()
                     .filter_map(|p| match p {
-                        crate::dsl::diagnostics::Problem::DuplicatePort { src, .. } => {
-                            Some(src.name().to_string())
-                        }
+                        Problem::DuplicatePort { src, .. } => Some(src.name().to_string()),
                         _ => None,
                     })
                     .collect();
@@ -408,19 +530,30 @@ mod tests {
     }
 
     /// The help of the one `unused_fragment` among `problems`.
-    fn unused_fragment_help(problems: &[crate::dsl::diagnostics::Problem]) -> String {
-        let [unused] = problems
-            .iter()
-            .filter(|p| {
-                p.code()
-                    .is_some_and(|c| c.to_string() == "wirebug::unused_fragment")
-            })
-            .collect::<Vec<_>>()[..]
-        else {
+    fn unused_fragment_help(problems: &[Problem]) -> String {
+        let [(_, help)] = &unused_fragment_helps(problems)[..] else {
             panic!("expected one unused_fragment: {:?}", codes(problems));
         };
-        assert!(!unused.is_error(), "a warning");
-        unused.help().expect("a help").to_string()
+        help.clone()
+    }
+
+    /// Each `unused_fragment` among `problems`: the name of the file its
+    /// line is written in, and its help.
+    fn unused_fragment_helps(problems: &[Problem]) -> Vec<(String, String)> {
+        problems
+            .iter()
+            .filter_map(|p| match p {
+                Problem::UnusedFragment { src, .. } => {
+                    assert!(!p.is_error(), "a warning");
+                    let file = Path::new(src.name()).file_name().expect("a file name");
+                    Some((
+                        file.to_string_lossy().into_owned(),
+                        p.help().expect("a help").to_string(),
+                    ))
+                }
+                _ => None,
+            })
+            .collect()
     }
 
     #[test]
@@ -440,6 +573,7 @@ mod tests {
     fn fragment_whose_extends_have_no_component_in_scope_names_them() {
         // `vehicle` and `trailer` are extended, but neither is in the
         // aggregating file's scope: merging does not pass through main.wb.
+        // So all.wb adds nothing, and main.wb's line is reported too.
         let p = problems(&[
             (
                 "main.wb",
@@ -452,8 +586,17 @@ mod tests {
             ),
         ]);
         assert_eq!(
-            unused_fragment_help(&p),
-            "`a.wb` extends `vehicle` and `trailer`, which are not in scope here, and a `fragment` merges an `extend` only into a component in scope where the line is written: `use` them in this file, or write the line in a file that has them in scope, such as the one that defines them"
+            unused_fragment_helps(&p),
+            [
+                (
+                    "main.wb".to_string(),
+                    "`all.wb` has no view and no `extend`, and its own `fragment` lines add nothing either: each names a file already loaded on the way here, or one that adds nothing through it; remove the line".to_string()
+                ),
+                (
+                    "all.wb".to_string(),
+                    "`a.wb` extends `vehicle` and `trailer`, which are not in scope here, and a `fragment` merges an `extend` only into a component in scope where the line is written: `use` them in this file, or write the line in a file that has them in scope, such as the one that defines them".to_string()
+                ),
+            ]
         );
     }
 
@@ -541,17 +684,115 @@ mod tests {
 
     #[test]
     fn fragment_cycle_loads_each_file_once() {
+        // main.wb's line merges a.wb's `extend`; a.wb's line back names the
+        // entry file, loaded anyway, and merges nothing of it.
+        with_resolved(
+            &[
+                (
+                    "main.wb",
+                    "fragment \"a.wb\";\ncomponent m { }\nview schematic \"M\" { }\n",
+                ),
+                (
+                    "a.wb",
+                    "fragment \"main.wb\";\nextend m { pub port x \"X\"; }\n",
+                ),
+            ],
+            |r| {
+                assert_eq!(r.fragments(r.root.expect("root")).len(), 2);
+                assert_eq!(
+                    unused_fragment_helps(&r.problems),
+                    [(
+                        "a.wb".to_string(),
+                        "`main.wb` is the project's entry file, which is loaded whatever names it, and the line merges none of its `extend`s; remove the line".to_string()
+                    )]
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn fragments_that_only_name_each_other_are_both_reported() {
         let p = problems(&[
             (
                 "main.wb",
-                "fragment \"a.wb\";\ncomponent m { }\nview schematic \"M\" { }\n",
+                "fragment \"systems/all.wb\";\ncomponent m { }\nview schematic \"M\" { }\n",
             ),
-            (
-                "a.wb",
-                "fragment \"main.wb\";\nextend m { pub port x \"X\"; }\n",
-            ),
+            ("systems/all.wb", "fragment \"../main.wb\";\n"),
         ]);
-        assert!(p.is_empty(), "{:?}", codes(&p));
+        assert_eq!(
+            unused_fragment_helps(&p),
+            [
+                (
+                    "main.wb".to_string(),
+                    "`systems/all.wb` has no view and no `extend`, and its own `fragment` lines add nothing either: each names a file already loaded on the way here, or one that adds nothing through it; remove the line".to_string()
+                ),
+                (
+                    "all.wb".to_string(),
+                    "`../main.wb` is the project's entry file, which is loaded whatever names it, and the line merges none of its `extend`s; remove the line".to_string()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_file_reached_again_through_a_cycle_contributes_nothing() {
+        // b.wb's only line leads back to a.wb, which main.wb already loads:
+        // a.wb's line to b.wb adds nothing. b.wb's line names a file of
+        // views, which is enough.
+        let p = problems(&[
+            ("main.wb", "fragment \"a.wb\";\ncomponent m { }\n"),
+            ("a.wb", "fragment \"b.wb\";\nview schematic \"A\" { }\n"),
+            ("b.wb", "fragment \"a.wb\";\n"),
+        ]);
+        let helps = unused_fragment_helps(&p);
+        let files: Vec<&str> = helps.iter().map(|(file, _)| file.as_str()).collect();
+        assert_eq!(files, ["a.wb"], "{helps:?}");
+    }
+
+    #[test]
+    fn fragment_of_an_extend_this_file_imports_says_so() {
+        // all.wb's `use` imports the very `extend` its `fragment` names, and
+        // no component of the name: there is nothing to merge it into.
+        let p = problems(&[
+            ("main.wb", "fragment \"systems/all.wb\";\ncomponent m { }\n"),
+            (
+                "systems/all.wb",
+                "use Vehicle from \"a.wb\";\nfragment \"a.wb\";\n",
+            ),
+            ("systems/a.wb", "extend Vehicle { pub port x \"X\"; }\n"),
+        ]);
+        assert!(has(&p, "wirebug::orphan_fragment"), "{:?}", codes(&p));
+        let helps = unused_fragment_helps(&p);
+        let help = helps
+            .iter()
+            .find(|(file, _)| file == "all.wb")
+            .map(|(_, help)| help.as_str());
+        assert_eq!(
+            help,
+            Some(
+                "`a.wb` extends `Vehicle`, but the `Vehicle` in scope here is that same `extend`, imported with `use`, so there is no component to merge it into; import the component itself, from the file that defines it"
+            ),
+            "{helps:?}"
+        );
+    }
+
+    #[test]
+    fn fragment_of_a_file_whose_use_merges_is_used() {
+        // all.wb merges a.wb's `extend` through the older `use` spelling.
+        with_resolved(
+            &[
+                ("main.wb", "fragment \"all.wb\";\ncomponent vehicle { }\n"),
+                (
+                    "all.wb",
+                    "use vehicle from \"main.wb\";\nuse vehicle from \"a.wb\";\n",
+                ),
+                ("a.wb", "extend vehicle { pub port x \"X\"; }\n"),
+            ],
+            |r| {
+                assert!(r.problems.is_empty(), "problems: {:?}", codes(&r.problems));
+                assert_eq!(r.fragments(r.root.expect("root")).len(), 2);
+            },
+        );
     }
 
     #[test]
