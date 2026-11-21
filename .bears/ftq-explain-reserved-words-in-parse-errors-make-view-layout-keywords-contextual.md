@@ -1,14 +1,15 @@
 ---
 id: ftq
 title: Explain reserved words in parse errors; make view/layout keywords contextual
-status: open
+status: done
 priority: P2
 created: "2026-11-20T21:40:31.982579187Z"
-updated: "2026-11-20T21:40:31.982579187Z"
+updated: "2026-11-21T00:15:24.136889235Z"
 tags:
   - dsl
   - parse
 parent: kss
+attempts: 1
 ---
 
 ## Summary
