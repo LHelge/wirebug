@@ -1668,12 +1668,18 @@ language config (declarative highlighting, no server needed) and a thin
 index and a table of every statement), `syntax.md`, `projects.md`,
 `components.md`, `connectors.md`, `wires-and-cables.md` and `views.md`.
 The agent skill, `.claude/skills/wirebug-dsl/SKILL.md`, is a separate,
-self-contained reference (it ships to other repositories, so it never
-links to `docs/`). `tests/docs.rs` holds both to the parser: every fenced
+self-contained reference written to be compact in an agent's context (at
+most 20 000 bytes, a test says; it ships to other repositories, so it never names `docs/`,
+`examples/`, `tests/fixtures` or `cargo run`). Neither is generated from
+the other; `tests/docs.rs` holds both to the parser: every fenced
 block must carry an info string, and every `wb` block must parse —
 ` ```wb ` as a whole file, ` ```wb component ` wrapped in a component
 body, ` ```wb view ` in a schematic view's body — except one tagged
-`error`, which must fail to. Neither is in `Cargo.toml`'s `include`: the
+`error`, which must fail to. It also holds both to the lexer: each lists
+the keywords as paragraphs of nothing but backticked words, one paragraph
+per kind (reserved, contextual), and those lists must name exactly
+`Token::keywords()`, each word once and in a paragraph of its own kind.
+Neither is in `Cargo.toml`'s `include`: the
 published crate needs neither, and the root files there are anchored
 (`/README.md`), since a bare `README.md` matches at any depth and would
 ship `docs/README.md` too.

@@ -113,6 +113,12 @@ pub(super) static KEYWORDS: [(&str, Token); 32] = [
 ];
 
 impl Token {
+    /// The surface text of every keyword, in the lexer's order: the words
+    /// the language reference and the agent skill must list.
+    pub fn keywords() -> impl Iterator<Item = &'static str> {
+        KEYWORDS.iter().map(|(word, _)| *word)
+    }
+
     /// Map an identifier-shaped slice to its keyword token, if any.
     pub(super) fn keyword(text: &str) -> Option<Token> {
         KEYWORDS
@@ -166,8 +172,9 @@ impl Token {
         )
     }
 
-    /// A reserved keyword: never a name. See [`is_contextual`](Self::is_contextual).
-    pub(crate) fn is_reserved(&self) -> bool {
+    /// A reserved keyword: never a name. Every keyword the grammar does not
+    /// list as contextual is reserved.
+    pub fn is_reserved(&self) -> bool {
         self.keyword_text().is_some() && !self.is_contextual()
     }
 
