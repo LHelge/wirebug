@@ -12,8 +12,16 @@ use wirebug::check_project;
 use wirebug::render::{RenderedView, SvgMode, embed_stylesheet, render_views};
 
 fn views(mode: SvgMode) -> Vec<RenderedView> {
-    let main =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/off_view_project/main.wb");
+    views_of("off_view_project", mode)
+}
+
+/// Every view of fixture `project`, which must check clean: with all its
+/// references drawn, not one layout problem.
+fn views_of(project: &str, mode: SvgMode) -> Vec<RenderedView> {
+    let main = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(project)
+        .join("main.wb");
     let report = check_project(Some(&main));
     assert!(
         report.problems.is_empty(),
@@ -36,7 +44,7 @@ fn view(views: &[RenderedView], title: &str) -> String {
 }
 
 /// One off-view reference as drawn: the port it stands beside
-/// (`instance.port`), its text and its tooltip.
+/// (`instance.port`), its text (empty for a stub alone) and its tooltip.
 #[derive(Debug, PartialEq)]
 struct Reference {
     port: String,
@@ -68,12 +76,13 @@ fn references(svg: &str) -> Vec<Reference> {
                 .and_then(|t| t.strip_suffix("</title>"))
                 .expect("a tooltip")
                 .to_string();
-            assert!(lines[i + 2].starts_with("<text class=\"off-view-label\""));
-            Reference {
-                port,
-                text: lines[i + 3].to_string(),
-                title,
-            }
+            // A stub with no room for text has its tooltip alone.
+            let text = if lines[i + 2].starts_with("<text class=\"off-view-label\"") {
+                lines[i + 3].to_string()
+            } else {
+                String::new()
+            };
+            Reference { port, text, title }
         })
         .collect()
 }
@@ -152,4 +161,58 @@ fn embed_output_carries_the_references_and_the_starter_styles_them() {
     let views = views(SvgMode::Embed);
     assert_eq!(references(&view(&views, "Partial")), expected());
     assert!(embed_stylesheet().contains(".wirebug-schematic .off-view-label {"));
+}
+
+/// `off_view_limits_project`: references where room runs out.
+fn limits() -> Vec<RenderedView> {
+    views_of("off_view_limits_project", SvgMode::Standalone)
+}
+
+#[test]
+fn a_reference_never_takes_a_view_past_the_canvas_limit() {
+    // The view is nearly as wide as a canvas may be: the reference gives
+    // way to its arrow alone, which the margin holds, and `check` (in
+    // `views_of`) stays clean, as it was before references were drawn.
+    let views = limits();
+    let near = views
+        .iter()
+        .find(|v| v.title == "Near the canvas limit")
+        .expect("the view");
+    assert!(near.canvas.width() <= 8192.0, "{}", near.canvas.width());
+    assert_eq!(
+        references(&near.svg),
+        [reference("right.out", "→", "far.some_long_port_name")]
+    );
+}
+
+#[test]
+fn a_view_crowded_with_references_has_no_layout_problem() {
+    // Sixteen ports with an undrawn wire among eight crossing wires:
+    // `check` reports nothing, and every reference that is drawn gives way
+    // rather than cover a wire, so none reads as more than its far end.
+    let views = limits();
+    let crossed = view(&views, "Crossed");
+    let drawn = references(&crossed);
+    assert!(!drawn.is_empty());
+    for reference in &drawn {
+        assert!(
+            reference.text.is_empty()
+                || ["→", "←"].contains(&reference.text.as_str())
+                || reference.text.contains(&reference.title),
+            "{reference:?}"
+        );
+    }
+}
+
+#[test]
+fn an_own_port_off_the_enclosure_keeps_its_mark_past_the_outline() {
+    let views = limits();
+    assert_eq!(
+        references(&view(&views, "Enclosed")),
+        [reference(
+            "dev.q",
+            "→ feed (leaves Vehicle)",
+            "feed (leaves Vehicle)"
+        )]
+    );
 }

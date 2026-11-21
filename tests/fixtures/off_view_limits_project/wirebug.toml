@@ -1,0 +1,5 @@
+[project]
+name = "off-view-limits-project"
+version = "0.1.0"
+description = "Off-view references where room runs out: next to the canvas limit, among crossed wires, past an enclosure"
+revision = "fixture"

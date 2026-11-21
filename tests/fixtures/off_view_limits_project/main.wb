@@ -1,0 +1,115 @@
+// Off-view references where room runs out. Each view checks clean, and
+// stays clean with every reference drawn: a reference gives way (a
+// shorter text, its stub alone, or nothing) rather than move a wire or
+// grow the view past the canvas limit.
+
+component Vehicle {
+    left:  Module;
+    right: Module;
+    far:   Module;
+    a:     Bank;
+    b:     Bank;
+    gone:  Sink;
+    dev:   Device;
+
+    pub port feed "FEED";
+
+    // Next to the canvas limit: `right.out` goes to a port the view leaves
+    // out, and the view is already nearly as wide as a canvas may be.
+    wire red 1.0 [left.sig, right.sig];
+    wire red 1.0 [right.out, far.some_long_port_name];
+
+    // Crossed wires between two banks, every port also wired to `gone`.
+    wire red 0.5 [a.p0, b.p7];
+    wire black 0.5 [a.p0, gone.p0];
+    wire blue 0.5 [b.p0, gone.q0];
+    wire red 0.5 [a.p1, b.p6];
+    wire black 0.5 [a.p1, gone.p1];
+    wire blue 0.5 [b.p1, gone.q1];
+    wire red 0.5 [a.p2, b.p5];
+    wire black 0.5 [a.p2, gone.p2];
+    wire blue 0.5 [b.p2, gone.q2];
+    wire red 0.5 [a.p3, b.p4];
+    wire black 0.5 [a.p3, gone.p3];
+    wire blue 0.5 [b.p3, gone.q3];
+    wire red 0.5 [a.p4, b.p3];
+    wire black 0.5 [a.p4, gone.p4];
+    wire blue 0.5 [b.p4, gone.q4];
+    wire red 0.5 [a.p5, b.p2];
+    wire black 0.5 [a.p5, gone.p5];
+    wire blue 0.5 [b.p5, gone.q5];
+    wire red 0.5 [a.p6, b.p1];
+    wire black 0.5 [a.p6, gone.p6];
+    wire blue 0.5 [b.p6, gone.q6];
+    wire red 0.5 [a.p7, b.p0];
+    wire black 0.5 [a.p7, gone.p7];
+    wire blue 0.5 [b.p7, gone.q7];
+
+    // An own port the enclosed view does not place on its enclosure.
+    wire green 0.5 [dev.q, feed];
+
+    component Module {
+        pub port sig "SIG";
+        pub port out "OUT";
+        pub port some_long_port_name "LONG";
+    }
+    component Bank {
+        pub port p0 "P0";
+        pub port p1 "P1";
+        pub port p2 "P2";
+        pub port p3 "P3";
+        pub port p4 "P4";
+        pub port p5 "P5";
+        pub port p6 "P6";
+        pub port p7 "P7";
+    }
+    component Sink {
+        pub port p0 "P0";
+        pub port q0 "Q0";
+        pub port p1 "P1";
+        pub port q1 "Q1";
+        pub port p2 "P2";
+        pub port q2 "Q2";
+        pub port p3 "P3";
+        pub port q3 "Q3";
+        pub port p4 "P4";
+        pub port q4 "Q4";
+        pub port p5 "P5";
+        pub port q5 "Q5";
+        pub port p6 "P6";
+        pub port q6 "Q6";
+        pub port p7 "P7";
+        pub port q7 "Q7";
+    }
+    component Device {
+        pub port q "Q";
+    }
+}
+
+view schematic "Near the canvas limit" {
+    grid: 20;
+    include left at (0, 0) ports {
+        east: sig;
+    }
+    include right at (396, 0) ports {
+        west: sig;
+        east: out;
+    }
+}
+
+view schematic "Crossed" {
+    include a at (0, 0) ports {
+        east: p0, p1, p2, p3, p4, p5, p6, p7;
+    }
+    include b at (20, 0) ports {
+        west: p0, p1, p2, p3, p4, p5, p6, p7;
+    }
+}
+
+view schematic "Enclosed" {
+    enclosure {
+    }
+    include dev at (0, 0) ports {
+        east: q;
+    }
+}
