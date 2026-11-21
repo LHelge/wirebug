@@ -302,6 +302,47 @@ mod tests {
         assert_ne!(unknown.range.start, unknown.range.end, "non-empty span");
     }
 
+    /// Every broken statement of a buffer gets its own squiggle at once,
+    /// with none for what the skipped statements leave missing (the wire
+    /// to `p`, whose port is the first broken line).
+    #[test]
+    fn each_broken_statement_is_its_own_diagnostic() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        manifest(dir.path());
+        write(
+            dir.path(),
+            "lamp.wb",
+            "component Lamp { pub port a \"A\"; pub port b \"B\"; }\n",
+        );
+        let main = write(
+            dir.path(),
+            "main.wb",
+            "use Lamp from \"lamp.wb\";\ncomponent Root { l: Lamp; }\n",
+        );
+
+        let mut overlay = Overlay::default();
+        overlay.insert(
+            &main,
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n    pub port p \"P\" pin;\n    wire red [p, l.a];\n    wire red 1 [p, l.a];\n}\nview schematic \"S\" {\n    include l at (0 0);\n}\n"
+                .to_string(),
+        );
+        let (by_uri, _) = check_open_documents([main.clone()].iter(), &overlay);
+        let main_uri = uri::to_uri(&main.canonicalize().unwrap()).unwrap();
+        let lines: Vec<(String, u32)> = by_uri
+            .get(&main_uri)
+            .expect("diagnostics on main.wb")
+            .iter()
+            .map(|d| {
+                let Some(NumberOrString::String(code)) = &d.code else {
+                    panic!("diagnostic without a code: {d:?}");
+                };
+                (code.clone(), d.range.start.line)
+            })
+            .collect();
+        let parse = || "wirebug::parse".to_string();
+        assert_eq!(lines, [(parse(), 3), (parse(), 4), (parse(), 8)]);
+    }
+
     /// The overlay drives the check: an error introduced only in the
     /// buffer must surface without touching the disk.
     #[test]
