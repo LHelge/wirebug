@@ -15,9 +15,9 @@ include = [
     "assets/fonts/**",
     "Cargo.toml",
     "Cargo.lock",
-    "README.md",
-    "LICENSE-MIT",
-    "LICENSE-APACHE",
+    "/README.md",
+    "/LICENSE-MIT",
+    "/LICENSE-APACHE",
 ]
 
 [dependencies]
