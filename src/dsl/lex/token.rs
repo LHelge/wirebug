@@ -65,75 +65,109 @@ pub enum Token {
     Number(String),
 }
 
+/// Every keyword with its surface text: the lexer's lookup table and the
+/// keywords' [`Display`](fmt::Display) form, so the two cannot drift.
+pub(super) static KEYWORDS: [(&str, Token); 28] = [
+    ("use", Token::Use),
+    ("from", Token::From),
+    ("component", Token::Component),
+    ("extend", Token::Extend),
+    ("connector_type", Token::ConnectorType),
+    ("connector", Token::Connector),
+    ("inline", Token::Inline),
+    ("port", Token::Port),
+    ("pub", Token::Pub),
+    ("pin", Token::Pin),
+    ("pins", Token::Pins),
+    ("wire", Token::Wire),
+    ("cable", Token::Cable),
+    ("twisted", Token::Twisted),
+    ("view", Token::View),
+    ("include", Token::Include),
+    ("text", Token::Text),
+    ("at", Token::At),
+    ("grid", Token::Grid),
+    ("face", Token::Face),
+    ("cavity", Token::Cavity),
+    ("layout", Token::Layout),
+    ("rows", Token::Rows),
+    ("cols", Token::Cols),
+    ("numbering", Token::Numbering),
+    ("size", Token::Size),
+    ("ports", Token::Ports),
+    ("enclosure", Token::Enclosure),
+];
+
 impl Token {
     /// Map an identifier-shaped slice to its keyword token, if any.
     pub(super) fn keyword(text: &str) -> Option<Token> {
-        Some(match text {
-            "use" => Token::Use,
-            "from" => Token::From,
-            "component" => Token::Component,
-            "extend" => Token::Extend,
-            "connector_type" => Token::ConnectorType,
-            "connector" => Token::Connector,
-            "inline" => Token::Inline,
-            "port" => Token::Port,
-            "pub" => Token::Pub,
-            "pin" => Token::Pin,
-            "pins" => Token::Pins,
-            "wire" => Token::Wire,
-            "cable" => Token::Cable,
-            "twisted" => Token::Twisted,
-            "view" => Token::View,
-            "include" => Token::Include,
-            "text" => Token::Text,
-            "at" => Token::At,
-            "grid" => Token::Grid,
-            "face" => Token::Face,
-            "cavity" => Token::Cavity,
-            "layout" => Token::Layout,
-            "rows" => Token::Rows,
-            "cols" => Token::Cols,
-            "numbering" => Token::Numbering,
-            "size" => Token::Size,
-            "ports" => Token::Ports,
-            "enclosure" => Token::Enclosure,
-            _ => return None,
-        })
+        KEYWORDS
+            .iter()
+            .find(|(word, _)| *word == text)
+            .map(|(_, token)| token.clone())
+    }
+
+    /// The surface text of a keyword token; `None` for punctuation and
+    /// leaves.
+    fn keyword_text(&self) -> Option<&'static str> {
+        KEYWORDS
+            .iter()
+            .find(|(_, token)| token == self)
+            .map(|(word, _)| *word)
+    }
+
+    /// A contextual keyword: one that means something only inside a view,
+    /// a `connector_type` layout, a cavity line, or after `use <Name>`.
+    /// Where the grammar expects a name, it is an ordinary name
+    /// (`pub port size "SIZE";`), so the word stays free for users.
+    ///
+    /// Every other keyword is reserved: the words that declare the design
+    /// itself (components, ports and pins, connectors, wires, cables,
+    /// views, imports). A new keyword is reserved until it is listed here.
+    pub(crate) fn is_contextual(&self) -> bool {
+        matches!(
+            self,
+            Token::From
+                | Token::Include
+                | Token::Text
+                | Token::At
+                | Token::Grid
+                | Token::Face
+                | Token::Cavity
+                | Token::Layout
+                | Token::Rows
+                | Token::Cols
+                | Token::Numbering
+                | Token::Size
+                | Token::Ports
+                | Token::Enclosure
+        )
+    }
+
+    /// A reserved keyword: never a name. See [`is_contextual`](Self::is_contextual).
+    pub(crate) fn is_reserved(&self) -> bool {
+        self.keyword_text().is_some() && !self.is_contextual()
+    }
+
+    /// The name this token spells where the grammar expects one: an
+    /// identifier's text, or a contextual keyword's. `None` for a reserved
+    /// keyword, punctuation, strings and numbers.
+    pub(crate) fn as_name(&self) -> Option<&str> {
+        match self {
+            Token::Ident(name) => Some(name.as_str()),
+            token if token.is_contextual() => token.keyword_text(),
+            _ => None,
+        }
     }
 }
 
 /// Surface form, for diagnostics ("expected `port`", "unexpected `[`").
 impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(word) = self.keyword_text() {
+            return f.write_str(word);
+        }
         let s = match self {
-            Token::Use => "use",
-            Token::From => "from",
-            Token::Component => "component",
-            Token::Extend => "extend",
-            Token::ConnectorType => "connector_type",
-            Token::Connector => "connector",
-            Token::Inline => "inline",
-            Token::Port => "port",
-            Token::Pub => "pub",
-            Token::Pin => "pin",
-            Token::Pins => "pins",
-            Token::Wire => "wire",
-            Token::Cable => "cable",
-            Token::Twisted => "twisted",
-            Token::View => "view",
-            Token::Include => "include",
-            Token::Text => "text",
-            Token::At => "at",
-            Token::Grid => "grid",
-            Token::Face => "face",
-            Token::Cavity => "cavity",
-            Token::Layout => "layout",
-            Token::Rows => "rows",
-            Token::Cols => "cols",
-            Token::Numbering => "numbering",
-            Token::Size => "size",
-            Token::Ports => "ports",
-            Token::Enclosure => "enclosure",
             Token::LBrace => "{",
             Token::RBrace => "}",
             Token::LBracket => "[",
@@ -148,6 +182,9 @@ impl fmt::Display for Token {
             Token::Ident(name) => name,
             Token::Str(s) => return write!(f, "{s:?}"),
             Token::Number(n) => n,
+            // Only a keyword left out of `KEYWORDS` lands here, and that
+            // keyword would not lex either.
+            unlisted => return write!(f, "{unlisted:?}"),
         };
         f.write_str(s)
     }

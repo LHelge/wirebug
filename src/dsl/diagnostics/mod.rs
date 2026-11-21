@@ -33,6 +33,24 @@ pub enum Problem {
         at: SourceSpan,
     },
 
+    /// A reserved keyword written where a name belongs
+    /// (`pub port wire "W";`). Contextual keywords (`size`, `grid`, …) are
+    /// ordinary names there; reserved ones never are.
+    #[error("'{word}' is a reserved word")]
+    #[diagnostic(
+        code(wirebug::reserved_word),
+        help(
+            "`{word}` declares part of the design, so it cannot also be a name; rename it, for example `{word}_1`"
+        )
+    )]
+    ReservedWord {
+        word: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("reserved word used as a name")]
+        at: SourceSpan,
+    },
+
     /// A `use` referenced a file that couldn't be found.
     #[error("cannot find imported file `{target}`")]
     #[diagnostic(

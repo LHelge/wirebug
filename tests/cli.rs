@@ -987,3 +987,86 @@ fn render_stops_at_check_instead_of_failing_on_an_uninstantiated_subject() {
         .stderr(predicate::str::contains("has no instance in the design").not());
     assert!(!out.exists(), "nothing is written");
 }
+
+/// Ports, instances, a connector and a cable named with contextual keywords
+/// (`at`, `from`, `size`, `grid`, `layout`, `text`, `ports`).
+const CONTEXTUAL_NAMES_ROOT: &str = "tests/fixtures/contextual_names_project";
+
+#[test]
+fn check_accepts_contextual_keywords_as_names() {
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--strict", CONTEXTUAL_NAMES_ROOT])
+        .assert()
+        .success();
+}
+
+#[test]
+fn render_draws_a_project_named_with_contextual_keywords() {
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("out");
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args([
+            "render",
+            CONTEXTUAL_NAMES_ROOT,
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    let overview = std::fs::read_to_string(out.join("overview.svg")).expect("overview.svg");
+    assert!(overview.contains("FROM"), "port label drawn");
+    assert!(
+        overview.contains("Two sensors on one loom"),
+        "text box drawn"
+    );
+    assert!(out.join("loom.svg").exists(), "harness view drawn");
+}
+
+/// A port named with the reserved word `wire`.
+const RESERVED_WORD_ROOT: &str = "tests/fixtures/reserved_word_project";
+
+#[test]
+fn check_says_a_reserved_word_cannot_be_a_name() {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--format", "json", RESERVED_WORD_ROOT])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+    let main =
+        std::fs::read_to_string(format!("{RESERVED_WORD_ROOT}/main.wb")).expect("fixture main.wb");
+    let [problem] = problems.as_slice() else {
+        panic!("expected one problem, got {problems:?}");
+    };
+    assert_eq!(problem["code"], "wirebug::reserved_word");
+    assert_eq!(problem["severity"], "error");
+    assert_eq!(problem["message"], "'wire' is a reserved word");
+    assert!(
+        problem["help"]
+            .as_str()
+            .is_some_and(|help| help.contains("rename it")),
+        "{problem}"
+    );
+    let span = &problem["labels"][0]["span"];
+    let offset = span["offset"].as_u64().expect("offset") as usize;
+    let length = span["length"].as_u64().expect("length") as usize;
+    assert_eq!(&main[offset..offset + length], "wire");
+}
+
+#[test]
+fn check_text_output_explains_the_reserved_word() {
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", RESERVED_WORD_ROOT])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("'wire' is a reserved word"))
+        .stderr(predicate::str::contains("help:"));
+}

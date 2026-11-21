@@ -244,6 +244,67 @@ mod tests {
     }
 
     #[test]
+    fn every_keyword_displays_as_the_text_it_lexes_from() {
+        for (word, token) in &token::KEYWORDS {
+            assert_eq!(&Token::keyword(word).as_ref(), &Some(token));
+            assert_eq!(token.to_string(), *word);
+        }
+    }
+
+    #[test]
+    fn view_and_layout_words_are_contextual_names() {
+        for word in [
+            "from",
+            "include",
+            "text",
+            "at",
+            "grid",
+            "face",
+            "cavity",
+            "layout",
+            "rows",
+            "cols",
+            "numbering",
+            "size",
+            "ports",
+            "enclosure",
+        ] {
+            let token = Token::keyword(word).expect("a keyword");
+            assert!(token.is_contextual() && !token.is_reserved(), "{word}");
+            assert_eq!(token.as_name(), Some(word));
+        }
+    }
+
+    #[test]
+    fn declaring_words_are_reserved_and_never_names() {
+        for word in [
+            "use",
+            "component",
+            "extend",
+            "connector_type",
+            "connector",
+            "inline",
+            "port",
+            "pub",
+            "pin",
+            "pins",
+            "wire",
+            "cable",
+            "twisted",
+            "view",
+        ] {
+            let token = Token::keyword(word).expect("a keyword");
+            assert!(token.is_reserved() && !token.is_contextual(), "{word}");
+            assert_eq!(token.as_name(), None, "{word}");
+        }
+        // Only keywords are reserved; an identifier is its own name.
+        let ident = Token::Ident("lamp".into());
+        assert!(!ident.is_reserved());
+        assert_eq!(ident.as_name(), Some("lamp"));
+        assert!(!Token::Semicolon.is_reserved());
+    }
+
+    #[test]
     fn pins_list_lexes() {
         assert_eq!(
             tokens("pins [2, 3, 4]"),
