@@ -204,39 +204,17 @@ struct HousingItem<'d> {
 }
 
 impl<'d> HousingItem<'d> {
-    /// The housings `table` stands for: its connector's, or its inline
-    /// half's. An inline connector is a mated pair, so a table of one that
-    /// declares one half or none stands for the undeclared halves too, as
-    /// housings of no type described by the inline's label.
-    fn of(table: &PinTable<'d>) -> Vec<Self> {
-        let item = |housing, half| Self {
-            housing,
+    /// The housing `table` is of: its connector's, or its inline half's,
+    /// declared or not ([`PinTable::housing`]).
+    fn of(table: &PinTable<'d>) -> Self {
+        Self {
+            housing: table.housing(),
             placement: HousingPlacement {
                 instance: table.instance,
                 connector: table.connector,
-                half,
+                half: table.half,
             },
-        };
-        let Some(inline) = &table.instance.inline else {
-            return vec![item(table.housing(), None)];
-        };
-        let undeclared = Housing {
-            type_name: None,
-            description: table.instance.label.as_deref(),
-            properties: &table.connector.properties,
-        };
-        [Half::Male, Half::Female]
-            .into_iter()
-            .filter_map(|half| match (table.half, inline.half(half)) {
-                (Some(own), _) if own == half => Some(item(table.housing(), Some(half))),
-                // A declared half has a table of its own.
-                (_, Some(_)) => None,
-                // An undeclared half, listed once: with the table of the
-                // other half, or with the one table of an inline that
-                // declares none.
-                (_, None) => Some(item(undeclared, Some(half))),
-            })
-            .collect()
+        }
     }
 
     fn key(&self) -> HousingKey<'d> {
@@ -257,7 +235,7 @@ impl<'d> HousingLine<'d> {
         let groups: Groups<_, _, _> = tables
             .tables()
             .iter()
-            .flat_map(HousingItem::of)
+            .map(HousingItem::of)
             .map(|item| {
                 let line = Self {
                     part: item.housing.part(),
@@ -1068,8 +1046,8 @@ component Pod {
                 ),
             ]
         );
-        // The pin tables keep one table per declared half.
-        assert_eq!(PinTables::from(&design).tables().len(), 5);
+        // Each housing is one pin table: the BOM and the pin tables agree.
+        assert_eq!(PinTables::from(&design).tables().len(), 7);
     }
 
     #[test]

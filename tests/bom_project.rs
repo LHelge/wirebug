@@ -13,7 +13,7 @@ use std::path::Path;
 
 use wirebug::check_project;
 use wirebug::dsl::ir::{Design, Length, LengthUnit};
-use wirebug::export::{Bom, Copper, Line, LineKind};
+use wirebug::export::{Bom, Copper, Line, LineKind, PinTables};
 
 fn design() -> Design {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/bom_project");
@@ -163,4 +163,50 @@ fn a_wire_line_says_how_many_conductors_continue_at_a_connectorless_boundary() {
     ]
     .map(|(name, count)| (name.to_string(), count));
     assert_eq!(boundary, expect);
+}
+
+#[test]
+fn the_pin_tables_and_the_bill_of_materials_count_the_same_housings() {
+    let design = design();
+    let tables = PinTables::from(&design);
+    let mut table_paths: Vec<String> = tables
+        .tables()
+        .iter()
+        .map(|t| match t.half {
+            Some(half) => format!("{}.{}", t.instance.path, half.as_str()),
+            None => format!("{}.{}", t.instance.path, t.connector.name),
+        })
+        .collect();
+    let bom = Bom::from(&design);
+    let mut housing_paths: Vec<String> = bom
+        .lines()
+        .iter()
+        .filter_map(|line| match line {
+            Line::Housing(l) => Some(l.housings.iter().map(ToString::to_string)),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    table_paths.sort();
+    housing_paths.sort();
+    assert_eq!(table_paths, housing_paths);
+    // Each inline is two tables, whatever it declares.
+    for inline in ["ic", "ic_stub", "ic_spare"] {
+        let halves: Vec<(&str, bool)> = tables
+            .tables()
+            .iter()
+            .filter(|t| t.instance.path.to_string() == format!("Vehicle.{inline}"))
+            .filter_map(|t| Some((t.half?.as_str(), t.is_declared())))
+            .collect();
+        let declared = match inline {
+            "ic" => [true, true],
+            "ic_stub" => [true, false],
+            _ => [false, false],
+        };
+        assert_eq!(
+            halves,
+            [("male", declared[0]), ("female", declared[1])],
+            "{inline}"
+        );
+    }
 }

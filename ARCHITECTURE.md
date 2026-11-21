@@ -596,8 +596,10 @@ is `export::records` (below), and the IR is not a wire format.
   `export::PinTable` per connector of each instance (the root's and every
   placement's, so a type placed twice has its tables twice; a
   connectorless port has none), in IR then connector order; an inline
-  connector has one table per half it declares (`PinTable.half`, male
-  first; one table with `None` when it declares none). A table's
+  connector is a mated pair, so it has a table for each of its two halves
+  (`PinTable.half`, male first), whether it declares that half or not
+  (`PinTable::is_declared`: an undeclared half has no layout, so its
+  cavities are the inline's pins). A table's
   `export::Cavity` rows are sorted by `ir::Pin`'s `Ord` (numeric; pins are
   whole numbers in the DSL), one per pin a port is bound to plus one per
   cavity of the connector's `layout` (an inline half's own layout) that no
@@ -610,7 +612,8 @@ is `export::records` (below), and the IR is not a wire format.
   `PinTable::housing()` is what the table's housing is bought as, an
   `export::Housing` (connector type, description, `part()`): an inline
   half's connector type, whose metadata is not on the synthetic
-  connector, else the connector's own. A
+  connector (for an undeclared half, a housing of no type described by
+  the inline's label), else the connector's own. A
   ganged port (`pins [2, 3]`) is entered in each of its cavities, marked
   by `Cavity::is_ganged` and `Cavity::ganged_with` (the other pins), since
   the model does not say which cavity takes which conductor. A cavity's
@@ -626,12 +629,16 @@ is `export::records` (below), and the IR is not a wire format.
   Each entry carries an `export::HalfFit`. The IR does not record which
   half of an inline connector a conductor is crimped into; the harness
   views say it, by `ir::HarnessScope`, the scoping rule the harness
-  renderer draws by: an end on an inline that declares both halves goes
-  to the half the harness views of its owner's component draw it into
-  (`Assigned`) when they draw it into exactly one; when none draws it, or
-  views draw it into each half, it is listed under both halves as
-  `Undetermined`, never guessed or dropped. A drain is placed the same
-  way (`HarnessScope::draws_drain`). Elsewhere an entry is `Assigned`.
+  renderer draws by: an end on an inline goes to the half the harness
+  views of its owner's component draw it into (`Assigned`, and absent
+  from the other half's table) when they draw it into exactly one; when
+  none draws it, or views draw it into each half, it is listed under both
+  halves as `Undetermined`, never guessed or dropped. The rule is the
+  same whatever the inline declares: a view can include only a declared
+  half, so an undeclared half is never assigned anything, and a conductor
+  no view draws into the declared half is undetermined, not assumed to be
+  in it. A drain is placed the same way (`HarnessScope::draws_drain`).
+  Elsewhere an entry is `Assigned`.
 - **Bill of materials (`export::Bom`, `From<&Design>`)** — what is
   bought: one `export::Line` per thing to buy, a closed enum whose
   variant is its kind (`Line::kind()`, an `export::LineKind`, whose order
@@ -641,12 +648,10 @@ is `export::records` (below), and the IR is not a wire format.
   counts six). Lines within a kind are grouped by an `IndexMap` key (a
   private `Groups` collector), so they come in order of first use and no
   hash order reaches the output. `HousingLine` reads `PinTables`, one
-  housing per table (`PinTable::housing()`, so each declared half of an
-  inline is one) — except that an inline connector is always two
-  housings: a half it does not declare (the pin tables have no table of
-  it) is added beside the table of the other half, or both beside the one
-  table of an inline declaring none, as an `export::Housing` of no type
-  described by the inline's label. Housings are keyed by part, else
+  housing per table (`PinTable::housing()`), so an inline connector is
+  always two housings, as it is two tables: a half it does not declare is
+  an `export::Housing` of no type described by the inline's label.
+  Housings are keyed by part, else
   connector type, else description (a connector block naming no type),
   else nothing (one line). `CableLine` reads every
   instance's `cables`, keyed by `CableMeta.type`; its `length()` sums the
