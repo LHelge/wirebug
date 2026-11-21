@@ -193,8 +193,11 @@ pub struct EmbedManifest<'a> {
 /// a sibling of the manifest.
 #[derive(Debug, Serialize)]
 pub struct EmbedExports {
+    /// The wire list's JSON (`wires.json`).
     pub wires: String,
+    /// The connector pin tables' JSON (`connectors.json`).
     pub connectors: String,
+    /// The bill of materials' JSON (`bom.json`).
     pub bom: String,
 }
 
