@@ -562,8 +562,10 @@ a renderer names the classes of a wire's three layers (`WireLayers` —
 `wire-casing`/`wire`/`wire-tracer` in a schematic,
 `cable-wire-casing`/`cable-wire`/`cable-wire-tracer` in a harness), and
 `WireLayers::stroke(&color)` gives a `WireStroke` whose `casing`, `core`
-and `tracer` dress a bare shape (polyline or path) as that layer, and
-whose `layers` yields all three in draw order. The core carries its base
+and `tracer` dress a bare shape (polyline or path) as that layer (the
+renderer orders them: a wire drawn in pieces, a schematic net or a
+harness strand, lays every casing before its cores, so no casing overdraws
+a core at a join). The core carries its base
 color as a `stroke` presentation attribute and the authored color as
 `data-color` (`green/yellow`, synonyms normalised); the tracer carries the
 tracer color the same way; the casing carries only its class. Widths, the
