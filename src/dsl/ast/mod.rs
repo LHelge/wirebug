@@ -64,6 +64,16 @@ impl File {
     pub fn has_views(&self) -> bool {
         self.items.iter().any(|item| matches!(item, Item::View(_)))
     }
+
+    /// Whether a `fragment` of this file can add something to the file that
+    /// names it: the file holds a top-level `extend` or a view.
+    pub fn is_fragment_target(&self) -> bool {
+        self.has_views()
+            || self
+                .items
+                .iter()
+                .any(|item| matches!(item, Item::Definition(def) if def.kind == DefKind::Extend))
+    }
 }
 
 /// `use <name> from "<path>"` — brings one top-level definition into scope.
