@@ -598,6 +598,9 @@ impl CompletionIndex {
                         _ => self.instances(subject),
                     }
                 }
+                // `text "<label>" ‸`: the position follows the label. The
+                // deprecated named form is not offered.
+                [.., Token::Text, Token::Str(_)] => keywords(&["at"]),
                 _ if cursor.at_statement_start() => {
                     keywords(&["grid", "include", "text", "enclosure"])
                 }
@@ -1410,6 +1413,28 @@ mod tests {
         );
         after_for.sort();
         assert_eq!(after_for, ["Lamp", "Root"]);
+    }
+
+    #[test]
+    fn view_body_offers_text_and_a_text_label_offers_at() {
+        let body = complete_in(
+            &[LAMP, MAIN],
+            "component Root { }\nview schematic \"V\" {\n    ‸",
+        );
+        assert!(body.contains(&"text".to_string()), "{body:?}");
+
+        let after_label = complete_in(
+            &[LAMP, MAIN],
+            "component Root { }\nview schematic \"V\" {\n    text \"120 Ω\" ‸",
+        );
+        assert_eq!(after_label, ["at"]);
+
+        // A text box's own name is no keyword's cue: nothing to offer.
+        let after_name = complete_in(
+            &[LAMP, MAIN],
+            "component Root { }\nview schematic \"V\" {\n    text note ‸",
+        );
+        assert!(after_name.is_empty(), "{after_name:?}");
     }
 
     #[test]
