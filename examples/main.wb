@@ -6,22 +6,25 @@
 // carries a physical harness bundle and its harness views. Every
 // fragment merges into the flat namespace rooted here, so wires and
 // views freely reference instances declared in other fragments. This
-// file keeps only the root component and the whole-vehicle overview.
+// file keeps only the root component and the whole-vehicle overview, and
+// pulls each fragment in with `fragment`, which loads the file without
+// importing a name.
 
-use Vehicle from "systems/traction.wb";
-use Vehicle from "systems/safety.wb";
-use Vehicle from "systems/lv.wb";
-use Vehicle from "systems/can.wb";
-use Vehicle from "systems/cooling.wb";
-use Vehicle from "systems/lighting.wb";
-use Vehicle from "looms/tunnel.wb";
-use Vehicle from "looms/engine_bay.wb";
-use Vehicle from "looms/ac_charge.wb";
-use Vehicle from "looms/pedal_branch.wb";
-use Vehicle from "looms/brake_branch.wb";
-use Vehicle from "looms/key_branch.wb";
-use Vehicle from "looms/gear_branch.wb";
-use Vcm     from "components/lv/vcm.wb";
+fragment "systems/traction.wb";
+fragment "systems/safety.wb";
+fragment "systems/lv.wb";
+fragment "systems/can.wb";
+fragment "systems/cooling.wb";
+fragment "systems/lighting.wb";
+fragment "looms/tunnel.wb";
+fragment "looms/engine_bay.wb";
+fragment "looms/ac_charge.wb";
+fragment "looms/pedal_branch.wb";
+fragment "looms/brake_branch.wb";
+fragment "looms/key_branch.wb";
+fragment "looms/gear_branch.wb";
+
+use Vcm from "components/lv/vcm.wb";
 
 component Vehicle {
     // The VCM is the one device every system touches; it lives at the root.
