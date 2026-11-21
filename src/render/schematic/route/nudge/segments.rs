@@ -6,7 +6,7 @@
 //! §6.2. A segment is *shared* with another route exactly where they
 //! cover a common edge.
 
-use std::collections::HashMap;
+use indexmap::IndexMap;
 
 use super::super::RawRoute;
 use super::super::visibility::Ovg;
@@ -82,9 +82,12 @@ pub(super) fn segmentize(ovg: &Ovg, raw: &RawRoute) -> Vec<Segment> {
     segments
 }
 
-/// Map each OVG edge used by two or more routes to the routes that use it.
-pub(super) fn shared_edges(routes: &[Vec<usize>]) -> HashMap<Edge, Vec<usize>> {
-    let mut map: HashMap<Edge, Vec<usize>> = HashMap::new();
+/// Map each OVG edge used by two or more routes to the routes that use it,
+/// in the order the routes first reach each edge. That order becomes the
+/// channel order and so the order of the nudging constraints, which
+/// settles how the solver breaks ties.
+pub(super) fn shared_edges(routes: &[Vec<usize>]) -> IndexMap<Edge, Vec<usize>> {
+    let mut map: IndexMap<Edge, Vec<usize>> = IndexMap::new();
     for (rid, nodes) in routes.iter().enumerate() {
         for w in nodes.windows(2) {
             let users = map.entry(canon(w[0], w[1])).or_default();
