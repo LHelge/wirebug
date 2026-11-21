@@ -13,10 +13,11 @@ component Vcm {
     }
 
     // CAN2 — vehicle bus to the BMS pair and the charger. VCM terminates
-    // this end of the bus (120 Ω).
+    // this end of the bus (120 Ω), and grounds the cable screen here.
     connector can2 "CAN 4p" {
-        pub port can2_h "CAN2 H" pin 1;
-        pub port can2_l "CAN2 L" pin 2;
+        pub port can2_h      "CAN2 H"    pin 1;
+        pub port can2_l      "CAN2 L"    pin 2;
+        pub port can2_shield "CAN2 SHLD" pin 3;
     }
 
     connector lv "12V 2p" {

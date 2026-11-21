@@ -31,6 +31,7 @@ component Inverter {
         pub port res_sin_pos "SIN+" pin 20;
         pub port res_cos_pos "COS+" pin 21;
         pub port res_ex_neg  "EX-" pin 27;
+        pub port res_shield  "RES SHLD" pin 26;
         pub port motor_temp_neg "TEMP-" pin 44;
         pub port motor_temp_pos "TEMP+" pin 45;
 
