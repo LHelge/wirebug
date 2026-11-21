@@ -1,12 +1,13 @@
 ---
 id: k7r.z4
 title: Explicit view subject (`for <Component>`)
-status: open
+status: done
 priority: P2
 created: "2026-11-20T21:40:31.995770278Z"
-updated: "2026-11-20T21:40:31.995770278Z"
+updated: "2026-11-21T02:18:58.931655786Z"
 tags:
   - dsl
+attempts: 1
 ---
 
 ## Summary
