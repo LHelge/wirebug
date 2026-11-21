@@ -63,6 +63,21 @@ impl<'d> PinTables<'d> {
     pub fn tables(&self) -> &[PinTable<'d>] {
         &self.tables
     }
+
+    /// The table of `instance`'s connector `connector`: `None` when the
+    /// instance has no connector of that name, and for an inline
+    /// connector, whose tables are its halves'.
+    pub(crate) fn of(
+        &self,
+        instance: &Instance,
+        connector: &ConnectorName,
+    ) -> Option<&PinTable<'d>> {
+        self.tables.iter().find(|table| {
+            table.half.is_none()
+                && table.instance.path == instance.path
+                && &table.connector.name == connector
+        })
+    }
 }
 
 impl<'a, 'd> IntoIterator for &'a PinTables<'d> {
@@ -737,6 +752,22 @@ component Loom {
             let pwr = cavity(table(&tables, &format!("{loom}.lamp"), "x1", None), 1);
             assert_eq!(fars(pwr), [format!("boundary:{loom}.out")]);
         }
+    }
+
+    #[test]
+    fn a_table_is_found_by_its_instance_and_connector_but_never_as_an_inline_half() {
+        let design = design(&format!(
+            "{USES}{INLINE}component Car {{ front: Loom; rear: Loom;\n\
+               inline ic \"Branch\" {{ male: M2; port sig \"SIG\" pin 1; }} }}\n"
+        ));
+        let tables = PinTables::from(&design);
+        let instance = |dotted: &str| design.get(&path(dotted)).expect("an instance");
+        let x9 = ConnectorName::from("x9");
+        let rear = tables.of(instance("Car.rear"), &x9).expect("a table");
+        assert_eq!(rear.instance.path, path("Car.rear"));
+        assert_eq!(rear.connector.name, x9);
+        assert!(tables.of(instance("Car.rear"), &"x1".into()).is_none());
+        assert!(tables.of(instance("Car.ic"), &"ic".into()).is_none());
     }
 
     #[test]
