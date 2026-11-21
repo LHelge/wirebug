@@ -120,7 +120,7 @@ impl SchematicRenderer {
         let router = Router::build(&placement, grid.step());
         let connections = placement.connections();
         let wires = route(&router, &connections, grid)?;
-        let codes = draw::code_anchors(&wires);
+        let codes = code_anchors(&placement, &connections, &wires);
         let references = off_views(design, view, &placement, &connections, &wires, &codes, grid);
 
         let mut doc = Document::new().set("xmlns", "http://www.w3.org/2000/svg");
@@ -303,7 +303,7 @@ impl SchematicRenderer {
         // wire routes is drawn at all.
         let canvas = if crowded.is_empty() && unroutable.is_empty() {
             route(&router, &connections, grid).ok().map(|wires| {
-                let codes = draw::code_anchors(&wires);
+                let codes = code_anchors(&placement, &connections, &wires);
                 let references =
                     off_views(design, view, &placement, &connections, &wires, &codes, grid);
                 let vb = viewbox(
@@ -344,6 +344,29 @@ fn route(
         let [from, to] = connections[unrouted.pair].ends();
         ViewErrorKind::RouteFailed { from, to }
     })
+}
+
+/// Where the codes of `placement`'s routed `wires` (one per connection)
+/// sit: [`draw::code_anchors`], kept off the pin annotations, and a code
+/// moved off one kept off the titles and text boxes too.
+fn code_anchors(
+    placement: &Placement,
+    connections: &[Connection<'_>],
+    wires: &[Vec<Point>],
+) -> Vec<Option<draw::CodeAnchor>> {
+    let colors: Vec<_> = connections.iter().map(|c| c.color).collect();
+    let annotations: Vec<_> = placement
+        .ports()
+        .filter_map(PlacedPort::pin_bound)
+        .collect();
+    let texts: Vec<_> = placement
+        .components
+        .values()
+        .chain(placement.enclosure())
+        .map(layout::PlacedComponent::title_bound)
+        .chain(placement.texts.iter().map(layout::PlacedText::bounds))
+        .collect();
+    draw::code_anchors(wires, &colors, &annotations, &texts)
 }
 
 /// The off-view references of `view`, fitted round its routed `wires` and

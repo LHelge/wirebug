@@ -384,10 +384,25 @@ impl CodeAnchor {
 /// crossings (the halo would visually cut the crossed wire) and each other
 /// (parallel wires in a channel would stack their codes); placed anchors
 /// become obstacles for the rest, in source order.
-pub(super) fn code_anchors(wires: &[Vec<Point>]) -> Vec<Option<CodeAnchor>> {
+///
+/// Then each code that would lie on a pin annotation (`annotations`, as
+/// the shared estimator bounds them) moves, in wire order, to the clear
+/// place on its wire nearest where it was: the whole code on one run of
+/// the wire, off every annotation and every other text in `texts`
+/// (titles, text boxes), and as clear of crossings and of the other codes
+/// as above. A code already clear of every annotation keeps its place;
+/// one with no clear place on its wire (a short wire between two
+/// annotated ports) keeps its place too. `colors` are the wires' colors,
+/// whose codes set each code's length.
+pub(super) fn code_anchors(
+    wires: &[Vec<Point>],
+    colors: &[&WireColor],
+    annotations: &[Bounds],
+    texts: &[Bounds],
+) -> Vec<Option<CodeAnchor>> {
     let crossings = wire_crossings(wires);
     let mut placed: Vec<Point> = Vec::new();
-    wires
+    let mut anchors: Vec<Option<CodeAnchor>> = wires
         .iter()
         .zip(&crossings)
         .map(|(polyline, crossings)| {
@@ -400,7 +415,113 @@ pub(super) fn code_anchors(wires: &[Vec<Point>]) -> Vec<Option<CodeAnchor>> {
             placed.extend(anchor.as_ref().map(|a| a.at));
             anchor
         })
-        .collect()
+        .collect();
+    let on_annotation = |anchor: &CodeAnchor, color: &WireColor| {
+        annotations.iter().any(|a| anchor.extent(color).overlaps(a))
+    };
+    for i in 0..anchors.len() {
+        let Some(anchor) = &anchors[i] else {
+            continue;
+        };
+        if !on_annotation(anchor, colors[i]) {
+            continue;
+        }
+        let obstacles: Vec<CodeObstacle> = crossings[i]
+            .iter()
+            .map(|&p| CodeObstacle::crossing(p))
+            .chain(
+                anchors
+                    .iter()
+                    .enumerate()
+                    .filter(|&(j, _)| j != i)
+                    .filter_map(|(_, other)| Some(CodeObstacle::code(other.as_ref()?.at))),
+            )
+            .collect();
+        let moved = CodeAnchor::nearest_clear(
+            &wires[i],
+            anchor.at,
+            &obstacles,
+            |candidate| {
+                let extent = candidate.extent(colors[i]);
+                !on_annotation(candidate, colors[i]) && !texts.iter().any(|t| extent.overlaps(t))
+            },
+            colors[i],
+        );
+        if let Some(moved) = moved {
+            anchors[i] = Some(moved);
+        }
+    }
+    anchors
+}
+
+impl CodeAnchor {
+    /// The place on `path` nearest `from` (by distance along the path,
+    /// the one nearer its start on a tie) where a code of `color` lies
+    /// whole on one run, outside every obstacle's blocked span, and
+    /// `clear` holds; tried at every whole unit along each run. `None`
+    /// when there is no such place.
+    fn nearest_clear(
+        path: &[Point],
+        from: Point,
+        obstacles: &[CodeObstacle],
+        clear: impl Fn(&CodeAnchor) -> bool,
+        color: &WireColor,
+    ) -> Option<CodeAnchor> {
+        let half = CODE_FONT.width(&color.code()) / 2.0;
+        // Where `from` lies along the path.
+        let mut walked = 0.0;
+        let mut origin = None;
+        for w in path.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            let len = (b.x - a.x).abs() + (b.y - a.y).abs();
+            let on_run = (from.x - a.x).abs()
+                + (from.y - a.y).abs()
+                + (b.x - from.x).abs()
+                + (b.y - from.y).abs()
+                - len;
+            if origin.is_none() && on_run.abs() < 1e-9 {
+                origin = Some(walked + (from.x - a.x).abs() + (from.y - a.y).abs());
+            }
+            walked += len;
+        }
+        let origin = origin?;
+        let mut best: Option<(f64, f64, CodeAnchor)> = None;
+        let mut walked = 0.0;
+        for w in path.windows(2) {
+            let (a, b) = (w[0], w[1]);
+            let len = (b.x - a.x).abs() + (b.y - a.y).abs();
+            let vertical = (b.x - a.x).abs() < (b.y - a.y).abs();
+            let blocked: Vec<(f64, f64)> = obstacles
+                .iter()
+                .filter_map(|o| o.blocked_span(a, b, len, vertical))
+                .collect();
+            let steps = len.floor() as usize;
+            for k in 0..=steps {
+                let s = k as f64;
+                if s < half || s > len - half || blocked.iter().any(|&(s0, s1)| s > s0 && s < s1) {
+                    continue;
+                }
+                let t = s / len;
+                let candidate = CodeAnchor {
+                    at: Point::new(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t),
+                    vertical,
+                };
+                if !clear(&candidate) {
+                    continue;
+                }
+                let along = walked + s;
+                let distance = (along - origin).abs();
+                if best
+                    .as_ref()
+                    .is_none_or(|&(d, at, _)| distance < d || (distance == d && along < at))
+                {
+                    best = Some((distance, along, candidate));
+                }
+            }
+            walked += len;
+        }
+        best.map(|(_, _, anchor)| anchor)
+    }
 }
 
 /// The anchor for a wire's color code: the midpoint of the longest
@@ -586,6 +707,60 @@ mod tests {
         let anchor = wire_code_anchor(&path, &[]).expect("anchor");
         assert!(anchor.vertical);
         assert_eq!((anchor.at.x, anchor.at.y), (0.0, 40.0));
+    }
+
+    fn area(x0: f64, y0: f64, x1: f64, y1: f64) -> Bounds {
+        Bounds {
+            origin: p(x0, y0),
+            width: x1 - x0,
+            height: y1 - y0,
+        }
+    }
+
+    #[test]
+    fn a_code_on_a_pin_annotation_moves_to_the_nearest_clear_place() {
+        let red = WireColor::from("red");
+        let wire = vec![p(0.0, 0.0), p(100.0, 0.0)];
+        // An annotation just above the middle of the wire, where the code
+        // would sit.
+        let pin = area(40.0, -10.0, 60.0, -3.0);
+        let anchors = code_anchors(&[wire], &[&red], &[pin], &[]);
+        let moved = anchors[0].as_ref().expect("a code");
+        assert!(!moved.extent(&red).overlaps(&pin), "{:?}", moved.at);
+        // Nearest the middle, on the side nearer the wire's start.
+        let half = CODE_FONT.width("RD") / 2.0;
+        assert_eq!(moved.at.y, 0.0);
+        assert!(
+            moved.at.x < 50.0 && moved.at.x >= 40.0 - half - 1.0,
+            "{:?}",
+            moved.at
+        );
+    }
+
+    #[test]
+    fn a_code_clear_of_every_annotation_keeps_its_place() {
+        let red = WireColor::from("red");
+        let wire = vec![p(0.0, 0.0), p(100.0, 0.0)];
+        let far = area(0.0, -30.0, 100.0, -20.0);
+        let anchors = code_anchors(&[wire], &[&red], &[far], &[]);
+        assert_eq!(anchors[0].as_ref().map(|a| a.at), Some(p(50.0, 0.0)));
+    }
+
+    #[test]
+    fn a_code_with_no_clear_place_on_its_wire_keeps_its_place() {
+        let red = WireColor::from("red");
+        let wire = vec![p(0.0, 0.0), p(0.0, 60.0)];
+        // A short vertical wire between two annotated ports: their turned
+        // texts run beside it over its whole length.
+        let left = area(-13.0, 0.0, -3.0, 60.0);
+        let right = area(3.0, 0.0, 13.0, 60.0);
+        let anchors = code_anchors(std::slice::from_ref(&wire), &[&red], &[left, right], &[]);
+        assert_eq!(anchors[0].as_ref().map(|a| a.at), Some(p(0.0, 30.0)));
+        // Nor does a code move onto another text, a title, to get off one.
+        let pin = area(-10.0, 20.0, -3.0, 40.0);
+        let title = area(-20.0, 0.0, 20.0, 60.0);
+        let anchors = code_anchors(&[wire], &[&red], &[pin], &[title]);
+        assert_eq!(anchors[0].as_ref().map(|a| a.at), Some(p(0.0, 30.0)));
     }
 
     #[test]
