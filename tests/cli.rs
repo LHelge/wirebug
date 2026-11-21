@@ -791,9 +791,11 @@ fn check_warns_on_conductors_no_harness_view_draws() {
         })
         .collect();
 
-    // The rail's undrawn segment and the cable conductor in the other file,
-    // each on its own wire; the drawn segment, the drawn loose wire and the
-    // wire of `Dash` (no harness view) are not reported.
+    // The rail's undrawn segment, the conductor from the splice to a
+    // connector no view includes, and the cable conductor in the other
+    // file, each on its own wire; the drawn segment, the drawn loose wire,
+    // the drawn conductor to the splice and the wire of `Dash` (no harness
+    // view) are not reported.
     assert_eq!(
         found,
         vec![
@@ -803,6 +805,13 @@ fn check_warns_on_conductors_no_harness_view_draws() {
                 "main.wb",
                 "wire from `lamp.gnd` to `horn.gnd` is in no harness view of `Car`",
                 vec!["wire black 1 [ecu.gnd, lamp.gnd, horn.gnd];"]
+            ),
+            (
+                "wirebug::undrawn_conductor",
+                "warning",
+                "main.wb",
+                "wire \"AUX\" from `sp` to `horn.aux` is in no harness view of `Car`",
+                vec!["wire white 0.5 \"AUX\" [sp, horn.aux];"]
             ),
             (
                 "wirebug::undrawn_conductor",

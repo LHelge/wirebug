@@ -4,10 +4,12 @@
 use svg::node::element::{Circle, Group, Line, Path, Rectangle, Text};
 
 use super::bezier::{FLEX, flex};
-use super::layout::{CableBox, ConnectorNode, DrainRow, LooseWire, braid_partners};
+use super::layout::{
+    CableBox, ConnectorNode, DrainRow, LooseWire, SpliceNode, SpliceText, braid_partners,
+};
 use super::{
     BADGE_INSET, BADGE_SIZE, HEADER_HEIGHT, LABEL_CHAR_WIDTH, NODE_PAD, PIN_COL_WIDTH,
-    PIN_DOT_RADIUS, ROW_HEIGHT, SHIELD_INSET, TWIST_PITCH,
+    PIN_DOT_RADIUS, ROW_HEIGHT, SHIELD_INSET, SPLICE_DOT_RADIUS, TWIST_PITCH,
 };
 use crate::dsl::ir::WireColor;
 use crate::render::geometry::{Point, Side};
@@ -156,6 +158,34 @@ pub(super) fn render_node(node: &ConnectorNode) -> Group {
         );
     }
 
+    group
+}
+
+/// A splice as a joint: a solid dot where its conductors meet, haloed so
+/// each conductor's end reads against it, with the splice's name (bold),
+/// label and part centred beneath — no table and no outline, so it never
+/// reads as a connector.
+pub(super) fn render_splice(splice: &SpliceNode) -> Group {
+    let mut group = Group::new().set("class", "splice").add(
+        Circle::new()
+            .set("class", "splice-dot")
+            .set("cx", splice.centre.x)
+            .set("cy", splice.centre.y)
+            .set("r", SPLICE_DOT_RADIUS),
+    );
+    for (i, line) in splice.lines.iter().enumerate() {
+        let class = match line.kind {
+            SpliceText::Name => "splice-name",
+            SpliceText::Label => "splice-label",
+            SpliceText::Part => "splice-part",
+        };
+        group = group.add(
+            Text::new(line.text.clone())
+                .set("class", class)
+                .set("x", splice.centre.x)
+                .set("y", splice.line_y(i)),
+        );
+    }
     group
 }
 

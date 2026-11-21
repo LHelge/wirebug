@@ -15,8 +15,8 @@ use indexmap::IndexMap;
 
 use crate::dsl::diagnostics::Problem;
 use crate::dsl::ir::{
-    ConnectorName, Design, Half, InlineMeta, Instance, InstanceName, PortName, TypeName, View,
-    ViewKind, Wire, WireEnd,
+    ConnectorName, Design, Half, InlineMeta, Instance, InstanceName, PortName, SpliceName,
+    TypeName, View, ViewKind, Wire, WireEnd,
 };
 use crate::dsl::project::Project;
 use crate::render::geometry::Bounds;
@@ -65,17 +65,18 @@ pub(super) struct Segment {
 }
 
 /// A conductor a harness view of its component can draw: a segment between
-/// connectors of two different children of the subject.
+/// connectors of two different children of the subject, or a wire with an
+/// end on one of the subject's splices.
 pub(super) struct Conductor<'d> {
     pub(super) segment: Segment,
     pub(super) wire: &'d Wire,
     /// The segment's two endpoints, in wire order.
     pub(super) ends: [&'d WireEnd; 2],
-    /// How a harness view can include each end's connector.
+    /// How a harness view can include each end's connector or splice.
     pub(super) targets: [EndTarget<'d>; 2],
 }
 
-/// How a harness view can include the connector at one end of a conductor.
+/// How a harness view can include what one end of a conductor lands on.
 pub(super) enum EndTarget<'d> {
     /// An include that draws it.
     Include(IncludeTarget<'d>),
@@ -84,8 +85,9 @@ pub(super) enum EndTarget<'d> {
     HalflessInline(&'d InstanceName),
 }
 
-/// A harness include target that resolves: `inst.connector`, or an inline
-/// connector through one of the halves it declares.
+/// A harness include target that resolves: `inst.connector`, an inline
+/// connector through one of the halves it declares, or a splice by its
+/// name.
 pub(super) enum IncludeTarget<'d> {
     Connector {
         instance: &'d InstanceName,
@@ -95,6 +97,7 @@ pub(super) enum IncludeTarget<'d> {
         instance: &'d InstanceName,
         halves: DeclaredHalves,
     },
+    Splice(&'d SpliceName),
 }
 
 /// The housing halves an inline connector declares, when it declares any.
@@ -117,8 +120,9 @@ impl DeclaredHalves {
     }
 }
 
-/// Backticked, as the help names it: `` `a.j` ``, `` `ic.male` ``, or
-/// `` `ic.male` (or `ic.female`) `` when either half draws it.
+/// Backticked, as the help names it: `` `a.j` ``, `` `ic.male` ``,
+/// `` `ic.male` (or `ic.female`) `` when either half draws it, or a
+/// splice's `` `sp` ``.
 impl fmt::Display for IncludeTarget<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (instance, halves) = match self {
@@ -126,6 +130,7 @@ impl fmt::Display for IncludeTarget<'_> {
                 instance,
                 connector,
             } => return write!(f, "`{instance}.{connector}`"),
+            Self::Splice(splice) => return write!(f, "`{splice}`"),
             Self::Inline { instance, halves } => (instance, halves),
         };
         let half = |h: Half| format!("`{instance}.{}`", h.as_str());
@@ -201,10 +206,17 @@ impl Conductor<'_> {
     /// connector that declares none (an include of an undeclared half is
     /// itself an error).
     fn advice(&self, component: &TypeName) -> String {
-        const DRAWS: &str =
-            "a harness view draws a conductor only when it includes the connectors at both ends";
+        let spliced = self
+            .targets
+            .iter()
+            .any(|t| matches!(t, EndTarget::Include(IncludeTarget::Splice(_))));
+        let draws = if spliced {
+            "a harness view draws a conductor only when it includes what both its ends land on, connector or splice"
+        } else {
+            "a harness view draws a conductor only when it includes the connectors at both ends"
+        };
         if let [EndTarget::Include(a), EndTarget::Include(b)] = &self.targets {
-            return format!("{DRAWS}; include {a} and {b} in one harness view of `{component}`");
+            return format!("{draws}; include {a} and {b} in one harness view of `{component}`");
         }
         let halfless: Vec<String> = self
             .targets
@@ -216,10 +228,10 @@ impl Conductor<'_> {
             .collect();
         match halfless.as_slice() {
             [one] => format!(
-                "{DRAWS}, and inline connector {one} must declare a `male` or `female` half before a harness view can include it"
+                "{draws}, and inline connector {one} must declare a `male` or `female` half before a harness view can include it"
             ),
             many => format!(
-                "{DRAWS}, and inline connectors {} must each declare a `male` or `female` half before a harness view can include them",
+                "{draws}, and inline connectors {} must each declare a `male` or `female` half before a harness view can include them",
                 many.join(" and ")
             ),
         }
@@ -1072,6 +1084,51 @@ component Sys {
         assert_eq!(
             help,
             "a harness view draws a conductor only when it includes the connectors at both ends, and inline connector `ic` must declare a `male` or `female` half before a harness view can include it"
+        );
+    }
+
+    /// `a` and `b` each run a conductor to splice `sp` in `Sys`, under
+    /// `views`.
+    fn spliced(views: &str) -> String {
+        harnessed(
+            r#"    splice sp "Joint";
+    wire black 1 [a.sig, sp];
+    wire black 1 [sp, b.sig];"#,
+            views,
+        )
+    }
+
+    #[test]
+    fn a_conductor_to_a_splice_is_drawn_when_the_view_includes_both_its_ends() {
+        assert!(summary(&spliced(&harness("AB", &["a.j", "sp", "b.j"]))).is_empty());
+
+        // Without the splice, neither conductor is drawn; the help names
+        // the splice as an include.
+        let src = spliced(&harness("AB", &["a.j", "b.j"]));
+        let (project, design) = load(&src);
+        let problems = layout_problems(&design, &project);
+        let messages: Vec<String> = problems.iter().map(ToString::to_string).collect();
+        assert_eq!(
+            messages,
+            [
+                "wire from `a.sig` to `sp` is in no harness view of `Sys`",
+                "wire from `sp` to `b.sig` is in no harness view of `Sys`"
+            ]
+        );
+        assert_eq!(
+            problems[0].help().map(|h| h.to_string()).as_deref(),
+            Some(
+                "a harness view draws a conductor only when it includes what both its ends land on, connector or splice; include `a.j` and `sp` in one harness view of `Sys`"
+            )
+        );
+    }
+
+    #[test]
+    fn a_splice_overlapping_a_connector_is_reported() {
+        let views = "view harness \"H\" {\n    grid: 20;\n    include a.j at (0, 0);\n    include sp at (1, 0);\n    include b.j at (20, 0);\n}\n";
+        assert_eq!(
+            summary(&spliced(views)),
+            [code("overlapping_includes", &["sp", "a.j"])]
         );
     }
 

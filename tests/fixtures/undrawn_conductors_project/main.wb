@@ -14,6 +14,12 @@ component Car {
     // harness view includes `horn.x1`, so `lamp.gnd`–`horn.gnd` is missed.
     wire black 1 [ecu.gnd, lamp.gnd, horn.gnd];
     wire red 1 "LAMP" [ecu.sig, lamp.sig];
+
+    // A splice the loom includes: the conductor to it from `ecu.x1` is
+    // drawn, the one on to `horn.x1`, which no view includes, is not.
+    splice sp "Joint";
+    wire white 0.5 "AUX" [ecu.aux, sp];
+    wire white 0.5 "AUX" [sp, horn.aux];
 }
 
 view harness "Lamp loom" {
@@ -21,4 +27,5 @@ view harness "Lamp loom" {
 
     include ecu.x1  at (0, 0);
     include lamp.x1 at (20, 0);
+    include sp      at (10, 6);
 }

@@ -10,9 +10,11 @@
 //! and the same chain-decomposition of wires, but keyed on connectors rather
 //! than authored port sides.
 //!
-//! - `layout` places connector nodes, the spine, and the cable boxes.
+//! - `layout` places connector nodes, splices, the spine, and the cable
+//!   boxes.
 //! - `bezier` is the pure cubic-bezier math for the wire flex.
-//! - `draw` emits the SVG for the pin tables, cable boxes, and wires.
+//! - `draw` emits the SVG for the pin tables, splices, cable boxes, and
+//!   wires.
 
 mod bezier;
 mod draw;
@@ -58,6 +60,10 @@ pub(super) const PIN_DOT_RADIUS: f64 = 3.0;
 pub(super) const BADGE_SIZE: f64 = 16.0;
 /// Gap between the badge chip and the header's corner.
 pub(super) const BADGE_INSET: f64 = 4.0;
+/// Radius of a splice's dot, the joint its conductors converge on.
+pub(super) const SPLICE_DOT_RADIUS: f64 = 7.0;
+/// Line height of the name, label and part under a splice's dot.
+pub(super) const SPLICE_LINE_HEIGHT: f64 = 13.0;
 /// Minimum vertical gap between two cable boxes stacked on the spine.
 pub(super) const CABLE_GAP: f64 = 24.0;
 /// Nominal width of one half-twist in a braided (twisted-pair) box run.
@@ -95,6 +101,10 @@ pub(super) const STYLE: &str = "\
 .connector .pair-shield { fill: none; stroke: #666; stroke-width: 1; stroke-dasharray: 3 2; }
 .drain-wire { fill: none; stroke: #777; stroke-width: 1.2; stroke-dasharray: 5 3; }
 .drain-label { font-style: italic; }
+.splice-dot { fill: black; stroke: white; stroke-width: 1.5; }
+.splice-name { font: bold 11px sans-serif; text-anchor: middle; }
+.splice-label { font: 10px sans-serif; text-anchor: middle; fill: #333; }
+.splice-part { font: italic 9px sans-serif; text-anchor: middle; fill: #555; }
 .title { font: bold 14px sans-serif; }
 .stamp { font: 10px sans-serif; fill: #666; text-anchor: end; }\
 ";
@@ -172,10 +182,20 @@ impl HarnessRenderer {
         }
         doc = doc.add(nodes_group);
 
+        // Splice dots over their conductors' converging ends.
+        if !layout.splices.is_empty() {
+            let mut splices_group = Group::new().set("class", "splices");
+            for splice in &layout.splices {
+                splices_group = splices_group.add(draw::render_splice(splice));
+            }
+            doc = doc.add(splices_group);
+        }
+
         Ok(doc.to_string())
     }
 
-    /// Each include's pin-table box, the conductors drawn and the canvas of
+    /// Each include's box (a connector's pin table, a splice's joint), the
+    /// conductors drawn and the canvas of
     /// the standalone SVG, from the same layout [`Self::render`] draws. A
     /// non-positive grid lays out no boxes and no canvas, only the fault;
     /// which conductors a view draws does not depend on its grid, so they
@@ -189,14 +209,19 @@ impl HarnessRenderer {
         let (boxes, canvas) = match fault {
             Some(_) => (Vec::new(), None),
             None => {
-                let boxes = layout
+                let mut boxes: Vec<IncludeBox> = layout
                     .nodes
                     .iter()
                     .map(|node| IncludeBox {
                         include: node.include,
                         bounds: node.bounds(),
                     })
+                    .chain(layout.splices.iter().map(|splice| IncludeBox {
+                        include: splice.include,
+                        bounds: splice.bounds,
+                    }))
                     .collect();
+                boxes.sort_by_key(|b| b.include);
                 let vb = viewbox(design, view, &layout, SvgMode::Standalone);
                 (boxes, Some(Canvas::new(vb.width, vb.height)))
             }
@@ -221,7 +246,7 @@ impl HarnessRenderer {
             .map(|c| Conductor {
                 segment: c.segment,
                 wire: c.wire,
-                ends: c.ends.each_ref().map(|end| end.end),
+                ends: c.ends.each_ref().map(|end| end.end()),
                 targets: c.ends.each_ref().map(|end| end.target()),
             })
             .collect()
@@ -1074,6 +1099,118 @@ component sys {{
             layout.drawn,
             [Segment { wire: 0, index: 0 }, Segment { wire: 1, index: 0 }]
         );
+    }
+
+    /// Three devices whose grounds join at splice `sp`, and the splice's
+    /// run on to `bat` inside cable `run`.
+    fn spliced_design() -> Design {
+        design_from(
+            r#"
+component sys {
+    a: dev "A";
+    b: dev "B";
+    bat: dev "Battery";
+    splice sp "Ground splice" { part: "D-436"; }
+    wire black 1 "GND" [a.gnd, sp];
+    wire brown 0.5 "GND" [b.gnd, sp];
+    cable run "Run" { wire black 2.5 "GND" [sp, bat.gnd]; }
+    component dev {
+        connector j "J 1p" { pub port gnd "GND" pin 1; }
+    }
+}
+"#,
+        )
+    }
+
+    /// A harness view of `sys` including `a.j`, `b.j` and `bat.j` and, when
+    /// `with_splice`, the splice `sp` between them.
+    fn spliced_view(with_splice: bool) -> View {
+        let mut view = harness_view(
+            "sys",
+            &[
+                ("a", "j", 0.0, 0.0),
+                ("b", "j", 0.0, 10.0),
+                ("bat", "j", 40.0, 5.0),
+            ],
+        );
+        if with_splice {
+            view.includes.push(Include {
+                instance: InstanceName::from("sp"),
+                connector: None,
+                half: None,
+                x: 20.0,
+                y: 5.0,
+                ports: Vec::new(),
+                span: Span::new(FileId(0), 0, 0),
+            });
+        }
+        view
+    }
+
+    #[test]
+    fn a_splice_draws_as_a_labelled_joint_its_conductors_meet_at() {
+        let design = spliced_design();
+        let svg = render(&design, &spliced_view(true));
+        assert_eq!(svg.matches("class=\"splice\"").count(), 1);
+        assert_eq!(svg.matches("class=\"splice-dot\"").count(), 1);
+        assert!(svg.contains("class=\"splice-name\""));
+        assert!(svg.contains(">\nsp\n</text>"), "{svg}");
+        assert!(svg.contains(">\nGround splice\n</text>"));
+        assert!(svg.contains(">\nD-436\n</text>"));
+        // A loose conductor stays a loose wire, a cable's runs through its box.
+        assert!(svg.contains("GND · 0.5mm² · BN"));
+        assert!(svg.contains("class=\"connector cable-box\""));
+
+        let layout = compute(&design, &spliced_view(true));
+        let [splice] = layout.splices.as_slice() else {
+            panic!("one splice node");
+        };
+        assert_eq!(
+            splice.centre,
+            crate::render::geometry::Point::new(400.0, 100.0)
+        );
+        // Every conductor ends at the dot: both loose wires, and the cable
+        // strand's left end.
+        assert_eq!(layout.loose.len(), 2);
+        assert!(layout.loose.iter().all(|w| w.to == splice.centre));
+        assert_eq!(layout.cable_boxes[0].strands[0].left_attach, splice.centre);
+        // The pins face the splice they run to.
+        use crate::render::geometry::Side;
+        assert!(
+            layout.nodes[..2]
+                .iter()
+                .all(|n| n.pins[0].side == Side::East)
+        );
+        assert_eq!(layout.nodes[2].pins[0].side, Side::West);
+    }
+
+    #[test]
+    fn conductors_to_a_splice_the_view_leaves_out_are_not_drawn() {
+        use crate::render::lint::Segment;
+        let design = spliced_design();
+        let without = compute(&design, &spliced_view(false));
+        assert!(without.splices.is_empty());
+        assert!(without.drawn.is_empty());
+        assert!(without.cable_boxes.is_empty() && without.loose.is_empty());
+        // And with it, all three are drawn, in wire order.
+        let with = compute(&design, &spliced_view(true));
+        assert_eq!(
+            with.drawn,
+            (0..3)
+                .map(|wire| Segment { wire, index: 0 })
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_splice_is_an_include_box_of_its_own() {
+        let design = spliced_design();
+        let subject = design.get(&design.root).expect("root");
+        let layout = HarnessRenderer.layout(&design, subject, &spliced_view(true));
+        let includes: Vec<usize> = layout.boxes.iter().map(|b| b.include).collect();
+        assert_eq!(includes, [0, 1, 2, 3], "every include, in include order");
+        let splice = &layout.boxes[3].bounds;
+        assert!(splice.width > 0.0 && splice.height > 0.0);
     }
 
     /// Build the layout for `view` against `design`'s subject instance.
