@@ -5,8 +5,8 @@
 //! rendering stage. A failure while rendering one view is a [`ViewError`]
 //! — the view's title and kind plus a [`ViewErrorKind`] saying why — so
 //! the other views still render; [`Error`] is what stops a whole render:
-//! disk IO, the HTML index and the embed manifest, and what stops an
-//! export of a build table.
+//! disk IO, the HTML index and the embed manifest, what stops an export of
+//! a build table, and what stops `init` scaffolding a project.
 
 use std::path::PathBuf;
 
@@ -15,7 +15,8 @@ use thiserror::Error;
 use crate::dsl::ir::{ViewKind, WireEnd};
 use crate::export::Table;
 
-/// Errors that stop a whole render, not just one view, or an export.
+/// Errors that stop a whole render, not just one view, an export, or a
+/// scaffold.
 #[derive(Debug, Error)]
 pub enum Error {
     /// Failure writing an output file to disk.
@@ -49,6 +50,11 @@ pub enum Error {
         #[source]
         source: serde_json::Error,
     },
+
+    /// `init` found a project file already in place, so it wrote nothing
+    /// rather than overwrite it.
+    #[error("{path} already exists; not overwriting it")]
+    InitExists { path: PathBuf },
 }
 
 /// Convenience alias used throughout the crate.

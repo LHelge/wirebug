@@ -10,7 +10,17 @@ Keep this file true in the same change that alters what it describes.
 ## One pipeline
 
 The only input is the **`.wb` DSL** (spec: `.claude/skills/wirebug-dsl/`).
-Five CLI commands share it:
+Five CLI commands share it; a sixth, **`init` (`src/init.rs`)**, only writes
+one: `init::Scaffold` creates the directory (with parents) and writes a
+`wirebug.toml` named after it (its file name with every run of characters
+other than letters, digits, `-` and `_` turned into one `-`; version
+`0.1.0`), `main.wb` from `templates/init/main.wb` (`include_str!`, so
+`Cargo.toml`'s `templates/**` include ships it; it must pass
+`check --strict`, which `tests/cli.rs` holds it to) and, only when absent,
+a `.gitignore` of `out/`. It refuses with `Error::InitExists`, before
+writing anything, when the manifest or `main.wb` is there, and opens every
+file `create_new`, so it never overwrites. `main` prints the `Scaffolded`
+summary (each file, then the `check`/`render` commands to run next).
 
 - **`check` (`src/dsl/`, then `src/render/lint.rs`)** — lex → parse →
   load project → resolve → elaborate → validate, then the **layout
@@ -1502,8 +1512,9 @@ has errors (or, under `--strict`, warnings).
 
 ```
 src/
-├── main.rs          # clap CLI: `check`, `render`, `export`, `serve`, `lsp`, `manifest version` (all over the .wb DSL)
+├── main.rs          # clap CLI: `init`, `check`, `render`, `export`, `serve`, `lsp`, `manifest version`
 ├── lib.rs           # re-exports; check_project + render::render_views
+├── init.rs          # Scaffold: `wirebug init` writes wirebug.toml, main.wb, .gitignore
 ├── pipeline.rs      # check_loaded: dsl::check_loaded, then render::lint
 │                    #   (the layout checks) — shared by check_project and lsp
 │
@@ -1640,7 +1651,8 @@ language config (declarative highlighting, no server needed) and a thin
 `npm run package` builds the installable `.vsix`; see its README.
 
 The `serve` module renders into memory only; `templates/index.html` (askama)
-is the shared index template for both `render` and `serve`.
+is the shared index template for both `render` and `serve`;
+`templates/init/main.wb` is the `main.wb` that `init` scaffolds.
 
 DSL pipeline notes:
 

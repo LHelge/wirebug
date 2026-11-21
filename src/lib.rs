@@ -5,7 +5,8 @@
 //! its problems, and
 //! [`render::render_views`] renders that design's views to SVG;
 //! [`export`] derives the build tables (the wire list and the pin tables)
-//! from it and writes them as CSV or JSON.
+//! from it and writes them as CSV or JSON; [`init`] scaffolds a new
+//! project.
 //!
 //! See the workspace `README.md` for the user-facing tour, `ARCHITECTURE.md`
 //! for how it works and `AGENTS.md` for the conventions.
@@ -13,6 +14,7 @@
 pub mod dsl;
 pub mod error;
 pub mod export;
+pub mod init;
 pub mod lsp;
 mod pipeline;
 pub mod render;

@@ -1,0 +1,34 @@
+// The entry file of a wirebug project: it defines the design's root
+// component, which holds everything else.
+component System {
+    // Components are types. Each lists the ports it offers to the outside
+    // with `pub port <name> "<label>"`.
+    component Sensor {
+        pub port out "OUT";
+    }
+
+    component Controller {
+        pub port sense "SENSE";
+    }
+
+    // Instances place a type in the design: `<name>: <Type> "<label>"`.
+    sensor: Sensor     "Sensor";
+    ctrl:   Controller "Controller";
+
+    // A wire: colour, gauge in mm², an optional signal name, its endpoints.
+    wire blue 0.5 "SIGNAL" [sensor.out, ctrl.sense];
+}
+
+// A schematic view places instances on a grid and lists the ports to show
+// on each side. Wires between listed ports are drawn for you.
+view schematic "Overview" {
+    grid: 20;
+
+    include sensor at (4, 4) ports {
+        east: out;
+    }
+
+    include ctrl at (16, 4) ports {
+        west: sense;
+    }
+}

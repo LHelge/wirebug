@@ -50,6 +50,19 @@ extension provides syntax highlighting plus live diagnostics and completion via
 `wirebug lsp`, so it needs the `wirebug` binary on your `PATH` (any install
 method above) or a path set in the `wirebug.server.path` setting.
 
+## Getting started
+
+Scaffold a project, then check and draw it:
+
+```sh
+wirebug init my-harness       # or `wirebug init` to use the current directory
+cd my-harness
+wirebug check                 # ok — 3 instances, 1 views
+wirebug render                # writes out/overview.svg and out/index.html
+```
+
+`wirebug init [dir]` creates the directory if need be and writes a `wirebug.toml` (named after the directory, version `0.1.0`), a commented `main.wb` with two components, one wire between them and a schematic view, and a `.gitignore` holding `out/`, where `render` writes by default. It never overwrites: a directory that already has a `wirebug.toml` or a `main.wb` is refused with nothing written, and an existing `.gitignore` is left as it is. Run `wirebug serve` next to see the drawing update as you edit.
+
 ## Why
 
 When designing an EV conversion — or any electrical system that isn't a PCB — traditional EDA tools like KiCad are overkill, and iterating in a GUI gets tedious. WireViz solved this beautifully for harness drawings. wirebug brings the same text-defined, git-friendly, regenerable-from-source workflow to system-level schematics, and ties schematics to harness drawings via a shared model so the two stay consistent by construction.
@@ -72,6 +85,7 @@ What works today:
   - a **schematic** renderer (rectangle blocks, labeled ports, object-avoiding orthogonal wire routing, each wire drawn in its colour);
   - a **harness** renderer (WireViz-style pin tables, a central spine, and bezier cable bundles);
   - a **pinout** renderer (connector cavity faces plus pin tables, authored from the harness side).
+- `wirebug init` — scaffold a new project (manifest, a minimal `main.wb`, a `.gitignore` for the render output).
 - `wirebug render` to disk (SVG, or `--png` rasterised, or `--pdf` for a single PDF with one view per page on A4, A3, Letter or Tabloid paper, or `--embed` for naked SVGs + a `manifest.json` sidecar).
 - `wirebug export` — the build tables as CSV or JSON: the wire list (cut list), the connector pin tables (crimp sheet) and the bill of materials.
 - `wirebug serve` — a live-reloading dev server that re-renders on `.wb` or `wirebug.toml` saves.
