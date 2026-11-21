@@ -530,12 +530,20 @@ impl Canvas {
         if self.fits() {
             Ok(())
         } else {
+            let (width, height) = self.reported();
             Err(ViewErrorKind::CanvasTooLarge {
-                width: self.width,
-                height: self.height,
+                width,
+                height,
                 limit: MAX_CANVAS,
             })
         }
+    }
+
+    /// The width and height as a message states them: each rounded up to
+    /// a whole unit, so a measured size reads without float noise and a
+    /// canvas over the limit never reads as equal to it.
+    pub(crate) fn reported(&self) -> (f64, f64) {
+        (self.width.ceil(), self.height.ceil())
     }
 
     /// The canvas's width, in world units.
@@ -675,6 +683,18 @@ pub(crate) mod tests {
         }
         assert_unsized(&svg);
         svg
+    }
+
+    #[test]
+    fn a_canvas_reports_its_size_rounded_up_to_whole_units() {
+        assert_eq!(
+            Canvas::new(20379.359999999997, 20218.0).reported(),
+            (20380.0, 20218.0)
+        );
+        // Over the limit by a fraction still reads as over it.
+        let over = Canvas::new(MAX_CANVAS + 0.01, 10.0);
+        assert!(!over.fits());
+        assert_eq!(over.reported().0, MAX_CANVAS + 1.0);
     }
 
     #[test]

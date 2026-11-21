@@ -1480,6 +1480,13 @@ fn check_rejects_a_view_too_large_to_rasterise() {
         problems[0]["message"],
         "view \"Wide\" is 20256 × 218 units, more than the 8192 a view may span on a side"
     );
+    // A pinout's measured text widths are fractional: the size reads
+    // rounded up to whole units, in the message and in its label.
+    assert_eq!(
+        problems[2]["message"],
+        "view \"Service\" is 20380 × 20218 units, more than the 8192 a view may span on a side"
+    );
+    assert_eq!(problems[2]["labels"][0]["label"], "20380 × 20218 units");
 }
 
 #[test]
