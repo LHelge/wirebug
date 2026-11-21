@@ -193,8 +193,12 @@
       "name": "entity.name.type.wirebug"
     },
     "numbers": {
-      "match": "(?<!\\w)-?\\d+(\\.\\d+)?\\b",
-      "name": "constant.numeric.wirebug"
+      "comment": "A number, and a length unit written directly after it (`150mm`). Any other suffix is no unit: the number is left unscoped, as the check reports it.",
+      "match": "(?<!\\w)-?\\d+(?:\\.\\d+)?(?:(m|cm|mm)\\b|\\b)",
+      "name": "constant.numeric.wirebug",
+      "captures": {
+        "1": { "name": "keyword.other.unit.wirebug" }
+      }
     },
     "punctuation": {
       "patterns": [
