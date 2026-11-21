@@ -7,6 +7,7 @@ use super::layout::{PlacedComponent, PlacedPort, PlacedText};
 use super::{COMPONENT_TITLE_GAP, LABEL_INSET, PIN_INSET, PORT_RADIUS};
 use crate::dsl::ir::{InstanceName, WireColor};
 use crate::render::geometry::{Point, Side};
+use crate::render::wire_stroke::WireLayers;
 
 pub(super) fn render_component(cid: &InstanceName, pc: &PlacedComponent) -> Group {
     let rect = Rectangle::new()
@@ -225,20 +226,31 @@ fn outside_pin_placement(side: Side, pos: Point) -> LabelPlacement {
     }
 }
 
-/// Emit a routed connector as a `<polyline>`. `path` is the ordered list
-/// of points produced by [`super::route::Router::route`]. The wire's
-/// authored color rides along as `data-color`, so a host stylesheet can
-/// theme wires by color (`.wire[data-color="white"] { … }`) in embed mode.
-pub(super) fn render_wire(path: &[Point], color: &WireColor) -> Polyline {
+/// The classes a schematic wire's layers carry: the core keeps the `wire`
+/// class hosts have always styled, over a `wire-casing` and under a
+/// `wire-tracer` for a two-tone wire.
+const WIRE_LAYERS: WireLayers = WireLayers {
+    casing: "wire-casing",
+    core: "wire",
+    tracer: "wire-tracer",
+};
+
+/// Emit a routed connector as `<polyline>`s, in draw order: the casing,
+/// the core in the wire's base colour, and a two-tone wire's tracer. `path`
+/// is the ordered list of points produced by [`super::route::Router::route`].
+/// Each layer carries `fill="none"` itself: an embed host's stylesheet
+/// written before the casing and tracer existed has no rule for them, and
+/// an unfilled polyline with no stroke of its own draws nothing, where a
+/// filled one would blot the area its bends enclose.
+pub(super) fn render_wire(path: &[Point], color: &WireColor) -> impl Iterator<Item = Polyline> {
     let points = path
         .iter()
         .map(|p| format!("{},{}", p.x, p.y))
         .collect::<Vec<_>>()
         .join(" ");
-    Polyline::new()
-        .set("class", "wire")
-        .set("data-color", color.to_string())
-        .set("points", points)
+    WIRE_LAYERS
+        .stroke(color)
+        .layers(Polyline::new().set("fill", "none").set("points", points))
 }
 
 /// Along-track clearance a code keeps from a crossing wire, so its halo

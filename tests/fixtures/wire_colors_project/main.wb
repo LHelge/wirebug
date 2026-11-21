@@ -1,0 +1,31 @@
+// Wire colours: light wires (white, yellow), a two-tone wire and a dark one
+// between two devices, drawn in a schematic and in a harness, which stroke
+// each wire in its colour the same way.
+
+use Ecu  from "components/ecu.wb";
+use Lamp from "components/lamp.wb";
+
+component Vehicle {
+    ecu:  Ecu  "ECU";
+    lamp: Lamp "Lamp";
+
+    wire white        0.5 "WAKE" [ecu.wake, lamp.wake];
+    wire yellow       0.5 "SIG"  [ecu.sig, lamp.sig];
+    wire green/yellow 1   "PE"   [ecu.pe, lamp.pe];
+    wire black        1   "GND"  [ecu.gnd, lamp.gnd];
+}
+
+view schematic "Signals" {
+    include ecu at (0, 0) ports {
+        east: wake, sig, pe, gnd;
+    }
+
+    include lamp at (16, 0) ports {
+        west: wake, sig, pe, gnd;
+    }
+}
+
+view harness "Loom" {
+    include ecu.x1  at (0, 0);
+    include lamp.x1 at (30, 0);
+}
