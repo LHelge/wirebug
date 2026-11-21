@@ -1,0 +1,5 @@
+// Already in the house style: `fmt` leaves it be.
+component Switch {
+    pub port a "A" pin 1;
+    pub port b "B" pin 2;
+}

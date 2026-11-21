@@ -130,6 +130,25 @@ pub enum Command {
         #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
         format: OutputFormat,
     },
+    /// Format the .wb files of a project in place, printing each file it
+    /// changes.
+    ///
+    /// Four spaces a block deep, one statement a line, and consecutive
+    /// statements of one kind aligned in columns. Comments stay with their
+    /// statements; blank lines between statements stay, at most one. A file
+    /// that does not parse is reported and left as it is, and the run fails.
+    Fmt {
+        /// A project manifest, project directory, or `.wb` file. Defaults
+        /// to the project containing the current directory (found by
+        /// walking up to `wirebug.toml`). Every `.wb` file the project
+        /// loads is formatted: from a `.wb` file, that file and the files
+        /// it reaches through `use` and `fragment`.
+        target: Option<PathBuf>,
+        /// Write nothing: print each file formatting would change, and
+        /// fail if there is one.
+        #[arg(long)]
+        check: bool,
+    },
     /// Render every view in a project to SVG.
     Render {
         /// A project manifest, project directory, or `.wb` file. Defaults

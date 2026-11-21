@@ -2760,3 +2760,141 @@ fn init_refuses_a_path_that_is_a_file() {
 
     assert_eq!(std::fs::read_to_string(&file).expect("read"), "mine");
 }
+
+const UNFORMATTED_ROOT: &str = "tests/fixtures/unformatted_project";
+
+/// `main.wb` of the unformatted fixture, as `fmt` lays it out.
+const FORMATTED_MAIN: &str = r#"// A panel, laid out carelessly: `wirebug fmt` puts it in the house style.
+use Lamp   from "components/lamp.wb";
+use Switch from "components/switch.wb";
+
+component Panel {
+    lamp: Lamp   "Lamp";
+    sw:   Switch "Switch"; // the only switch
+    pub port feed   "FEED";
+    pub port ground "GND";
+
+    // Feed through the switch to the lamp.
+    wire red 1.5 "FEED" [feed, sw.a];
+    wire red 1.5 "SW"   [sw.b, lamp.anode];
+    wire black 1 [lamp.cathode, ground];
+}
+
+view schematic "Panel" {
+    grid: 20;
+    include lamp at (30, 0);
+    include sw at (4, 0) ports {
+        west: a;
+        east: b;
+    }
+}
+"#;
+
+/// A copy of the unformatted fixture, to format in place.
+fn unformatted_copy() -> tempfile::TempDir {
+    let tmp = tempdir().expect("tempdir");
+    copy_tree(std::path::Path::new(UNFORMATTED_ROOT), tmp.path());
+    tmp
+}
+
+fn read(path: std::path::PathBuf) -> String {
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+}
+
+#[test]
+fn fmt_rewrites_the_files_the_project_loads_and_lists_those_it_changed() {
+    let tmp = unformatted_copy();
+    let switch = read(tmp.path().join("components/switch.wb"));
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .arg("fmt")
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout("main.wb\ncomponents/lamp.wb\n")
+        .stderr(predicate::str::contains("2 of 3 file(s) reformatted"));
+
+    assert_eq!(read(tmp.path().join("main.wb")), FORMATTED_MAIN);
+    assert_eq!(
+        read(tmp.path().join("components/lamp.wb")),
+        "component Lamp {\n    pub port anode   \"+\" pin 1;\n    pub port cathode \"-\" pin 2;\n}\n"
+    );
+    assert_eq!(read(tmp.path().join("components/switch.wb")), switch);
+
+    // Formatted once, the project is formatted.
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["fmt", "--check"])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout("");
+}
+
+#[test]
+fn fmt_check_lists_the_files_that_would_change_writes_nothing_and_fails() {
+    let tmp = unformatted_copy();
+    let main = read(tmp.path().join("main.wb"));
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["fmt", "--check"])
+        .arg(tmp.path().join("wirebug.toml"))
+        .current_dir(tmp.path())
+        .assert()
+        .failure()
+        .stdout("main.wb\ncomponents/lamp.wb\n")
+        .stderr(predicate::str::contains(
+            "2 of 3 file(s) would be reformatted",
+        ));
+
+    assert_eq!(read(tmp.path().join("main.wb")), main);
+}
+
+#[test]
+fn fmt_of_a_wb_file_formats_it_and_the_files_it_reaches() {
+    let tmp = unformatted_copy();
+    let main = read(tmp.path().join("main.wb"));
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["fmt", "components/lamp.wb"])
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout("components/lamp.wb\n");
+
+    assert_eq!(read(tmp.path().join("main.wb")), main);
+}
+
+#[test]
+fn fmt_reports_a_file_that_does_not_parse_and_leaves_it_as_it_is() {
+    let tmp = unformatted_copy();
+    let broken = "component Lamp {  pub port anode \"+\" pin 1  pub port cathode \"-\"; }\n";
+    std::fs::write(tmp.path().join("components/lamp.wb"), broken).expect("write");
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .arg("fmt")
+        .current_dir(tmp.path())
+        .assert()
+        .failure()
+        .stdout("main.wb\n")
+        .stderr(predicate::str::contains("wirebug::parse"))
+        .stderr(predicate::str::contains("lamp.wb"));
+
+    assert_eq!(read(tmp.path().join("components/lamp.wb")), broken);
+    assert_eq!(read(tmp.path().join("main.wb")), FORMATTED_MAIN);
+}
+
+#[test]
+fn fmt_help_says_what_is_formatted_and_what_check_does() {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["fmt", "--help"])
+        .output()
+        .expect("runs");
+    assert!(output.status.success());
+    insta::assert_snapshot!("fmt_help", String::from_utf8(output.stdout).expect("utf-8"));
+}

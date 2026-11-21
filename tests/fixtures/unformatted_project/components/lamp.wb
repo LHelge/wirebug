@@ -1,0 +1,1 @@
+component Lamp { pub port anode "+" pin 1; pub port cathode "-" pin 2; }
