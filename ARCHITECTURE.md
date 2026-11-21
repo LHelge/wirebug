@@ -10,7 +10,7 @@ Keep this file true in the same change that alters what it describes.
 ## One pipeline
 
 The only input is the **`.wb` DSL** (spec: `.claude/skills/wirebug-dsl/`).
-Four CLI commands share it:
+Five CLI commands share it:
 
 - **`check` (`src/dsl/`, then `src/render/lint.rs`)** — lex → parse →
   load project → resolve → elaborate → validate, then the **layout
@@ -46,12 +46,29 @@ Four CLI commands share it:
   plus a `manifest.json` sidecar in place of the HTML index (see below)
   and a `wirebug.css` starter stylesheet (`render::embed_stylesheet` —
   the built-in styles re-scoped under `.wirebug-{kind}`, referenced from
-  the manifest's `stylesheet` field; hosts copy and theme it).
+  the manifest's `stylesheet` field; hosts copy and theme it), and the
+  build tables as `wires.json` and `connectors.json` (see `export`
+  below), which the manifest names in its last field, `exports`
+  (`render::EmbedExports`) — added after the fields hosts already read,
+  so they keep their names and places.
   Each view renders or fails on its own (see Render-time errors): `render`
   writes every view that rendered, prints each failure naming its view,
   and exits non-zero.
   The legacy YAML model/view loader has been removed; `ir::Design` is the
   only thing the renderer consumes.
+- **`export` (`src/export/`)** — runs `check_project` like `render`,
+  refuses a project with errors (or, under `--strict`, warnings) with the
+  same message (`— not exporting`), then writes one build table:
+  `export wires` (the wire list) or `export connectors` (the pin tables),
+  one subcommand per `export::Table` (`cli::ExportCommand`, each taking
+  `cli::ExportArgs`: the target, `--format csv|json` — its own
+  `ExportFormat`, not `check`'s `--format` — `--out <file>` and
+  `--strict`). `export::Export::new(design, table, format)` builds the
+  text; `main` prints it to stdout, or `Export::write` saves it (creating
+  its directory, as `render` creates `--out`) and `main`
+  prints the returned `Exported` (its `Display` is the one-line summary)
+  to stderr. Diagnostics go to stderr only, so stdout is the table alone.
+  See Build tables for the wire format.
 - **`serve` (`src/serve/`)** — a live-reloading dev server. Renders the
   project into memory (the same `render_views` + `index_html` pipeline,
   `live_reload` on), serves it over axum, and watches the project tree for
@@ -531,8 +548,8 @@ The tables a harness is cut, crimped and ordered from are typed models
 built from `ir::Design` alone: no layout, so they list what the design
 holds whether or not a drawing shows it (the pin tables read the harness
 views only to tell an inline connector's halves apart). They borrow the design
-(`'d`) rather than copy it. Writing them out (CSV, JSON) is the CLI's
-job; the models carry no serialisation.
+(`'d`) rather than copy it, and carry no serialisation: writing them out
+is `export::records` (below), and the IR is not a wire format.
 
 - **Wire list (`export::WireList`, `From<&Design>`)** — the cut list.
   One `export::Row` per physical conductor: each `Wire::segments()` run
@@ -613,6 +630,27 @@ job; the models carry no serialisation.
   views draw it into each half, it is listed under both halves as
   `Undetermined`, never guessed or dropped. A drain is placed the same
   way (`HarnessScope::draws_drain`). Elsewhere an entry is `Assigned`.
+- **Wire format (`export/records/`)** — what `wirebug export` prints and
+  `render --embed` writes. Each table becomes record types private to the
+  module, built from the models (`WireSheet` from a `WireList`,
+  `ConnectorSheet` from `PinTables`; `EndRecord` for an end in either,
+  `From<&End>` / `From<&FarEnd>`), owned strings and numbers with serde
+  derives: the JSON nests them, and the CSV is their flattening
+  (`Sheet::csv_rows`, one row per wire-list row or per cavity entry, under
+  `Sheet::HEADER`), so the two formats carry the same data by
+  construction. The JSON document wraps a sheet's fields (`rows` or
+  `connectors`) in `table`, `format_version` (`export::FORMAT_VERSION`),
+  `project` and `generator` (`crate::GENERATOR`, the embed manifest's).
+  CSV goes through the `csv` crate (RFC 4180 quoting, `\n` endings, and a
+  row of the wrong length is refused). The rail rule is explicit:
+  `length_m` is `RowLength::copper()` (a rail's length on its first
+  segment only, nothing on a screen), and `rail_length_m` /
+  `rail_segment` carry the whole rail on each of its segments, so summing
+  `length_m` is `WireList::copper()`. Twisted pairs are numbered from 1
+  (the IR's `twisted_group` + 1). The columns are a public interface and
+  are listed in README's "Exporting build tables"; a change to one's
+  name, place or meaning raises `FORMAT_VERSION`. A new table (the BOM)
+  is a new `Table` variant, a `Sheet` impl and an `EmbedExports` field.
 
 ## DSL validation (`check`)
 
@@ -947,7 +985,10 @@ phases above). Render adds only geometry/dispatch errors, in `src/error.rs`
   - our own SVG failing to parse or convert for `--png` / `--pdf`.
 - **`error::Error`** — what stops the whole render: file IO when writing
   output (`Write`), the HTML index template (`Template`) and serializing
-  the `--embed` manifest (`EmbedManifest`).
+  the `--embed` manifest (`EmbedManifest`); and what stops an export (or
+  `--embed`'s tables): writing a table's CSV (`ExportCsv`) or JSON
+  (`ExportJson`), each naming the `export::Table`, and `Write` for its
+  file.
 
 `render_views` returns one `Result<RenderedView, ViewError>` per view, in
 declaration order; a failure never stops the others, and file names are
@@ -960,8 +1001,9 @@ each output mode does with a failure:
 - **SVG / `--png`** — the views that rendered (and rasterised) are written;
   `index.html` shows each failure, titled, where its drawing would be.
 - **`--embed`** — the views that rendered are written, and `manifest.json`
-  lists only those (its schema is unchanged: a host never sees a view whose
-  file is missing). The failures are on stderr only.
+  lists only those (a host never sees a view whose file is missing). The
+  build tables are written before the manifest, so it never names a
+  missing table either. The failures are on stderr only.
 - **`--pdf`** — `PdfExporter::to_pdf` takes `render_views`' results and
   makes one page per view that rendered and converted, numbered
   `n / total` among themselves; `PdfExport::failures` names the rest, in
@@ -980,17 +1022,22 @@ has errors (or, under `--strict`, warnings).
 
 ```
 src/
-├── main.rs          # clap CLI: `check`, `render`, `serve`, `lsp`, `manifest version` (all over the .wb DSL)
+├── main.rs          # clap CLI: `check`, `render`, `export`, `serve`, `lsp`, `manifest version` (all over the .wb DSL)
 ├── lib.rs           # re-exports; check_project + render::render_views
 ├── pipeline.rs      # check_loaded: dsl::check_loaded, then render::lint
 │                    #   (the layout checks) — shared by check_project and lsp
 │
 │  # ── build tables derived from ir::Design (no rendering) ──
 ├── export/
-│   ├── mod.rs       # re-exports the table models
+│   ├── mod.rs       # re-exports the table models and Export
 │   ├── wires.rs     # WireList: one Row per conductor segment and per screen
-│   └── pins.rs      # PinTables: one PinTable per connector (per inline half),
-│                    #   one Cavity per pin, built from the WireList
+│   ├── pins.rs      # PinTables: one PinTable per connector (per inline half),
+│   │                #   one Cavity per pin + unpinned ports, built from the WireList
+│   └── records/     # the wire format: Export (Table × Format → text), Exported
+│       ├── mod.rs       # Table, Format, Export, the JSON Document, CSV writing
+│       ├── ends.rs      # EndRecord: an end as both tables write it
+│       ├── wires.rs     # WireSheet: the wire list's records and columns
+│       └── connectors.rs# ConnectorSheet: the pin tables' records and columns
 │
 │  # ── DSL parse-and-check pipeline (the only input: .wb) ──
 ├── dsl/
@@ -1180,7 +1227,11 @@ Runtime:
 - [`pdf-writer`] — assembles the multi-page A4 document around `svg2pdf`'s
   chunks. Pinned to the version `svg2pdf`'s API exposes (its `to_chunk`
   returns this crate's types) — bump the two together.
-- [`serde_json`] — serialises the `--embed` `manifest.json` sidecar.
+- [`serde_json`] — serialises the `--embed` `manifest.json` sidecar and
+  the exported tables' JSON.
+- [`csv`] — RFC 4180 writing of the exported tables (`export/records/`):
+  quoting of labels with commas, quotes and line breaks, and a check that
+  every row has a field per column.
 - [`pathfinding`] — A* over the orthogonal visibility graph for
   object-avoiding connector routing (render path), and the breadth-first
   reachability test `check` uses to find wires the router cannot route.
@@ -1216,6 +1267,7 @@ Dev / test:
 [`svg2pdf`]: https://docs.rs/svg2pdf
 [`pdf-writer`]: https://docs.rs/pdf-writer
 [`serde_json`]: https://docs.rs/serde_json
+[`csv`]: https://docs.rs/csv
 [`tempfile`]: https://docs.rs/tempfile
 [`pathfinding`]: https://docs.rs/pathfinding
 [`askama`]: https://docs.rs/askama

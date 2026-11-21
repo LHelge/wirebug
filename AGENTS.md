@@ -11,7 +11,7 @@ about to change before changing it, and update it in the same change.
 
 ## Orientation
 
-One pipeline, shared by every command (`check`, `render`, `serve`, `lsp`):
+One pipeline, shared by every command (`check`, `render`, `export`, `serve`, `lsp`):
 
 ```
 .wb files → lex → parse (AST) → load project → resolve (registry)
@@ -26,8 +26,9 @@ One pipeline, shared by every command (`check`, `render`, `serve`, `lsp`):
   `src/render/lint.rs`, which ask the renderers' layout code and so sit in
   `render`; `dsl` never depends on `render`). `check_project` and the LSP
   both go through it; a new stage goes there.
-- `src/export/` — build tables derived from `ir::Design` (the wire list),
-  typed models with no rendering involved.
+- `src/export/` — build tables derived from `ir::Design` (the wire list,
+  the pin tables), typed models with no rendering involved, and their
+  CSV/JSON wire format (`wirebug export`).
 - `src/render/` — consumes `ir::Design` only; one renderer per view kind
   (`schematic/`, `harness/`, `pinout/`) plus `png.rs`, `pdf.rs`, embed output.
 - `src/serve/` — live-reloading dev server (the only async code).
@@ -39,12 +40,12 @@ Where to look in `ARCHITECTURE.md`:
 
 | Working on | Section |
 |---|---|
-| CLI commands, output modes, `serve`, `lsp` | One pipeline |
+| CLI commands, output modes, `export`, `serve`, `lsp` | One pipeline |
 | `wirebug.toml`, the identity stamp | Project manifest |
 | AST, registry, `extend` merge groups, IR, cables, inline connectors | DSL mental model |
 | Schematic layout, routing, enclosures | Render mental model; Connector routing |
 | Harness views | Harness views |
-| Wire list and other build tables (`src/export/`) | Build tables |
+| Wire list, pin tables and their CSV/JSON format (`src/export/`) | Build tables |
 | A new or changed diagnostic, and which phase it belongs in | DSL validation; Render-time errors |
 | Finding a file | Source tree |
 | Why a crate is there | Dependencies |
@@ -184,6 +185,10 @@ cargo run --release -- render examples --out out/
 cargo run --release -- render examples --out out/ --png    # rasterise to PNG
 cargo run --release -- render examples --out out/ --pdf    # single A4 PDF, one view per page
 cargo run --release -- render examples --out out/ --embed  # naked SVGs + manifest.json
+
+# export a build table (CSV on stdout; --format json, --out <file>)
+cargo run -- export wires examples
+cargo run -- export connectors examples --format json --out out/connectors.json
 
 # serve a project with live reload (re-renders on every .wb save)
 cargo run -- serve examples --port 3000   # then open http://localhost:3000

@@ -73,13 +73,14 @@ What works today:
   - a **harness** renderer (WireViz-style pin tables, a central spine, and bezier cable bundles);
   - a **pinout** renderer (connector cavity faces plus pin tables, authored from the harness side).
 - `wirebug render` to disk (SVG, or `--png` rasterised, or `--pdf` for a single A4 PDF with one view per page, or `--embed` for naked SVGs + a `manifest.json` sidecar).
+- `wirebug export` — the build tables as CSV or JSON: the wire list (cut list) and the connector pin tables (crimp sheet).
 - `wirebug serve` — a live-reloading dev server that re-renders on `.wb` or `wirebug.toml` saves.
 - A VSCode extension ([`editors/vscode/`](editors/vscode/)) — syntax highlighting plus live diagnostics and context-aware completion via `wirebug lsp`, a language server over stdio.
 
 In transition / not yet:
 
 - Object-avoiding harness routing (the harness renderer flexes beziers, no obstacle avoidance yet)
-- BOM views
+- BOM export
 - View composition / `extends`
 - Unconnected-port linting, theming, auto-layout
 
@@ -183,7 +184,7 @@ date        = "2026-05-28"    # optional; ISO date
 
 **Revision from git.** If `revision` is omitted, wirebug shells out to `git rev-parse --short HEAD` in the project directory and uses the result, suffixed `-dirty` when the working tree has uncommitted changes. An explicit `revision = "..."` in the manifest always wins. If `git` isn't on `PATH`, or the directory isn't a git repo, the field stays empty and the stamp simply omits it — no error.
 
-**Embedding into another document.** Pass `--embed` to `wirebug render` to emit SVGs intended for inclusion in another page, report, or static site. Embed-mode SVGs drop the built-in `<style>` block (the host stylesheet owns the look), suppress the bottom-right project-identity stamp, and class-tag the root `<svg>` with `wirebug wirebug-schematic` (or `wirebug-harness`) so host CSS can scope rules under `.wirebug`. The HTML index is replaced by a `manifest.json` sidecar listing every rendered view (title, filename, kind) plus the project's identity and a `generator` field (`wirebug v<x.y.z>`, since embed SVGs carry no in-drawing stamp), so a downstream build can enumerate and embed views without parsing each SVG. A `wirebug.css` starter stylesheet lands beside the manifest (and is referenced by its `stylesheet` field): the built-in styles re-scoped under `.wirebug-schematic` / `.wirebug-harness` / `.wirebug-pinout`, so linking it reproduces the standalone look — copy it into your own assets and edit the copy to theme. (The previous `--no-stamp` flag is removed: embedding was its only use case, and `--embed` now expresses it directly.)
+**Embedding into another document.** Pass `--embed` to `wirebug render` to emit SVGs intended for inclusion in another page, report, or static site. Embed-mode SVGs drop the built-in `<style>` block (the host stylesheet owns the look), suppress the bottom-right project-identity stamp, and class-tag the root `<svg>` with `wirebug wirebug-schematic` (or `wirebug-harness`) so host CSS can scope rules under `.wirebug`. The HTML index is replaced by a `manifest.json` sidecar listing every rendered view (title, filename, kind) plus the project's identity and a `generator` field (`wirebug v<x.y.z>`, since embed SVGs carry no in-drawing stamp), so a downstream build can enumerate and embed views without parsing each SVG. The build tables land beside it too, as `wires.json` and `connectors.json` — the same documents `wirebug export … --format json` prints (see [Exporting build tables](#exporting-build-tables)) — and the manifest names them in its last field, `"exports": { "wires": "wires.json", "connectors": "connectors.json" }`; the fields before it are unchanged, so a host that ignores unknown fields is unaffected. A `wirebug.css` starter stylesheet lands beside the manifest (and is referenced by its `stylesheet` field): the built-in styles re-scoped under `.wirebug-schematic` / `.wirebug-harness` / `.wirebug-pinout`, so linking it reproduces the standalone look — copy it into your own assets and edit the copy to theme. (The previous `--no-stamp` flag is removed: embedding was its only use case, and `--embed` now expresses it directly.)
 
 ## Rendering
 
@@ -271,6 +272,83 @@ wirebug render examples --out out/                  # one SVG per view, into out
 wirebug render examples --out out/ --pdf            # one A4 PDF, one view per page
 wirebug render examples/wirebug.toml --out out/ --embed  # naked SVGs + manifest.json
 ```
+
+## Exporting build tables
+
+`wirebug export` writes the tables a harness is cut and crimped from, built from the model rather than from any drawing — so they list every conductor, whether or not a view draws it:
+
+```sh
+wirebug export wires                                  # the wire list, as CSV on stdout
+wirebug export connectors examples --out pins.csv     # the pin tables, into a file
+wirebug export wires examples --format json           # the same data as JSON, for tooling
+```
+
+Each table is a subcommand and takes the project like `check` and `render` do (a manifest, a project directory or a `.wb` file; by default the project around the current directory). `export` checks the project first and, like `render`, refuses one with errors (or, under `--strict`, warnings), exiting non-zero with nothing on stdout. Diagnostics always go to stderr, so stdout holds the table alone; with `--out <file>` the table goes to the file (its directory created if need be) and stderr gets a one-line summary (`exported 19 wire-list row(s) as csv to wires.csv`).
+
+**CSV** (`--format csv`, the default) follows RFC 4180: a header row, one row per record, a field quoted only when it holds a comma, a quote or a line break (a quote doubled inside it), `\n` line endings, UTF-8 without a byte-order mark. Numbers use `.` as the decimal point whatever the locale; lengths are in metres and gauges in mm², as the column names say. An empty field means the value does not apply or is not set. A list inside one field (the pins of a ganged port, the ends beyond a splice) is separated by `;`. Twisted pairs are numbered from 1 within their cable, in source order. Instances are named by their full path (`Vehicle.front.lamp`) and ends by the full path of what they land on (`Vehicle.ecu.pwr`, `Vehicle.sp_gnd`).
+
+An end, in either table, is eight columns after its prefix (`from`, `to`, `far`):
+
+| Column | Holds |
+|---|---|
+| `from` | the full path of what the end lands on |
+| `from_kind` | `port` (a port of a placed component, inline connectors included), `boundary` (the owner's own port, where the conductor leaves its component), `splice`, or `unresolved` (never in a project that checks) |
+| `from_instance` | the instance the port is on, or the splice's owner |
+| `from_connector` | the connector designator (an inline connector's name); empty for a connectorless port |
+| `from_pins` | the pins the port occupies (`2;3` for a ganged port); empty when it has no pin |
+| `from_port`, `from_port_label` | the port's name and label |
+| `from_splice` | the splice's name |
+
+**`wirebug export wires`** — one row per physical conductor (each segment of a multi-endpoint wire: a rail of four ends is three rows) and one per cable screen, in source order:
+
+| Column | Holds |
+|---|---|
+| `kind` | `conductor` or `shield` |
+| `owner` | the instance whose component body declares the wire |
+| `cable`, `cable_label`, `cable_type`, `cable_length_m` | the cable it runs in, empty for a loose wire |
+| `twisted_pair` | the twisted pair it is in (for a screen, the pair it screens) |
+| `screens` | for a screen: `cable` (the overall screen) or `pair` |
+| `label` | the wire's label (a screen's own label) |
+| `color`, `color_code` | the colour name (`green/yellow`) and its IEC 60757 code (`GN/YE`) |
+| `gauge_mm2` | the cross-section |
+| `type`, `part` | the wire's insulation type and part number |
+| `from…`, `to…` | its two ends, as above; for a screen, the pins its drain lands on (none, one or two) |
+| `length_m` | the length this row adds to a total: its own (or its cable's), or a rail's whole length on the rail's first segment only; empty on a screen, which is cut with its cable |
+| `rail_length_m`, `rail_segment` | on each segment of a wire with more than two ends: the whole rail's length, and the segment's place in it, from 1 |
+
+A `length` on a wire with more than two ends is the length of the whole rail, so summing `length_m` gives the copper to cut, each rail counted once.
+
+**`wirebug export connectors`** — one table per connector of each placed instance, one per housing half of an inline connector; within it, one row per conductor or drain crimped into each cavity (two for a double crimp), a cavity in pin order with nothing in it as one row of entry `empty` (so unused pins are listed), and then each port of the connector that has no pin assigned yet, with an empty `pin`:
+
+| Column | Holds |
+|---|---|
+| `instance`, `connector` | the instance and the connector designator |
+| `half` | `male` or `female` on a half of an inline connector |
+| `housing_type`, `housing_description`, `housing_part` | the connector type the housing is bought as (an inline half's own) |
+| `pin` | the cavity; empty for a port with no pin assigned |
+| `ganged_with` | the other cavities of a ganged port (a ganged port's conductor is listed in each of its cavities) |
+| `port`, `port_label` | the port on the pin |
+| `entry` | `conductor`, `drain` (a cable screen's), or `empty` |
+| `half_fit` | on an inline half: `assigned` when the harness views place the conductor in this half, `undetermined` when they place it in neither or both, so it is listed under both halves |
+| `owner` | the instance whose body declares the conductor |
+| `cable`, `twisted_pair`, `screens` | its cable and pair; for a drain, what the screen screens |
+| `label`, `color`, `color_code`, `gauge_mm2` | the conductor's (a drain's: its screen's label only) |
+| `far…` | the end across the conductor, as above (a drain's other end, when it is grounded at both) |
+| `beyond` | when `far` is a splice: every other end the splice joins, through linked splices, as full paths |
+
+**JSON** (`--format json`) carries the same data, structured: ends as objects with a `pins` array, a splice's `beyond` as an array of ends, and the pin tables nested as `connectors`, each with its `housing`, its `cavities` (each with its `entries`) and its `unpinned` ports. Every document has the same top level:
+
+```json
+{
+  "table": "wires",
+  "format_version": 1,
+  "project": { "name": "…", "version": "…", "revision": "…", "…": "…" },
+  "generator": "wirebug v0.1.0",
+  "rows": [ … ]
+}
+```
+
+(`"connectors": [ … ]` for the pin tables.) `format_version` is raised when a column or field changes name, place or meaning; new ones may be added without raising it.
 
 ## Design principles
 
