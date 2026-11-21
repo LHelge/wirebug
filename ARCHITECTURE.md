@@ -448,7 +448,7 @@ subject's `layout::HarnessConductor`s (`HarnessConductor::all`: each chain
 segment between connectors of two *different* children — one within a
 single connector is a jumper, never drawn — and each wire with an end on a
 splice of the subject; an end is a `layout::HarnessEnd`, `Connector` or
-`Splice`, keyed by a `NodeKey` of the same two kinds);
+`Splice`, keyed by an `ir::HarnessNode` of the same two kinds);
 `HarnessLayout::compute` keeps those whose two ends' connectors or splices
 are included and records them as `HarnessLayout.drawn` (`lint::Segment`,
 wire and pair index), which is what `check`'s `undrawn_conductor` reads.
@@ -464,8 +464,8 @@ and so does the pin-table export, which reads off it which housing half
 of an inline connector a conductor is drawn into.
 
 A **splice** include (`include sp`, an `ir::Include` with no connector
-naming one of the subject's `Instance.splices`; `NodeKey::of`) draws as a
-`SpliceNode`: a solid dot at the authored point (`splice-dot`, haloed in
+naming one of the subject's `Instance.splices`;
+`HarnessNode::of_include`) draws as a `SpliceNode`: a solid dot at the authored point (`splice-dot`, haloed in
 white so each conductor's end reads against it) with the name
 (`splice-name`, bold), label (`splice-label`) and part (`splice-part`)
 centred beneath, in a `<g class="splice">` drawn over the connectors — no
