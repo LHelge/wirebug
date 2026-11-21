@@ -24,7 +24,7 @@
 use std::collections::HashMap;
 
 use crate::dsl::ast::{
-    Cable, Endpoint, Item, Member, Port, Property, PropertyValue, Quantity, Shield, Wire,
+    Cable, DefKind, Endpoint, Item, Member, Port, Property, PropertyValue, Quantity, Shield, Wire,
 };
 use crate::dsl::diagnostics::{
     EndpointOwner, FirstProperty, Problem, PropertyKind, PropertyOwner, ShieldOwner,
@@ -154,6 +154,22 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
                     && d.name == name
                     && resolved.fragments(id).len() > 1
             });
+            // So is an import a `fragment` of this file merges an `extend`
+            // into (a file of `fragment` lines that `use`s their component).
+            let merged = merged
+                || file.ast.fragments.iter().any(|fragment| {
+                    resolved
+                        .project
+                        .import_target(fid, &fragment.path.node)
+                        .is_some_and(|target| {
+                            resolved.defs.iter().any(|d| {
+                                d.file == target
+                                    && d.parent.is_none()
+                                    && d.kind == DefKind::Extend
+                                    && d.name == name
+                            })
+                        })
+                });
             // A view's `for` documents the import, which is a use of it.
             let documented = file.ast.items.iter().any(|item| {
                 matches!(item, Item::View(view)
@@ -1280,6 +1296,20 @@ mod tests {
         ]);
         assert!(
             codes.iter().any(|c| c == "wirebug::unused_import"),
+            "{codes:?}"
+        );
+    }
+
+    #[test]
+    fn import_a_fragment_merges_into_does_not_warn() {
+        // A file of `fragment` lines `use`s the component they extend.
+        let codes = validate_files(&[
+            ("main.wb", "fragment \"all.wb\";\ncomponent m { }\n"),
+            ("all.wb", "use m from \"main.wb\";\nfragment \"a.wb\";\n"),
+            ("a.wb", "extend m { pub port x \"X\"; }\n"),
+        ]);
+        assert!(
+            !codes.iter().any(|c| c == "wirebug::unused_import"),
             "{codes:?}"
         );
     }
