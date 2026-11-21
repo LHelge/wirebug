@@ -1,13 +1,14 @@
 ---
 id: jkx.r6
 title: "Schematic: label where an off-view wire end goes"
-status: open
+status: done
 priority: P2
 created: "2026-11-20T21:40:32.053429424Z"
-updated: "2026-11-20T21:40:32.053429424Z"
+updated: "2026-11-21T15:35:55.476578109Z"
 tags:
   - render
   - schematic
+attempts: 1
 ---
 
 ## Summary
