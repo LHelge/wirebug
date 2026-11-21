@@ -66,7 +66,7 @@ use Inverter from "components/inverter.wb";
 fragment "systems/traction.wb";
 ```
 
-- `use <Name> from "<path>";` loads the file (path relative to this file) and imports one top-level component or connector type; repeat the statement per name. Nested definitions cannot be imported. `use_not_found` (no file), `unresolved_import` (no such name), `unused_import` (warning).
+- `use <Name> from "<path>";` loads the file (relative path) and imports one top-level component or connector type. Nested definitions cannot be imported. `use_not_found` (no file), `unresolved_import` (no such name), `unused_import` (warning).
 - `fragment "<path>";` loads a file without importing a name: its top-level `extend`s merge into the same-named component in scope here, its views render. To place a component it defines, `use` it. `unused_fragment` (warning) when the line adds nothing, its help says why; `duplicate_fragment` when one file names the same file twice.
 - A file loads once however often it is named; cycles are fine.
 
@@ -156,7 +156,7 @@ component Ecu {
 - Pins are positive integers (`invalid_pin`); a pin belongs to one port per connector (`duplicate_connector_pin`). A pin on a port outside any connector warns (`bare_port_pin`).
 - `connector_type <Name> "<description>" { … }` is top level and `use`-importable; the description is required. Its body: `key: value;` lines (string or number; `part` is shown on drawings and the BOM, other keys are accepted but unused) and at most one layout. Without a layout a pinout view draws the table only.
 - Layouts are seen **from the harness side** (wire entry): mirror a mating-face datasheet drawing.
-- `layout grid { rows: N; cols: N; [numbering: <mode>;] }`, in this order. Modes: `row_major` (default: left to right, row by row), `odd_even` (column first: on 2×N odd pins on one row, even on the other), `clockwise`, `counter_clockwise` (around the face; on 2×N the upper row mirrored, the lower left to right).
+- `layout grid { rows: N; cols: N; [numbering: <mode>;] }`, in this order. Modes: `row_major` (default: left to right, row by row), `odd_even` (column first: on 2×N odd pins on one row, even on the other), `clockwise` (around the face; on 2×N the upper row left to right, the lower mirrored), `counter_clockwise` (on 2×N the upper row mirrored, the lower left to right).
 - `layout face { cavity <pin> at (x, y) [size large]; … }`, one or more cavities, for any other shape. Slot coordinates, `x` right, `y` down; `size large` fills 2×2 slots; the drawing starts at the first occupied slot.
 
 ```wb
