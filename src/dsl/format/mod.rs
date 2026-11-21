@@ -80,6 +80,7 @@ impl From<Formatted> for String {
 pub struct FormattedFile {
     /// The file, as the loader found it (canonical).
     pub path: PathBuf,
+    /// The file's text in the house layout.
     pub formatted: Formatted,
     /// Whether the formatted text differs from the file's.
     pub changed: bool,
