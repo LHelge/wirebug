@@ -57,6 +57,9 @@ pub(super) const PIN_NEIGHBOUR_GAP: f64 = 3.0;
 pub(super) const PIN_ACROSS: f64 = 8.0;
 /// Estimated advance of one character of the 10px pin font.
 pub(super) const PIN_CHAR_WIDTH: f64 = 6.0;
+/// The room between a north pin annotation moved past the component title
+/// and the title.
+pub(super) const PIN_TITLE_GAP: f64 = 2.0;
 /// The least room between a pin annotation and the canvas edge.
 pub(super) const PIN_CANVAS_PAD: f64 = 12.0;
 pub(super) const PORT_RADIUS: f64 = 4.0;

@@ -140,6 +140,17 @@ impl PlacedComponent {
         }
     }
 
+    /// Move each north-side pin annotation that would meet the title out
+    /// along its stub, past the title.
+    fn clear_pins_of_title(&mut self) {
+        let title = self.title_extent();
+        for port in self.ports.iter_mut().filter(|p| p.side == Side::North) {
+            if let Some(pin) = &mut port.pin {
+                pin.clear_title(port.pos, &title);
+            }
+        }
+    }
+
     /// The area the title above the box covers (bold 13px, centred), its
     /// width estimated at [`TITLE_CHAR_WIDTH`] per character.
     pub(super) fn title_extent(&self) -> Bounds {
@@ -473,7 +484,7 @@ impl Placement {
                         port: (*port_name).clone(),
                         side,
                         pos,
-                        pin: pin.map(|text| PinAnnotation { text, orientation }),
+                        pin: pin.map(|text| PinAnnotation::new(text, orientation)),
                         label: port.label.clone(),
                         inverted: false,
                         off_view: None,
@@ -481,17 +492,16 @@ impl Placement {
                 }
             }
 
-            components.insert(
-                name.clone(),
-                PlacedComponent {
-                    origin,
-                    width,
-                    height,
-                    label,
-                    ports,
-                    port_index,
-                },
-            );
+            let mut component = PlacedComponent {
+                origin,
+                width,
+                height,
+                label,
+                ports,
+                port_index,
+            };
+            component.clear_pins_of_title();
+            components.insert(name.clone(), component);
         }
 
         let texts = view
@@ -681,10 +691,8 @@ impl Placement {
                 port: ep.port.clone(),
                 side: ep.side,
                 pos,
-                pin: PinAnnotation::text(subject, port).map(|text| PinAnnotation {
-                    text,
-                    orientation: PinOrientation::Horizontal,
-                }),
+                pin: PinAnnotation::text(subject, port)
+                    .map(|text| PinAnnotation::new(text, PinOrientation::Horizontal)),
                 label: port.label.clone(),
                 inverted: true,
                 off_view: None,
@@ -1755,5 +1763,66 @@ component sys {
                 "d 11 true",
             ]
         );
+    }
+
+    #[test]
+    fn north_pin_annotations_under_the_title_move_past_it_and_others_stay() {
+        // The cell module's case: a box with several connectors whose
+        // north pins sit under its centred title. The three under
+        // "BmsSlave" move out past it; the fourth, right of the title,
+        // keeps its place.
+        let design = design_from(
+            r#"
+component sys {
+    slave: BmsSlave;
+    component BmsSlave {
+        connector iso_up "ISO-SPI up 2p" {
+            pub port a "A" pin 1;
+            pub port b "B" pin 2;
+        }
+        connector iso_down "ISO-SPI down 2p" {
+            pub port c "C" pin 1;
+            pub port d "D" pin 2;
+        }
+    }
+}
+"#,
+        );
+        let subject = design.get(&design.root).unwrap();
+        let view = view_of(
+            "sys",
+            &[(
+                "slave",
+                0.0,
+                0.0,
+                &[
+                    ("a", Side::North),
+                    ("b", Side::North),
+                    ("c", Side::North),
+                    ("d", Side::North),
+                ],
+            )],
+        );
+        let placement = Placement::compute(&design, subject, &view, Grid::new(15.0)).unwrap();
+        let slave = &placement.components[&InstanceName::from("slave")];
+        let title = slave.title_extent();
+        let moved: Vec<bool> = slave
+            .ports
+            .iter()
+            .map(|port| {
+                let pin = port.pin.as_ref().unwrap();
+                let extent = port.pin_extent().unwrap();
+                assert!(!extent.overlaps(&title), "{}: {extent:?}", port.port);
+                // Turned, reading down: the number ends at the anchor, the
+                // end nearest the port.
+                let at = pin.placement(Side::North, port.pos);
+                assert_eq!((at.anchor, at.rotate), ("end", 90.0), "{}", port.port);
+                assert_eq!(at.y, extent.origin.y + extent.height, "{}", port.port);
+                let unmoved = PinAnnotation::new(pin.text.clone(), pin.orientation)
+                    .extent(Side::North, port.pos);
+                extent != unmoved
+            })
+            .collect();
+        assert_eq!(moved, [true, true, true, false]);
     }
 }
