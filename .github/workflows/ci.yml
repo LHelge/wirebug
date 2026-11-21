@@ -1,8 +1,9 @@
 name: CI
 
 on:
+  # Every pull request, whatever its base: a stacked pull request targets the
+  # branch below it, and should be checked before that one merges.
   pull_request:
-    branches: [main]
 
 # Cancel superseded runs on the same PR branch.
 concurrency:
