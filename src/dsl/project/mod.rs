@@ -21,6 +21,9 @@ use crate::dsl::manifest::{self, Manifest};
 use crate::dsl::parse::{Completeness, ParseError, parse_file};
 use crate::dsl::span::FileId;
 
+/// The entry file beside `wirebug.toml`, the one a project loads first.
+pub(crate) const ENTRY_FILE: &str = "main.wb";
+
 /// One loaded source file. `files[id.0]` is the file with that [`FileId`].
 pub struct LoadedFile {
     pub path: PathBuf,
@@ -131,7 +134,7 @@ pub(crate) fn relative_path(from_dir: &Path, to: &Path) -> String {
 #[allow(clippy::result_large_err)]
 pub fn discover(target: Option<&Path>) -> Result<PathBuf, Problem> {
     match target {
-        Some(p) if p.is_file() && is_manifest(p) => Ok(p.with_file_name("main.wb")),
+        Some(p) if p.is_file() && is_manifest(p) => Ok(p.with_file_name(ENTRY_FILE)),
         Some(p) if p.is_file() => Ok(p.to_path_buf()),
         Some(p) if p.is_dir() => walk_up_manifest(p),
         Some(p) => Err(Problem::Io {
@@ -156,7 +159,7 @@ fn walk_up_manifest(start: &Path) -> Result<PathBuf, Problem> {
     while let Some(d) = dir {
         let candidate = d.join(manifest::FILE_NAME);
         if candidate.is_file() {
-            return Ok(d.join("main.wb"));
+            return Ok(d.join(ENTRY_FILE));
         }
         dir = d.parent();
     }

@@ -3,19 +3,16 @@
 //! the `out/` that `render` writes by default.
 //!
 //! A scaffold never overwrites: it refuses, before writing anything, a
-//! directory that already holds a manifest or a `main.wb`, and leaves an
-//! existing `.gitignore` alone.
+//! path that is not a directory or a directory that already holds a
+//! manifest or a `main.wb`, and leaves an existing `.gitignore` alone.
 
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
-use crate::dsl::manifest;
+use crate::dsl::{manifest, project};
 use crate::error::{Error, Result};
-
-/// The entry file the scaffold writes, the one project discovery loads.
-const ENTRY_FILE: &str = "main.wb";
 
 /// The scaffolded `main.wb`: two components, one wire, one schematic view.
 const MAIN_WB: &str = include_str!("../templates/init/main.wb");
@@ -56,11 +53,17 @@ impl Scaffold {
 
     /// Write the project: create the directory (and its parents) if
     /// missing, then the manifest, `main.wb` and, if absent, `.gitignore`.
-    /// Refuses with [`Error::InitExists`], having written nothing, when the
-    /// manifest or `main.wb` is already there.
+    /// Refuses, having written nothing, with [`Error::InitNotADirectory`]
+    /// when the path is something other than a directory, and with
+    /// [`Error::InitExists`] when the manifest or `main.wb` is already there.
     pub fn write(&self) -> Result<Scaffolded> {
+        if self.dir.exists() && !self.dir.is_dir() {
+            return Err(Error::InitNotADirectory {
+                path: self.dir.clone(),
+            });
+        }
         let manifest_path = self.dir.join(manifest::FILE_NAME);
-        let entry_path = self.dir.join(ENTRY_FILE);
+        let entry_path = self.dir.join(project::ENTRY_FILE);
         for path in [&manifest_path, &entry_path] {
             if path.exists() {
                 return Err(Error::InitExists { path: path.clone() });
@@ -74,12 +77,12 @@ impl Scaffold {
         let name = self.project_name();
 
         let mut files = Vec::new();
-        create_new(&manifest_path, &manifest_text(&name))?;
+        Self::create_new(&manifest_path, &name.manifest())?;
         files.push(manifest_path);
-        create_new(&entry_path, MAIN_WB)?;
+        Self::create_new(&entry_path, MAIN_WB)?;
         files.push(entry_path);
         let gitignore = self.dir.join(".gitignore");
-        match create_new(&gitignore, GITIGNORE) {
+        match Self::create_new(&gitignore, GITIGNORE) {
             Ok(()) => files.push(gitignore),
             Err(Error::InitExists { .. }) => {}
             Err(error) => return Err(error),
@@ -87,63 +90,91 @@ impl Scaffold {
 
         Ok(Scaffolded {
             dir: self.dir.clone(),
-            name,
+            name: name.0,
             files,
         })
     }
 
     /// The manifest name: the directory's own name, resolved through `.`
-    /// and `..`, made a project name by [`project_name_from`].
-    fn project_name(&self) -> String {
+    /// and `..`.
+    fn project_name(&self) -> ProjectName {
         let dir = fs::canonicalize(&self.dir).unwrap_or_else(|_| self.dir.clone());
         dir.file_name()
             .and_then(|name| name.to_str())
-            .map_or_else(|| FALLBACK_NAME.to_string(), project_name_from)
+            .map_or_else(ProjectName::fallback, ProjectName::from)
+    }
+
+    /// Write `text` to a file that must not exist yet, so a file created
+    /// since the scaffold looked is still never overwritten.
+    fn create_new(path: &Path, text: &str) -> Result<()> {
+        let failed = |source| Error::Write {
+            path: path.to_path_buf(),
+            source,
+        };
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+            .map_err(|source| match source.kind() {
+                ErrorKind::AlreadyExists => Error::InitExists {
+                    path: path.to_path_buf(),
+                },
+                _ => failed(source),
+            })?;
+        file.write_all(text.as_bytes()).map_err(failed)
+    }
+}
+
+/// The `name` a scaffolded manifest carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProjectName(String);
+
+impl ProjectName {
+    fn fallback() -> Self {
+        Self(FALLBACK_NAME.to_string())
+    }
+
+    /// The scaffolded `wirebug.toml`.
+    fn manifest(&self) -> String {
+        format!("[project]\nname = \"{}\"\nversion = \"0.1.0\"\n", self.0)
     }
 }
 
 /// A project name from a directory name: letters, digits, `-` and `_` are
 /// kept, every other run of characters becomes one `-`, and none leads or
 /// trails. The result also needs no escaping in a TOML string.
-fn project_name_from(dir_name: &str) -> String {
-    let mut name = String::new();
-    for c in dir_name.chars() {
-        if c.is_alphanumeric() || c == '-' || c == '_' {
-            name.push(c);
-        } else if !name.is_empty() && !name.ends_with('-') {
-            name.push('-');
+impl From<&str> for ProjectName {
+    fn from(dir_name: &str) -> Self {
+        let mut name = String::new();
+        for c in dir_name.chars() {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                name.push(c);
+            } else if !name.is_empty() && !name.ends_with('-') {
+                name.push('-');
+            }
+        }
+        match name.trim_matches('-') {
+            "" => Self::fallback(),
+            name => Self(name.to_string()),
         }
     }
-    let name = name.trim_matches('-');
-    if name.is_empty() {
-        FALLBACK_NAME.to_string()
-    } else {
-        name.to_string()
+}
+
+impl Scaffolded {
+    /// The directory as an argument to append to a command, quoted for a
+    /// POSIX shell unless every character is plain; empty for `.`, where
+    /// commands find the project themselves.
+    fn command_argument(&self) -> String {
+        let dir = self.dir.display().to_string();
+        let plain = |c: char| c.is_ascii_alphanumeric() || "._/-".contains(c);
+        if dir == "." {
+            String::new()
+        } else if dir.chars().all(plain) {
+            format!(" {dir}")
+        } else {
+            format!(" '{}'", dir.replace('\'', "'\\''"))
+        }
     }
-}
-
-fn manifest_text(name: &str) -> String {
-    format!("[project]\nname = \"{name}\"\nversion = \"0.1.0\"\n")
-}
-
-/// Write `text` to a file that must not exist yet, so a file created
-/// since the scaffold looked is still never overwritten.
-fn create_new(path: &Path, text: &str) -> Result<()> {
-    let failed = |source| Error::Write {
-        path: path.to_path_buf(),
-        source,
-    };
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path)
-        .map_err(|source| match source.kind() {
-            ErrorKind::AlreadyExists => Error::InitExists {
-                path: path.to_path_buf(),
-            },
-            _ => failed(source),
-        })?;
-    file.write_all(text.as_bytes()).map_err(failed)
 }
 
 /// One `created <path>` line per file, then the commands to run next.
@@ -152,11 +183,7 @@ impl fmt::Display for Scaffolded {
         for file in &self.files {
             writeln!(f, "created {}", file.display())?;
         }
-        let target = match self.dir.display().to_string() {
-            dir if dir == "." => String::new(),
-            dir if dir.contains(char::is_whitespace) => format!(" '{dir}'"),
-            dir => format!(" {dir}"),
-        };
+        let target = self.command_argument();
         write!(
             f,
             "next: `wirebug check{target}`, then `wirebug render{target}`"
@@ -168,23 +195,27 @@ impl fmt::Display for Scaffolded {
 mod tests {
     use super::*;
 
+    fn name(dir_name: &str) -> String {
+        ProjectName::from(dir_name).0
+    }
+
     #[test]
     fn a_directory_name_is_kept_when_it_is_already_a_project_name() {
-        assert_eq!(project_name_from("my-harness_2"), "my-harness_2");
-        assert_eq!(project_name_from("kabelstam-åäö"), "kabelstam-åäö");
+        assert_eq!(name("my-harness_2"), "my-harness_2");
+        assert_eq!(name("kabelstam-åäö"), "kabelstam-åäö");
     }
 
     #[test]
     fn other_characters_in_a_directory_name_become_single_dashes() {
-        assert_eq!(project_name_from("My Car (v2)"), "My-Car-v2");
-        assert_eq!(project_name_from("a\"b\\c"), "a-b-c");
-        assert_eq!(project_name_from(".hidden"), "hidden");
+        assert_eq!(name("My Car (v2)"), "My-Car-v2");
+        assert_eq!(name("a\"b\\c"), "a-b-c");
+        assert_eq!(name(".hidden"), "hidden");
     }
 
     #[test]
     fn a_directory_name_with_nothing_to_keep_falls_back() {
-        assert_eq!(project_name_from("..."), FALLBACK_NAME);
-        assert_eq!(project_name_from(""), FALLBACK_NAME);
+        assert_eq!(name("..."), FALLBACK_NAME);
+        assert_eq!(name(""), FALLBACK_NAME);
     }
 
     #[test]
@@ -245,6 +276,16 @@ mod tests {
     }
 
     #[test]
+    fn scaffold_refuses_a_path_that_is_a_file_and_writes_nothing() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let file = tmp.path().join("afile");
+        fs::write(&file, "mine").expect("write");
+        let error = Scaffold::new(&file).write().expect_err("refused");
+        assert!(matches!(&error, Error::InitNotADirectory { path } if *path == file));
+        assert_eq!(fs::read_to_string(&file).expect("read"), "mine");
+    }
+
+    #[test]
     fn scaffold_leaves_an_existing_gitignore_alone() {
         let tmp = tempfile::tempdir().expect("tempdir");
         fs::write(tmp.path().join(".gitignore"), "target/\n").expect("write");
@@ -281,5 +322,19 @@ mod tests {
             ..here
         };
         assert!(spaced.to_string().ends_with("`wirebug render 'my lamp'`"));
+        let quoted = Scaffolded {
+            dir: PathBuf::from("it's mine"),
+            ..spaced.clone()
+        };
+        assert!(
+            quoted
+                .to_string()
+                .ends_with(r"`wirebug render 'it'\''s mine'`")
+        );
+        let ampersand = Scaffolded {
+            dir: PathBuf::from("a&b"),
+            ..spaced
+        };
+        assert!(ampersand.to_string().ends_with("`wirebug render 'a&b'`"));
     }
 }
