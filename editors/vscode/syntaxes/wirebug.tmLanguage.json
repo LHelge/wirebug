@@ -8,6 +8,7 @@
     { "include": "#type-declaration" },
     { "include": "#use-import" },
     { "include": "#view-kind" },
+    { "include": "#view-subject" },
     { "include": "#numbering-mode" },
     { "include": "#wire-color" },
     { "include": "#declared-name" },
@@ -51,6 +52,14 @@
       "captures": {
         "1": { "name": "storage.type.wirebug" },
         "2": { "name": "support.constant.view-kind.wirebug" }
+      }
+    },
+    "view-subject": {
+      "comment": "`for Component` right after a view's title names its subject. Only there: anywhere else `for` is an ordinary name (`pub port for \"F\";`).",
+      "match": "(?<=\")\\s*\\b(for)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.other.wirebug" },
+        "2": { "name": "entity.name.type.wirebug" }
       }
     },
     "numbering-mode": {
