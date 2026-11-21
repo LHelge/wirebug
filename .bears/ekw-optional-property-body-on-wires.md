@@ -1,13 +1,14 @@
 ---
 id: ekw
 title: Optional property body on wires
-status: open
+status: done
 priority: P1
 created: "2026-11-20T21:40:31.990543266Z"
-updated: "2026-11-20T21:40:31.990543266Z"
+updated: "2026-11-21T01:48:33.972158922Z"
 tags:
   - dsl
 parent: k7r
+attempts: 1
 ---
 
 ## Summary
