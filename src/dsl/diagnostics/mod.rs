@@ -952,7 +952,7 @@ pub enum Problem {
     #[diagnostic(
         code(wirebug::uninstantiated_view_subject),
         help(
-            "a view is drawn against an instance of its file's top-level component; instantiate `{subject}` under the root component, or remove the view"
+            "a view is drawn against an instance of its subject, the component it documents; instantiate `{subject}` under the root component, or remove the view"
         )
     )]
     UninstantiatedViewSubject {

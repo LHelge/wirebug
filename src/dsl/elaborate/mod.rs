@@ -1133,6 +1133,37 @@ mod tests {
     }
 
     #[test]
+    fn an_uninstantiated_for_subject_is_named_as_the_views_subject() {
+        // The view sits in `main.wb`, whose top-level component is
+        // `Vehicle`, and names `Lamp`: the help must not blame the file's
+        // component.
+        let (_, problems) = elaborate_files(&[
+            (
+                "main.wb",
+                "use Lamp from \"lamp.wb\";\ncomponent Vehicle { }\n\
+                 view pinout \"Lamp\" for Lamp { include x at (0, 0); }\n",
+            ),
+            (
+                "lamp.wb",
+                "component Lamp { connector x \"X\" { pub port a \"A\" pin 1; } }\n",
+            ),
+        ]);
+        let [problem] = problems.as_slice() else {
+            panic!("one problem: {problems:?}");
+        };
+        assert_eq!(
+            problem.to_string(),
+            "view \"Lamp\" documents `Lamp`, which the design never instantiates"
+        );
+        let help = miette::Diagnostic::help(problem).expect("help").to_string();
+        assert_eq!(
+            help,
+            "a view is drawn against an instance of its subject, the component it documents; \
+             instantiate `Lamp` under the root component, or remove the view"
+        );
+    }
+
+    #[test]
     fn a_view_of_a_component_instantiated_anywhere_is_drawn_against_it() {
         let (design, problems) = with_spare(&["Plug", "Spare"], "    spare: Spare;");
         assert!(problems.is_empty(), "{problems:?}");
