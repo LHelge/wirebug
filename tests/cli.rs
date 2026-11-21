@@ -1781,3 +1781,135 @@ fn render_refuses_a_project_with_syntax_errors() {
     let drawn = std::fs::read_dir(&out).map_or(0, |entries| entries.count());
     assert_eq!(drawn, 0, "nothing is drawn");
 }
+
+const WIRE_LIST_ROOT: &str = "tests/fixtures/wire_list_project";
+const PIN_TABLE_ROOT: &str = "tests/fixtures/pin_table_project";
+
+/// Run `wirebug export <args>`, returning (success, stdout, stderr).
+fn export(args: &[&str]) -> (bool, String, String) {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .arg("export")
+        .args(args)
+        .output()
+        .expect("runs");
+    (
+        output.status.success(),
+        String::from_utf8(output.stdout).expect("utf-8 stdout"),
+        String::from_utf8(output.stderr).expect("utf-8 stderr"),
+    )
+}
+
+#[test]
+fn export_wires_prints_the_wire_list_as_csv_on_stdout() {
+    let (ok, stdout, stderr) = export(&["wires", WIRE_LIST_ROOT]);
+    assert!(ok, "{stderr}");
+    let mut lines = stdout.lines();
+    let header = lines.next().expect("a header");
+    assert!(header.starts_with("kind,owner,cable,"), "{header}");
+    assert!(header.ends_with(",length_m,rail_length_m,rail_segment"));
+    // 16 conductors (a rail of four ends is three), two screens, and the
+    // sub-loom's wire once per placement.
+    let rows: Vec<&str> = lines.collect();
+    assert_eq!(rows.len(), 19, "{stdout}");
+    assert_eq!(rows.iter().filter(|r| r.starts_with("shield,")).count(), 2);
+    // Nothing but the table on stdout; a clean project says nothing.
+    assert!(stderr.is_empty(), "{stderr}");
+}
+
+#[test]
+fn export_connectors_prints_a_row_per_cavity_entry() {
+    let (ok, stdout, stderr) = export(&["connectors", PIN_TABLE_ROOT]);
+    assert!(ok, "{stderr}");
+    let mut lines = stdout.lines();
+    let header = lines.next().expect("a header");
+    assert!(header.starts_with("instance,connector,half,"), "{header}");
+    let rows: Vec<&str> = lines.collect();
+    assert_eq!(rows.len(), 43, "{stdout}");
+    // A conductor into a port with no pin is listed, its pin empty.
+    assert!(
+        rows.iter()
+            .any(|r| r.starts_with("Vehicle.ecu,x1,,Ecu12,ECU 12p,ECU-12,,,aux,AUX,conductor,")),
+        "{stdout}"
+    );
+    // An unused cavity is a row of its own.
+    assert!(
+        rows.iter()
+            .any(|r| r.starts_with("Vehicle.ecu,x1,,Ecu12,ECU 12p,ECU-12,7,,,,empty,"))
+    );
+}
+
+#[test]
+fn export_json_carries_the_format_version_and_the_project() {
+    for (table, root, data) in [
+        ("wires", WIRE_LIST_ROOT, "rows"),
+        ("connectors", PIN_TABLE_ROOT, "connectors"),
+    ] {
+        let (ok, stdout, stderr) = export(&[table, root, "--format", "json"]);
+        assert!(ok, "{stderr}");
+        let document: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+        assert_eq!(document["table"], table);
+        assert_eq!(document["format_version"], 1);
+        assert!(document["project"]["name"].is_string());
+        assert_eq!(
+            document["generator"],
+            concat!("wirebug v", env!("CARGO_PKG_VERSION"))
+        );
+        assert!(document[data].is_array(), "{table}: {stdout}");
+    }
+}
+
+#[test]
+fn export_out_writes_the_file_and_prints_a_summary_instead() {
+    let tmp = tempdir().expect("tempdir");
+    let path = tmp.path().join("wires.csv");
+    let (ok, stdout, stderr) = export(&["wires", WIRE_LIST_ROOT, "--out", path.to_str().unwrap()]);
+    assert!(ok, "{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert_eq!(
+        stderr.trim_end(),
+        format!("exported 19 wire-list row(s) as csv to {}", path.display())
+    );
+    let written = std::fs::read_to_string(&path).expect("written");
+    let (_, printed, _) = export(&["wires", WIRE_LIST_ROOT]);
+    assert_eq!(written, printed);
+}
+
+#[test]
+fn export_refuses_a_project_with_errors_and_prints_no_table() {
+    let (ok, stdout, stderr) = export(&["wires", SYNTAX_ERRORS_ROOT]);
+    assert!(!ok);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(stderr.contains("not exporting"), "{stderr}");
+}
+
+#[test]
+fn export_strict_refuses_a_project_with_warnings() {
+    let (ok, stdout, stderr) = export(&["connectors", UNDRAWN_CONDUCTORS_ROOT]);
+    assert!(ok, "warnings do not block: {stderr}");
+    assert!(stdout.starts_with("instance,"));
+    assert!(
+        stderr.contains("undrawn"),
+        "the warnings go to stderr: {stderr}"
+    );
+
+    let (ok, stdout, stderr) = export(&["connectors", UNDRAWN_CONDUCTORS_ROOT, "--strict"]);
+    assert!(!ok);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(stderr.contains("— not exporting"), "{stderr}");
+}
+
+#[test]
+fn export_help_lists_its_tables_and_flags() {
+    let help = |args: &[&str]| {
+        let output = Command::cargo_bin("wirebug")
+            .expect("binary present")
+            .args(args)
+            .output()
+            .expect("runs");
+        assert!(output.status.success());
+        String::from_utf8(output.stdout).expect("utf-8")
+    };
+    insta::assert_snapshot!("export_help", help(&["export", "--help"]));
+    insta::assert_snapshot!("export_wires_help", help(&["export", "wires", "--help"]));
+}

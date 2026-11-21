@@ -1,0 +1,16 @@
+---
+source: tests/cli.rs
+expression: "help(&[\"export\", \"wires\", \"--help\"])"
+---
+The wire list (cut list): one row per conductor — each segment of a multi-endpoint wire — and one per cable screen
+
+Usage: wirebug export wires [OPTIONS] [TARGET]
+
+Arguments:
+  [TARGET]  A project manifest, project directory, or `.wb` file. Defaults to the project containing the current directory (found by walking up to `wirebug.toml`)
+
+Options:
+      --format <FORMAT>  Table format [default: csv] [possible values: csv, json]
+      --out <OUT>        File to write the table to (its directory created if absent), instead of stdout
+      --strict           Treat warnings as errors
+  -h, --help             Print help

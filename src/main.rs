@@ -1,14 +1,16 @@
 //! `wirebug` CLI binary.
 //!
-//! Three subcommands over the `.wb` DSL pipeline: `check` reports problems,
+//! Subcommands over the `.wb` DSL pipeline: `check` reports problems,
 //! `render` writes one SVG (or PNG) per view in the design — or, with
-//! `--pdf`, a single multi-page A4 PDF — and `serve` runs a live-reloading
-//! dev server. Each discovers the project by walking up to `wirebug.toml`
-//! when given no target. A view that fails to render is reported by title
-//! and left out; the others are still written, and `render` exits non-zero.
+//! `--pdf`, a single multi-page A4 PDF — `export` writes a build table as
+//! CSV or JSON, and `serve` runs a live-reloading dev server. Each
+//! discovers the project by walking up to `wirebug.toml` when given no
+//! target. A view that fails to render is reported by title and left out;
+//! the others are still written, and `render` exits non-zero.
 
 mod cli;
 
+use std::io::Write;
 use std::net::IpAddr;
 use std::path::Path;
 use std::process::ExitCode;
@@ -18,9 +20,11 @@ use clap::Parser;
 use miette::{GraphicalReportHandler, JSONReportHandler};
 use tracing_subscriber::EnvFilter;
 
-use cli::{Cli, Command, ManifestCommand};
+use cli::{Cli, Command, ExportArgs, ManifestCommand};
 use wirebug::dsl::diagnostics::Problem;
+use wirebug::dsl::ir::Design;
 use wirebug::dsl::{self, CheckReport, Format};
+use wirebug::export::{Export, Table};
 use wirebug::render::output::{Output, ViewFormat};
 use wirebug::render::png::PNG_SCALE;
 
@@ -49,6 +53,10 @@ fn run(cli: Cli) -> Result<ExitCode> {
             pdf,
             embed,
         } => render_command(target.as_deref(), &out, strict, png, pdf, embed),
+        Command::Export { table } => {
+            let (table, args) = table.into_parts();
+            export_command(table, &args)
+        }
         Command::Manifest { what } => Ok(manifest_command(what)),
         Command::Lsp => lsp_command(),
         Command::Serve { target, port, host } => serve_command(target.as_deref(), host, port),
@@ -126,21 +134,7 @@ fn render_command(
     embed: bool,
 ) -> Result<ExitCode> {
     let report = wirebug::check_project(target);
-    let counts = report.counts();
-
-    // Surface any check problems first; an erroring project (or, under
-    // --strict, a warning) is not rendered.
-    eprint!("{}", render_problems(&report.problems));
-    if report.has_blocking_problems(strict) {
-        eprintln!(
-            "{} error(s), {} warning(s) — not rendering",
-            counts.errors, counts.warnings
-        );
-        return Ok(ExitCode::FAILURE);
-    }
-
-    let Some(design) = &report.design else {
-        eprintln!("no design to render");
+    let Some(design) = checked_design(&report, strict, "render") else {
         return Ok(ExitCode::FAILURE);
     };
 
@@ -165,6 +159,44 @@ fn render_command(
     } else {
         ExitCode::FAILURE
     })
+}
+
+/// Write one build table of the project to stdout, or to `--out` with a
+/// summary line on stderr. Diagnostics go to stderr, so stdout holds the
+/// table alone.
+fn export_command(table: Table, args: &ExportArgs) -> Result<ExitCode> {
+    let report = wirebug::check_project(args.target.as_deref());
+    let Some(design) = checked_design(&report, args.strict, "export") else {
+        return Ok(ExitCode::FAILURE);
+    };
+    let export = Export::new(design, table, args.format.into())?;
+    match &args.out {
+        Some(path) => eprintln!("{}", export.write(path)?),
+        None => std::io::stdout()
+            .lock()
+            .write_all(export.text().as_bytes())
+            .context("writing the table to stdout")?,
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Print the check's problems to stderr, then the design to `action`
+/// (`render`, `export`) — or `None`, saying why, when the project has
+/// errors (or, under `strict`, warnings) or no design.
+fn checked_design<'r>(report: &'r CheckReport, strict: bool, action: &str) -> Option<&'r Design> {
+    let counts = report.counts();
+    eprint!("{}", render_problems(&report.problems));
+    if report.has_blocking_problems(strict) {
+        eprintln!(
+            "{} error(s), {} warning(s) — not {action}ing",
+            counts.errors, counts.warnings
+        );
+        return None;
+    }
+    if report.design.is_none() {
+        eprintln!("no design to {action}");
+    }
+    report.design.as_ref()
 }
 
 /// Print the project's manifest version (`v<version>`) to stdout, or the
