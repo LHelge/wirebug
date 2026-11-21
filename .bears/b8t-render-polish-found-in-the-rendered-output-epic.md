@@ -19,6 +19,7 @@ Small items found while implementing jkx.cp, jkx.48 and jkx.wq.
 - [ ] Build resvg/fontdb without the system-font features (`fontconfig`, `memmap`): unused since fonts are bundled, smaller binary, and the no-system-font rule is enforced at compile time
 - [ ] LSP completion lists nested component names and same-label auto-import items in hash order (cosmetic; clients re-sort)
 
+- [ ] The identity stamp's revision depends on the user's git environment: `git_revision` (`src/dsl/manifest/git.rs`) appends `-dirty` whenever `git status --porcelain` prints anything, untracked files included, so a file ignored only by one user's GLOBAL excludes makes the same tree `-dirty` elsewhere (CI, a sandbox, another user). Count only tracked changes (`--untracked-files=no` or `git diff --quiet HEAD`); and decide what the stamp shows when git refuses the repository (today the revision silently disappears)
 
 ## Testing
 - Unit tests beside the code; end-to-end coverage via `tests/fixtures/` (never `examples/`).
