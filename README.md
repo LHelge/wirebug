@@ -287,6 +287,8 @@ warning: view "HV System Overview": smallest text 3.2 pt on A4, below the 5 pt l
 
 The page is written all the same and the exit status is unchanged — also under `--strict`, which makes the project's own warnings fatal, not the paper's. `--paper` without `--pdf` is refused.
 
+PNG and PDF output draw every label in DejaVu Sans, which is built into wirebug, so a drawing comes out the same on every machine and needs no fonts installed. The SVG files name only `sans-serif` and do not carry the font, so a browser or embedding page draws them with its own sans-serif face.
+
 ## Exporting build tables
 
 `wirebug export` writes the tables a harness is cut, crimped and ordered from, built from the model rather than from any drawing — so they list every conductor, whether or not a view draws it:
@@ -450,6 +452,8 @@ Licensed under either of
   <http://opensource.org/licenses/MIT>)
 
 at your option.
+
+PNG and PDF output use the bundled [DejaVu Sans](https://dejavu-fonts.github.io/) font (version 2.37, in [`assets/fonts/dejavu/`](assets/fonts/dejavu/)), which is not under the licences above but under its own: the Bitstream Vera and Arev font licences, in [`assets/fonts/dejavu/LICENSE`](assets/fonts/dejavu/LICENSE), which ships with the fonts.
 
 Unless you explicitly state otherwise, any contribution intentionally
 submitted for inclusion in the work by you, as defined in the Apache-2.0

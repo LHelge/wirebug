@@ -87,6 +87,69 @@ fn render_png_writes_a_png_per_view_and_index_references_png() {
     assert!(!index.contains(".svg"));
 }
 
+/// Every file `render <mode>` writes for the basic fixture into `out`, by
+/// name. With `hide_fonts` the run sees no system font: fontconfig is
+/// pointed at a config whose only font directory is empty, and `HOME` at an
+/// empty directory, so a lookup of the system fonts would find none.
+fn rendered_files(out: &std::path::Path, mode: &str, hide_fonts: bool) -> Vec<(String, Vec<u8>)> {
+    let mut render = Command::cargo_bin("wirebug").expect("binary present");
+    render.args(["render", FIXTURE_ROOT, "--out", out.to_str().unwrap(), mode]);
+    let empty = out.with_extension("empty");
+    if hide_fonts {
+        std::fs::create_dir_all(&empty).expect("empty dir");
+        let config = out.with_extension("conf");
+        std::fs::write(
+            &config,
+            format!("<fontconfig><dir>{}</dir></fontconfig>", empty.display()),
+        )
+        .expect("fontconfig written");
+        render
+            .env("FONTCONFIG_FILE", &config)
+            .env_remove("FONTCONFIG_PATH")
+            .env("HOME", &empty)
+            .env("XDG_DATA_HOME", &empty)
+            .env("XDG_CONFIG_HOME", &empty);
+    }
+    render.assert().success();
+    let mut files: Vec<_> = std::fs::read_dir(out)
+        .expect("out dir")
+        .map(|entry| {
+            let path = entry.expect("entry").path();
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            (name, std::fs::read(&path).expect("file read"))
+        })
+        .collect();
+    files.sort();
+    files
+}
+
+#[test]
+fn png_and_pdf_output_is_the_same_with_or_without_system_fonts() {
+    // Text is drawn with the bundled font alone, so hiding every system
+    // font changes no byte. (With the system fonts loaded instead, the
+    // hidden run found no font and dropped every label.)
+    let tmp = tempdir().expect("tempdir");
+    for (mode, drawing) in [
+        ("--png", "system_overview.png"),
+        ("--pdf", "basic_project.pdf"),
+    ] {
+        let dir = mode.trim_start_matches('-');
+        let seen = rendered_files(&tmp.path().join(format!("{dir}-seen")), mode, false);
+        let hidden = rendered_files(&tmp.path().join(format!("{dir}-hidden")), mode, true);
+        let names = |files: &[(String, Vec<u8>)]| -> Vec<String> {
+            files.iter().map(|(name, _)| name.clone()).collect()
+        };
+        assert!(names(&seen).iter().any(|name| name == drawing));
+        assert_eq!(names(&seen), names(&hidden));
+        for ((name, seen), (_, hidden)) in seen.iter().zip(&hidden) {
+            assert!(
+                seen == hidden,
+                "{name} differs when system fonts are hidden"
+            );
+        }
+    }
+}
+
 #[test]
 fn render_pdf_writes_a_single_pdf_and_no_svgs_or_index() {
     let tmp = tempdir().expect("tempdir");

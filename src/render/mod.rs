@@ -19,6 +19,7 @@ use crate::error::{Error, Result, ViewError, ViewErrorKind, ViewResult};
 use crate::export::{Format as ExportFormat, PinTables, Table};
 use crate::render::geometry::Point;
 
+pub(crate) mod fonts;
 pub mod geometry;
 pub mod harness;
 pub(crate) mod lint;

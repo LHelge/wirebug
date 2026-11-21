@@ -88,6 +88,18 @@ Five CLI commands share it:
   Each view renders or fails on its own (see Render-time errors): `render`
   writes every view that rendered, prints each failure naming its view,
   and exits non-zero.
+  Fonts: `--png` and `--pdf` draw text with DejaVu Sans (regular, bold
+  and oblique, `assets/fonts/dejavu/`, compiled in by `render/fonts.rs`),
+  whose database both `PngRasterizer` and `PdfExporter` parse with: it
+  holds those faces only, every generic family maps to them, and no
+  system font is ever loaded, so a given SVG becomes the same PNG and PDF
+  on every machine (the PDF outlines the glyphs, `embed_text: false`, so
+  its text is paths, not a font). SVG output still asks for `sans-serif`
+  and is drawn with whatever font the viewer resolves; the font is not
+  embedded in it. That is why the text-width estimators (schematic and
+  harness `*CHAR_WIDTH` constants, the pinout's `fit::Font`) stay
+  conservative upper bounds for the widest common `sans-serif` rather
+  than DejaVu Sans's exact advances.
   The legacy YAML model/view loader has been removed; `ir::Design` is the
   only thing the renderer consumes.
 - **`export` (`src/export/`)** — runs `check_project` like `render`,
@@ -1439,6 +1451,7 @@ src/
 │   │                #   RenderedView{title,filename,kind,svg,canvas} + index_html (tabs)
 │   │                #   + SvgMode::frame (root viewBox, and width/height off embed)
 │   │                #   + embed_manifest (manifest.json sidecar for --embed)
+│   ├── fonts.rs     # the bundled DejaVu Sans font database --png and --pdf use
 │   ├── geometry.rs  # Point, Bounds (+ overlap test); re-exports ir::Side
 │   ├── lint.rs      # layout checks for `check`: overlaps, crowded ports,
 │   │                #   unroutable wires, undrawn harness conductors,
@@ -1631,6 +1644,13 @@ Runtime:
 - [`pdf-writer`] — assembles the multi-page document around `svg2pdf`'s
   chunks. Pinned to the version `svg2pdf`'s API exposes (its `to_chunk`
   returns this crate's types) — bump the two together.
+- DejaVu Sans 2.37 (not a crate) — the font `--png` and `--pdf` draw
+  with, compiled into the binary (`render/fonts.rs`) from
+  `assets/fonts/dejavu/` (three faces, about 2 MB, with their Bitstream
+  Vera / Arev licence and a README naming the release and checksums;
+  shipped in the crate through `Cargo.toml`'s `include`). Loaded through
+  the `fontdb` that resvg's and svg2pdf's `usvg` share; should their
+  `fontdb` versions part, the shared database stops compiling.
 - [`serde_json`] — serialises the `--embed` `manifest.json` sidecar and
   the exported tables' JSON.
 - [`csv`] — RFC 4180 writing of the exported tables (`export/records/`):
