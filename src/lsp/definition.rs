@@ -6,8 +6,9 @@
 //! already runs per keystroke, so a fresh resolve per jump is cheap and
 //! never stale. The resolution itself is a span walk over the [`Resolved`]
 //! registry: find the reference whose span contains the offset, then
-//! return its target's name span (spans are file-tagged, so the target
-//! carries its own file).
+//! return the [`Target`] it names, whose name span is the jump target
+//! (spans are file-tagged, so the target carries its own file). Hover
+//! (`lsp/hover.rs`) describes the same [`Target`].
 
 use std::path::Path;
 
@@ -15,12 +16,69 @@ use lsp_types::{Location, Position, Range};
 
 use crate::dsl::ast::{self, Member};
 use crate::dsl::ir::{ConnectorName, InstanceName, PortName, SpliceName};
-use crate::dsl::project::{self, Overlay};
+use crate::dsl::project::{self, Overlay, Project};
 use crate::dsl::resolve::{self, DefId, Resolved};
 use crate::dsl::span::{FileId, Span};
 
 use super::line_index::LineIndex;
 use super::uri;
+
+/// The declaration a reference resolves to.
+pub(super) enum Target<'r> {
+    /// A `use`/`fragment` path: the top of the file it names.
+    File(FileId),
+    /// A component type: its root `component` when split with `extend`.
+    Component(&'r resolve::DefInfo<'r>),
+    ConnectorType(&'r resolve::ConnectorTypeInfo<'r>),
+    Instance(&'r resolve::InstFacts<'r>),
+    Inline(&'r resolve::InlineFacts<'r>),
+    /// One housing half of an inline (`include ic.male`); `half` is `None`
+    /// when the inline doesn't declare it.
+    InlineHalf {
+        inline: &'r resolve::InlineFacts<'r>,
+        half: Option<&'r ast::InlineHalfDecl>,
+    },
+    /// A port, with the name of what owns it: a component, or an inline.
+    Port {
+        owner: &'r str,
+        name: &'r PortName,
+        facts: &'r resolve::PortFacts<'r>,
+    },
+    Splice(&'r ast::Splice),
+    /// A connector designator: a typed connector instance, or an inline
+    /// `connector` block.
+    Connector(Connector<'r>),
+}
+
+/// The two declarations a connector designator can name.
+pub(super) enum Connector<'r> {
+    Typed(&'r resolve::ConnectorInstFacts<'r>),
+    Block(&'r ast::Connector),
+}
+
+impl Target<'_> {
+    /// The span of the declaration's name: where go-to-definition lands.
+    pub(super) fn span(&self) -> Span {
+        match self {
+            Target::File(file) => Span {
+                file: *file,
+                start: 0,
+                end: 0,
+            },
+            Target::Component(def) => def.ast.name.span,
+            Target::ConnectorType(ct) => ct.ast.name.span,
+            Target::Instance(facts) => facts.ast.name.span,
+            Target::Inline(facts) => facts.ast.name.span,
+            Target::InlineHalf { inline, half } => {
+                half.map_or(inline.ast.name.span, |h| h.key.span)
+            }
+            Target::Port { facts, .. } => facts.span,
+            Target::Splice(splice) => splice.name.span,
+            Target::Connector(Connector::Typed(facts)) => facts.ast.name.span,
+            Target::Connector(Connector::Block(conn)) => conn.name.span,
+        }
+    }
+}
 
 /// Answer one go-to-definition request: `doc` at `position`, with `text`
 /// as its live buffer.
@@ -30,6 +88,30 @@ pub(crate) fn goto_definition(
     text: &str,
     position: Position,
 ) -> Option<Location> {
+    with_target(overlay, doc, text, position, |project, target| {
+        let span = target.span();
+        let target = project.file(span.file);
+        let index = LineIndex::new(&target.src);
+        Some(Location {
+            uri: uri::to_uri(&target.path)?,
+            range: Range {
+                start: index.position(&target.src, span.start),
+                end: index.position(&target.src, span.end),
+            },
+        })
+    })
+}
+
+/// Load and resolve `doc`'s project (the overlay shadowing the disk, `text`
+/// as `doc`'s live buffer) and hand the target of the reference at
+/// `position` to `answer`.
+pub(super) fn with_target<R>(
+    overlay: &Overlay,
+    doc: &Path,
+    text: &str,
+    position: Position,
+    answer: impl FnOnce(&Project, Target<'_>) -> Option<R>,
+) -> Option<R> {
     let offset = LineIndex::new(text).offset(text, position);
     let parent = doc.parent().unwrap_or(Path::new("."));
     let entry = project::discover(Some(parent)).unwrap_or_else(|_| doc.to_path_buf());
@@ -38,22 +120,16 @@ pub(crate) fn goto_definition(
     let canonical = doc.canonicalize().unwrap_or_else(|_| doc.to_path_buf());
     let file = FileId(project.files.iter().position(|f| f.path == canonical)?);
     let resolved = resolve::resolve(&project);
-
-    let span = find(&resolved, file, offset)?;
-    let target = &project.files[span.file.0];
-    let index = LineIndex::new(&target.src);
-    Some(Location {
-        uri: uri::to_uri(&target.path)?,
-        range: Range {
-            start: index.position(&target.src, span.start),
-            end: index.position(&target.src, span.end),
-        },
-    })
+    answer(&project, find(&resolved, file, offset)?)
 }
 
-/// The definition-site span for the reference at `offset` in `file`, if
-/// the offset sits on something that resolves.
-fn find(resolved: &Resolved, file: FileId, offset: usize) -> Option<Span> {
+/// The declaration the reference at `offset` in `file` names, if the
+/// offset sits on something that resolves.
+pub(super) fn find<'r>(
+    resolved: &'r Resolved<'r>,
+    file: FileId,
+    offset: usize,
+) -> Option<Target<'r>> {
     let hit = |span: Span| span.file == file && span.start <= offset && offset <= span.end;
 
     // `use` and `fragment` paths: the path string jumps to the top of the
@@ -61,12 +137,9 @@ fn find(resolved: &Resolved, file: FileId, offset: usize) -> Option<Span> {
     let project = resolved.project;
     for import in project.files[file.0].ast.imports() {
         if hit(import.path().span) {
-            let target = project.import_target(file, &import.path().node)?;
-            return Some(Span {
-                file: target,
-                start: 0,
-                end: 0,
-            });
+            return project
+                .import_target(file, &import.path().node)
+                .map(Target::File);
         }
     }
 
@@ -82,13 +155,13 @@ fn find(resolved: &Resolved, file: FileId, offset: usize) -> Option<Span> {
             .iter()
             .find(|d| d.file == tf && d.parent.is_none() && d.name == name)
         {
-            return Some(d.ast.name.span);
+            return Some(Target::Component(d));
         }
         return resolved
             .connector_types
             .iter()
             .find(|ct| ct.file == tf && ct.name == name)
-            .map(|ct| ct.ast.name.span);
+            .map(Target::ConnectorType);
     }
 
     // References inside this file's definitions.
@@ -102,21 +175,21 @@ fn find(resolved: &Resolved, file: FileId, offset: usize) -> Option<Span> {
         if hit(def.ast.name.span) {
             let canonical = resolved.groups.canonical(d);
             if canonical != d {
-                return Some(resolved.defs[canonical].ast.name.span);
+                return Some(Target::Component(&resolved.defs[canonical]));
             }
             continue;
         }
 
         for facts in def.instances.values() {
             if hit(facts.ast.type_name.span) {
-                return facts.type_id.map(|t| resolved.defs[t].ast.name.span);
+                return facts.type_id.map(|t| Target::Component(&resolved.defs[t]));
             }
         }
         for facts in def.connectors.values() {
             if hit(facts.ast.type_name.span) {
                 return facts
                     .type_id
-                    .map(|t| resolved.connector_types[t].ast.name.span);
+                    .map(|t| Target::ConnectorType(&resolved.connector_types[t]));
             }
         }
         // An inline's `male:`/`female:` type refs point at the connector type.
@@ -128,7 +201,7 @@ fn find(resolved: &Resolved, file: FileId, offset: usize) -> Option<Span> {
                         "female" => facts.female,
                         _ => None,
                     };
-                    return type_id.map(|t| resolved.connector_types[t].ast.name.span);
+                    return type_id.map(|t| Target::ConnectorType(&resolved.connector_types[t]));
                 }
             }
         }
@@ -143,15 +216,21 @@ fn find(resolved: &Resolved, file: FileId, offset: usize) -> Option<Span> {
                 if let Some(inst) = &ep.instance {
                     if hit(inst.span) {
                         if let Some(inline) = find_inline(resolved, d, inst.node.as_str()) {
-                            return Some(inline.ast.name.span);
+                            return Some(Target::Inline(inline));
                         }
                         return find_instance(resolved, d, inst.node.as_str())
-                            .map(|f| f.ast.name.span);
+                            .map(Target::Instance);
                     }
                     if hit(ep.port.span) {
                         if let Some(inline) = find_inline(resolved, d, inst.node.as_str()) {
                             let port = PortName::from(ep.port.node.as_str());
-                            return inline.ports.get(&port).map(|p| p.span);
+                            return inline.ports.get_key_value(&port).map(|(name, facts)| {
+                                Target::Port {
+                                    owner: inline.ast.name.node.as_str(),
+                                    name,
+                                    facts,
+                                }
+                            });
                         }
                         let t = find_instance(resolved, d, inst.node.as_str())?.type_id?;
                         return find_port(resolved, t, ep.port.node.as_str());
@@ -161,7 +240,7 @@ fn find(resolved: &Resolved, file: FileId, offset: usize) -> Option<Span> {
                     // one of that name, else an own port.
                     let name = ep.port.node.as_str();
                     if let Some(splice) = resolved.splice(d, &SpliceName::from(name)) {
-                        return Some(splice.name.span);
+                        return Some(Target::Splice(splice));
                     }
                     return find_port(resolved, d, name);
                 }
@@ -178,7 +257,7 @@ fn find(resolved: &Resolved, file: FileId, offset: usize) -> Option<Span> {
         if let Some(named) = &view.subject
             && hit(named.span)
         {
-            return subject.map(|s| resolved.defs[s].ast.name.span);
+            return subject.map(|s| Target::Component(&resolved.defs[s]));
         }
         for ep in &view.enclosure {
             if hit(ep.port.span) {
@@ -190,18 +269,19 @@ fn find(resolved: &Resolved, file: FileId, offset: usize) -> Option<Span> {
                 let subject = subject?;
                 // A pinout include names a connector on the subject itself.
                 if view.kind.node.as_str() == "pinout" {
-                    return find_connector(resolved, subject, inc.instance.node.as_str());
+                    return find_connector(resolved, subject, inc.instance.node.as_str())
+                        .map(Target::Connector);
                 }
                 // A harness include may place one of the subject's splices.
                 let splice = SpliceName::from(inc.instance.node.as_str());
                 if let Some(splice) = resolved.splice(subject, &splice) {
-                    return Some(splice.name.span);
+                    return Some(Target::Splice(splice));
                 }
                 if let Some(inline) = find_inline(resolved, subject, inc.instance.node.as_str()) {
-                    return Some(inline.ast.name.span);
+                    return Some(Target::Inline(inline));
                 }
                 return find_instance(resolved, subject, inc.instance.node.as_str())
-                    .map(|f| f.ast.name.span);
+                    .map(Target::Instance);
             }
             let inst_type = || {
                 find_instance(resolved, subject?, inc.instance.node.as_str())
@@ -214,15 +294,15 @@ fn find(resolved: &Resolved, file: FileId, offset: usize) -> Option<Span> {
                 // the matching `male:`/`female:` line (the inline's name
                 // when that half isn't declared).
                 if let Some(inline) = find_inline(resolved, subject?, inc.instance.node.as_str()) {
-                    return inline
+                    let half = inline
                         .ast
                         .halves
                         .iter()
-                        .find(|h| h.key.node.as_str() == conn.node.as_str())
-                        .map(|h| h.key.span)
-                        .or(Some(inline.ast.name.span));
+                        .find(|h| h.key.node.as_str() == conn.node.as_str());
+                    return Some(Target::InlineHalf { inline, half });
                 }
-                return find_connector(resolved, inst_type()?, conn.node.as_str());
+                return find_connector(resolved, inst_type()?, conn.node.as_str())
+                    .map(Target::Connector);
             }
             for placement in &inc.ports {
                 if hit(placement.port.span) {
@@ -236,11 +316,11 @@ fn find(resolved: &Resolved, file: FileId, offset: usize) -> Option<Span> {
 }
 
 /// The instance declaration for `name` in `d`'s merged component.
-fn find_instance<'a>(
-    resolved: &'a Resolved,
+fn find_instance<'r>(
+    resolved: &'r Resolved<'r>,
     d: DefId,
     name: &str,
-) -> Option<&'a resolve::InstFacts<'a>> {
+) -> Option<&'r resolve::InstFacts<'r>> {
     let name = InstanceName::from(name);
     resolved
         .fragments(d)
@@ -249,11 +329,11 @@ fn find_instance<'a>(
 }
 
 /// The inline connector declaration for `name` in `d`'s merged component.
-fn find_inline<'a>(
-    resolved: &'a Resolved,
+fn find_inline<'r>(
+    resolved: &'r Resolved<'r>,
     d: DefId,
     name: &str,
-) -> Option<&'a resolve::InlineFacts<'a>> {
+) -> Option<&'r resolve::InlineFacts<'r>> {
     let name = InstanceName::from(name);
     resolved
         .fragments(d)
@@ -261,29 +341,32 @@ fn find_inline<'a>(
         .find_map(|frag| resolved.defs[frag].inlines.get(&name))
 }
 
-/// The port declaration span for `name` in `d`'s merged component.
-fn find_port(resolved: &Resolved, d: DefId, name: &str) -> Option<Span> {
+/// The port declaration for `name` in `d`'s merged component.
+fn find_port<'r>(resolved: &'r Resolved<'r>, d: DefId, name: &str) -> Option<Target<'r>> {
     let name = PortName::from(name);
-    resolved
-        .fragments(d)
-        .into_iter()
-        .find_map(|frag| resolved.defs[frag].ports.get(&name).map(|p| p.span))
+    let owner = resolved.defs[d].name;
+    resolved.fragments(d).into_iter().find_map(|frag| {
+        resolved.defs[frag]
+            .ports
+            .get_key_value(&name)
+            .map(|(name, facts)| Target::Port { owner, name, facts })
+    })
 }
 
-/// The connector declaration span for designator `name` in `d`'s merged
+/// The connector declaration for designator `name` in `d`'s merged
 /// component: a typed connector instance or an inline `connector` block.
-fn find_connector(resolved: &Resolved, d: DefId, name: &str) -> Option<Span> {
+fn find_connector<'r>(resolved: &'r Resolved<'r>, d: DefId, name: &str) -> Option<Connector<'r>> {
     let typed = ConnectorName::from(name);
     for frag in resolved.fragments(d) {
         let def = &resolved.defs[frag];
         if let Some(facts) = def.connectors.get(&typed) {
-            return Some(facts.ast.name.span);
+            return Some(Connector::Typed(facts));
         }
         for member in &def.ast.members {
             if let Member::Connector(conn) = member
                 && conn.name.node.as_str() == name
             {
-                return Some(conn.name.span);
+                return Some(Connector::Block(conn));
             }
         }
     }
@@ -328,7 +411,7 @@ mod tests {
         );
         let resolved = resolve::resolve(&project);
 
-        let span = find(&resolved, file, offset)?;
+        let span = find(&resolved, file, offset)?.span();
         let target = &project.files[span.file.0];
         let name = target
             .path

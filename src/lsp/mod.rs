@@ -5,9 +5,9 @@
 //! go to stderr (`main.rs` configures tracing accordingly).
 //!
 //! Scope: live diagnostics (the full `check` pipeline re-run per change,
-//! with open buffers shadowing the disk via [`Overlay`]), completion, and
-//! go-to-definition. Hover, rename, semantic tokens, and formatting are
-//! deliberately later.
+//! with open buffers shadowing the disk via [`Overlay`]), completion,
+//! go-to-definition, and hover. Rename, semantic tokens, and formatting
+//! are deliberately later.
 
 // `lsp_types::Uri` caches parse offsets in a `Cell`, tripping
 // `mutable_key_type` on every URI-keyed map; its `Eq`/`Hash` are the
@@ -17,6 +17,7 @@
 mod complete;
 mod definition;
 mod diagnostics;
+mod hover;
 mod line_index;
 mod state;
 mod uri;
@@ -26,12 +27,13 @@ use lsp_types::notification::{
     DidChangeTextDocument, DidChangeWatchedFiles, DidCloseTextDocument, DidOpenTextDocument,
     Notification as _, PublishDiagnostics,
 };
-use lsp_types::request::{Completion, GotoDefinition, Request as _};
+use lsp_types::request::{Completion, GotoDefinition, HoverRequest, Request as _};
 use lsp_types::{
     CompletionItem, CompletionOptions, CompletionParams, CompletionResponse,
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    GotoDefinitionParams, GotoDefinitionResponse, Location, OneOf, PublishDiagnosticsParams,
-    ServerCapabilities, TextDocumentSyncCapability, TextDocumentSyncKind,
+    GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams, HoverProviderCapability,
+    Location, OneOf, PublishDiagnosticsParams, ServerCapabilities, TextDocumentSyncCapability,
+    TextDocumentSyncKind,
 };
 use thiserror::Error;
 
@@ -78,6 +80,7 @@ fn server_capabilities() -> ServerCapabilities {
             ..CompletionOptions::default()
         }),
         definition_provider: Some(OneOf::Left(true)),
+        hover_provider: Some(HoverProviderCapability::Simple(true)),
         ..ServerCapabilities::default()
     }
 }
@@ -135,6 +138,12 @@ fn handle_request(
                 .and_then(|params| definition_location(state, &params));
             Response::new_ok(request.id, location.map(GotoDefinitionResponse::Scalar))
         }
+        HoverRequest::METHOD => {
+            let hover = serde_json::from_value::<HoverParams>(request.params)
+                .ok()
+                .and_then(|params| hover_card(state, &params));
+            Response::new_ok(request.id, hover)
+        }
         _ => Response::new_err(
             request.id,
             lsp_server::ErrorCode::MethodNotFound as i32,
@@ -167,6 +176,15 @@ fn definition_location(state: &ServerState, params: &GotoDefinitionParams) -> Op
     let path = state.open.get(&position.text_document.uri)?;
     let text = state.overlay.get(path)?;
     definition::goto_definition(&state.overlay, path, text, position.position)
+}
+
+/// Answer one hover request like a go-to-definition one, describing the
+/// declaration instead of jumping to it.
+fn hover_card(state: &ServerState, params: &HoverParams) -> Option<Hover> {
+    let position = &params.text_document_position_params;
+    let path = state.open.get(&position.text_document.uri)?;
+    let text = state.overlay.get(path)?;
+    hover::hover(&state.overlay, path, text, position.position)
 }
 
 /// Apply one notification to the server state; `true` means the document
