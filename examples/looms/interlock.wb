@@ -10,14 +10,15 @@ extend Vehicle {
 }
 
 // --- View: battery interlock harness ---
-// The loop runs down the page: MSD → front pack on the left, the tunnel
-// loom across to the rear pack, rear pack → junction box on the right.
+// The front and rear packs face each other across the tunnel loom. The MSD
+// sits above the rear pack and the junction box below the front pack, so
+// each interlock link crosses the page to the pack it joins.
 
 view harness "Battery interlock harness" {
     grid: 20;
 
-    include msd.intlk         at (0, 0);
+    include msd.intlk         at (40, 0);
     include front.bms_signals at (0, 12);
     include rear.bms_signals  at (40, 12);
-    include hvjb.intlk        at (40, 24);
+    include hvjb.intlk        at (0, 24);
 }
