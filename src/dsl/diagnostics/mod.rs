@@ -973,4 +973,86 @@ impl Problem {
     pub fn is_error(&self) -> bool {
         !matches!(self.severity(), Some(miette::Severity::Warning))
     }
+
+    /// True for problems that report something missing: a name that
+    /// resolves to nothing, a component with no root or no instance, an
+    /// import nothing uses, a cable with no conductors, a port without
+    /// `pub`. A statement the parser skipped may have declared or used
+    /// that very thing (a `;` too early parts `pub ; port a "A";` into a
+    /// skipped `pub` and a private port), so while a file has syntax
+    /// errors these may be their echo, not mistakes of their own
+    /// ([`Project::drop_parse_cascades`]).
+    ///
+    /// The rest report something present that is wrong, which skipping a
+    /// statement cannot cause. The match lists every variant so that a new
+    /// one has to be sorted.
+    ///
+    /// [`Project::drop_parse_cascades`]: crate::dsl::project::Project::drop_parse_cascades
+    pub fn reports_an_absence(&self) -> bool {
+        match self {
+            Problem::UndefinedType { .. }
+            | Problem::UndefinedConnectorType { .. }
+            | Problem::UnresolvedImport { .. }
+            | Problem::OrphanFragment { .. }
+            | Problem::UnknownInstance { .. }
+            | Problem::UnknownPort { .. }
+            | Problem::PrivatePort { .. }
+            | Problem::UnknownInclude { .. }
+            | Problem::ViewSubject { .. }
+            | Problem::UndeclaredInlineHalf { .. }
+            | Problem::EmptyCable { .. }
+            | Problem::UnknownConnector { .. }
+            | Problem::NoRoot
+            | Problem::UninstantiatedViewSubject { .. }
+            | Problem::UnusedImport { .. }
+            | Problem::UndrawnConductor { .. } => true,
+            Problem::Lex { .. }
+            | Problem::Parse { .. }
+            | Problem::ReservedWord { .. }
+            | Problem::UseNotFound { .. }
+            | Problem::NoProject { .. }
+            | Problem::Io { .. }
+            | Problem::ManifestMissing { .. }
+            | Problem::ManifestParse { .. }
+            | Problem::DuplicateConnectorType { .. }
+            | Problem::DuplicateType { .. }
+            | Problem::NestedExtend { .. }
+            | Problem::DuplicateInstance { .. }
+            | Problem::DuplicatePort { .. }
+            | Problem::UnknownPortSide { .. }
+            | Problem::DuplicateViewPort { .. }
+            | Problem::DuplicateViewInclude { .. }
+            | Problem::OverlappingIncludes { .. }
+            | Problem::IncludeTooClose { .. }
+            | Problem::UnroutableWire { .. }
+            | Problem::InvalidGrid { .. }
+            | Problem::GridTooFine { .. }
+            | Problem::DuplicateConnectorName { .. }
+            | Problem::DuplicateConnectorPin { .. }
+            | Problem::UnknownInlineProperty { .. }
+            | Problem::DuplicateInlineHalf { .. }
+            | Problem::UnknownInlineHalf { .. }
+            | Problem::InlinePubPort { .. }
+            | Problem::DuplicateCableName { .. }
+            | Problem::CableWireArity { .. }
+            | Problem::DuplicateEndpoint { .. }
+            | Problem::UnknownCableProperty { .. }
+            | Problem::DuplicateCableProperty { .. }
+            | Problem::CablePropertyType { .. }
+            | Problem::InvalidGauge { .. }
+            | Problem::InvalidLength { .. }
+            | Problem::WrongIncludeForm { .. }
+            | Problem::UnknownViewKind { .. }
+            | Problem::DuplicateViewItem { .. }
+            | Problem::DuplicateViewText { .. }
+            | Problem::DuplicateViewTitle { .. }
+            | Problem::UnsupportedViewText { .. }
+            | Problem::EnclosureAnchor { .. }
+            | Problem::ContainmentCycle { .. }
+            | Problem::WireArity { .. }
+            | Problem::InvalidPin { .. }
+            | Problem::BarePortPin { .. }
+            | Problem::UnknownWireColor { .. } => false,
+        }
+    }
 }

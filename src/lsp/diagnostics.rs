@@ -136,6 +136,7 @@ fn check_one(
         let (design, elab_problems) = elaborate::elaborate(&resolved);
         problems.extend(elab_problems);
         problems.extend(validate::validate(&resolved));
+        project.drop_parse_cascades(&mut problems);
         pipeline::extend_with_layout_problems(project, design.as_ref(), &mut problems);
     }
 

@@ -87,6 +87,11 @@ pub fn load_manifest(target: Option<&Path>) -> (Option<manifest::Manifest>, Vec<
 /// elaborate, validate. Returns the elaborated design, when the project got
 /// far enough to build one, and every problem found.
 ///
+/// A project with syntax errors still goes through every phase, over what
+/// parsed, but reports only the problems a skipped statement cannot cause
+/// ([`Project::drop_parse_cascades`]), and yields no design: one built
+/// without the skipped statements is not the design the author wrote.
+///
 /// The layout-derived checks run after this, outside `dsl`: see
 /// `pipeline::check_project`, the entry every command uses.
 pub fn check_loaded(project: &Project) -> (Option<Design>, Vec<Problem>) {
@@ -95,7 +100,8 @@ pub fn check_loaded(project: &Project) -> (Option<Design>, Vec<Problem>) {
     let (design, elab_problems) = elaborate::elaborate(&resolved);
     problems.extend(elab_problems);
     problems.extend(validate::validate(&resolved));
-    (design, problems)
+    project.drop_parse_cascades(&mut problems);
+    (design.filter(|_| project.parsed_whole), problems)
 }
 
 #[cfg(test)]
