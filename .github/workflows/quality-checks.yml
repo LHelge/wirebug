@@ -29,3 +29,10 @@ jobs:
 
       - name: Test
         run: cargo test
+
+      # The example project must stay clean: any error or warning fails.
+      - name: Check the example project
+        run: cargo run --locked -- check --strict examples
+
+      - name: Render the example project
+        run: cargo run --locked -- render examples --out "$RUNNER_TEMP/examples-out"
