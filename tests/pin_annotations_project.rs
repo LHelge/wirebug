@@ -38,12 +38,13 @@ fn attr<'a>(element: &'a str, name: &str) -> Option<&'a str> {
 }
 
 /// One drawn pin annotation: the port it labels, as `instance.port`, its
-/// text, whether it is turned to run along the port's stub, and its anchor.
+/// text, the angle it is turned by to run along the port's stub (0 when
+/// level; 90 reads downward, -90 upward), and its anchor.
 #[derive(Debug)]
 struct Annotation {
     port: String,
     text: String,
-    turned: bool,
+    turn: i32,
     x: f64,
 }
 
@@ -63,7 +64,9 @@ fn annotations(svg: &str) -> Vec<Annotation> {
             found.push(Annotation {
                 port: format!("{component}.{port}"),
                 text: lines[i + 1].to_string(),
-                turned: attr(line, "transform").is_some_and(|t| t.starts_with("rotate(-90 ")),
+                turn: attr(line, "transform")
+                    .and_then(|t| t.strip_prefix("rotate(")?.split(' ').next()?.parse().ok())
+                    .unwrap_or(0),
                 x: attr(line, "x").and_then(|x| x.parse().ok()).expect("x"),
             });
         }
@@ -71,16 +74,16 @@ fn annotations(svg: &str) -> Vec<Annotation> {
     found
 }
 
-/// `(port, text, turned)` for each annotation, for comparing whole views.
-fn summary(svg: &str) -> Vec<(String, String, bool)> {
+/// `(port, text, turn)` for each annotation, for comparing whole views.
+fn summary(svg: &str) -> Vec<(String, String, i32)> {
     annotations(svg)
         .into_iter()
-        .map(|a| (a.port, a.text, a.turned))
+        .map(|a| (a.port, a.text, a.turn))
         .collect()
 }
 
-fn row(port: &str, text: &str, turned: bool) -> (String, String, bool) {
-    (port.to_string(), text.to_string(), turned)
+fn row(port: &str, text: &str, turn: i32) -> (String, String, i32) {
+    (port.to_string(), text.to_string(), turn)
 }
 
 #[test]
@@ -91,17 +94,18 @@ fn pins_of_a_component_with_two_connectors_name_their_connector() {
     assert_eq!(
         summary(&view(SvgMode::Standalone, "MSD")),
         [
-            row("msd.hv_in", "hv:1", false),
-            row("msd.hv_out", "hv:2", false),
+            row("msd.hv_in", "hv:1", 0),
+            row("msd.hv_out", "hv:2", 0),
             // Side by side at the pitch, the two would run into each other,
-            // so they turn to run along their stubs.
-            row("msd.intlk_in", "intlk:1", true),
-            row("msd.intlk_out", "intlk:2", true),
-            row("lamp.sig", "4", false),
-            row("lamp.pwr", "1", false),
-            row("lamp.gnd", "2,3", false),
-            row("left.pwr", "1", false),
-            row("left.sig", "4", false),
+            // so they turn to run along their stubs, reading up toward the
+            // port so the number ends beside it.
+            row("msd.intlk_in", "intlk:1", -90),
+            row("msd.intlk_out", "intlk:2", -90),
+            row("lamp.sig", "4", 0),
+            row("lamp.pwr", "1", 0),
+            row("lamp.gnd", "2,3", 0),
+            row("left.pwr", "1", 0),
+            row("left.sig", "4", 0),
         ]
     );
 }
@@ -114,15 +118,17 @@ fn long_designators_fit_at_the_minimum_grid() {
     assert_eq!(
         summary(&svg),
         [
-            row("bms.bat", "power:1", false),
-            row("bms.gnd", "power:2,3,4", false),
-            row("bms.can_h", "bms_signals:1", true),
-            row("bms.can_l", "bms_signals:2", true),
-            row("bms.wake", "bms_signals:3", true),
-            row("bms.fault", "bms_signals:4", true),
-            row("probe.pwr", "1", false),
-            row("probe.sig", "4", false),
-            row("probe.gnd", "2,3", false),
+            row("bms.bat", "power:1", 0),
+            row("bms.gnd", "power:2,3,4", 0),
+            // Turned on both sides, each reading toward its port: down on
+            // the north side, up on the south.
+            row("bms.can_h", "bms_signals:1", 90),
+            row("bms.can_l", "bms_signals:2", 90),
+            row("bms.wake", "bms_signals:3", -90),
+            row("bms.fault", "bms_signals:4", -90),
+            row("probe.pwr", "1", 0),
+            row("probe.sig", "4", 0),
+            row("probe.gnd", "2,3", 0),
         ]
     );
     // Turned, neighbouring annotations stay one port pitch (two steps of

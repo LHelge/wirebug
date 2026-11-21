@@ -23,8 +23,10 @@ pub(super) enum PinOrientation {
     /// wire stub, above it; beside a north or south port it runs across
     /// the stub, toward the next port on the side.
     Horizontal,
-    /// Turned to read upward along a north or south port's stub, so its
-    /// length runs away from the box instead of toward the next port.
+    /// Turned to run along a north or south port's stub, so its length
+    /// runs away from the box instead of toward the next port. It reads
+    /// toward the port (downward on a north side, upward on a south one),
+    /// so the pin number, at its end, sits next to the port.
     Vertical,
 }
 
@@ -85,11 +87,11 @@ impl PinAnnotation {
 
     /// Where the text is anchored for a port at `pos` labelled as sitting
     /// on `side`, outside the box. Level text sits above a west or east
-    /// stub and to the right of a north or south one; turned text starts
-    /// `PIN_INSET` out along the stub, on its right on a north side and
-    /// its left on a south side, so the two annotations of a short
-    /// vertical wire between a box's south port and another's north port
-    /// sit on opposite sides of it.
+    /// stub and to the right of a north or south one. Turned text ends
+    /// `PIN_INSET` out along the stub, reading toward the port, on the
+    /// stub's right on a north side and its left on a south side, so the
+    /// two annotations of a short vertical wire between a box's south
+    /// port and another's north port sit on opposite sides of it.
     pub(super) fn placement(&self, side: Side, pos: Point) -> LabelPlacement {
         let level = |x: f64, y: f64, anchor: &'static str| LabelPlacement {
             x,
@@ -98,11 +100,11 @@ impl PinAnnotation {
             rotate: 0.0,
             baseline: None,
         };
-        let turned = |x: f64, y: f64, anchor: &'static str| LabelPlacement {
+        let turned = |x: f64, y: f64, rotate: f64| LabelPlacement {
             x,
             y,
-            anchor,
-            rotate: -90.0,
+            anchor: "end",
+            rotate,
             baseline: Some("central"),
         };
         match (self.orientation, side) {
@@ -115,10 +117,10 @@ impl PinAnnotation {
                 level(pos.x + PIN_INSET, pos.y + 13.0, "start")
             }
             (PinOrientation::Vertical, Side::North) => {
-                turned(pos.x + PIN_ACROSS, pos.y - PIN_INSET, "start")
+                turned(pos.x + PIN_ACROSS, pos.y - PIN_INSET, 90.0)
             }
             (PinOrientation::Vertical, Side::South) => {
-                turned(pos.x - PIN_ACROSS, pos.y + PIN_INSET, "end")
+                turned(pos.x - PIN_ACROSS, pos.y + PIN_INSET, -90.0)
             }
         }
     }
@@ -131,7 +133,6 @@ impl PinAnnotation {
         // the rotation about the anchor.
         let (u0, u1) = match at.anchor {
             "end" => (-width, 0.0),
-            "middle" => (-width / 2.0, width / 2.0),
             _ => (0.0, width),
         };
         let (v0, v1) = match at.baseline {
@@ -318,6 +319,23 @@ component sys {
             south.origin.x + south.width < 0.0,
             "left of the stub: {south:?}"
         );
+    }
+
+    #[test]
+    fn a_turned_annotation_reads_toward_its_port_so_the_pin_number_ends_beside_it() {
+        let text = annotation("intlk:1", PinOrientation::Vertical);
+        // The text ends at its anchor, one inset out from the port, and
+        // reads toward the port: downward (+90°) above a north port,
+        // upward (-90°) below a south one.
+        for (side, rotate, end_y) in [
+            (Side::North, 90.0, -PIN_INSET),
+            (Side::South, -90.0, PIN_INSET),
+        ] {
+            let at = text.placement(side, Point::ORIGIN);
+            assert_eq!(at.anchor, "end", "{side:?}");
+            assert_eq!(at.rotate, rotate, "{side:?}");
+            assert_eq!(at.y, end_y, "{side:?}");
+        }
     }
 
     #[test]
