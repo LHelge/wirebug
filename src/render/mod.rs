@@ -74,7 +74,7 @@ impl SvgMode {
     /// each to its container. Equal to the viewBox's size, they leave the
     /// size the rasteriser and the PDF export read (`usvg::Tree::size`)
     /// as it was. An embed root keeps the viewBox alone: its host's CSS
-    /// sizes it.
+    /// sizes it, and [`EmbedManifestView`] offers the canvas as data.
     pub(crate) fn frame(self, root: Document, origin: Point, canvas: Canvas) -> Document {
         let Canvas { width, height } = canvas;
         let root = root.set(
@@ -110,7 +110,8 @@ impl Drawing {
 /// One rendered view: the SVG document, the file name it should be
 /// written to (a slug of the view title, without a directory), the human
 /// title it was rendered from, the view `kind` (so the HTML index can
-/// group views into tabs), and the canvas its viewBox spans.
+/// group views into tabs), and the canvas its viewBox spans (so the embed
+/// manifest can give each view's natural size).
 #[derive(Debug)]
 #[must_use]
 pub struct RenderedView {
@@ -323,6 +324,13 @@ pub struct EmbedManifestView<'a> {
     pub title: &'a str,
     pub filename: &'a str,
     pub kind: &'a str,
+    /// The view's natural width: its viewBox's, in world units. An embed
+    /// SVG carries no intrinsic size, so a host that wants one world unit
+    /// to the px (the text size of standalone output) sets it from here.
+    /// After the fields hosts already read, so they keep their place.
+    pub width: f64,
+    /// The view's natural height, as [`Self::width`].
+    pub height: f64,
 }
 
 /// Build the embed-mode manifest from the rendered views and the project's
@@ -341,6 +349,8 @@ pub fn embed_manifest<'a>(
                 title: &v.title,
                 filename: &v.filename,
                 kind: v.kind.as_str(),
+                width: v.canvas.width(),
+                height: v.canvas.height(),
             })
             .collect(),
         exports: EmbedExports::default(),
@@ -1060,11 +1070,23 @@ component sys {
     }
 
     #[test]
-    fn manifest_lists_each_view_with_title_filename_kind() {
+    fn manifest_lists_each_view_with_title_filename_kind_and_size() {
+        let sized = |view: RenderedView, width, height| RenderedView {
+            canvas: Canvas::new(width, height),
+            ..view
+        };
         let views = vec![
-            view("HV Overview", "hv_overview.svg", "schematic"),
-            view("Main Harness", "main_harness.svg", "harness"),
-            view("X1 Pinout", "x1_pinout.svg", "pinout"),
+            sized(
+                view("HV Overview", "hv_overview.svg", "schematic"),
+                2076.0,
+                656.0,
+            ),
+            sized(
+                view("Main Harness", "main_harness.svg", "harness"),
+                1192.0,
+                429.625,
+            ),
+            sized(view("X1 Pinout", "x1_pinout.svg", "pinout"), 645.5, 484.0),
         ];
         let manifest = embed_manifest(&views, None);
         let json = serde_json::to_string(&manifest).expect("serializes");
@@ -1088,6 +1110,13 @@ component sys {
         assert_eq!(entries[2]["title"], "X1 Pinout");
         assert_eq!(entries[2]["filename"], "x1_pinout.svg");
         assert_eq!(entries[2]["kind"], "pinout");
+        // Each view's natural size, its viewBox's, as numbers.
+        assert_eq!(entries[0]["width"], 2076.0);
+        assert_eq!(entries[0]["height"], 656.0);
+        assert_eq!(entries[1]["width"], 1192.0);
+        assert_eq!(entries[1]["height"], 429.625);
+        assert_eq!(entries[2]["width"], 645.5);
+        assert_eq!(entries[2]["height"], 484.0);
         // The build tables written beside the manifest, by file name; the
         // last field, after the ones hosts already read.
         assert_eq!(parsed["exports"]["wires"], "wires.json");
@@ -1095,6 +1124,12 @@ component sys {
         assert_eq!(parsed["exports"]["bom"], "bom.json");
         let at = |field: &str| json.find(&format!("\"{field}\":")).expect(field);
         let order = ["project", "generator", "stylesheet", "views", "exports"].map(at);
+        assert!(order.is_sorted(), "{json}");
+        // Within a view entry, the size comes after the fields hosts
+        // already read.
+        let entry = &json[at("views")..];
+        let at = |field: &str| entry.find(&format!("\"{field}\":")).expect(field);
+        let order = ["title", "filename", "kind", "width", "height"].map(at);
         assert!(order.is_sorted(), "{json}");
     }
 

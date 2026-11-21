@@ -371,6 +371,60 @@ fn render_sizes_every_view_one_world_unit_to_the_px() {
     assert!(index.contains("img { max-width: 100%; height: auto; }"));
 }
 
+#[test]
+fn render_embed_leaves_the_size_to_the_host_and_gives_it_in_the_manifest() {
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("embed");
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args([
+            "render",
+            FIXTURE_ROOT,
+            "--out",
+            out.to_str().unwrap(),
+            "--embed",
+        ])
+        .assert()
+        .success();
+
+    let manifest_src =
+        std::fs::read_to_string(out.join("manifest.json")).expect("manifest written");
+    let manifest: serde_json::Value =
+        serde_json::from_str(&manifest_src).expect("manifest is valid JSON");
+    let views = manifest["views"].as_array().expect("views array");
+    for kind in ["schematic", "harness", "pinout"] {
+        assert!(views.iter().any(|v| v["kind"] == kind), "a {kind} view");
+    }
+    for view in views {
+        let file = view["filename"].as_str().expect("a file name");
+        let svg = std::fs::read_to_string(out.join(file)).expect("view rendered");
+        // No intrinsic size on the root: the host's CSS sizes the view.
+        assert_eq!(root_attribute(&svg, "width"), None, "{file}");
+        assert_eq!(root_attribute(&svg, "height"), None, "{file}");
+        // Its natural size is in the manifest instead, the very numbers
+        // of the viewBox. Read from the text: `serde_json` parses some
+        // floats a last digit off.
+        let (width, height) = viewbox_size(&svg);
+        let json = |side: &str| {
+            serde_json::to_string(&side.parse::<f64>().expect("a number")).expect("serializes")
+        };
+        let entry = &manifest_src[manifest_src
+            .find(&format!("\"filename\": \"{file}\""))
+            .expect("the view's entry")..];
+        let size = format!(
+            "\"width\": {},\n      \"height\": {}\n",
+            json(width),
+            json(height)
+        );
+        assert!(entry.contains(&size), "{file}: {size} in {entry}");
+        assert!(
+            entry.find(&size) < entry.find('}'),
+            "{file}: {size} in its own entry"
+        );
+    }
+}
+
 const TIED_ROUTES_ROOT: &str = "tests/fixtures/tied_routes_project";
 
 /// Each process seeds its hash maps afresh, so this catches any output
