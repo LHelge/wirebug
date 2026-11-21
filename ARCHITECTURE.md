@@ -209,9 +209,12 @@ Distinct from clap's `--version`, which prints the wirebug app version.
   is a *merge* (not the `duplicate_type` error) as soon as either side is an
   `extend`; that is how the `use` spelling merges. A `fragment` brings no
   name into the scope: once the file's scope is complete (own definitions,
-  then every `use`, so the lines' order does not matter), `build_scopes`
-  links each top-level `extend` of the named file into the group of the
-  scope entry of its name (`Resolver::merge_fragment`). An `extend` whose
+  then every `use`, so the lines' order does not matter), each top-level
+  `extend` of the named file merges into the group of the scope entry of
+  its name (`Resolver::merge_fragment`). `build_scopes` makes the merges of
+  a file's `use` and `fragment` lines last, sorted by line, so a group
+  gathers its fragments in source order whichever spelling names them (the
+  order instances elaborate in, and which of two duplicates is reported). An `extend` whose
   component is not in the naming file's scope is not merged by the line, so
   a file of nothing but `fragment` lines passes nothing on to a file that
   names it: merging is not transitive, as with `use`.
