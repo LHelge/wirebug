@@ -4,7 +4,7 @@ title: Write errors print their io cause twice
 status: open
 priority: P3
 created: "2026-11-21T19:27:28.199300599Z"
-updated: "2026-11-21T19:27:28.199300599Z"
+updated: "2026-11-21T20:52:28.074649653Z"
 tags:
   - cli
 ---
@@ -18,3 +18,5 @@ tags:
 
 ## Testing
 - `cargo fmt && cargo clippy -- -D warnings && cargo test` pass.
+
+Also `Error::SkillInstall` (g2e.h6): `failed to install the skill at …: Is a directory (os error 21): Is a directory (os error 21)`.
