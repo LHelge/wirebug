@@ -1,12 +1,16 @@
 //! Connector pinout renderer.
 //!
 //! A `pinout` view documents connectors on the view subject itself. Each
-//! `include <connector> at (x, y);` becomes a titled pin table rendered from
-//! the harness side, optionally with a physical cavity face above the pin
-//! table when the connector type carries a layout.
+//! `include <connector> at (x, y);` becomes a pin table headed by the
+//! component and the connector, its rows sorted by pin, optionally with a
+//! physical cavity face above the rows when the connector type carries a
+//! layout. A face is always drawn from the harness side (the language's
+//! convention for `layout`; it has no other) and says so in a caption.
+
+mod fit;
 
 use svg::Document;
-use svg::node::element::{Group, Line, Rectangle, Style, Text};
+use svg::node::element::{Group, Line, Rectangle, Style, Text, Title};
 
 use crate::dsl::ir::{
     Connector, ConnectorLayout, ConnectorName, Design, Include, Instance, Pin, PortName, View,
@@ -16,7 +20,14 @@ use crate::render::geometry::{Bounds, Point};
 use crate::render::lint::{IncludeBox, ViewLayout};
 use crate::render::stamp::{STAMP_HEIGHT, STAMP_INSET, stamp_element};
 use crate::render::{Canvas, GridFault, SvgMode};
+use fit::FittedLabel;
 
+/// The caption under every cavity face.
+const FACE_CAPTION: &str = "Viewed from harness side";
+/// The band under a face that holds [`FACE_CAPTION`].
+const CAPTION_HEIGHT: f64 = 18.0;
+/// Clear space between a cavity label and its cavity's border, each side.
+const CAVITY_LABEL_INSET: f64 = 3.0;
 const DEFAULT_GRID: f64 = 20.0;
 const HEADER_HEIGHT: f64 = 44.0;
 const ROW_HEIGHT: f64 = 22.0;
@@ -39,8 +50,11 @@ pub(super) const STYLE: &str = "\
 .pin-num { font: italic 10px sans-serif; fill: #555; text-anchor: middle; dominant-baseline: central; }
 .pin-label { font: 11px sans-serif; dominant-baseline: central; }
 .cavity { fill: white; stroke: black; stroke-width: 1.25; }
+.pinout rect.cavity-unused { fill: #f2f2f2; stroke: #999; stroke-width: 1; stroke-dasharray: 3 2; }
 .cavity-pin { font: bold 11px sans-serif; text-anchor: middle; dominant-baseline: central; }
+.cavity-pin-unused { font-weight: normal; fill: #999; }
 .cavity-label { font: 8px sans-serif; text-anchor: middle; dominant-baseline: central; fill: #555; }
+.pinout-caption { font: italic 10px sans-serif; text-anchor: middle; dominant-baseline: central; fill: #555; }
 .title { font: bold 14px sans-serif; }
 .stamp { font: 10px sans-serif; fill: #666; text-anchor: end; }\
 ";
@@ -167,39 +181,49 @@ impl Table {
             .collect()
     }
 
-    /// The table for `connector`, centred where `inc` places it on a grid
-    /// of `step` world units.
+    /// The table for `connector` of `subject`, centred where `inc` places
+    /// it on a grid of `step` world units: headed by the component (its
+    /// label, else its type) and the connector's designator, then the
+    /// housing's description and part, its rows in pin order.
     fn new(connector: &Connector, subject: &Instance, inc: &Include, step: f64) -> Self {
         let (cx, cy) = (inc.x * step, inc.y * step);
-        let title = connector.name.to_string();
+        let component = subject
+            .label
+            .clone()
+            .unwrap_or_else(|| subject.type_name.to_string());
+        let title = format!("{component} · {}", connector.name);
         let subtitle = connector_subtitle(connector);
-        let rows = connector
+        let mut rows = connector
             .pins
             .iter()
             .map(|pin| {
                 let port = subject.ports.get(&pin.port);
                 Row {
-                    pin: pin.pin.to_string(),
+                    pin: pin.pin,
                     label: port_label(&pin.port, port),
                 }
             })
             .collect::<Vec<_>>();
+        rows.sort_by_key(|row| row.pin);
         let face = Face::from_connector(connector, subject);
 
         let max_chars = std::iter::once(title.chars().count())
             .chain(std::iter::once(subtitle.chars().count()))
             .chain(
                 rows.iter()
-                    .map(|r| r.label.chars().count() + r.pin.chars().count()),
+                    .map(|r| r.label.chars().count() + r.pin.to_string().chars().count()),
             )
             .max()
             .unwrap_or(0);
         let table_width =
             MIN_WIDTH.max(max_chars as f64 * CHAR_WIDTH + PIN_COL_WIDTH + 3.0 * PAD_X);
-        let face_width = face.as_ref().map_or(0.0, |f| f.width() + 2.0 * FACE_PAD);
+        let face_width = face.as_ref().map_or(0.0, |f| {
+            (f.width() + 2.0 * FACE_PAD)
+                .max(FACE_CAPTION.chars().count() as f64 * CHAR_WIDTH + 2.0 * PAD_X)
+        });
         let width = table_width.max(face_width);
         let row_count = rows.len().max(1);
-        let face_height = face.as_ref().map_or(0.0, |f| f.height() + FACE_PAD);
+        let face_height = face.as_ref().map_or(0.0, Face::band_height);
         let height = HEADER_HEIGHT + face_height + row_count as f64 * ROW_HEIGHT;
 
         Self {
@@ -239,14 +263,14 @@ impl Face {
                     .into_iter()
                     .enumerate()
                     .map(|(index, (x, y))| {
-                        let pin = (index + 1) as u32;
+                        let pin = Pin((index + 1) as u32);
                         let port = connector
                             .pins
                             .iter()
-                            .find(|binding| binding.pin == Pin(pin))
+                            .find(|binding| binding.pin == pin)
                             .and_then(|binding| subject.ports.get(&binding.port));
                         Cell {
-                            pin: pin.to_string(),
+                            pin,
                             label: port.map(|p| p.label.clone()),
                             x,
                             y,
@@ -283,7 +307,7 @@ impl Face {
                             .find(|binding| binding.pin == cavity.pin)
                             .and_then(|binding| subject.ports.get(&binding.port));
                         Cell {
-                            pin: cavity.pin.to_string(),
+                            pin: cavity.pin,
                             label: port.map(|p| p.label.clone()),
                             x: (cavity.x as u32).saturating_sub(min_x),
                             y: (cavity.y as u32).saturating_sub(min_y),
@@ -304,6 +328,12 @@ impl Face {
 
     fn height(&self) -> f64 {
         self.rows as f64 * CAVITY_SIZE + (self.rows.saturating_sub(1)) as f64 * CAVITY_GAP
+    }
+
+    /// The height the face takes in its table: padding above and below
+    /// it, and the caption band under it.
+    fn band_height(&self) -> f64 {
+        self.height() + FACE_PAD + CAPTION_HEIGHT
     }
 }
 
@@ -443,8 +473,10 @@ fn spiral_positions(rows: u32, cols: u32, direction: SpiralDirection) -> Vec<(u3
     positions
 }
 
+/// One cavity of a face: its pin, the label of the port bound to it
+/// (`None` for a cavity no port uses), and its place in cavity steps.
 struct Cell {
-    pin: String,
+    pin: Pin,
     label: Option<String>,
     x: u32,
     y: u32,
@@ -466,11 +498,31 @@ impl Cell {
     fn span_bottom(&self) -> u32 {
         self.y + self.span()
     }
+
+    /// The cavity's side, in world units.
+    fn side(&self) -> f64 {
+        let span = self.span();
+        span as f64 * CAVITY_SIZE + (span.saturating_sub(1)) as f64 * CAVITY_GAP
+    }
+
+    /// Whether a port is bound to the cavity.
+    fn is_used(&self) -> bool {
+        self.label.is_some()
+    }
+
+    /// The port's label as it is drawn inside the cavity: fitted between
+    /// its borders, [`CAVITY_LABEL_INSET`] clear of each.
+    fn fitted_label(&self) -> Option<FittedLabel> {
+        let label = self.label.as_deref()?;
+        Some(FittedLabel::new(
+            label,
+            self.side() - 2.0 * CAVITY_LABEL_INSET,
+        ))
+    }
 }
 
-#[derive(Clone)]
 struct Row {
-    pin: String,
+    pin: Pin,
     label: String,
 }
 
@@ -526,46 +578,54 @@ fn render_table(table: &Table) -> Group {
                 .set("class", "pinout-title")
                 .set("x", table.x + table.width / 2.0)
                 .set("y", table.y + HEADER_HEIGHT * 0.42),
-        )
-        .add(
+        );
+    if !table.subtitle.is_empty() {
+        group = group.add(
             Text::new(table.subtitle.clone())
                 .set("class", "pinout-part")
                 .set("x", table.x + table.width / 2.0)
                 .set("y", table.y + HEADER_HEIGHT * 0.78),
         );
-
-    let rows_top = table.y
-        + HEADER_HEIGHT
-        + table
-            .face
-            .as_ref()
-            .map_or(0.0, |face| face.height() + FACE_PAD);
-
-    if let Some(face) = &table.face {
-        group = group.add(render_face(
-            face,
-            table.x + (table.width - face.width()) / 2.0,
-            table.y + HEADER_HEIGHT + FACE_PAD / 2.0,
-        ));
     }
 
-    let rows = if table.rows.is_empty() {
-        vec![Row {
-            pin: String::new(),
-            label: "No pins assigned".to_string(),
-        }]
+    let rows_top = table.y + HEADER_HEIGHT + table.face.as_ref().map_or(0.0, Face::band_height);
+
+    if let Some(face) = &table.face {
+        let face_top = table.y + HEADER_HEIGHT + FACE_PAD / 2.0;
+        group = group
+            .add(render_face(
+                face,
+                table.x + (table.width - face.width()) / 2.0,
+                face_top,
+            ))
+            .add(
+                Text::new(FACE_CAPTION)
+                    .set("class", "pinout-caption")
+                    .set("x", table.x + table.width / 2.0)
+                    .set("y", rows_top - CAPTION_HEIGHT / 2.0),
+            )
+            .add(
+                Line::new()
+                    .set("class", "row-sep")
+                    .set("x1", table.x)
+                    .set("y1", rows_top)
+                    .set("x2", table.x + table.width)
+                    .set("y2", rows_top),
+            );
+    }
+
+    let placeholder = [(String::new(), "No pins assigned")];
+    let rows: Vec<(String, &str)> = if table.rows.is_empty() {
+        placeholder.to_vec()
     } else {
         table
             .rows
             .iter()
-            .map(|r| Row {
-                pin: r.pin.clone(),
-                label: r.label.clone(),
-            })
+            .map(|r| (r.pin.to_string(), r.label.as_str()))
             .collect()
     };
 
-    for (i, row) in rows.iter().enumerate() {
+    for (i, (pin, label)) in rows.into_iter().enumerate() {
         let row_top = rows_top + i as f64 * ROW_HEIGHT;
         let row_y = row_top + ROW_HEIGHT / 2.0;
         if i > 0 {
@@ -580,13 +640,13 @@ fn render_table(table: &Table) -> Group {
         }
         group = group
             .add(
-                Text::new(row.pin.clone())
+                Text::new(pin)
                     .set("class", "pin-num")
                     .set("x", table.x + PIN_COL_WIDTH / 2.0)
                     .set("y", row_y),
             )
             .add(
-                Text::new(row.label.clone())
+                Text::new(label)
                     .set("class", "pin-label")
                     .set("x", table.x + PIN_COL_WIDTH + PAD_X)
                     .set("y", row_y),
@@ -596,35 +656,50 @@ fn render_table(table: &Table) -> Group {
     group
 }
 
+/// The cavities of `face`, its top-left corner at (`x`, `y`). A cavity no
+/// port uses is drawn dashed and greyed (`cavity-unused`,
+/// `cavity-pin-unused`); a used one carries its port's label, fitted
+/// inside it, with the full label as its tooltip when the fit cut it.
 fn render_face(face: &Face, x: f64, y: f64) -> Group {
     let mut group = Group::new().set("class", "pinout-face");
     for cell in &face.cells {
-        let span = cell.span();
-        let size = span as f64 * CAVITY_SIZE + (span.saturating_sub(1)) as f64 * CAVITY_GAP;
+        let size = cell.side();
         let cx = x + cell.x as f64 * (CAVITY_SIZE + CAVITY_GAP);
         let cy = y + cell.y as f64 * (CAVITY_SIZE + CAVITY_GAP);
-        group = group
-            .add(
-                Rectangle::new()
-                    .set("class", "cavity")
-                    .set("x", cx)
-                    .set("y", cy)
-                    .set("width", size)
-                    .set("height", size),
-            )
-            .add(
-                Text::new(cell.pin.clone())
-                    .set("class", "cavity-pin")
-                    .set("x", cx + size / 2.0)
-                    .set("y", cy + size * 0.42),
-            );
-        if let Some(label) = &cell.label {
-            group = group.add(
-                Text::new(label.clone())
-                    .set("class", "cavity-label")
-                    .set("x", cx + size / 2.0)
-                    .set("y", cy + size * 0.72),
-            );
+        let (cavity_class, pin_class) = if cell.is_used() {
+            ("cavity", "cavity-pin")
+        } else {
+            ("cavity cavity-unused", "cavity-pin cavity-pin-unused")
+        };
+        let mut cavity = Rectangle::new()
+            .set("class", cavity_class)
+            .set("x", cx)
+            .set("y", cy)
+            .set("width", size)
+            .set("height", size);
+        let fitted = cell.fitted_label();
+        if let (Some(label), Some(fitted)) = (&cell.label, &fitted)
+            && fitted.is_cut()
+        {
+            cavity = cavity.add(Title::new(label.clone()));
+        }
+        group = group.add(cavity).add(
+            Text::new(cell.pin.to_string())
+                .set("class", pin_class)
+                .set("x", cx + size / 2.0)
+                .set("y", cy + size * 0.42),
+        );
+        if let Some(fitted) = fitted {
+            let mut text = Text::new(fitted.text.clone())
+                .set("class", "cavity-label")
+                .set("x", cx + size / 2.0)
+                .set("y", cy + size * 0.72);
+            // An inline style, because the stylesheet's `font` shorthand
+            // would override a `font-size` attribute.
+            if fitted.is_shrunk() {
+                text = text.set("style", format!("font-size: {}px", fitted.size));
+            }
+            group = group.add(text);
         }
     }
     group
@@ -750,6 +825,233 @@ component m {
         assert_eq!(svg.matches("class=\"cavity\"").count(), 2);
         assert!(svg.contains("can_h · CAN H"));
         assert!(svg.contains("can_l · CAN L"));
+    }
+
+    /// The first instance of `m` in `design`, and its connector `x1`.
+    fn subject_x1(design: &Design) -> (&Instance, &Connector) {
+        let subject = design
+            .instances
+            .values()
+            .find(|i| i.type_name == TypeName::from("m"))
+            .expect("subject");
+        let connector = subject
+            .connectors
+            .get(&ConnectorName::from("x1"))
+            .expect("connector");
+        (subject, connector)
+    }
+
+    /// A design whose root `top` holds `placement` of the component `m`,
+    /// which `lib` (a file of its own) defines.
+    fn placed_in_top(lib: &str, placement: &str) -> Design {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let main = format!("use m from \"lib.wb\";\ncomponent top {{ {placement} }}\n");
+        std::fs::write(dir.path().join("main.wb"), main).expect("write");
+        std::fs::write(dir.path().join("lib.wb"), lib).expect("write");
+        let (project, _) = crate::dsl::project::load(&dir.path().join("main.wb"));
+        let project = project.expect("loads");
+        let resolved = crate::dsl::resolve::resolve(&project);
+        let (design, problems) = crate::dsl::elaborate::elaborate(&resolved);
+        assert!(problems.is_empty(), "elaboration problems: {problems:?}");
+        design.expect("a design")
+    }
+
+    fn table_of(design: &Design) -> Table {
+        let (subject, connector) = subject_x1(design);
+        let view = pinout_view("m", &[("x1", 0.0, 0.0)]);
+        Table::new(connector, subject, &view.includes[0], DEFAULT_GRID)
+    }
+
+    #[test]
+    fn rows_are_sorted_by_pin_whatever_the_declaration_order() {
+        let design = design_from(
+            r#"
+component m {
+    connector x1 "X" {
+        pub port temp "TEMP" pin 45;
+        pub port ign  "IGN"  pin 42;
+        pub port b_pos "B+" pins [46, 48];
+        pub port b_neg "B-" pins [47, 49];
+        pub port can  "CAN"  pin 9;
+    }
+}
+"#,
+        );
+        let pins: Vec<u32> = table_of(&design).rows.iter().map(|r| r.pin.0).collect();
+        assert_eq!(pins, [9, 42, 45, 46, 47, 48, 49]);
+    }
+
+    #[test]
+    fn header_names_the_component_the_connector_its_description_and_part() {
+        let design = placed_in_top(
+            r#"
+connector_type Box "Box 2p" {
+    part: "BX-2";
+    layout grid { rows: 1; cols: 2; }
+}
+component m {
+    connector x1: Box { pub port a "A" pin 1; }
+}
+"#,
+            "inv: m \"Inverter\";",
+        );
+        let table = table_of(&design);
+        assert_eq!(table.title, "Inverter · x1");
+        assert_eq!(table.subtitle, "Box 2p · BX-2");
+    }
+
+    #[test]
+    fn header_omits_what_is_missing_without_dangling_separators() {
+        // A connector block with no description, on a component placed
+        // without a label: the component's type stands in for its label.
+        let design = placed_in_top(
+            r#"
+component m {
+    connector x1 { pub port a "A" pin 1; }
+}
+"#,
+            "inv: m;",
+        );
+        let table = table_of(&design);
+        assert_eq!(table.title, "m · x1");
+        assert_eq!(table.subtitle, "");
+        let svg = render(
+            &design,
+            &pinout_view("m", &[("x1", 0.0, 0.0)]),
+            SvgMode::Standalone,
+        );
+        assert!(!svg.contains("class=\"pinout-part\""));
+    }
+
+    #[test]
+    fn every_face_carries_the_harness_side_caption_below_it() {
+        let design = design_from(
+            r#"
+connector_type Pair "Pair" { layout grid { rows: 1; cols: 2; } }
+component m {
+    connector x1: Pair { pub port a "A" pin 1; }
+    connector x2 "Faceless" { pub port b "B" pin 1; }
+}
+"#,
+        );
+        let with_face = render(
+            &design,
+            &pinout_view("m", &[("x1", 0.0, 0.0)]),
+            SvgMode::Standalone,
+        );
+        assert_eq!(with_face.matches("class=\"pinout-caption\"").count(), 1);
+        assert!(with_face.contains("Viewed from harness side"));
+        // A connector without a layout has no face, so no caption.
+        let without = render(
+            &design,
+            &pinout_view("m", &[("x2", 0.0, 0.0)]),
+            SvgMode::Standalone,
+        );
+        assert!(!without.contains("class=\"pinout-caption\""));
+
+        // The caption has a band of its own between the face and the rows.
+        let table = table_of(&design);
+        let face = table.face.as_ref().expect("face");
+        assert_eq!(
+            table.height,
+            HEADER_HEIGHT + face.height() + FACE_PAD + CAPTION_HEIGHT + ROW_HEIGHT
+        );
+    }
+
+    #[test]
+    fn unused_cavities_are_drawn_apart_from_used_ones() {
+        let design = design_from(
+            r#"
+connector_type Tri "Tri" { layout grid { rows: 1; cols: 3; } }
+component m {
+    connector x1: Tri {
+        pub port a "A" pin 1;
+        pub port c "C" pin 3;
+    }
+}
+"#,
+        );
+        let svg = render(
+            &design,
+            &pinout_view("m", &[("x1", 0.0, 0.0)]),
+            SvgMode::Standalone,
+        );
+        // Every cavity keeps the `cavity` class; the unused one adds its own.
+        assert_eq!(svg.matches("class=\"cavity\"").count(), 2);
+        assert_eq!(svg.matches("class=\"cavity cavity-unused\"").count(), 1);
+        assert_eq!(
+            svg.matches("class=\"cavity-pin cavity-pin-unused\"")
+                .count(),
+            1
+        );
+        let unused: Vec<u32> = table_of(&design)
+            .face
+            .expect("face")
+            .cells
+            .iter()
+            .filter(|cell| !cell.is_used())
+            .map(|cell| cell.pin.0)
+            .collect();
+        assert_eq!(unused, [2]);
+        assert!(STYLE.contains("rect.cavity-unused"));
+    }
+
+    #[test]
+    fn cavity_labels_are_fitted_inside_their_cavity() {
+        let design = design_from(
+            r#"
+connector_type Face "Face" {
+    layout face {
+        cavity 1 at (0, 0);
+        cavity 2 at (1, 0);
+        cavity 3 at (2, 0);
+        cavity 4 at (3, 0) size large;
+    }
+}
+component m {
+    connector x1: Face {
+        pub port a "EX+" pin 1;
+        pub port b "IGNITION" pin 2;
+        pub port c "RESOLVER SHIELD DRAIN" pin 3;
+        pub port d "RESOLVER" pin 4;
+    }
+}
+"#,
+        );
+        let face = table_of(&design).face.expect("face");
+        for cell in &face.cells {
+            let fitted = cell.fitted_label().expect("a label");
+            assert!(
+                fitted.width() <= cell.side() - 2.0 * CAVITY_LABEL_INSET,
+                "pin {}: {:?} crosses its cavity",
+                cell.pin,
+                fitted
+            );
+        }
+        let fits: Vec<(String, bool, bool)> = face
+            .cells
+            .iter()
+            .filter_map(Cell::fitted_label)
+            .map(|f| (f.text.clone(), f.is_shrunk(), f.is_cut()))
+            .collect();
+        assert_eq!(fits[0], ("EX+".to_string(), false, false));
+        assert_eq!(fits[1], ("IGNITION".to_string(), true, false));
+        assert!(fits[2].2, "a long label is cut in a small cavity");
+        assert_eq!(
+            fits[3],
+            ("RESOLVER".to_string(), false, false),
+            "a large cavity holds at full size what a small one would shrink"
+        );
+
+        let svg = render(
+            &design,
+            &pinout_view("m", &[("x1", 0.0, 0.0)]),
+            SvgMode::Standalone,
+        );
+        // The cut label stays whole in the cavity's tooltip and the table.
+        assert!(svg.contains("<title>RESOLVER SHIELD DRAIN</title>"));
+        assert!(svg.contains("c · RESOLVER SHIELD DRAIN"));
+        assert!(svg.contains("style=\"font-size: 6px\""));
     }
 
     #[test]
