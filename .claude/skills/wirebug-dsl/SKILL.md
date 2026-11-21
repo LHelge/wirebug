@@ -490,7 +490,7 @@ wire red 0.5 "12V" [fuses.ecu, ecu.b_pos] {
 wire black 1.5 "GND" [ecu.gnd, ecu.case_gnd] { length: 150mm; }
 ```
 
-- `length: <length>;` — the wire's length (see Lengths below). It must be positive (`invalid_length`).
+- `length: <length>;` — the wire's length (see Lengths below). It must be positive (`invalid_length`). On a wire with more than two endpoints `length` is the length of the whole rail, not of each leg; for per-leg lengths use a splice with one wire per leg (see Splices).
 - `type: "<string>";` — the insulation/construction type, free text (e.g. `"FLRY-B"`).
 - `part: "<string>";` — the part number.
 

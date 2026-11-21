@@ -720,6 +720,19 @@ impl Length {
     }
 }
 
+/// Lengths add exactly, to the micrometre, so a total of authored lengths
+/// prints as written (`0.15 m + 0.8 m` is `0.95 m`), never with float
+/// noise. Saturates rather than wraps; no wiring total comes near.
+impl std::ops::Add for Length {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        Self {
+            micrometres: self.micrometres.saturating_add(other.micrometres),
+        }
+    }
+}
+
 /// In metres, with as many decimals as the length has and no more:
 /// `2 m`, `0.15 m`, `0.000001 m`.
 impl fmt::Display for Length {
@@ -1319,6 +1332,13 @@ mod tests {
             assert_eq!(Length::new(value, unit), None, "{value}{unit}");
         }
         assert_eq!(length(0.0005, "mm").to_string(), "0.000001 m");
+    }
+
+    #[test]
+    fn lengths_add_exactly_whatever_their_unit() {
+        let total = length(150.0, "mm") + length(80.0, "cm") + length(0.1, "m");
+        assert_eq!(total, length(1.05, "m"));
+        assert_eq!(total.to_string(), "1.05 m");
     }
 
     #[test]

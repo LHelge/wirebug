@@ -11,7 +11,7 @@ use wirebug::check_project;
 use wirebug::dsl::ir::{
     ConnectorName, Design, InstanceName, InstancePath, Length, LengthUnit, Pin, Screened,
 };
-use wirebug::export::{Contact, Drain, End, Row, RowKind, WireList};
+use wirebug::export::{Contact, Copper, Drain, End, Row, RowKind, RowLength, WireList};
 
 fn checked_design() -> Design {
     let main =
@@ -31,8 +31,12 @@ fn path(dotted: &str) -> InstancePath {
     segments.fold(root, |path, segment| path.child(segment))
 }
 
-fn metres(value: f64) -> Option<Length> {
-    Length::new(value, LengthUnit::Metre)
+fn metres(value: f64) -> Length {
+    Length::new(value, LengthUnit::Metre).expect("a positive length")
+}
+
+fn own(value: f64) -> RowLength {
+    RowLength::Own(metres(value))
 }
 
 /// What an end lands on, typed: a pin (instance path, port, designator and
@@ -220,21 +224,28 @@ fn conductors_carry_their_wire_data_and_the_length_that_applies() {
             label("CAN H"),
             "YE".into(),
             0.5,
-            metres(2.15),
+            own(2.15),
             Some(0)
         )
     );
     assert_eq!(
         rows[4],
-        (can, label("CAN L"), "GN".into(), 0.5, metres(2.0), Some(0))
+        (can, label("CAN L"), "GN".into(), 0.5, own(2.0), Some(0))
     );
-    // A loose wire's own length, in centimetres; a rail's segments carry
-    // their wire's (none).
+    // A loose wire's own length, in centimetres.
     assert_eq!(
         rows[5],
-        (None, label("12V"), "RD".into(), 1.5, metres(0.8), None)
+        (None, label("12V"), "RD".into(), 1.5, own(0.8), None)
     );
-    assert_eq!(rows[0].4, None);
+    // The rail's 4 m is the whole rail's, on each of its three segments,
+    // and only the first counts it.
+    let rail = |first| RowLength::Rail {
+        total: metres(4.0),
+        first,
+    };
+    let segments: Vec<RowLength> = rows[..3].iter().map(|row| row.4).collect();
+    assert_eq!(segments, [rail(true), rail(false), rail(false)]);
+    assert_eq!(rows[6].4, RowLength::Unset);
 
     let (_, crimp) = list.conductors().nth(5).expect("the first 12V conductor");
     assert_eq!(crimp.wire.r#type.as_deref(), Some("FLRY-B"));
@@ -257,7 +268,7 @@ fn cable_screens_are_rows_of_their_own() {
         overall_row.ends().iter().map(At::of).collect::<Vec<_>>(),
         [pin("Vehicle.ecu", "shld", &[6])]
     );
-    assert_eq!(overall_row.length, metres(2.0));
+    assert_eq!(overall_row.length, own(2.0));
 
     assert_eq!(pair.screened, Screened::Pair(0));
     assert!(matches!(pair.drain, Drain::NoPin));
@@ -287,5 +298,20 @@ fn a_loom_placed_twice_lists_its_own_wire_once_per_placement() {
         .filter(|(row, _)| row.owner.path != path("Vehicle"))
         .map(|(row, _)| row.length)
         .collect();
-    assert_eq!(lengths, [metres(0.5), metres(0.5)]);
+    assert_eq!(lengths, [own(0.5), own(0.5)]);
+}
+
+#[test]
+fn the_copper_total_counts_each_rail_once() {
+    let design = checked_design();
+    let list = WireList::from(&design);
+    // The 4 m rail once, the CAN pair's 2.15 m and 2 m, the 0.8 m feed and
+    // the two looms' 0.5 m each; nine conductors have no length.
+    assert_eq!(
+        list.copper(),
+        Copper {
+            length: Some(metres(9.95)),
+            unmeasured: 9,
+        }
+    );
 }
