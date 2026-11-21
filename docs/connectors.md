@@ -57,8 +57,8 @@ connector_type Dt06_6s "Deutsch DT06-6S" {
 `use` imports it like a component. The description is required. The body
 holds `key: value;` lines, whose value is a string or a number, and at most
 one [layout](#pinout-layouts). `part` is the housing's part number, shown
-on harness and pinout drawings and in the bill of materials; other keys are
-kept as notes.
+on harness and pinout drawings and in the bill of materials. Any other key is
+accepted, but no drawing, table or bill of materials shows it.
 
 ### Typed connectors
 

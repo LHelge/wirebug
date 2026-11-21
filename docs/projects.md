@@ -142,7 +142,7 @@ view schematic "Traction" {
         east: hv_pos, hv_neg;
     }
 
-    include inv at (14, 4) ports {
+    include inv at (18, 4) ports {
         west: dc_pos, dc_neg;
     }
 }
