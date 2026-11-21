@@ -698,7 +698,7 @@ pub enum Problem {
     #[error("unknown {owner} property `{key}`")]
     #[diagnostic(
         code(wirebug::unknown_cable_property),
-        help("a {owner} supports {}", owner.supported())
+        help("{}", owner.unknown_key_help(key))
     )]
     UnknownProperty {
         owner: PropertyOwner,
@@ -1107,6 +1107,20 @@ impl PropertyOwner {
             .iter()
             .find(|(k, _)| *k == key)
             .map(|&(_, kind)| kind)
+    }
+
+    /// The help for an unknown `key`: the keys this owner takes. In a
+    /// component body a `<name>:` with a string after it is part data, so
+    /// an instance written without its type (`l: "Lamp";`) lands here too,
+    /// and the help names that reading as well.
+    fn unknown_key_help(self, key: &str) -> String {
+        let supported = format!("a {self} supports {}", self.supported());
+        match self {
+            PropertyOwner::Component => format!(
+                "{supported}; to place an instance, name its type after the colon: `{key}: <Type> \"<label>\";`"
+            ),
+            PropertyOwner::Cable | PropertyOwner::Wire => supported,
+        }
     }
 
     /// The keys as the help lists them: `` `type: "...";` and `length: <number>;` ``.
