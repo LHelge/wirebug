@@ -11,14 +11,15 @@ extend Vehicle {
 }
 
 // --- View: cooling loom ---
-// The VCM's 12V and cooling connectors on the left, the pump and the fan
-// on the right; the ground runs on from the pump to the fan.
+// The VCM's 12V and cooling connectors and the fan on the left, the pump
+// on the right; the ground runs from the VCM to the pump and back to the
+// fan.
 
 view harness "Cooling loom" {
     grid: 20;
 
     include vcm.lv      at (0, 0);
     include vcm.cooling at (0, 8);
-    include pump.x1     at (40, 4);
-    include fan.x1      at (40, 16);
+    include pump.x1     at (40, 6);
+    include fan.x1      at (0, 16);
 }

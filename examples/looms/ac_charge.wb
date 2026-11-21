@@ -61,12 +61,14 @@ view schematic "Charging control" {
 // Every signal lead into the OBC's 13-pin signal connector that is not CAN:
 // the control pilot from the inlet, the VCM's DC/DC enable and the signal
 // ground back to the VCM. The proximity pilot runs alongside to the VCM.
+// Inlet, VCM and OBC stand in three columns, so each lead runs from one
+// column to the next.
 
 view harness "OBC signal loom" {
     grid: 20;
 
-    include vcm.charge  at (0, 0);
-    include ac_inlet.x1 at (0, 10);
-    include vcm.lv      at (0, 22);
-    include charger.sig at (40, 10);
+    include ac_inlet.x1 at (0, 0);
+    include vcm.charge  at (28, 12);
+    include vcm.lv      at (28, 20);
+    include charger.sig at (56, 2);
 }
