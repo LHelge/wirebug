@@ -8,6 +8,7 @@
     { "include": "#type-declaration" },
     { "include": "#use-import" },
     { "include": "#fragment-import" },
+    { "include": "#shield-statement" },
     { "include": "#view-kind" },
     { "include": "#view-subject" },
     { "include": "#numbering-mode" },
@@ -53,6 +54,13 @@
       "match": "^\\s*(fragment)(?=\\s*\")",
       "captures": {
         "1": { "name": "keyword.control.import.wirebug" }
+      }
+    },
+    "shield-statement": {
+      "comment": "`shield [\"<label>\"] [<ends>];` starts a statement in a cable body or a `twisted { }` group. Only there: anywhere else `shield` is an ordinary name (`pub port shield \"S\";`, `shield: Lamp;`, `[ecu.shield, b]`).",
+      "match": "(?:^|(?<=[{;]))\\s*(shield)(?=\\s*(?:\"|\\[|;))",
+      "captures": {
+        "1": { "name": "storage.type.wirebug" }
       }
     },
     "view-kind": {
