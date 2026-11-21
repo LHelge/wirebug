@@ -6,8 +6,8 @@
 //!
 //! Scope: live diagnostics (the full `check` pipeline re-run per change,
 //! with open buffers shadowing the disk via [`Overlay`]), completion,
-//! go-to-definition, and hover. Rename, semantic tokens, and formatting
-//! are deliberately later.
+//! go-to-definition, hover, and whole-document formatting (`wirebug fmt`'s
+//! formatter). Rename and semantic tokens are deliberately later.
 
 // `lsp_types::Uri` caches parse offsets in a `Cell`, tripping
 // `mutable_key_type` on every URI-keyed map; its `Eq`/`Hash` are the
@@ -17,6 +17,7 @@
 mod complete;
 mod definition;
 mod diagnostics;
+mod formatting;
 mod hover;
 mod line_index;
 mod state;
@@ -27,13 +28,13 @@ use lsp_types::notification::{
     DidChangeTextDocument, DidChangeWatchedFiles, DidCloseTextDocument, DidOpenTextDocument,
     Notification as _, PublishDiagnostics,
 };
-use lsp_types::request::{Completion, GotoDefinition, HoverRequest, Request as _};
+use lsp_types::request::{Completion, Formatting, GotoDefinition, HoverRequest, Request as _};
 use lsp_types::{
     CompletionItem, CompletionOptions, CompletionParams, CompletionResponse,
     DidChangeTextDocumentParams, DidCloseTextDocumentParams, DidOpenTextDocumentParams,
-    GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams, HoverProviderCapability,
-    Location, OneOf, PublishDiagnosticsParams, ServerCapabilities, TextDocumentSyncCapability,
-    TextDocumentSyncKind,
+    DocumentFormattingParams, GotoDefinitionParams, GotoDefinitionResponse, Hover, HoverParams,
+    HoverProviderCapability, Location, OneOf, PublishDiagnosticsParams, ServerCapabilities,
+    TextDocumentSyncCapability, TextDocumentSyncKind, TextEdit,
 };
 use thiserror::Error;
 
@@ -81,6 +82,7 @@ fn server_capabilities() -> ServerCapabilities {
         }),
         definition_provider: Some(OneOf::Left(true)),
         hover_provider: Some(HoverProviderCapability::Simple(true)),
+        document_formatting_provider: Some(OneOf::Left(true)),
         ..ServerCapabilities::default()
     }
 }
@@ -144,6 +146,13 @@ fn handle_request(
                 .and_then(|params| hover_card(state, &params));
             Response::new_ok(request.id, hover)
         }
+        Formatting::METHOD => {
+            let edits = serde_json::from_value::<DocumentFormattingParams>(request.params)
+                .ok()
+                .map(|params| formatting_edits(state, &params))
+                .unwrap_or_default();
+            Response::new_ok(request.id, edits)
+        }
         _ => Response::new_err(
             request.id,
             lsp_server::ErrorCode::MethodNotFound as i32,
@@ -185,6 +194,17 @@ fn hover_card(state: &ServerState, params: &HoverParams) -> Option<Hover> {
     let path = state.open.get(&position.text_document.uri)?;
     let text = state.overlay.get(path)?;
     hover::hover(&state.overlay, path, text, position.position)
+}
+
+/// Answer one formatting request from the live overlay text of the
+/// document.
+fn formatting_edits(state: &ServerState, params: &DocumentFormattingParams) -> Vec<TextEdit> {
+    state
+        .open
+        .get(&params.text_document.uri)
+        .and_then(|path| state.overlay.get(path))
+        .map(formatting::edits)
+        .unwrap_or_default()
 }
 
 /// Apply one notification to the server state; `true` means the document

@@ -1,5 +1,6 @@
 //! Black-box tests for `wirebug lsp` over stdio: the initialize handshake
-//! and its advertised capabilities, published diagnostics, and hover.
+//! and its advertised capabilities, published diagnostics, hover, and
+//! formatting.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -287,6 +288,94 @@ fn hover_describes_the_reference_under_the_cursor() {
     assert!(value.starts_with("**instance** `ecu`"), "{value}");
     assert!(value.contains("- label: \"ECU\""), "{value}");
     assert!(value.contains("- type: `Device`"), "{value}");
+
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","id":4,"method":"shutdown","params":null}"#,
+    );
+    loop {
+        let message = read_message(&mut stdout);
+        if message["id"] == 4 {
+            break;
+        }
+    }
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","method":"exit","params":null}"#,
+    );
+    assert!(child.wait().expect("server exits").success());
+}
+
+/// Formatting an opened buffer replaces it whole with what `wirebug fmt`
+/// writes; a buffer that does not parse gets no edits.
+#[test]
+fn formatting_lays_out_the_buffer_and_leaves_a_broken_one_alone() {
+    let lamp = std::path::Path::new("tests/fixtures/unformatted_project/components/lamp.wb")
+        .canonicalize()
+        .expect("fixture path");
+    let text = std::fs::read_to_string(&lamp).expect("read fixture");
+    let uri = format!("file://{}", lamp.display());
+
+    let (mut child, mut stdin, mut stdout) = spawn_server();
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}"#,
+    );
+    let response = read_message(&mut stdout);
+    let caps = &response["result"]["capabilities"];
+    assert_eq!(caps["documentFormattingProvider"], true, "{caps}");
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#,
+    );
+    let open = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didOpen",
+        "params": {"textDocument": {
+            "uri": uri, "languageId": "wirebug", "version": 1, "text": text,
+        }},
+    });
+    send(&mut stdin, &open.to_string());
+
+    let format = |stdin: &mut ChildStdin, stdout: &mut BufReader<ChildStdout>, id: u32| {
+        let request = serde_json::json!({
+            "jsonrpc": "2.0", "id": id, "method": "textDocument/formatting",
+            "params": {
+                "textDocument": {"uri": uri},
+                "options": {"tabSize": 2, "insertSpaces": false},
+            },
+        });
+        send(stdin, &request.to_string());
+        // Diagnostics for the opened file may arrive first.
+        loop {
+            let message = read_message(stdout);
+            if message["id"] == id {
+                return message["result"].clone();
+            }
+        }
+    };
+
+    assert_eq!(
+        format(&mut stdin, &mut stdout, 2),
+        serde_json::json!([{
+            "range": {
+                "start": {"line": 0, "character": 0},
+                "end": {"line": 1, "character": 0},
+            },
+            "newText": "component Lamp {\n    pub port anode   \"+\" pin 1;\n    pub port cathode \"-\" pin 2;\n}\n",
+        }])
+    );
+
+    let change = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didChange",
+        "params": {
+            "textDocument": {"uri": uri, "version": 2},
+            "contentChanges": [{"text": "component Lamp { pub port anode \"+\" }\n"}],
+        },
+    });
+    send(&mut stdin, &change.to_string());
+    assert_eq!(format(&mut stdin, &mut stdout, 3), serde_json::json!([]));
 
     send(
         &mut stdin,
