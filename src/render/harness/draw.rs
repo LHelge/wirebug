@@ -428,12 +428,13 @@ pub(super) fn render_loose(wire: &LooseWire) -> Group {
     let d = Cubic::chain_d(&wire.curves());
     let at = wire.annotation_at();
     let (shown, full) = (wire.annotation(), wire.full_annotation());
-    let mut annotation = Text::new(shown.clone())
+    let shortened = shown != full;
+    let mut annotation = Text::new(shown)
         .set("class", "cable-label")
         .set("x", at.x)
         .set("y", at.y);
     // A shortened annotation keeps the full text as its tooltip.
-    if shown != full {
+    if shortened {
         annotation = annotation.add(Title::new(full));
     }
     add_strand(Group::new().set("class", "cable"), &wire.color, &[d]).add(annotation)

@@ -292,19 +292,26 @@ impl LooseWire {
         }) || self.annotation_bounds().overlaps(&cable.bounds())
     }
 
-    /// Give the wire its lane at height `y` on the spine at `spine_x`: as
-    /// wide as the widest box there (`widest`, so its leads clear every
-    /// box) or as its annotation needs, whichever is wider — but no wider
-    /// than the room between its two ends allows, short of
-    /// [`LANE_MIN_LEAD`] each side, where the annotation is cut short
-    /// instead.
-    fn take_lane(&mut self, y: f64, spine_x: f64, widest: f64) {
+    /// The width the full annotation needs on a lane's run.
+    fn annotation_width(&self) -> f64 {
+        self.full_annotation().chars().count() as f64 * LABEL_CHAR_WIDTH + 2.0 * NODE_PAD
+    }
+
+    /// How wide a lane on the spine at `spine_x` the wire wants: as wide
+    /// as the widest box there (`widest`, so its leads clear every box) or
+    /// as its annotation needs, whichever is wider — but no wider than the
+    /// room between its two ends allows, short of [`LANE_MIN_LEAD`] each
+    /// side, where the annotation is cut short instead.
+    fn lane_width(&self, spine_x: f64, widest: f64) -> f64 {
         let (left, right) = (self.from.x.min(self.to.x), self.from.x.max(self.to.x));
         let room = (2.0 * ((spine_x - left).min(right - spine_x) - LANE_MIN_LEAD)).max(0.0);
-        let text = self.full_annotation().chars().count();
-        let needed = text as f64 * LABEL_CHAR_WIDTH + 2.0 * NODE_PAD;
-        let width = widest.max(needed.min(room));
-        let fit = (needed > width).then(|| {
+        widest.max(self.annotation_width().min(room))
+    }
+
+    /// Give the wire its lane at height `y`, `width` wide and centred on
+    /// the spine at `spine_x`, its annotation cut short if it needs more.
+    fn take_lane(&mut self, y: f64, spine_x: f64, width: f64) {
+        let fit = (self.annotation_width() > width).then(|| {
             ((width - 2.0 * NODE_PAD) / LABEL_CHAR_WIDTH)
                 .floor()
                 .max(1.0) as usize
@@ -1157,9 +1164,18 @@ impl HarnessLayout {
             .iter()
             .map(|cable| cable.width)
             .fold(0.0, f64::max);
+        // The lanes of one slot share its widest lane's width: an upper lane
+        // wider than the one below would have the lower one's leads cross
+        // its run. Its wires run between the same two nodes, so the same
+        // room between their ends caps them all.
         for slot in &slots {
+            let width = slot
+                .wires
+                .iter()
+                .map(|&i| loose[i].lane_width(spine_x, widest))
+                .fold(0.0, f64::max);
             for (k, &i) in slot.wires.iter().enumerate() {
-                loose[i].take_lane(slot.lane_y(k), spine_x, widest);
+                loose[i].take_lane(slot.lane_y(k), spine_x, width);
             }
         }
     }
@@ -1760,6 +1776,64 @@ component Root {
 
         let direct = loose(west, east, None);
         assert_eq!(direct.curves(), [flex(west, east, FLEX)]);
+    }
+
+    /// Two loose wires between nodes 0 and 1 (one with a long label) and
+    /// one between nodes 0 and 2, all straight through a box on the spine:
+    /// the long label widens its own slot's lanes, both of them, and no
+    /// other slot's.
+    #[test]
+    fn a_slot_shares_one_lane_width_and_widens_no_other_slot() {
+        let mut cable = CableBox {
+            title: "c".into(),
+            subtitle: String::new(),
+            origin: Point::new(-50.0, 0.0),
+            width: 100.0,
+            height: HEADER_HEIGHT + CABLE_LABEL_PAD + ROW_HEIGHT,
+            strands: vec![strand(0)],
+            shielded: false,
+            shielded_pairs: Vec::new(),
+            drains: Vec::new(),
+        };
+        cable.place_rows();
+        let wire = |y: f64, label: &str| LooseWire {
+            label: Some(label.into()),
+            ..loose(Point::new(-400.0, y), Point::new(400.0, y), None)
+        };
+        let mut wires = [
+            wire(60.0, "A LONG LABEL THAT NEEDS FAR MORE ROOM THAN THE BOX"),
+            wire(70.0, "S1"),
+            wire(80.0, "S2"),
+        ];
+        let between = |a: usize, b: usize| [AnchorNode::Connector(a), AnchorNode::Connector(b)];
+        let crossing = [
+            Crossing {
+                wire: 0,
+                order: 1,
+                pair: between(0, 1),
+            },
+            Crossing {
+                wire: 1,
+                order: 2,
+                pair: between(0, 1),
+            },
+            Crossing {
+                wire: 2,
+                order: 3,
+                pair: between(0, 2),
+            },
+        ];
+        HarnessLayout::occupy_spine(0.0, &mut [cable], &[0], &mut wires, &crossing);
+
+        let span = |w: &LooseWire| w.lane.map(|l| l.right - l.left).expect("a lane");
+        assert!(span(&wires[0]) > 100.0, "the long label widens its lane");
+        assert_eq!(span(&wires[1]), span(&wires[0]), "and its slot mate's");
+        assert_eq!(
+            span(&wires[2]),
+            wires[2].annotation_width().max(100.0),
+            "the other slot keeps its own width"
+        );
+        assert!(span(&wires[2]) < span(&wires[0]));
     }
 
     #[test]
