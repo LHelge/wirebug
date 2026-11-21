@@ -4,7 +4,7 @@
 //! qualified with the port's connector designator: `hv:1`.
 
 use super::draw::LabelPlacement;
-use super::{PIN_ACROSS, PIN_CHAR_WIDTH, PIN_INSET, PIN_NEIGHBOUR_GAP};
+use super::{PIN_ACROSS, PIN_CHAR_WIDTH, PIN_INSET, PIN_NEIGHBOUR_GAP, PIN_TITLE_GAP};
 use crate::dsl::ir::{Instance, Pin, Port};
 use crate::render::geometry::{Bounds, Point, Side};
 
@@ -31,13 +31,39 @@ pub(super) enum PinOrientation {
 }
 
 /// The text beside one port and the way it reads.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(super) struct PinAnnotation {
     pub(super) text: String,
     pub(super) orientation: PinOrientation,
+    /// How much farther out along a north stub than usual the text sits,
+    /// to clear the component title ([`Self::clear_title`]); 0 elsewhere.
+    lift: f64,
 }
 
 impl PinAnnotation {
+    /// `text` read the way `orientation` says, in its usual place.
+    pub(super) fn new(text: String, orientation: PinOrientation) -> Self {
+        Self {
+            text,
+            orientation,
+            lift: 0.0,
+        }
+    }
+
+    /// Move the text of a north port at `pos` out along its stub, past the
+    /// component's `title`, when it would meet it there: its end nearest
+    /// the port (the pin number of a turned text) then sits at least
+    /// `PIN_TITLE_GAP` above the title (the move rounded up to a
+    /// whole unit, so the drawn coordinates stay whole). A text clear of
+    /// the title keeps its place.
+    pub(super) fn clear_title(&mut self, pos: Point, title: &Bounds) {
+        let extent = self.extent(Side::North, pos);
+        if extent.overlaps(title) {
+            let near = extent.origin.y + extent.height;
+            self.lift += (near - (title.origin.y - PIN_TITLE_GAP)).ceil();
+        }
+    }
+
     /// What `port` of `owner` is annotated with: its pins (`2`, or `2,3`
     /// for a ganged port), after `<designator>:` when `owner`'s component
     /// declares more than one connector — counting every connector, not
@@ -91,7 +117,8 @@ impl PinAnnotation {
     /// `PIN_INSET` out along the stub, reading toward the port, on the
     /// stub's right on a north side and its left on a south side, so the
     /// two annotations of a short vertical wire between a box's south
-    /// port and another's north port sit on opposite sides of it.
+    /// port and another's north port sit on opposite sides of it. A north
+    /// text sits `lift` farther out.
     pub(super) fn placement(&self, side: Side, pos: Point) -> LabelPlacement {
         let level = |x: f64, y: f64, anchor: &'static str| LabelPlacement {
             x,
@@ -111,13 +138,13 @@ impl PinAnnotation {
             (_, Side::West) => level(pos.x - PIN_INSET, pos.y - 5.0, "end"),
             (_, Side::East) => level(pos.x + PIN_INSET, pos.y - 5.0, "start"),
             (PinOrientation::Horizontal, Side::North) => {
-                level(pos.x + PIN_INSET, pos.y - 5.0, "start")
+                level(pos.x + PIN_INSET, pos.y - 5.0 - self.lift, "start")
             }
             (PinOrientation::Horizontal, Side::South) => {
                 level(pos.x + PIN_INSET, pos.y + 13.0, "start")
             }
             (PinOrientation::Vertical, Side::North) => {
-                turned(pos.x + PIN_ACROSS, pos.y - PIN_INSET, 90.0)
+                turned(pos.x + PIN_ACROSS, pos.y - PIN_INSET - self.lift, 90.0)
             }
             (PinOrientation::Vertical, Side::South) => {
                 turned(pos.x - PIN_ACROSS, pos.y + PIN_INSET, -90.0)
@@ -160,8 +187,8 @@ impl PinAnnotation {
 mod tests {
     use super::*;
     use crate::dsl::ir::{InstanceName, PortName};
-    use crate::render::schematic::MIN_PORT_PITCH;
     use crate::render::schematic::tests::design_from;
+    use crate::render::schematic::{MIN_PORT_PITCH, PIN_TITLE_GAP};
 
     /// An instance with an HV and an interlock connector (each with a pin
     /// 1 and 2, one of them ganged), a bare-port pin and a pinless port,
@@ -264,10 +291,7 @@ component sys {
     }
 
     fn annotation(text: &str, orientation: PinOrientation) -> PinAnnotation {
-        PinAnnotation {
-            text: text.to_string(),
-            orientation,
-        }
+        PinAnnotation::new(text.to_string(), orientation)
     }
 
     /// The extent's span across the stub of a port at the origin: y for a
@@ -319,6 +343,53 @@ component sys {
             south.origin.x + south.width < 0.0,
             "left of the stub: {south:?}"
         );
+    }
+
+    /// A title band across the top of a box whose top edge is at y = 0,
+    /// from `x0` to `x1`.
+    fn title(x0: f64, x1: f64) -> Bounds {
+        Bounds {
+            origin: Point::new(x0, -20.0),
+            width: x1 - x0,
+            height: 15.0,
+        }
+    }
+
+    #[test]
+    fn a_north_text_meeting_the_title_moves_out_past_it_keeping_its_number_nearest() {
+        for orientation in [PinOrientation::Vertical, PinOrientation::Horizontal] {
+            let mut text = annotation("iso_up:1", orientation);
+            let title = title(-40.0, 40.0);
+            assert!(text.extent(Side::North, Point::ORIGIN).overlaps(&title));
+
+            text.clear_title(Point::ORIGIN, &title);
+            let moved = text.extent(Side::North, Point::ORIGIN);
+            assert!(!moved.overlaps(&title), "{orientation:?}: {moved:?}");
+            // Its near end sits just above the title, not farther.
+            let near = moved.origin.y + moved.height;
+            assert!(near <= title.origin.y - PIN_TITLE_GAP, "{orientation:?}");
+            assert!(
+                near > title.origin.y - PIN_TITLE_GAP - 1.0,
+                "{orientation:?}"
+            );
+        }
+        // A turned text still ends, number last, at its anchor: the end
+        // nearest the port.
+        let mut text = annotation("iso_up:1", PinOrientation::Vertical);
+        text.clear_title(Point::ORIGIN, &title(-40.0, 40.0));
+        let at = text.placement(Side::North, Point::ORIGIN);
+        let moved = text.extent(Side::North, Point::ORIGIN);
+        assert_eq!((at.anchor, at.rotate), ("end", 90.0));
+        assert_eq!(at.y, moved.origin.y + moved.height);
+    }
+
+    #[test]
+    fn a_north_text_clear_of_the_title_keeps_its_place() {
+        let mut text = annotation("iso_up:1", PinOrientation::Vertical);
+        let before = text.extent(Side::North, Point::ORIGIN);
+        // The text runs right of the stub; a title ending left of it.
+        text.clear_title(Point::ORIGIN, &title(-60.0, 0.0));
+        assert_eq!(text.extent(Side::North, Point::ORIGIN), before);
     }
 
     #[test]
