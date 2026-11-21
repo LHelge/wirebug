@@ -13,6 +13,9 @@ component Vehicle {
     dev:   Device;
     c:     Quad;
     d:     Quad;
+    bms:   Bms "Battery management master";
+    lamp:  Lamp;
+    farl:  Lamp;
 
     pub port feed "FEED";
 
@@ -49,6 +52,14 @@ component Vehicle {
 
     // An own port the enclosed view does not place on its enclosure.
     wire green 0.5 [dev.q, feed];
+
+    // A short drawn CAN pair from a BMS with two connectors (its pin
+    // numbers name their connector) to `lamp`, and on to `farl`, which no
+    // view includes.
+    wire white/blue 0.5 [bms.can_h, lamp.pwr];
+    wire white/blue 0.5 [bms.can_h, farl.pwr];
+    wire white/red  0.5 [bms.can_l, lamp.gnd];
+    wire white/red  0.5 [bms.can_l, farl.gnd];
 
     // Neighbours: `c.p0` and `c.p2` run straight across to `d` and on to
     // `gone`; `c.p1` and `c.p3` have no wire at all.
@@ -89,6 +100,19 @@ component Vehicle {
         pub port q6 "Q6";
         pub port p7 "P7";
         pub port q7 "Q7";
+    }
+    component Bms {
+        connector signals "Signals 12p" {
+            pub port can_h "CAN H" pin 11;
+            pub port can_l "CAN L" pin 12;
+        }
+        connector power "Power 2p" {
+            pub port b_pos "B+" pin 1;
+        }
+    }
+    component Lamp {
+        pub port pwr "PWR";
+        pub port gnd "GND";
     }
     component Quad {
         pub port p0 "P0";
@@ -156,5 +180,23 @@ view schematic "Neighbours, grid 7.5" {
     }
     include d at (30, 0) ports {
         west: p0, p1, p2, p3;
+    }
+}
+
+view schematic "Short wire" {
+    include bms at (0, 0) ports {
+        east: can_h, can_l;
+    }
+    include lamp at (24, 0) ports {
+        west: pwr, gnd;
+    }
+}
+
+view schematic "Under a long title" {
+    include bms at (0, 0) ports {
+        north: can_h, can_l;
+    }
+    include lamp at (0, -14) ports {
+        south: pwr, gnd;
     }
 }

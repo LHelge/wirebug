@@ -618,9 +618,10 @@ runs a step past the tip, and its text may go *beside* the stub instead,
 at the end of a **leader**: below a west or east stub (the pin annotation
 is above), left of a north one, right of a south one. The leader is drawn
 in the undrawn wire's colour and layers, as the stub is: it follows the
-port's line out to a branch point (`MIN_STUB` out, or past the pin
-annotations on the lane's side), jogs across into the lane and runs 3
-units along it, and the text follows. So even where the drawn wire covers
+port's line out to a branch point (the nearest that keeps it clear, see
+below), jogs across into the lane and runs along it to the text (3 units
+at least, farther where the text must start past an annotation in the
+lane). So even where the drawn wire covers
 the stub, the reader sees a second wire branch off that port toward the
 text. The lane is centred 8.5 units off the line (clear of the drawn
 wire's casing and the text's halo) or, where that meets the wire's code,
@@ -640,22 +641,32 @@ then each reference, in port order (boxes in include order, each box's
 ports west, east, north, south in authored order, then the enclosure's),
 is fitted against everything drawn and every reference fitted before it:
 
-- **Stub.** It must not run into a wire of another connection (wires
-  leaving its own port share its first run), another box or its title, a
-  code, a text box or an earlier reference. If it would, it is cut short
-  of the first thing in its way and keeps no text; cut shorter than
-  `MIN_STUB` (past the port's dot), the reference is left out.
+- **Along the line.** The stub, and a leader's first leg, run along the
+  port's line, under its own drawn wire where that runs on along it: so
+  neither that wire nor its code is in their way. They must not run into
+  a wire of another connection or its code, another box or its title, a
+  text box or an earlier reference.
 - **Text.** Its ladder runs from the most detailed text within
   `MAX_CHARS` (32): all far ends, then fewer with `+N more`, then
   `N more`, then the arrow alone (a splice lists what it joins as far as
-  room allows). The first rung whose text, on the stub's line or else
-  beside it, sits clear of every wire (with its casing), box, title, pin
-  annotation (where it is drawn, moved past a title or not), port label,
-  code, text box and earlier reference is drawn (and whose leader, as new
-  ink, is clear of all of those but its own port's wires). With none, the
-  stub is drawn alone, with its tooltip, unless a drawn wire of its own
-  port runs out along it at least as far, so it would show nothing: then
-  the reference is left out, and the SVG has no element for it.
+  room allows). Each rung is tried on the stub's line (unless the stub
+  runs into something), then in each beside lane at the end of a leader.
+  The leader's branch is the nearest point along the line, in whole units
+  from `MIN_STUB` out to as far as the port's own drawn wire runs on along
+  it (or the stub's end), at which the jog and the run (new ink: clear of
+  everything but the port's own wires, though not of their codes) and the
+  text are clear (`LeaderScan`: a branch short of the far edge of what the
+  leader meets meets it too, so the scan jumps past it, and stops once the
+  leg along the line is blocked). The text must sit clear of every wire
+  (with its casing), box, title, pin annotation (where it is drawn, moved
+  past a title or not), port label, code, text box and earlier reference.
+  The first rung that fits in any of its places is drawn.
+- **Stub alone.** With no rung fitting anywhere, the stub is drawn alone,
+  with its tooltip: cut 1 short of the first thing on its line in its
+  way, and left out if that leaves it shorter than `MIN_STUB` (past the
+  port's dot), or if a drawn wire of its own port runs out along it at
+  least as far, so it would show nothing. A reference left out has no
+  element in the SVG.
 - **Canvas.** A rung is taken only if the standalone canvas
   (`Placement::viewbox`, which holds each reference's stub and text
   `PIN_CANVAS_PAD` inside it) with it still fits `MAX_CANVAS`, or grows no
