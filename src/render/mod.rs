@@ -333,6 +333,52 @@ impl GridFault {
     }
 }
 
+/// The longest side, in world units, a view's canvas (its viewBox) may
+/// have.
+///
+/// `--png` allocates its whole pixmap up front, 4 bytes a pixel, so a view
+/// whose includes sit far apart would ask for terabytes and abort the
+/// process. At [`png::PNG_SCALE`] this is 16384 px a side, a pixmap of at
+/// most 1 GiB, which still holds an A0 sheet at 300 dpi (14043 px on its
+/// long edge) and is almost four times the widest view of the example
+/// project (about 2200 units). SVG and PDF output have no such cost.
+pub(crate) const MAX_CANVAS: f64 = 8192.0;
+
+/// A view's canvas: its viewBox's width and height, in world units.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Canvas {
+    width: f64,
+    height: f64,
+}
+
+impl Canvas {
+    /// A `width` × `height` canvas.
+    pub(crate) fn new(width: f64, height: f64) -> Self {
+        Self { width, height }
+    }
+
+    /// Whether neither side is longer than [`MAX_CANVAS`]. Compared as
+    /// `f32`, the precision the rasteriser reads the viewBox at, so `check`
+    /// and `--png` judge the very same numbers.
+    pub(crate) fn fits(&self) -> bool {
+        let limit = MAX_CANVAS as f32;
+        self.width as f32 <= limit && self.height as f32 <= limit
+    }
+
+    /// Why the canvas cannot be rasterised, when it does not fit.
+    pub(crate) fn admit(self) -> ViewResult<()> {
+        if self.fits() {
+            Ok(())
+        } else {
+            Err(ViewErrorKind::CanvasTooLarge {
+                width: self.width,
+                height: self.height,
+                limit: MAX_CANVAS,
+            })
+        }
+    }
+}
+
 impl From<GridFault> for ViewErrorKind {
     fn from(fault: GridFault) -> Self {
         match fault {

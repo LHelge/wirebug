@@ -22,6 +22,7 @@ use cli::{Cli, Command, ManifestCommand};
 use wirebug::dsl::diagnostics::Problem;
 use wirebug::dsl::{self, CheckReport, Format};
 use wirebug::render::output::{Output, ViewFormat};
+use wirebug::render::png::PNG_SCALE;
 
 fn main() -> ExitCode {
     match run(Cli::parse()) {
@@ -147,7 +148,7 @@ fn render_command(
         Output::Pdf
     } else {
         let format = if png {
-            ViewFormat::Png { scale: 2.0 }
+            ViewFormat::Png { scale: PNG_SCALE }
         } else {
             ViewFormat::Svg
         };
