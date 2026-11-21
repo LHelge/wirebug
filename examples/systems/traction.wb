@@ -2,7 +2,7 @@
 //
 // A `Vehicle` fragment: the battery string, HV junction box, inverter,
 // OBC/DC-DC, and drive motor, plus the HV bus and the motor-phase cable
-// that tie them together. `main.wb` merges this in with `use Vehicle`.
+// that tie them together. `main.wb` merges this in with `fragment`.
 // This file carries its own `use` imports for the types it instantiates;
 // the HV bus wires reach `msd` (declared in systems/safety.wb) through
 // the merged flat namespace.
