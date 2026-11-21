@@ -1,5 +1,6 @@
-// The bill of materials: an assembly placed twice (six lamps), an inline
-// connector with two halves, two cables of one type (one without a
+// The bill of materials: an assembly placed twice (six lamps), inline
+// connectors with two halves, one and none declared (each two housings),
+// a sub-loom whose wire continues the vehicle's at its boundary, two cables of one type (one without a
 // length) and one with no type, loose wire of one colour and gauge summed
 // with an unmeasured conductor and the assemblies' rails, two wire part
 // numbers of one colour and gauge, and splices with and without a part.
@@ -8,6 +9,7 @@ use Ecu     from "components/parts.wb";
 use Relay   from "components/parts.wb";
 use Switch  from "components/parts.wb";
 use LampBar from "components/parts.wb";
+use Pod     from "components/parts.wb";
 use Dt04_2p from "components/parts.wb";
 use Dt06_2s from "components/parts.wb";
 
@@ -18,12 +20,22 @@ component Vehicle {
     sw:    Switch  "Switch";
     front: LampBar "Front lamps";
     rear:  LampBar "Rear lamps";
+    pod:   Pod     "Pod";
 
     inline ic "Branch" {
         male:   Dt04_2p;
         female: Dt06_2s;
         port sig "SIG" pin 1;
         port ret "RET" pin 2;
+    }
+
+    inline ic_stub "Stub" {
+        male: Dt04_2p;
+        port s "S" pin 1;
+    }
+
+    inline ic_spare "Spare" {
+        port s "S" pin 1;
     }
 
     splice sp_gnd "Ground splice" {
@@ -36,12 +48,14 @@ component Vehicle {
     wire red 1 "12V" [ecu.pwr, sp_feed] { length: 1m; }
     wire red 1 "12V" [sp_feed, relay.coil] { length: 50cm; }
     wire red 1 "12V" [sp_feed, sw.a];
+    wire red 1 "12V" [sp_feed, pod.feed] { length: 1m; }
 
     wire black 0.5 "GND" [relay.gnd, sp_gnd] { type: "FLRY-B"; part: "FLRY-0.5-BK"; length: 30cm; }
     wire black 0.5 "GND" [sw.b, sp_gnd] { type: "FLRY-B"; part: "FLRY-0.5-BK"; }
     wire black 0.5 "GND" [sp_gnd, ecu.gnd] { part: "TXL-0.5-BK"; length: 2m; }
     wire black 0.5 "GND" [node.gnd, sp_aux];
     wire black 0.5 "GND" [sp_aux, sp_gnd];
+    wire black 0.5 "GND" [pod.out, sp_gnd];
 
     cable can1 "CAN" {
         type: "2x0.5 TP";

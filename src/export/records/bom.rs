@@ -47,6 +47,10 @@ struct LineRecord {
     /// For a cable or a wire: how many of `quantity` have no length, so
     /// are not in `total_length_m`.
     unmeasured: Option<usize>,
+    /// For a wire: how many of `quantity` end on the owning component's
+    /// own connectorless port, continuing a conductor the enclosing
+    /// component wires to it ([`WireLine::boundary`](crate::export::WireLine::boundary)).
+    boundary: Option<usize>,
     /// The placements `quantity` counts, as full paths: empty for a wire,
     /// whose conductors are the wire list's rows.
     #[serde(rename = "where")]
@@ -83,6 +87,7 @@ impl From<&Line<'_>> for LineRecord {
                 color: Some(l.color.to_string()),
                 color_code: Some(l.color.code()),
                 gauge_mm2: Some(l.gauge),
+                boundary: Some(l.boundary()),
                 ..base
             },
             Line::Component(l) => Self {
@@ -122,6 +127,7 @@ impl Sheet for BomSheet {
         "quantity",
         "total_length_m",
         "unmeasured",
+        "boundary",
         "where",
     ];
 
@@ -144,6 +150,7 @@ impl Sheet for BomSheet {
                     line.quantity.to_string(),
                     field(line.total_length_m),
                     field(line.unmeasured),
+                    field(line.boundary),
                     line.placements.join(";"),
                 ]
             })
@@ -208,7 +215,9 @@ mod tests {
                 "",
                 "Car.l1.x1;Car.l2.x1",
             ],
-            ["housing", "false", "", "", "", "", "1", "", "", "Car.p.x1"],
+            [
+                "housing", "false", "", "", "", "Plug 2p", "1", "", "", "Car.p.x1",
+            ],
             [
                 "cable", "true", "", "2-core", "", "", "1", "1.5", "0", "Car.k",
             ],
@@ -247,8 +256,14 @@ mod tests {
         );
         assert_eq!(rows.len(), 7);
         assert_eq!(
-            fields(&rows[3], &["color", "color_code", "gauge_mm2"]),
-            ["red", "RD", "1"]
+            fields(&rows[3], &["color", "color_code", "gauge_mm2", "boundary"]),
+            ["red", "RD", "1", "0"]
+        );
+        // Only a wire row counts boundary continuations.
+        assert!(
+            rows.iter()
+                .filter(|row| row["kind"] != "wire")
+                .all(|row| row["boundary"].is_empty())
         );
         assert_eq!(
             fields(&rows[4], &["manufacturer", "rating"]),
@@ -279,6 +294,8 @@ mod tests {
         assert_eq!(wire["gauge_mm2"], 1.0);
         assert_eq!(wire["total_length_m"], 2.15);
         assert_eq!(wire["unmeasured"], 1);
+        assert_eq!(wire["boundary"], 0);
+        assert!(housing["boundary"].is_null());
         assert_eq!(wire["where"], serde_json::json!([]));
         // Every line has every field, a column each of the CSV.
         let mut columns = BomSheet::HEADER.to_vec();

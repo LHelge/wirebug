@@ -1,7 +1,7 @@
 // The parts the vehicle is built from: a component with every part-data
-// key, one placed six times, one with part data but no number, one with
+// key, one placed seven times, one with part data but no number, one with
 // none; housings of a type with a part, of a type without one, and of
-// connector blocks that name no type.
+// connector blocks that name no type, with a description and without.
 
 connector_type Dt04_2p "Deutsch DT04-2P" {
     part: "DT04-2P";
@@ -48,7 +48,7 @@ component Relay {
 }
 
 component Switch {
-    connector x1 "Switch 2p" {
+    connector x1 {
         pub port a "A" pin 1;
         pub port b "B" pin 2;
     }
@@ -69,4 +69,18 @@ component LampBar {
     wire black 0.5 [left.b, sp_bar];
     wire black 0.5 [mid.b, sp_bar];
     wire black 0.5 [right.b, sp_bar];
+}
+
+// A sub-loom with a port of its own on no connector: its wire to the lamp
+// continues the vehicle's wire to `feed`, a boundary continuation. Its
+// `out` is on its own connector, a real termination.
+component Pod {
+    pub port feed "FEED";
+    connector x9 "Pod 1p" {
+        pub port out "OUT" pin 1;
+    }
+    lamp: Lamp;
+
+    wire red 1 "FEED" [feed, lamp.a];
+    wire black 0.5 [out, lamp.b];
 }

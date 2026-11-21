@@ -6,8 +6,8 @@ use std::hash::Hash;
 
 use indexmap::IndexMap;
 
-use super::PinTables;
-use super::wires::{Cable, Copper, Row, RowLength, WireList};
+use super::wires::{Cable, Contact, Copper, End, Row, RowLength, WireList};
+use super::{Housing, PinTable, PinTables};
 use crate::dsl::ir::{
     Connector, ConnectorTypeName, Design, Half, Instance, PartMeta, Splice, TypeName, WireColor,
 };
@@ -165,58 +165,107 @@ impl Line<'_> {
 }
 
 /// Connector housings of one part number. Housings with none are grouped
-/// by connector type, and those with no type either (a connector block
-/// that names none) are one line together.
+/// by connector type; those with no type either (a connector block that
+/// names none, or an inline connector's half it does not declare) by
+/// their description; and those with no description as well are one line
+/// together.
 #[derive(Debug, Clone)]
 pub struct HousingLine<'d> {
     /// The housings' part number, from their connector type's `part:`.
     pub part: Option<&'d str>,
     /// Their connector type: the first housing's, on a line of a part.
-    /// `None` only on the line of housings with neither part nor type.
+    /// `None` on a line of housings of no type.
     pub type_name: Option<&'d ConnectorTypeName>,
-    /// The connector type's description, as `type_name`; `None` on the
-    /// line of housings with neither part nor type, whose connectors each
-    /// describe themselves.
+    /// The housings' description: their connector type's (the first
+    /// housing's, on a line of a part); for housings of no type, the
+    /// description they are grouped by — a connector block's own, or an
+    /// inline connector's label for a half it does not declare.
     pub description: Option<&'d str>,
     /// Every housing the line counts, in pin-table order: one per
-    /// connector per placement, one per declared half of an inline.
+    /// connector per placement, and two per inline connector, male first —
+    /// a half it does not declare is still a housing to buy.
     pub housings: Vec<HousingPlacement<'d>>,
 }
 
-/// What a housing is grouped by: its part, else its type, else nothing.
+/// What a housing is grouped by: its part, else its type, else its
+/// description, else nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum HousingKey<'d> {
     Part(&'d str),
     Type(&'d ConnectorTypeName),
+    Described(&'d str),
     Neither,
 }
 
+/// One housing as the BOM groups it: what it is bought as, and where.
+struct HousingItem<'d> {
+    housing: Housing<'d>,
+    placement: HousingPlacement<'d>,
+}
+
+impl<'d> HousingItem<'d> {
+    /// The housings `table` stands for: its connector's, or its inline
+    /// half's. An inline connector is a mated pair, so a table of one that
+    /// declares one half or none stands for the undeclared halves too, as
+    /// housings of no type described by the inline's label.
+    fn of(table: &PinTable<'d>) -> Vec<Self> {
+        let item = |housing, half| Self {
+            housing,
+            placement: HousingPlacement {
+                instance: table.instance,
+                connector: table.connector,
+                half,
+            },
+        };
+        let Some(inline) = &table.instance.inline else {
+            return vec![item(table.housing(), None)];
+        };
+        let undeclared = Housing {
+            type_name: None,
+            description: table.instance.label.as_deref(),
+            properties: &table.connector.properties,
+        };
+        [Half::Male, Half::Female]
+            .into_iter()
+            .filter_map(|half| match (table.half, inline.half(half)) {
+                (Some(own), _) if own == half => Some(item(table.housing(), Some(half))),
+                // A declared half has a table of its own.
+                (_, Some(_)) => None,
+                // An undeclared half, listed once: with the table of the
+                // other half, or with the one table of an inline that
+                // declares none.
+                (_, None) => Some(item(undeclared, Some(half))),
+            })
+            .collect()
+    }
+
+    fn key(&self) -> HousingKey<'d> {
+        let housing = &self.housing;
+        match (housing.part(), housing.type_name, housing.description) {
+            (Some(part), _, _) => HousingKey::Part(part),
+            (None, Some(type_name), _) => HousingKey::Type(type_name),
+            (None, None, Some(description)) => HousingKey::Described(description),
+            (None, None, None) => HousingKey::Neither,
+        }
+    }
+}
+
 impl<'d> HousingLine<'d> {
-    /// One line per part number (else connector type), in the order the
-    /// pin tables first meet it.
+    /// One line per part number (else connector type, else description),
+    /// in the order the pin tables first meet it.
     fn all(tables: &PinTables<'d>) -> Vec<Self> {
         let groups: Groups<_, _, _> = tables
             .tables()
             .iter()
-            .map(|table| {
-                let housing = table.housing();
-                let key = match (housing.part(), housing.type_name) {
-                    (Some(part), _) => HousingKey::Part(part),
-                    (None, Some(type_name)) => HousingKey::Type(type_name),
-                    (None, None) => HousingKey::Neither,
-                };
+            .flat_map(HousingItem::of)
+            .map(|item| {
                 let line = Self {
-                    part: housing.part(),
-                    type_name: housing.type_name,
-                    description: housing.description.filter(|_| key != HousingKey::Neither),
+                    part: item.housing.part(),
+                    type_name: item.housing.type_name,
+                    description: item.housing.description,
                     housings: Vec::new(),
                 };
-                let placement = HousingPlacement {
-                    instance: table.instance,
-                    connector: table.connector,
-                    half: table.half,
-                };
-                (key, line, placement)
+                (item.key(), line, item.placement)
             })
             .collect();
         groups
@@ -234,13 +283,13 @@ pub struct HousingPlacement<'d> {
     pub instance: &'d Instance,
     /// The connector.
     pub connector: &'d Connector,
-    /// The half of an inline connector the housing is; `None` for an
-    /// ordinary connector, and for an inline that declares no half.
+    /// The half of an inline connector the housing is, declared or not;
+    /// `None` for an ordinary connector.
     pub half: Option<Half>,
 }
 
-/// Where the housing is: `Vehicle.ecu.x1` for a connector, `Vehicle.ic`
-/// for an inline connector, `Vehicle.ic.male` for one of its halves.
+/// Where the housing is: `Vehicle.ecu.x1` for a connector,
+/// `Vehicle.ic.male` for a half of an inline connector.
 impl fmt::Display for HousingPlacement<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.instance.path)?;
@@ -374,6 +423,23 @@ impl<'d> WireLine<'d> {
     /// segment, [`RowLength::copper`]), and how many have no length.
     pub fn length(&self) -> Copper {
         self.rows.iter().map(|row| row.length).collect()
+    }
+
+    /// How many of the conductors are boundary continuations: they end on
+    /// their owner's own port that is on no connector, so they continue a
+    /// conductor the enclosing component wires to that port rather than
+    /// being a second piece of wire. They are counted in the quantity all
+    /// the same; a boundary port on the owner's own connector is a real
+    /// termination and does not make one.
+    pub fn boundary(&self) -> usize {
+        self.rows
+            .iter()
+            .filter(|row| {
+                row.ends().iter().any(|end| {
+                    matches!(end, End::Boundary(port) if port.contact() == Contact::Connectorless)
+                })
+            })
+            .count()
     }
 }
 
@@ -556,20 +622,31 @@ component Plug {
     connector x1 "Plug 2p" { pub port a "A" pin 1; pub port b "B" pin 2; }
 }
 
+component Socket {
+    connector x1 "Socket 2p" { pub port a "A" pin 1; pub port b "B" pin 2; }
+}
+
+component Bare {
+    connector x1 { pub port a "A" pin 1; }
+}
+
 component Bar {
     left: Lamp; mid: Lamp; right: Lamp;
     wire red 1 [left.a, mid.a, right.a] { length: 2m; }
 }
 
 component Pod {
-    connector x9 "Pod 1p" { pub port feed "FEED" pin 1; }
+    pub port feed "FEED";
+    connector x9 "Pod 1p" { pub port out "OUT" pin 1; }
     lamp: Lamp;
     wire red 1 [feed, lamp.a];
+    wire black 0.5 [out, lamp.b];
 }
 "#;
 
     const USES: &str = "use Lamp from \"lib.wb\";\nuse Node from \"lib.wb\";\n\
-         use Plug from \"lib.wb\";\nuse Bar from \"lib.wb\";\nuse Pod from \"lib.wb\";\n\
+         use Plug from \"lib.wb\";\nuse Bar from \"lib.wb\";\n\
+         use Socket from \"lib.wb\";\nuse Bare from \"lib.wb\";\nuse Pod from \"lib.wb\";\n\
          use Dt04_2p from \"lib.wb\";\nuse Dt06_2s from \"lib.wb\";\n";
 
     fn bom_of(main: &str) -> Design {
@@ -688,8 +765,10 @@ component Pod {
     }
 
     #[test]
-    fn a_housing_without_a_part_is_grouped_by_its_type_else_with_the_untyped() {
-        let design = bom_of("component Car { a: Node; b: Node; p: Plug; q: Plug; }\n");
+    fn a_housing_without_a_part_is_grouped_by_its_type_else_by_its_description() {
+        let design = bom_of(
+            "component Car { a: Node; p: Plug; s: Socket; b: Node; q: Plug; x: Bare; y: Bare; }\n",
+        );
         let bom = Bom::from(&design);
         let lines: Vec<_> = housings(&bom)
             .iter()
@@ -706,7 +785,11 @@ component Pod {
             lines,
             [
                 (None, Some("Hdr2"), Some("Header 2p"), 2),
-                (None, None, None, 2)
+                // Connector blocks that name no type, by their description…
+                (None, None, Some("Plug 2p"), 2),
+                (None, None, Some("Socket 2p"), 1),
+                // …and those with none either, together.
+                (None, None, None, 2),
             ]
         );
         assert!(
@@ -945,5 +1028,64 @@ component Pod {
             measured,
             [false, false, true, true, true, false, false, false]
         );
+    }
+
+    #[test]
+    fn an_inline_is_two_housings_even_when_it_declares_a_half_or_none() {
+        let design = bom_of(
+            "component Car { a: Node; b: Node; c: Node;\n\
+               inline one \"One half\" { female: Dt06_2s; port s \"S\" pin 1; }\n\
+               inline none \"No halves\" { port s \"S\" pin 1; }\n\
+               wire green 0.5 [a.a, one.s]; wire green 0.5 [one.s, b.a];\n\
+               wire green 0.5 [b.b, none.s]; wire green 0.5 [none.s, c.a]; }\n",
+        );
+        let bom = Bom::from(&design);
+        let lines: Vec<_> = housings(&bom)
+            .iter()
+            .map(|line| (line.part, line.description, paths(&line.housings)))
+            .collect();
+        let strings = |paths: &[&str]| paths.iter().map(|p| p.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            lines,
+            [
+                (
+                    None,
+                    Some("Header 2p"),
+                    strings(&["Car.a.x1", "Car.b.x1", "Car.c.x1"])
+                ),
+                // The undeclared half of each inline is listed under its
+                // label, male first; the declared one under its part.
+                (None, Some("One half"), strings(&["Car.one.male"])),
+                (
+                    Some("DT06-2S"),
+                    Some("Deutsch DT06-2S"),
+                    strings(&["Car.one.female"])
+                ),
+                (
+                    None,
+                    Some("No halves"),
+                    strings(&["Car.none.male", "Car.none.female"])
+                ),
+            ]
+        );
+        // The pin tables keep one table per declared half.
+        assert_eq!(PinTables::from(&design).tables().len(), 5);
+    }
+
+    #[test]
+    fn a_wire_line_counts_the_conductors_that_continue_at_a_connectorless_boundary() {
+        // The pod's `feed` is on no connector: its wire continues the one
+        // the car wires to `feed`. Its `x9` port is a real termination.
+        let design = bom_of(
+            "component Car { a: Node; b: Node; pod: Pod;\n\
+             wire red 1 [a.a, pod.feed];\n\
+             wire red 1 [b.a, pod.out]; }\n",
+        );
+        let bom = Bom::from(&design);
+        let lines: Vec<_> = wires(&bom)
+            .iter()
+            .map(|line| (line.color.code(), line.rows.len(), line.boundary()))
+            .collect();
+        assert_eq!(lines, [("RD".to_string(), 3, 1), ("BK".to_string(), 1, 0)]);
     }
 }
