@@ -3,8 +3,10 @@
 Text-defined electrical schematics and wiring harnesses: a multi-file `.wb`
 DSL project, rooted at a `wirebug.toml` manifest, is checked and rendered to
 SVG/PNG/PDF. `README.md` is the user-facing intro; the language itself is
-specified in `docs/`, and summed up for agents in the
-`.claude/skills/wirebug-dsl/` skill.
+specified in `docs/`, and summed up for agents in the `wirebug-dsl` skill,
+whose source is `skill/SKILL.md`. `.claude/skills/wirebug-dsl/SKILL.md` is
+only its install output: edit the source, then run
+`cargo run -- skill --install claude` (a test fails while the two differ).
 
 This file holds the rules for working on the codebase. **How the application
 works lives in `ARCHITECTURE.md`** — read the section for the area you are
@@ -209,6 +211,10 @@ cargo run -- serve examples --port 3000   # then open http://localhost:3000
 
 # the language server runs over stdio — editors spawn it, not humans
 cargo run -- lsp
+
+# print the agent skill, or reinstall this repository's copy after editing skill/SKILL.md
+cargo run -- skill
+cargo run -- skill --install claude
 
 # build + install the VSCode extension (see editors/vscode/README.md)
 cd editors/vscode && npm install && npm run package
