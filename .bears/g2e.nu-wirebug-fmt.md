@@ -1,13 +1,14 @@
 ---
 id: g2e.nu
 title: "`wirebug fmt`"
-status: open
+status: done
 priority: P3
 created: "2026-11-20T21:40:32.105730769Z"
-updated: "2026-11-20T21:40:32.105730769Z"
+updated: "2026-11-21T20:23:17.348557228Z"
 tags:
   - cli
   - dsl
+attempts: 1
 ---
 
 ## Summary
