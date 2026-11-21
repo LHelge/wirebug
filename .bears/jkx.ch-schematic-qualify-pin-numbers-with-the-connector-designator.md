@@ -1,13 +1,14 @@
 ---
 id: jkx.ch
 title: "Schematic: qualify pin numbers with the connector designator"
-status: open
+status: done
 priority: P2
 created: "2026-11-20T21:40:32.049938707Z"
-updated: "2026-11-20T21:40:32.049938707Z"
+updated: "2026-11-21T12:40:26.615870694Z"
 tags:
   - render
   - schematic
+attempts: 1
 ---
 
 ## Summary
