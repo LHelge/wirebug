@@ -911,7 +911,16 @@ component sys {
 }
 "#,
         );
-        let svg = render(&design, &one_wire_view()).expect("renders");
+        // `b` sits below `a.p`'s line, so the drawn wire turns at the stub's
+        // tip and the reference's text has room on its line.
+        let view = view_of(
+            "sys",
+            &[
+                ("a", 0.0, 0.0, &[("p", Side::East)]),
+                ("b", 16.0, 6.0, &[("p", Side::West)]),
+            ],
+        );
+        let svg = render(&design, &view).expect("renders");
         let classes: Vec<String> = wire_layers(&svg).into_iter().map(|l| l.class).collect();
         assert_eq!(
             classes,

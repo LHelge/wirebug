@@ -7,12 +7,15 @@ use super::draw::LabelPlacement;
 use super::{PIN_ACROSS, PIN_CHAR_WIDTH, PIN_INSET, PIN_NEIGHBOUR_GAP, PIN_TITLE_GAP};
 use crate::dsl::ir::{Instance, Pin, Port};
 use crate::render::geometry::{Bounds, Point, Side};
+use crate::render::text::Font;
 
 /// The pin font's size, and how far its glyphs reach above and below an
 /// alphabetic baseline: a sans-serif face's ascender and descender
 /// (Arial's 0.905 and 0.212 em, rounded up) rather than the ink of the
 /// digits, so an extent never undershoots the text it measures.
 const FONT_SIZE: f64 = 10.0;
+/// The `.port-pin` font, for the shared estimator.
+const FONT: Font = Font::italic(FONT_SIZE);
 const ASCENT: f64 = 9.1;
 const DESCENT: f64 = 2.2;
 
@@ -152,10 +155,23 @@ impl PinAnnotation {
         }
     }
 
-    /// The area the text covers when drawn at [`Self::placement`].
+    /// The area the text covers when drawn at [`Self::placement`], as the
+    /// layout estimates it ([`PIN_CHAR_WIDTH`] a character).
     pub(super) fn extent(&self, side: Side, pos: Point) -> Bounds {
+        self.extent_of(side, pos, Self::width(&self.text))
+    }
+
+    /// The same area measured with the shared estimator, which bounds the
+    /// bundled font's widths: what another text must keep clear of, where
+    /// the layout's flat estimate can fall short.
+    pub(super) fn bound(&self, side: Side, pos: Point) -> Bounds {
+        self.extent_of(side, pos, FONT.width(&self.text))
+    }
+
+    /// The area the text covers at [`Self::placement`] when it is `width`
+    /// long.
+    fn extent_of(&self, side: Side, pos: Point, width: f64) -> Bounds {
         let at = self.placement(side, pos);
-        let width = Self::width(&self.text);
         // Along the baseline (u) and across it (v, negative above), before
         // the rotation about the anchor.
         let (u0, u1) = match at.anchor {
