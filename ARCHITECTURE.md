@@ -81,7 +81,8 @@ Four CLI commands share it:
   `use ‸` offers every component/connector_type defined elsewhere,
   inserting the full `<Name> from "<relative path>";` remainder — plus
   `extend` targets, the `connector_type`/`layout` bodies, and the keys of
-  a cable body and of a wire body (a `{` right after a wire's `]`). An open
+  a cable body, of a wire body (a `{` right after a wire's `]`) and of a
+  component's part data (beside the member keywords). An open
   `.wb` file its project never loads (not reachable from `main.wb` via
   `use`) gets one info-severity `unlinked_file` notice instead of
   silence — rust-analyzer's unlinked-file move; its contents stay
