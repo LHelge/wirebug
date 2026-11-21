@@ -1,12 +1,13 @@
 ---
 id: g2e.f7
 title: Accurate, standalone language reference
-status: open
+status: done
 priority: P1
 created: "2026-11-20T21:40:32.089977524Z"
-updated: "2026-11-20T21:49:51.002826892Z"
+updated: "2026-11-21T19:37:15.805662978Z"
 tags:
   - docs
+attempts: 1
 ---
 
 ## Summary
