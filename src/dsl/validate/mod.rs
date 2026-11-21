@@ -839,10 +839,33 @@ mod tests {
             })
             .collect();
         insta::assert_snapshot!(messages.join("\n"), @r#"
-        unknown component property `length` | a component supports `part: "...";`, `manufacturer: "...";`, `description: "...";` and `rating: "...";`
+        unknown component property `length` | a component supports `part: "...";`, `manufacturer: "...";`, `description: "...";` and `rating: "...";`; to place an instance, name its type after the colon: `length: <Type> "<label>";`
         component property `rating` expects a string
         duplicate component property `part`
         "#);
+    }
+
+    #[test]
+    fn an_instance_without_its_type_is_told_to_name_the_type() {
+        // `l: "Lamp";` parses as part data, a string after the colon; the
+        // help covers the instance the author more likely meant.
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("main.wb"), "component m { l: \"Lamp\"; }\n")
+            .expect("write");
+        let (project, _) = load(&dir.path().join("main.wb"));
+        let resolved = resolve(project.as_ref().expect("loads"));
+        let problems = validate(&resolved);
+        let [problem] = problems.as_slice() else {
+            panic!("expected one problem, got {problems:?}");
+        };
+        assert_eq!(problem.to_string(), "unknown component property `l`");
+        let help = problem.help().expect("a help").to_string();
+        assert!(
+            help.ends_with(
+                "; to place an instance, name its type after the colon: `l: <Type> \"<label>\";`"
+            ),
+            "{help}"
+        );
     }
 
     #[test]
