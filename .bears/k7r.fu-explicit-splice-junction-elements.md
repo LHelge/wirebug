@@ -1,13 +1,14 @@
 ---
 id: k7r.fu
 title: Explicit splice / junction elements
-status: open
+status: done
 priority: P3
 created: "2026-11-20T21:40:32.019278995Z"
-updated: "2026-11-21T01:36:29.879636522Z"
+updated: "2026-11-21T04:04:52.402704538Z"
 tags:
   - dsl
   - harness
+attempts: 1
 ---
 
 ## Summary
