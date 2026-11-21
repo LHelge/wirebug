@@ -148,7 +148,7 @@ When the loop has ended, with every task done or with the rest blocked (a partia
    step 4, sending each to the implementer of the task it concerns.
 3. Read the seams yourself, and only those: the diff of `src/lib.rs`, `src/main.rs`,
    `Cargo.toml`, `src/dsl/ir/mod.rs`, `src/dsl/diagnostics/mod.rs`, `AGENTS.md`,
-   `ARCHITECTURE.md`, `README.md` and `.claude/skills/wirebug-dsl/SKILL.md`. Check them against the epic's
+   `ARCHITECTURE.md`, `README.md` and `skill/SKILL.md` (the skill's source). Check them against the epic's
    body.
 4. `bea done <epic>` if it did not auto-close, and commit it:
    `chore: complete the <name> epic (<epic>)`. In a partial run, leave the epic open and

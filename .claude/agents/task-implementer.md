@@ -23,7 +23,8 @@ agent is working in parallel).
    area you will change (its table in `AGENTS.md` says which), among them the pipeline's
    phases: which check belongs in resolve, elaborate, validate or render. Then read the code next to where yours will go,
    and build to match it. For anything that touches `.wb` syntax, also read
-   `.claude/skills/wirebug-dsl/SKILL.md`.
+   `skill/SKILL.md`, the skill's source: edit it there, never the installed copy in
+   `.claude/skills/`, and reinstall that with `cargo run -- skill --install claude`.
 3. Read the task with `bea show <id> --json`, and its parent epic the same way for the
    purpose and the decisions recorded there. The task's body is the acceptance criteria:
    every point is implemented and tested, or named in your report as not done with the
@@ -53,7 +54,7 @@ agent is working in parallel).
    check fails for a reason outside your task, say so in the report with the output.
 8. Keep the documentation true in the same change. `ARCHITECTURE.md` for the pipeline,
    the mental models, the list of checks, the source tree and the dependencies;
-   `AGENTS.md` for the working rules; the `wirebug-dsl` skill
+   `AGENTS.md` for the working rules; the `wirebug-dsl` skill (`skill/SKILL.md`)
    for the language; `README.md` for what users are told. A change to the syntax also
    reaches `tests/fixtures/`, `examples/` and the TextMate grammar in
    `editors/vscode/syntaxes/`.

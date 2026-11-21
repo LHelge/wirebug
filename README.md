@@ -63,6 +63,17 @@ wirebug render                # writes out/overview.svg and out/index.html
 
 `wirebug init [dir]` creates the directory if need be and writes a `wirebug.toml` (named after the directory, version `0.1.0`), a commented `main.wb` with two components, one wire between them and a schematic view, and a `.gitignore` holding `out/`, where `render` writes by default. It never overwrites: a directory that already has a `wirebug.toml` or a `main.wb` is refused with nothing written, and an existing `.gitignore` is left as it is. Run `wirebug serve` next to see the drawing update as you edit, and see [`docs/`](docs/README.md) for everything a `.wb` file can say.
 
+## Using wirebug with a coding agent
+
+The binary carries an agent skill: a compact, self-contained reference to the `.wb` language that matches its own version. Install it into the repository that holds your project, from the directory the agent runs in:
+
+```sh
+wirebug skill --install claude    # writes .claude/skills/wirebug-dsl/SKILL.md
+wirebug skill                     # or print it, for another agent or path
+```
+
+`--install` creates the directories it needs and overwrites an older copy, so rerun it after upgrading wirebug; the installed file's frontmatter names the wirebug version that wrote it. Claude Code is the only harness `--install` knows so far; for any other, redirect `wirebug skill` to where it looks.
+
 ## Why
 
 When designing an EV conversion — or any electrical system that isn't a PCB — traditional EDA tools like KiCad are overkill, and iterating in a GUI gets tedious. WireViz solved this beautifully for harness drawings. wirebug brings the same text-defined, git-friendly, regenerable-from-source workflow to system-level schematics, and ties schematics to harness drawings via a shared model so the two stay consistent by construction.

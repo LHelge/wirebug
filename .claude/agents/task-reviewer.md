@@ -25,7 +25,7 @@ temporary directory with `--out`, never into the repository.
    The task's body is the acceptance criteria, and the epic's body holds decisions that
    bind it.
 2. Read `AGENTS.md` for the rules, the sections of `ARCHITECTURE.md` for the area the
-   task changes, and `.claude/skills/wirebug-dsl/SKILL.md` when it touches the language.
+   task changes, and `skill/SKILL.md` (the skill's source) when it touches the language.
 3. Read the whole diff (`git diff <range>`, and `git log <range>` for the commits), and the
    surrounding code wherever the diff alone does not show whether a change is right.
 
