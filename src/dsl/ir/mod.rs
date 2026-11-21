@@ -59,6 +59,10 @@ name_newtype!(
     CableName,
     "A cable's designator, grouping its conductor wires."
 );
+name_newtype!(
+    SpliceName,
+    "A splice's name: a joint inside a component that conductors end on."
+);
 /// One wire color, in the IEC 60757 vocabulary. `Other` preserves a name
 /// outside the standard set verbatim (mirroring [`ViewKind::Other`]) —
 /// validation warns on it, and `--strict` turns the warning into a
@@ -387,6 +391,75 @@ pub struct Instance {
     /// type carries the same. Empty for a synthetic inline instance, whose
     /// halves' part data is in `inline`.
     pub part: PartMeta,
+    /// The joints declared at this level, keyed by name, in source order.
+    /// The conductors ending on one are the wires in `wires` with a
+    /// [`WireEnd::Splice`] end naming it ([`Instance::splice_conductors`]).
+    pub splices: IndexMap<SpliceName, Splice>,
+}
+
+/// A joint inside a component — a crimp or solder splice in a harness —
+/// that conductors end on. All conductors ending on one splice are joined
+/// electrically; each stays a two-ended [`Wire`] of its own, with its own
+/// color, gauge and length.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Splice {
+    pub name: SpliceName,
+    /// Optional human name, shown on the splice in a harness drawing.
+    pub label: Option<String>,
+    /// The part number of the splice itself, from its body's `part:`.
+    pub part: Option<String>,
+    /// What it is, for humans, from its body's `description:`.
+    pub description: Option<String>,
+    /// The authored `splice` statement.
+    pub span: Span,
+}
+
+/// A `splice` member, its body's well-typed `part` and `description` kept
+/// (the first of each); unknown keys, values of the wrong kind and repeats
+/// are reported in validate.
+impl From<&ast::Splice> for Splice {
+    fn from(splice: &ast::Splice) -> Self {
+        let mut part = None;
+        let mut description = None;
+        for p in &splice.properties {
+            let ast::PropertyValue::Str(value) = &p.value else {
+                continue;
+            };
+            let field = match p.key.node.as_str() {
+                "part" => &mut part,
+                "description" => &mut description,
+                _ => continue,
+            };
+            field.get_or_insert_with(|| value.node.clone());
+        }
+        Self {
+            name: SpliceName::from(splice.name.node.as_str()),
+            label: splice.label.as_ref().map(|l| l.node.clone()),
+            part,
+            description,
+            span: splice.span,
+        }
+    }
+}
+
+/// The conductors one splice joins, through any splice-to-splice links:
+/// one electrical net. See [`Instance::splice_net`].
+#[derive(Debug, Clone)]
+pub struct SpliceNet<'a> {
+    /// The splices of the net, the one asked about first, then the ones
+    /// reached through links in the order they are found.
+    pub splices: Vec<&'a SpliceName>,
+    /// Each conductor end of the net that is not a splice, in wire order,
+    /// with the conductor it is an end of.
+    pub ends: Vec<NetEnd<'a>>,
+}
+
+/// One end a [`SpliceNet`] reaches beyond its splices: a port, and the
+/// conductor that runs from it to one of the net's splices.
+#[derive(Debug, Clone, Copy)]
+pub struct NetEnd<'a> {
+    pub end: &'a WireEnd,
+    pub wire: &'a Wire,
 }
 
 /// What a component type is bought as, from the `key: value;` lines of its
@@ -429,6 +502,67 @@ impl<'a> FromIterator<&'a ast::Property> for PartMeta {
 }
 
 impl Instance {
+    /// The conductors ending on `splice`, in wire order: each a row of its
+    /// own in a wire list, with the splice as one of its ends.
+    pub fn splice_conductors<'a>(
+        &'a self,
+        splice: &SpliceName,
+    ) -> impl Iterator<Item = &'a Wire> + use<'a> {
+        let splice = splice.clone();
+        self.wires.iter().filter(move |wire| wire.ends_on(&splice))
+    }
+
+    /// The net `splice` joins: every splice linked to it by a conductor
+    /// from splice to splice, and every other end of the conductors of
+    /// those splices. Empty of ends for a splice nothing ends on, and
+    /// empty altogether for a name this instance declares no splice of.
+    pub fn splice_net(&self, splice: &SpliceName) -> SpliceNet<'_> {
+        let mut splices: Vec<&SpliceName> = self
+            .splices
+            .get_key_value(splice)
+            .map(|(name, _)| name)
+            .into_iter()
+            .collect();
+        let mut next = 0;
+        while let Some(&current) = splices.get(next) {
+            next += 1;
+            for wire in self.splice_conductors(current) {
+                for end in &wire.endpoints {
+                    if let WireEnd::Splice(other) = end
+                        && let Some((other, _)) = self.splices.get_key_value(other)
+                        && !splices.contains(&other)
+                    {
+                        splices.push(other);
+                    }
+                }
+            }
+        }
+        let ends = self
+            .wires
+            .iter()
+            .filter(|wire| splices.iter().any(|s| wire.ends_on(s)))
+            .flat_map(|wire| {
+                wire.endpoints
+                    .iter()
+                    .filter(|end| !matches!(end, WireEnd::Splice(_)))
+                    .map(move |end| NetEnd { end, wire })
+            })
+            .collect();
+        SpliceNet { splices, ends }
+    }
+
+    /// One [`SpliceNet`] per group of linked splices, in the order their
+    /// first splice is declared.
+    pub fn splice_nets(&self) -> Vec<SpliceNet<'_>> {
+        let mut nets: Vec<SpliceNet<'_>> = Vec::new();
+        for name in self.splices.keys() {
+            if !nets.iter().any(|net| net.splices.contains(&name)) {
+                nets.push(self.splice_net(name));
+            }
+        }
+        nets
+    }
+
     /// The length that applies to `wire`, one of this instance's wires: its
     /// own `length`, else that of the cable it belongs to. `None` when
     /// neither sets one.
@@ -512,17 +646,6 @@ impl Shield {
     /// The pins the drain lands on, in source order: none, one or two.
     pub fn ends(&self) -> &[WireEnd] {
         self.termination.ends()
-    }
-}
-
-/// A `shield` line, its ends resolved like a wire's.
-impl From<&ast::Shield> for Shield {
-    fn from(shield: &ast::Shield) -> Self {
-        Self {
-            label: shield.label.as_ref().map(|l| l.node.clone()),
-            termination: shield.ends.iter().map(WireEnd::from).collect(),
-            span: shield.span,
-        }
     }
 }
 
@@ -846,7 +969,30 @@ pub struct Wire {
     pub span: Span,
 }
 
-/// A resolved wire endpoint.
+impl Wire {
+    /// Whether one of the wire's ends is `splice`.
+    pub fn ends_on(&self, splice: &SpliceName) -> bool {
+        self.endpoints
+            .iter()
+            .any(|end| matches!(end, WireEnd::Splice(name) if name == splice))
+    }
+
+    /// The end across the wire from `end`, for a two-ended wire (a cable
+    /// conductor, or any wire to a splice): where a conductor from a pin
+    /// to a splice goes, or which pin a splice's conductor comes from.
+    /// `None` when `end` is not one of its two ends.
+    pub fn other_end(&self, end: &WireEnd) -> Option<&WireEnd> {
+        match self.endpoints.as_slice() {
+            [a, b] if a == end => Some(b),
+            [a, b] if b == end => Some(a),
+            _ => None,
+        }
+    }
+}
+
+/// A resolved wire endpoint. Which an authored bare name is, an own port
+/// or a splice, is resolve's to say: `Resolved::wire_end` is the one
+/// mapping elaboration and validation share.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum WireEnd {
     /// The enclosing component's own port.
@@ -856,31 +1002,17 @@ pub enum WireEnd {
         instance: InstanceName,
         port: PortName,
     },
+    /// One of the enclosing component's splices.
+    Splice(SpliceName),
 }
 
-/// The endpoint an authored reference names in the enclosing component's
-/// flat namespace: a bare `port` is the component's own, `inst.port` a
-/// child's. Elaboration and validation share this mapping, so both agree on
-/// which references are the same endpoint.
-impl From<&ast::Endpoint> for WireEnd {
-    fn from(ep: &ast::Endpoint) -> Self {
-        let port = PortName::from(ep.port.node.as_str());
-        match &ep.instance {
-            None => Self::Own(port),
-            Some(inst) => Self::Child {
-                instance: InstanceName::from(inst.node.as_str()),
-                port,
-            },
-        }
-    }
-}
-
-/// The endpoint as authored: `port` or `inst.port`.
+/// The endpoint as authored: `port`, `inst.port` or `splice`.
 impl fmt::Display for WireEnd {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Own(port) => write!(f, "{port}"),
             Self::Child { instance, port } => write!(f, "{instance}.{port}"),
+            Self::Splice(splice) => write!(f, "{splice}"),
         }
     }
 }
@@ -986,6 +1118,9 @@ pub struct EnclosurePort {
 /// connector's pins are drawn.
 #[derive(Debug)]
 pub struct Include {
+    /// The included instance; in a pinout view the subject's connector it
+    /// draws, and in a harness view, when `connector` is `None`, the
+    /// subject's splice it places (resolve allows nothing else there).
     pub instance: InstanceName,
     /// The connector designator for a harness include; `None` for schematic.
     /// For an inline-connector include this is normalized to the inline's

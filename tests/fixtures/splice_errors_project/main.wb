@@ -1,0 +1,46 @@
+// Each splice is wrong in one way; `sp` itself, with two conductors, is
+// right, and so is the loose rail without a splice.
+
+component Vehicle {
+    a: Device "A";
+    b: Device "B";
+    c: Device "C";
+
+    pub port out "OUT";
+
+    splice sp;
+    wire red 1 [a.x, sp];
+    wire red 1 [sp, b.x];
+    wire red 1 [a.x, b.x, c.x];
+
+    splice out;
+    wire red 1 [out, c.y];
+    wire red 1 [b.y, out];
+
+    wire black 1 [a.y, sp, c.y];
+    wire black 1 [c.x, spp];
+
+    cable k {
+        wire red 1 [a.z, b.z];
+        shield [sp];
+    }
+
+    splice sleeve { colour: "red"; }
+    wire red 1 [a.z, sleeve];
+    wire red 1 [sleeve, c.z];
+
+    splice once;
+    wire red 1 [a.y, once];
+
+    component Device {
+        connector j "J 3p" {
+            pub port x "X" pin 1;
+            pub port y "Y" pin 2;
+            pub port z "Z" pin 3;
+        }
+    }
+}
+
+view schematic "Joints" {
+    include sp at (0, 0);
+}

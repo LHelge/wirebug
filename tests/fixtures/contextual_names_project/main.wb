@@ -19,6 +19,13 @@ component Car {
     // `shield` starts a statement only in a cable body or a twisted pair.
     shield: Sensor "Shield sensor";
 
+    // `splice` starts a statement only when a name follows it: here an
+    // instance, a port and an endpoint, and a splice named `face`.
+    splice: Sensor "Splice sensor";
+    splice face;
+    wire black 1 [size.splice, face];
+    wire black 1 [face, splice.splice];
+
     cable text "Loom" {
         length: 1.5;
         wire red 1 "SIG" [size.at, grid.at];
@@ -32,6 +39,7 @@ component Car {
             pub port from "FROM" pin 2;
         }
         pub port shield "SHIELD";
+        pub port splice "SPLICE";
     }
 }
 

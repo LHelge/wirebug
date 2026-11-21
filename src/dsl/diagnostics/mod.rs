@@ -271,6 +271,33 @@ pub enum Problem {
         first: SourceSpan,
     },
 
+    /// A splice shares its name with another declaration of its component.
+    /// A bare endpoint names an own port or a splice, so the two share one
+    /// namespace; a splice also stays clear of the instances, connectors
+    /// and cables, so a name means one thing in the component. The other
+    /// declaration is a label when it is in the splice's file, else a
+    /// related note.
+    #[error("splice `{name}` has the same name as {other} of `{component}`")]
+    #[diagnostic(
+        code(wirebug::duplicate_splice_name),
+        help(
+            "a bare name in a wire is an own port or a splice of the component, so a splice takes a name no port, instance, connector, cable or other splice of it has"
+        )
+    )]
+    DuplicateSpliceName {
+        name: String,
+        other: SpliceClash,
+        component: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("this splice")]
+        at: SourceSpan,
+        #[label("{other} of that name")]
+        here: Option<SourceSpan>,
+        #[related]
+        elsewhere: Vec<OtherDeclaration>,
+    },
+
     /// A wire endpoint names an instance that doesn't exist in the
     /// enclosing component.
     #[error("unknown instance `{name}`")]
@@ -283,13 +310,17 @@ pub enum Problem {
         at: SourceSpan,
     },
 
-    /// A wire endpoint names a port that doesn't exist on its component.
+    /// A wire endpoint names a port that doesn't exist on its component
+    /// (for a bare name, nor a splice of it).
     #[error("unknown port `{port}`{on}")]
     #[diagnostic(code(wirebug::unknown_port))]
     UnknownPort {
         port: String,
         /// e.g. " on `cell_module`", or empty for a self port.
         on: String,
+        /// What a bare name may be, when the endpoint is a conductor's.
+        #[help]
+        help: Option<String>,
         #[source_code]
         src: NamedSource<String>,
         #[label("no such port")]
@@ -686,13 +717,67 @@ pub enum Problem {
     #[error("a cable wire must connect exactly two endpoints, found {count}")]
     #[diagnostic(
         code(wirebug::cable_wire_arity),
-        help("split a shared rail into one loose `wire` per net, or add a junction")
+        help(
+            "a cable conductor runs from one pin to another: join several at a `splice`, one conductor to it from each pin, or keep a shared rail a loose `wire`"
+        )
     )]
     CableWireArity {
         count: usize,
         #[source_code]
         src: NamedSource<String>,
         #[label("this cable wire")]
+        at: SourceSpan,
+    },
+
+    /// A shield's drain names a splice: a drain is terminated on a pin.
+    #[error("a shield's drain cannot land on splice `{splice}`")]
+    #[diagnostic(
+        code(wirebug::shield_on_splice),
+        help(
+            "terminate the drain on a connector pin; to join the screen to the splice, run a wire from that pin to the splice"
+        )
+    )]
+    ShieldOnSplice {
+        splice: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("a splice, not a pin")]
+        at: SourceSpan,
+    },
+
+    /// A loose wire with a splice among more than two endpoints: each
+    /// conductor to a splice runs from one end to the other.
+    #[error("a wire to a splice has exactly two ends, found {count}")]
+    #[diagnostic(
+        code(wirebug::splice_wire_arity),
+        help(
+            "a splice joins point-to-point conductors: write one `wire` from each pin to the splice"
+        )
+    )]
+    SpliceWireArity {
+        count: usize,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("this wire")]
+        at: SourceSpan,
+    },
+
+    /// A splice fewer than two conductors end on: a joint that joins
+    /// nothing. Nothing breaks, so this is a warning.
+    #[error("splice `{name}` joins nothing: {}", conductor_count(.count))]
+    #[diagnostic(
+        severity(Warning),
+        code(wirebug::splice_joins_nothing),
+        help(
+            "end a wire on it from each pin it joins (`wire <color> <gauge> [<pin>, {name}];`), or remove the splice"
+        )
+    )]
+    SpliceJoinsNothing {
+        name: String,
+        count: usize,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("this splice")]
         at: SourceSpan,
     },
 
@@ -1147,6 +1232,54 @@ pub struct FirstViewTitle {
     pub at: SourceSpan,
 }
 
+/// The declaration a splice shares its name with, attached to
+/// [`Problem::DuplicateSpliceName`] as a related note when it is in another
+/// file than the splice.
+#[derive(Debug, Error, Diagnostic)]
+#[error("{what} `{name}` is declared here")]
+#[diagnostic(severity(Advice))]
+pub struct OtherDeclaration {
+    pub what: SpliceClash,
+    pub name: String,
+    #[source_code]
+    pub src: NamedSource<String>,
+    #[label("declared here")]
+    pub at: SourceSpan,
+}
+
+/// What a splice's name clashes with ([`Problem::DuplicateSpliceName`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpliceClash {
+    Port,
+    Instance,
+    InlineConnector,
+    Connector,
+    Cable,
+    Splice,
+}
+
+impl std::fmt::Display for SpliceClash {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            SpliceClash::Port => "a port",
+            SpliceClash::Instance => "an instance",
+            SpliceClash::InlineConnector => "an inline connector",
+            SpliceClash::Connector => "a connector",
+            SpliceClash::Cable => "a cable",
+            SpliceClash::Splice => "another splice",
+        })
+    }
+}
+
+/// How many conductors end on a splice that joins nothing.
+fn conductor_count(count: &usize) -> &'static str {
+    if *count == 0 {
+        "no conductor ends on it"
+    } else {
+        "only one conductor ends on it"
+    }
+}
+
 /// The fragment that first set a component property, attached to
 /// [`Problem::DuplicateFragmentProperty`] as a related note: the two
 /// fragments are in different files.
@@ -1170,6 +1303,8 @@ pub enum PropertyOwner {
     /// A component type's part data, the `key: value;` lines among its
     /// members.
     Component,
+    /// A splice's body.
+    Splice,
 }
 
 /// Why a `fragment` line adds nothing ([`Problem::UnusedFragment`]).
@@ -1290,6 +1425,11 @@ impl PropertyOwner {
                 ("description", PropertyKind::Str),
                 ("rating", PropertyKind::Str),
             ],
+            // What a bill of materials lists a splice by.
+            PropertyOwner::Splice => &[
+                ("part", PropertyKind::Str),
+                ("description", PropertyKind::Str),
+            ],
         }
     }
 
@@ -1312,7 +1452,7 @@ impl PropertyOwner {
             PropertyOwner::Component => format!(
                 "{supported}; to place an instance, name its type after the colon: `{key}: <Type> \"<label>\";`"
             ),
-            PropertyOwner::Cable | PropertyOwner::Wire => supported,
+            PropertyOwner::Cable | PropertyOwner::Wire | PropertyOwner::Splice => supported,
         }
     }
 
@@ -1337,6 +1477,7 @@ impl std::fmt::Display for PropertyOwner {
             PropertyOwner::Cable => "cable",
             PropertyOwner::Wire => "wire",
             PropertyOwner::Component => "component",
+            PropertyOwner::Splice => "splice",
         })
     }
 }
@@ -1409,6 +1550,7 @@ impl Problem {
             | Problem::UninstantiatedViewSubject { .. }
             | Problem::UnusedImport { .. }
             | Problem::UnusedFragment { .. }
+            | Problem::SpliceJoinsNothing { .. }
             | Problem::UndrawnConductor { .. } => true,
             Problem::Lex { .. }
             | Problem::Parse { .. }
@@ -1424,6 +1566,7 @@ impl Problem {
             | Problem::DuplicateFragment { .. }
             | Problem::DuplicateInstance { .. }
             | Problem::DuplicatePort { .. }
+            | Problem::DuplicateSpliceName { .. }
             | Problem::UnknownPortSide { .. }
             | Problem::DuplicateViewPort { .. }
             | Problem::DuplicateViewInclude { .. }
@@ -1441,6 +1584,8 @@ impl Problem {
             | Problem::InlinePubPort { .. }
             | Problem::DuplicateCableName { .. }
             | Problem::CableWireArity { .. }
+            | Problem::ShieldOnSplice { .. }
+            | Problem::SpliceWireArity { .. }
             | Problem::DuplicateEndpoint { .. }
             | Problem::ShieldArity { .. }
             | Problem::DuplicateShield { .. }

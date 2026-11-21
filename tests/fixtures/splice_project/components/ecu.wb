@@ -1,0 +1,6 @@
+component Ecu {
+    connector x1 "ECU 2p" {
+        pub port gnd  "GND"  pin 1;
+        pub port wake "WAKE" pin 2;
+    }
+}

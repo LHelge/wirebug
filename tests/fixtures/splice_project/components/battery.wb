@@ -1,0 +1,6 @@
+component Battery {
+    connector x1 "Battery 2p" {
+        pub port pos "B+" pin 1;
+        pub port neg "B-" pin 2;
+    }
+}

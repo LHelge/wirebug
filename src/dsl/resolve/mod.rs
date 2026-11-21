@@ -28,7 +28,7 @@ use indexmap::IndexMap;
 
 use crate::dsl::ast::{self, Item};
 use crate::dsl::diagnostics::Problem;
-use crate::dsl::ir::{ConnectorName, InstanceName, Pin, PortName};
+use crate::dsl::ir::{ConnectorName, InstanceName, Pin, PortName, SpliceName, WireEnd};
 use crate::dsl::project::Project;
 use crate::dsl::span::{FileId, Span};
 
@@ -121,6 +121,9 @@ pub struct DefInfo<'a> {
     pub instances: IndexMap<InstanceName, InstFacts<'a>>,
     /// Inline (mid-harness) connectors, sharing the instance namespace.
     pub inlines: IndexMap<InstanceName, InlineFacts<'a>>,
+    /// Splices, sharing the own ports' namespace: a bare endpoint names
+    /// one or the other. The first of a repeated name is kept.
+    pub splices: IndexMap<SpliceName, &'a ast::Splice>,
     pub nested: Vec<DefId>,
 }
 
@@ -142,10 +145,39 @@ pub struct Resolved<'a> {
     pub project: &'a Project,
 }
 
-impl Resolved<'_> {
+impl<'a> Resolved<'a> {
     /// Every fragment id of `d`'s merged component, canonical first.
     pub fn fragments(&self, d: DefId) -> Vec<DefId> {
         self.groups.fragments(d)
+    }
+
+    /// The splice `name` of `d`'s merged component, declared in any of its
+    /// fragments.
+    pub fn splice(&self, d: DefId, name: &SpliceName) -> Option<&'a ast::Splice> {
+        self.fragments(d)
+            .into_iter()
+            .find_map(|f| self.defs[f].splices.get(name).copied())
+    }
+
+    /// The endpoint `ep`, written in definition `d`, names in its merged
+    /// component's flat namespace: `inst.port` a child's port, and a bare
+    /// name one of the component's splices when it declares one of that
+    /// name, else its own port (the two share a namespace, so a name is
+    /// never both in a design that checks). Elaboration and validation
+    /// both map endpoints through this, so they agree on which references
+    /// are the same end.
+    pub fn wire_end(&self, d: DefId, ep: &ast::Endpoint) -> WireEnd {
+        let name = ep.port.node.as_str();
+        match &ep.instance {
+            Some(inst) => WireEnd::Child {
+                instance: InstanceName::from(inst.node.as_str()),
+                port: PortName::from(name),
+            },
+            None if self.splice(d, &SpliceName::from(name)).is_some() => {
+                WireEnd::Splice(SpliceName::from(name))
+            }
+            None => WireEnd::Own(PortName::from(name)),
+        }
     }
 }
 
@@ -188,6 +220,7 @@ pub fn resolve(project: &Project) -> Resolved<'_> {
     r.finalize_groups();
     r.report_orphan_fragments();
     r.validate_merge_groups();
+    r.check_splice_names();
     r.canonicalize_scopes(&mut file_scope);
     let envs: Vec<HashMap<String, DefId>> = (0..r.defs.len())
         .map(|d| r.visible_types(d, &file_scope))

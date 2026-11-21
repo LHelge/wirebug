@@ -7,10 +7,18 @@ use std::collections::HashMap;
 
 use crate::dsl::ast::{self, Member};
 use crate::dsl::diagnostics::Problem;
-use crate::dsl::ir::{ConnectorName, InstanceName, PortName};
+use crate::dsl::ir::{ConnectorName, InstanceName, PortName, SpliceName};
 use crate::dsl::span::{FileId, Span};
 
 use super::{ConnectorTypeId, DefId, InlineFacts, InstFacts, PortFacts, Resolver};
+
+/// What an endpoint ends: a conductor (a wire, or a cable's) or a shield's
+/// drain, which may not land on a splice.
+#[derive(Clone, Copy)]
+enum EndOwner {
+    Conductor,
+    Shield,
+}
 
 impl<'a> Resolver<'a> {
     /// Find an instance by name across every fragment of `d`'s merged
@@ -37,6 +45,15 @@ impl<'a> Resolver<'a> {
             .fragments(d)
             .into_iter()
             .find_map(|f| self.defs[f].ports.get(name))
+    }
+
+    /// Find a splice by name across every fragment of `d`'s merged
+    /// component (splices share the own ports' namespace).
+    pub(super) fn lookup_splice(&self, d: DefId, name: &SpliceName) -> Option<&'a ast::Splice> {
+        self.groups
+            .fragments(d)
+            .into_iter()
+            .find_map(|f| self.defs[f].splices.get(name).copied())
     }
 
     pub(super) fn resolve_instances(&mut self, envs: &[HashMap<String, DefId>]) {
@@ -201,14 +218,23 @@ impl<'a> Resolver<'a> {
             let ast = self.defs[d].ast;
             for member in &ast.members {
                 // A cable's shields name their drain pins like its
-                // conductors name their ends, so they resolve alike.
-                let endpoints: Vec<&ast::Endpoint> = match member {
-                    Member::Wire(wire) => wire.endpoints.iter().collect(),
-                    Member::Cable(cable) => cable.endpoints().collect(),
+                // conductors name their ends, so they resolve alike, but a
+                // drain lands on a pin, never on a splice.
+                let (conductors, shields): (Vec<&ast::Endpoint>, Vec<&ast::Endpoint>) = match member
+                {
+                    Member::Wire(wire) => (wire.endpoints.iter().collect(), Vec::new()),
+                    Member::Cable(cable) => (
+                        cable.wires().flat_map(|w| &w.endpoints).collect(),
+                        cable.shield_ends().collect(),
+                    ),
                     _ => continue,
                 };
-                for ep in endpoints {
-                    if let Some(problem) = self.check_endpoint(d, ep) {
+                let ends = conductors
+                    .into_iter()
+                    .map(|ep| (ep, EndOwner::Conductor))
+                    .chain(shields.into_iter().map(|ep| (ep, EndOwner::Shield)));
+                for (ep, owner) in ends {
+                    if let Some(problem) = self.check_endpoint(d, ep, owner) {
                         problems.push(problem);
                     }
                 }
@@ -217,23 +243,38 @@ impl<'a> Resolver<'a> {
         self.problems.extend(problems);
     }
 
-    fn check_endpoint(&self, d: DefId, ep: &ast::Endpoint) -> Option<Problem> {
+    fn check_endpoint(&self, d: DefId, ep: &ast::Endpoint, owner: EndOwner) -> Option<Problem> {
         let file = self.defs[d].file;
         let port = ep.port.node.as_str();
-        // Flat namespace: an endpoint resolves against the merged instances
-        // and ports of `d`'s whole component, so one fragment's wire may reach
-        // an instance or own-port declared in another fragment.
+        // Flat namespace: an endpoint resolves against the merged instances,
+        // ports and splices of `d`'s whole component, so one fragment's wire
+        // may reach an instance, own port or splice declared in another.
         match &ep.instance {
             None => {
-                if self.lookup_port(d, &PortName::from(port)).is_some() {
-                    None
-                } else {
-                    Some(Problem::UnknownPort {
-                        port: port.to_string(),
-                        on: String::new(),
+                let is_splice = self.lookup_splice(d, &SpliceName::from(port)).is_some();
+                match owner {
+                    EndOwner::Shield if is_splice => Some(Problem::ShieldOnSplice {
+                        splice: port.to_string(),
                         src: self.project.source(file),
                         at: ep.port.span.into(),
-                    })
+                    }),
+                    _ if is_splice || self.lookup_port(d, &PortName::from(port)).is_some() => None,
+                    EndOwner::Conductor => Some(Problem::UnknownPort {
+                        port: port.to_string(),
+                        on: String::new(),
+                        help: Some(format!(
+                            "a bare name is one of this component's own ports or splices: declare `port {port} \"…\";` or `splice {port};`, or name a child's port as `<instance>.{port}`"
+                        )),
+                        src: self.project.source(file),
+                        at: ep.port.span.into(),
+                    }),
+                    EndOwner::Shield => Some(Problem::UnknownPort {
+                        port: port.to_string(),
+                        on: String::new(),
+                        help: None,
+                        src: self.project.source(file),
+                        at: ep.port.span.into(),
+                    }),
                 }
             }
             Some(inst) => {
@@ -248,6 +289,7 @@ impl<'a> Resolver<'a> {
                             Some(Problem::UnknownPort {
                                 port: port.to_string(),
                                 on: format!(" on inline `{iname}`"),
+                                help: None,
                                 src: self.project.source(file),
                                 at: ep.port.span.into(),
                             })
@@ -264,6 +306,7 @@ impl<'a> Resolver<'a> {
                     None => Some(Problem::UnknownPort {
                         port: port.to_string(),
                         on: format!(" on `{}`", self.defs[tid].name),
+                        help: None,
                         src: self.project.source(file),
                         at: ep.port.span.into(),
                     }),
@@ -388,6 +431,63 @@ mod tests {
                 "wirebug::unknown_instance",
                 "wirebug::private_port"
             ]
+        );
+    }
+
+    #[test]
+    fn a_bare_endpoint_may_name_a_splice() {
+        let p = problems(&[(
+            "main.wb",
+            "component leaf { pub port a \"A\"; }\n\
+             component m { l: leaf; splice sp;\n\
+             wire red 1 [l.a, sp];\n\
+             cable c { wire red 1 [sp, l.a]; } }\n",
+        )]);
+        assert!(p.is_empty(), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn a_splice_is_visible_to_every_fragment_of_its_component() {
+        let p = problems(&[
+            (
+                "main.wb",
+                "fragment \"loom.wb\";\nuse leaf from \"leaf.wb\";\n\
+                 component m { l: leaf; splice sp; wire red 1 [l.a, sp]; }\n",
+            ),
+            ("loom.wb", "extend m { wire red 1 [sp, l.b]; }\n"),
+            ("leaf.wb", LEAF),
+        ]);
+        assert!(p.is_empty(), "{:?}", codes(&p));
+    }
+
+    #[test]
+    fn an_unknown_bare_endpoint_is_told_it_may_be_a_port_or_a_splice() {
+        use miette::Diagnostic;
+        let p = problems(&[(
+            "main.wb",
+            "component m { pub port a \"A\"; wire red 1 [a, sp_gnd]; }\n",
+        )]);
+        let [problem] = p.as_slice() else {
+            panic!("one problem: {:?}", codes(&p));
+        };
+        assert_eq!(problem.to_string(), "unknown port `sp_gnd`");
+        let help = problem.help().expect("help").to_string();
+        assert!(help.contains("`splice sp_gnd;`"), "{help}");
+    }
+
+    #[test]
+    fn a_shield_end_on_a_splice_errors() {
+        let p = problems(&[(
+            "main.wb",
+            "component leaf { pub port a \"A\"; pub port b \"B\"; }\n\
+             component m { l: leaf; r: leaf; splice sp;\n\
+             wire red 1 [l.b, sp]; wire red 1 [sp, r.b];\n\
+             cable c { wire red 1 [l.a, r.a]; shield [sp]; } }\n",
+        )]);
+        assert_eq!(codes(&p), ["wirebug::shield_on_splice"]);
+        assert_eq!(
+            p[0].to_string(),
+            "a shield's drain cannot land on splice `sp`"
         );
     }
 

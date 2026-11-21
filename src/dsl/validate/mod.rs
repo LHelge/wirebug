@@ -29,7 +29,7 @@ use crate::dsl::ast::{
 use crate::dsl::diagnostics::{
     EndpointOwner, FirstProperty, Problem, PropertyKind, PropertyOwner, ShieldOwner,
 };
-use crate::dsl::ir::{ColorName, WireEnd};
+use crate::dsl::ir::{ColorName, SpliceName, WireEnd};
 use crate::dsl::resolve::{DefId, Resolved};
 use crate::dsl::span::{FileId, Span, Spanned};
 
@@ -37,20 +37,41 @@ use crate::dsl::span::{FileId, Span, Spanned};
 pub fn validate(resolved: &Resolved) -> Vec<Problem> {
     let mut problems = Vec::new();
 
-    for def in &resolved.defs {
+    for (d, def) in resolved.defs.iter().enumerate() {
         let src = || resolved.project.source(def.file);
         for member in &def.ast.members {
             match member {
                 Member::Wire(wire) => {
-                    if wire.endpoints.len() < 2 {
+                    let count = wire.endpoints.len();
+                    if count < 2 {
                         problems.push(Problem::WireArity {
-                            count: wire.endpoints.len(),
+                            count,
+                            src: src(),
+                            at: wire.span.into(),
+                        });
+                    } else if count > 2
+                        && wire
+                            .endpoints
+                            .iter()
+                            .any(|ep| matches!(resolved.wire_end(d, ep), WireEnd::Splice(_)))
+                    {
+                        // A shared rail stays a loose multi-endpoint wire;
+                        // a splice joins point-to-point conductors.
+                        problems.push(Problem::SpliceWireArity {
+                            count,
                             src: src(),
                             at: wire.span.into(),
                         });
                     }
-                    validate_wire(wire, def.file, resolved, &mut problems);
+                    validate_wire(d, wire, resolved, &mut problems);
                 }
+                Member::Splice(splice) => validate_properties(
+                    PropertyOwner::Splice,
+                    &splice.properties,
+                    def.file,
+                    resolved,
+                    &mut problems,
+                ),
                 Member::Port(port) if !port.pins.is_empty() => {
                     validate_pin_numbers(port, def.file, resolved, &mut problems);
                     problems.push(Problem::BarePortPin {
@@ -86,22 +107,22 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
                                 at: wire.span.into(),
                             });
                         }
-                        validate_wire(wire, def.file, resolved, &mut problems);
+                        validate_wire(d, wire, resolved, &mut problems);
                     }
                     validate_shields(
+                        d,
                         cable,
                         ShieldOwner::Cable,
                         &cable.shields,
-                        def.file,
                         resolved,
                         &mut problems,
                     );
                     for pair in cable.twisted_groups() {
                         validate_shields(
+                            d,
                             cable,
                             ShieldOwner::Pair,
                             &pair.shields,
-                            def.file,
                             resolved,
                             &mut problems,
                         );
@@ -126,6 +147,7 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
         );
     }
     validate_fragment_properties(resolved, &mut problems);
+    validate_splice_conductors(resolved, &mut problems);
 
     for (fi, file) in resolved.project.files.iter().enumerate() {
         let fid = FileId(fi);
@@ -188,18 +210,14 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
     problems
 }
 
-/// The checks every wire takes, loose or a cable's conductor: its colors,
-/// gauge, endpoints and body.
-fn validate_wire(wire: &Wire, file: FileId, resolved: &Resolved, problems: &mut Vec<Problem>) {
+/// The checks every wire of definition `d` takes, loose or a cable's
+/// conductor, to a pin or to a splice: its colors, gauge, endpoints and
+/// body.
+fn validate_wire(d: DefId, wire: &Wire, resolved: &Resolved, problems: &mut Vec<Problem>) {
+    let file = resolved.defs[d].file;
     validate_wire_colors(wire, file, resolved, problems);
     validate_gauge(wire, file, resolved, problems);
-    validate_distinct_endpoints(
-        EndpointOwner::Wire,
-        &wire.endpoints,
-        file,
-        resolved,
-        problems,
-    );
+    validate_distinct_endpoints(d, EndpointOwner::Wire, &wire.endpoints, resolved, problems);
     validate_properties(
         PropertyOwner::Wire,
         &wire.properties,
@@ -214,13 +232,14 @@ fn validate_wire(wire: &Wire, file: FileId, resolved: &Resolved, problems: &mut 
 /// shield end sharing a pin with a wire is a drain crimped alongside it,
 /// and is not compared.
 fn validate_shields(
+    d: DefId,
     cable: &Cable,
     owner: ShieldOwner,
     shields: &[Shield],
-    file: FileId,
     resolved: &Resolved,
     problems: &mut Vec<Problem>,
 ) {
+    let file = resolved.defs[d].file;
     if let [first, rest @ ..] = shields {
         for again in rest {
             problems.push(Problem::DuplicateShield {
@@ -240,13 +259,7 @@ fn validate_shields(
                 at: shield.span.into(),
             });
         }
-        validate_distinct_endpoints(
-            EndpointOwner::Shield,
-            &shield.ends,
-            file,
-            resolved,
-            problems,
-        );
+        validate_distinct_endpoints(d, EndpointOwner::Shield, &shield.ends, resolved, problems);
     }
 }
 
@@ -347,6 +360,55 @@ fn validate_fragment_properties(resolved: &Resolved, problems: &mut Vec<Problem>
     }
 }
 
+/// A splice joins two or more conductors (two is a butt splice, a gauge or
+/// color change): warn on one that fewer end on. Counted across every
+/// fragment of its component, loose wires and cable conductors alike, a
+/// wire once however often it names the splice; reported once per
+/// component type, on the splice's name.
+fn validate_splice_conductors(resolved: &Resolved, problems: &mut Vec<Problem>) {
+    for d in 0..resolved.defs.len() {
+        if resolved.groups.canonical(d) != d {
+            continue;
+        }
+        let fragments = resolved.fragments(d);
+        let ends: Vec<Vec<WireEnd>> = fragments
+            .iter()
+            .flat_map(|&frag| {
+                resolved.defs[frag]
+                    .ast
+                    .members
+                    .iter()
+                    .flat_map(|member| match member {
+                        Member::Wire(wire) => vec![wire],
+                        Member::Cable(cable) => cable.wires().collect(),
+                        _ => Vec::new(),
+                    })
+                    .map(move |wire| {
+                        wire.endpoints
+                            .iter()
+                            .map(|ep| resolved.wire_end(frag, ep))
+                            .collect()
+                    })
+            })
+            .collect();
+        for &frag in &fragments {
+            let file = resolved.defs[frag].file;
+            for splice in resolved.defs[frag].ast.splices() {
+                let end = WireEnd::Splice(SpliceName::from(splice.name.node.as_str()));
+                let count = ends.iter().filter(|wire| wire.contains(&end)).count();
+                if count < 2 {
+                    problems.push(Problem::SpliceJoinsNothing {
+                        name: splice.name.node.as_str().to_string(),
+                        count,
+                        src: resolved.project.source(file),
+                        at: splice.name.span.into(),
+                    });
+                }
+            }
+        }
+    }
+}
+
 /// Warn on a base or tracer color outside the IEC 60757 set. The wire
 /// still renders (the name passes through verbatim), so this is a
 /// warning — fatal only under `--strict`.
@@ -384,15 +446,16 @@ fn validate_gauge(wire: &Wire, file: FileId, resolved: &Resolved, problems: &mut
 /// `gnd` and a child's `ecu.gnd` stay distinct. Different wires sharing a
 /// port are not compared: that is a deliberate double crimp.
 fn validate_distinct_endpoints(
+    d: DefId,
     owner: EndpointOwner,
     endpoints: &[Endpoint],
-    file: FileId,
     resolved: &Resolved,
     problems: &mut Vec<Problem>,
 ) {
+    let file = resolved.defs[d].file;
     let mut seen: HashMap<WireEnd, Span> = HashMap::new();
     for ep in endpoints {
-        let end = WireEnd::from(ep);
+        let end = resolved.wire_end(d, ep);
         if let Some(&first) = seen.get(&end) {
             problems.push(Problem::DuplicateEndpoint {
                 owner,
@@ -1411,5 +1474,105 @@ mod tests {
             codes.iter().any(|c| c == "wirebug::invalid_pin"),
             "{codes:?}"
         );
+    }
+
+    /// A component `m` with own port `a`, a child `l` (ports `a`, `gnd`), a
+    /// splice `sp` and `body`.
+    fn spliced(body: &str) -> Vec<String> {
+        validate_files(&[("main.wb", &with_leaf(&format!("splice sp; {body}")))])
+    }
+
+    #[test]
+    fn conductors_to_a_splice_take_the_checks_of_any_wire() {
+        assert!(spliced("wire black 1 [l.gnd, sp]; wire black 2.5 [sp, gnd];").is_empty());
+        assert_eq!(
+            spliced("wire black 0 [l.gnd, sp]; wire black 1 [sp, sp];"),
+            ["wirebug::invalid_gauge", "wirebug::duplicate_endpoint"]
+        );
+        // A cable conductor may run from a pin to a splice.
+        assert!(spliced("cable c { wire black 1 [l.gnd, sp]; } wire red 1 [sp, a];").is_empty());
+    }
+
+    #[test]
+    fn a_wire_to_a_splice_has_exactly_two_ends() {
+        assert_eq!(
+            spliced("wire black 1 [l.gnd, sp, gnd]; wire black 1 [l.a, sp];"),
+            ["wirebug::splice_wire_arity"]
+        );
+        // A rail without a splice stays a rail.
+        assert!(
+            spliced("wire black 1 [l.gnd, a, gnd]; wire black 1 [l.a, sp]; wire black 1 [sp, a];")
+                .is_empty()
+        );
+        // One end is the wire arity error alone.
+        assert_eq!(
+            spliced("wire black 1 [sp]; wire black 1 [l.a, sp]; wire black 1 [sp, a];"),
+            ["wirebug::wire_arity"]
+        );
+    }
+
+    #[test]
+    fn a_splice_fewer_than_two_conductors_end_on_warns_on_its_name() {
+        let src = with_leaf("splice sp; wire black 1 [l.gnd, sp];");
+        assert_eq!(labelled_text(&src), ["sp"]);
+        assert_eq!(
+            spliced("wire black 1 [l.gnd, sp];"),
+            ["wirebug::splice_joins_nothing"]
+        );
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("main.wb"), with_leaf("splice sp;")).expect("write");
+        let (project, _) = load(&dir.path().join("main.wb"));
+        let problems = validate(&resolve(&project.expect("loads")));
+        let [problem] = problems.as_slice() else {
+            panic!("one problem: {problems:?}");
+        };
+        assert!(!problem.is_error());
+        assert_eq!(
+            problem.to_string(),
+            "splice `sp` joins nothing: no conductor ends on it"
+        );
+        // Two is a butt splice: a gauge or color change.
+        assert!(spliced("wire black 1 [l.gnd, sp]; wire red 2.5 [sp, gnd];").is_empty());
+    }
+
+    #[test]
+    fn a_splice_counts_the_conductors_of_every_fragment() {
+        let codes = validate_files(&[
+            (
+                "main.wb",
+                "fragment \"loom.wb\";\ncomponent leaf { pub port a \"A\"; }\n\
+                 component m { l: leaf; r: leaf; splice sp; wire red 1 [l.a, sp]; }\n",
+            ),
+            ("loom.wb", "extend m { wire red 1 [sp, r.a]; }\n"),
+        ]);
+        assert!(codes.is_empty(), "{codes:?}");
+    }
+
+    #[test]
+    fn a_splice_body_takes_a_part_and_a_description() {
+        assert!(
+            spliced("splice sq { part: \"BSC\"; description: \"Butt\"; } wire red 1 [l.a, sp]; wire red 1 [sp, a]; wire red 1 [l.gnd, sq]; wire red 1 [sq, gnd];")
+                .is_empty()
+        );
+        let src = with_leaf(
+            "splice sp { length: 1; part: 2; part: \"x\"; } wire red 1 [l.a, sp]; wire red 1 [sp, a];",
+        );
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("main.wb"), &src).expect("write");
+        let (project, _) = load(&dir.path().join("main.wb"));
+        let problems = validate(&resolve(&project.expect("loads")));
+        let report: Vec<String> = problems
+            .iter()
+            .map(|p| {
+                let code = p.code().map(|c| c.to_string()).unwrap_or_default();
+                let help = p.help().map(|h| h.to_string()).unwrap_or_default();
+                format!("{code}: {p} | {help}")
+            })
+            .collect();
+        insta::assert_snapshot!(report.join("\n"), @r#"
+        wirebug::unknown_cable_property: unknown splice property `length` | a splice supports `part: "...";` and `description: "...";`
+        wirebug::cable_property_type: splice property `part` expects a string | 
+        wirebug::duplicate_cable_property: duplicate splice property `part` |
+        "#);
     }
 }

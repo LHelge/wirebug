@@ -1268,6 +1268,7 @@ component Root {
             connectors: IndexMap::new(),
             inline: None,
             part: PartMeta::default(),
+            splices: IndexMap::new(),
         };
 
         let visible: HashSet<PortName> = [PortName::from("p")].into_iter().collect();
@@ -1311,6 +1312,7 @@ component Root {
             connectors: IndexMap::new(),
             inline: None,
             part: PartMeta::default(),
+            splices: IndexMap::new(),
         };
 
         let visible: HashSet<PortName> = [PortName::from("a"), PortName::from("c")]

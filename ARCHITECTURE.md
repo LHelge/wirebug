@@ -187,12 +187,22 @@ Distinct from clap's `--version`, which prints the wirebug app version.
   `TwistedGroup.shields`; `Cable::wires()` yields conductors only, and
   `Cable::endpoints()` every reference the cable names, conductors' and
   shields' alike, which is what resolve (`check_endpoint`) and the LSP's
-  go-to-definition walk.
+  go-to-definition walk; `Cable::shield_ends()` the shields' alone, which
+  resolve checks may not name a splice. A `splice` member is an
+  `ast::Splice` (name, optional label, the `ast::Property` lines of an
+  optional body; `Definition::splices`).
 - **Resolved registry** — every definition (top-level and nested) keyed by
   `DefId`, with flattened ports (connectors are grouping metadata, not a
   namespace — port names are unique per component), per-file type scopes
   (own defs + `use` imports; a `fragment` adds no name), and resolved
-  instance/endpoint/include refs.
+  instance/endpoint/include refs. A definition's splices
+  (`DefInfo.splices`) share the own ports' namespace: a bare endpoint
+  names one or the other, and `Resolved::wire_end(d, ep)` is the one
+  mapping from an authored endpoint to an `ir::WireEnd` (a bare name a
+  splice of the merged component declares is `WireEnd::Splice`, else
+  `Own`), which elaboration and validation both call, so they agree on
+  which references are one end; resolve's `check_endpoint` makes the same
+  lookup (`Resolver::lookup_splice`).
   Each view is bound to its subject (`ViewBinding.subject`, in
   `resolve/views.rs`): the component its `for` names, looked up in the
   view's file scope (own top-level components and `use` imports, not
@@ -223,7 +233,7 @@ Distinct from clap's `--version`, which prints the wirebug app version.
   yields a component's fragments (just `[d]` when unmerged).
   Type resolution stays per-fragment (each carries its own `use` imports), but
   the merged component is one **flat namespace**: endpoints (`check_endpoint`),
-  view includes/enclosures (`resolve/views.rs`), and elaboration all consult
+  view includes/enclosures (`resolve/views.rs`), splices, and elaboration all consult
   the union across fragments, so a wire or view in one file freely references
   an instance/port declared in another. `extend` is top-level only; a fragment
   with no root `component` is an `orphan_fragment`.
@@ -271,13 +281,23 @@ Distinct from clap's `--version`, which prints the wirebug app version.
   `manufacturer`, `description`, `rating`) collected across the type's
   fragments, root first, so every placement of the type carries the same;
   a synthetic inline instance's is empty (its halves' part data lives in
-  `InlineMeta`). Every
+  `InlineMeta`). A component's splices elaborate to `Instance.splices`
+  (`ir::Splice`: `SpliceName`, label, `part`, `description`, span),
+  gathered across its fragments; a conductor to one has a
+  `WireEnd::Splice` end, and each conductor stays a two-ended `Wire` of its
+  own. The IR answers what a splice joins:
+  `Instance::splice_conductors(name)` (each conductor, a wire list's row
+  with the splice as an end; `Wire::other_end` gives the pin across it),
+  `Instance::splice_net(name)` (an `ir::SpliceNet`: the splices linked to
+  it by splice-to-splice conductors and every other end of their
+  conductors, as `NetEnd`s with their wire) and `Instance::splice_nets()`
+  (one per group of linked splices). Every
   `Wire` keeps its authored `span` (the `wire` statement, inside its
   cable for a conductor), so a check over the drawings can point back at
   it. So the schematic renderer ignores cables
   for free, and only the harness renderer reads the tags. Cable
-  conductors are 2-endpoint by rule; shared rails stay loose
-  multi-endpoint wires.
+  conductors are 2-endpoint by rule, and so is any wire to a splice;
+  shared rails without a splice stay loose multi-endpoint wires.
 - **Inline connectors (`inline`)** — a mated plug/receptacle pair
   mid-harness (a loom's branch point): one shared port set, two optional
   `male:`/`female:` housing halves, each a `connector_type` ref. Inlines
@@ -509,7 +529,7 @@ so one run reports many. Errors fail the run; warnings fail only under
   or a lex error) the problems that report an absence
   (`Problem::reports_an_absence`: unknown or undefined names, unresolved
   or unused imports and unused fragments, no root, a view of nothing, an
-  empty cable, a port without `pub` — a `;` too early parts `pub ; port a "A";` into a skipped
+  empty cable, a splice that joins nothing, a port without `pub` — a `;` too early parts `pub ; port a "A";` into a skipped
   `pub` and a private port) are dropped (`Project::drop_parse_cascades`,
   in `dsl::check_loaded`, so for the CLI and the LSP alike), and come
   back once the syntax is fixed. The problems that report something present and wrong (a bad
@@ -524,7 +544,14 @@ so one run reports many. Errors fail the run; warnings fail only under
   naming no component in scope (the instances' `undefined_type`, on the
   name) or a connector type (`view_subject_not_component`), duplicate
   connector designator (`duplicate_connector_name`), duplicate cable designator
-  (`duplicate_cable_name`). `extend` fragments add: a fragment nested inside a
+  (`duplicate_cable_name`), a splice named like a port, instance, inline
+  connector, connector, cable or other splice of its merged component
+  (`duplicate_splice_name`, one per splice, on the splice; the other
+  declaration a second label in the same file, else a `#[related]`
+  `OtherDeclaration` note; `Resolver::check_splice_names`), a shield end
+  naming a splice (`shield_on_splice`). An unknown bare conductor endpoint
+  is the usual `unknown_port`, its help saying a bare name is an own port
+  or a splice. `extend` fragments add: a fragment nested inside a
   component (`nested_extend`); an `extend` with no root `component` of that
   name (`orphan_fragment`); an instance/port name declared in two fragments of
   one merged component (the ordinary `duplicate_instance`/`duplicate_port`,
@@ -536,8 +563,11 @@ so one run reports many. Errors fail the run; warnings fail only under
   unknown/private port, and a duplicate-port-in-one-include guard
   (`duplicate_view_port`). Includes are checked per view kind: a `harness`
   include must name an existing connector (`unknown_connector`) and carry no
-  `ports { }`; a `schematic` include must not name a connector — violations
-  are `wrong_include_form`. A view's `enclosure { }` ports resolve against the
+  `ports { }`, or name one of the subject's splices alone (`include sp`, no
+  `.connector`, no `ports { }`; `check_splice_include`); a `schematic`
+  include must not name a connector, and no schematic or pinout include may
+  name a splice — violations are `wrong_include_form`. A splice included
+  twice in one view is a `duplicate_view_include`. A view's `enclosure { }` ports resolve against the
   *subject*: each anchor must name exactly one side in the slot for its axis
   (`enclosure_anchor`) and an existing `pub` subject port (`unknown_port` /
   `private_port`), with the same duplicate guard (`duplicate_view_port`).
@@ -575,12 +605,14 @@ so one run reports many. Errors fail the run; warnings fail only under
   and `render` use to find the instance a view is drawn against.
 - **Validate** — wire arity (fewer than two endpoints, error); cable wire
   arity (a cable conductor that isn't exactly two endpoints,
-  `cable_wire_arity`); property checks on a cable body and on any wire's
+  `cable_wire_arity`; a loose wire with a splice among more than two
+  endpoints, `splice_wire_arity`, since a conductor to a splice runs end
+  to end); property checks on a cable body and on any wire's
   body and on a component's part data (`validate_properties`, keyed by
   `diagnostics::PropertyOwner`, whose `keys()` say what each body takes: a
   cable `type` and `length`, a wire `length`, `type` and `part`, a
-  component `part`, `manufacturer`, `description` and `rating`, a closed
-  set a later bill of materials reads) — an unknown key, a key set twice, a
+  component `part`, `manufacturer`, `description` and `rating`, a splice
+  `part` and `description`, a closed set a later bill of materials reads) — an unknown key, a key set twice, a
   value of the wrong kind (strings for `type`/`part` and the component
   keys, a number for `length`). A component split with `extend` sets each
   key once across its fragments (`validate_fragment_properties`): a
@@ -610,7 +642,10 @@ group (`duplicate_shield`, on both statements, the message naming the cable
 or the pair), and a shield listing more than two ends (`shield_arity`, on
 the statement: a screen, like a conductor, runs end to end), are errors;
 the shield ends resolve in resolve like wire endpoints. As warnings: a
-cable with no conductors (`empty_cable`; a shield is no conductor),
+cable with no conductors (`empty_cable`; a shield is no conductor), a
+splice fewer than two conductors of its merged component end on
+(`splice_joins_nothing`, on its name; two is a butt splice;
+`validate_splice_conductors`),
   unused import (an import counts as used when the file instantiates it,
   merges with it, a `fragment` of the file merges an `extend` into it, or
   the file names it in a view's `for`), bare-port pin, and
@@ -899,8 +934,10 @@ DSL pipeline notes:
 - Keywords are **reserved** or **contextual** (`Token::is_contextual`;
   one `KEYWORDS` table in `lex/token.rs` drives both lexing and display).
   Contextual ones — the view, `connector_type` layout and cavity words,
-  plus `from`, `for` (a view's subject) and `fragment` (a top-level
-  statement, where no name can start one) — mean something only in their
+  plus `from`, `for` (a view's subject), `fragment` (a top-level
+  statement, where no name can start one), `shield` (a statement of a cable
+  body or a pair) and `splice` (a component-body statement when a name
+  follows it; `splice: Sensor;` reads on as an instance) — mean something only in their
   own production; everywhere a
   name belongs they are names. Names go through two boxed productions,
   both taking an identifier or a contextual keyword (`Token::as_name`):
@@ -922,8 +959,8 @@ DSL pipeline notes:
   diamond import (`use` and `fragment` alike) is harmless and never
   double-reports. Directory layout never affects logical hierarchy — only
   `use` and `fragment` paths and DSL nesting do.
-- Wire endpoints are at most two-part (`inst.port` or bare `port`); the
-  deep dotted form is an IR *path*, not surface syntax.
+- Wire endpoints are at most two-part (`inst.port`, or a bare own port or
+  splice); the deep dotted form is an IR *path*, not surface syntax.
 
 ## Connector routing
 

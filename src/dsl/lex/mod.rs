@@ -346,6 +346,7 @@ mod tests {
             "from",
             "fragment",
             "shield",
+            "splice",
             "for",
             "include",
             "text",

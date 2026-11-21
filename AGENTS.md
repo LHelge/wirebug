@@ -59,8 +59,12 @@ redesign each when it lands.
 - Non-rectangle component symbols
 - Visual grouping of ports by connector on a side (bracket + label)
 - Per-port styling (input/output, voltage class, gauge, etc.)
-- Explicit `junction`/`splice` elements (shared rails stay loose
-  multi-endpoint wires for now; `cable` conductors are point-to-point)
+- More than the basic `splice` member (landed: a named joint that
+  two-ended conductors end on, placed and drawn in harness views, drawn as
+  one net in schematics): splices in schematic or pinout includes, shield
+  drains on a splice, junction dots, multi-endpoint wires through a splice.
+  Shared rails stay valid loose multi-endpoint wires; `cable` conductors
+  stay point-to-point.
 - Port re-export aliases (`pub port x "X" = inner.port;` — a pure boundary
   mapping with no wire). Decided against for now (2026-06): the wire-through
   pattern stays; revisit when a BOM view makes invented color/gauge on

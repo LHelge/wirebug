@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use crate::dsl::ast;
-use crate::dsl::diagnostics::Problem;
+use crate::dsl::diagnostics::{OtherDeclaration, Problem, SpliceClash};
 use crate::dsl::span::{FileId, Span};
 
 use super::{ComponentScope, DefId, Resolver};
@@ -191,6 +191,77 @@ impl<'a> Resolver<'a> {
         self.problems.extend(problems);
     }
 
+    /// A splice's name is unique in its merged component: no port (bare
+    /// endpoints name either), instance, inline connector, connector,
+    /// cable or other splice of any fragment has it. One problem per
+    /// splice that clashes, on the splice, naming the first clash.
+    pub(super) fn check_splice_names(&mut self) {
+        let mut problems = Vec::new();
+        for d in 0..self.defs.len() {
+            if self.groups.canonical(d) != d {
+                continue;
+            }
+            let fragments = self.groups.fragments(d);
+            let mut taken: Vec<(&str, SpliceClash, Span)> = Vec::new();
+            for &f in &fragments {
+                let info = &self.defs[f];
+                taken.extend(
+                    info.ports
+                        .iter()
+                        .map(|(name, facts)| (name.as_str(), SpliceClash::Port, facts.span)),
+                );
+                taken.extend(info.instances.iter().map(|(name, facts)| {
+                    (name.as_str(), SpliceClash::Instance, facts.ast.name.span)
+                }));
+                taken.extend(info.inlines.iter().map(|(name, facts)| {
+                    (
+                        name.as_str(),
+                        SpliceClash::InlineConnector,
+                        facts.ast.name.span,
+                    )
+                }));
+                for member in &info.ast.members {
+                    let (name, what) = match member {
+                        ast::Member::Connector(c) => (&c.name, SpliceClash::Connector),
+                        ast::Member::ConnectorInstance(c) => (&c.name, SpliceClash::Connector),
+                        ast::Member::Cable(c) => (&c.name, SpliceClash::Cable),
+                        _ => continue,
+                    };
+                    taken.push((name.node.as_str(), what, name.span));
+                }
+            }
+            for &f in &fragments {
+                for splice in self.defs[f].ast.splices() {
+                    let name = splice.name.node.as_str();
+                    let at = splice.name.span;
+                    if let Some(&(_, other, first)) = taken.iter().find(|(n, ..)| *n == name) {
+                        let file = self.defs[f].file;
+                        let same_file = first.file == file;
+                        problems.push(Problem::DuplicateSpliceName {
+                            name: name.to_string(),
+                            other,
+                            component: self.defs[d].name.to_string(),
+                            src: self.project.source(file),
+                            at: at.into(),
+                            here: same_file.then(|| first.into()),
+                            elsewhere: (!same_file)
+                                .then(|| OtherDeclaration {
+                                    what: other,
+                                    name: name.to_string(),
+                                    src: self.project.source(first.file),
+                                    at: first.into(),
+                                })
+                                .into_iter()
+                                .collect(),
+                        });
+                    }
+                    taken.push((name, SpliceClash::Splice, at));
+                }
+            }
+        }
+        self.problems.extend(problems);
+    }
+
     /// Rewrite every type-scope entry to its group's canonical id, so an
     /// instance of a merged type resolves to the one representative def.
     pub(super) fn canonicalize_scopes(&self, scopes: &mut HashMap<FileId, ComponentScope>) {
@@ -251,6 +322,69 @@ mod tests {
             ("frag.wb", "extend vehicle { }\n"),
         ]);
         assert!(has(&p, "wirebug::orphan_fragment"), "{:?}", codes(&p));
+    }
+
+    /// The code and the message of each problem of a one-file component
+    /// `m` with `members`.
+    fn clashes(members: &str) -> Vec<String> {
+        problems(&[(
+            "main.wb",
+            &format!("component leaf {{ pub port a \"A\"; }}\ncomponent m {{ {members} }}\n"),
+        )])
+        .iter()
+        .map(ToString::to_string)
+        .collect()
+    }
+
+    #[test]
+    fn a_splice_takes_a_name_nothing_else_in_its_component_has() {
+        for (members, other) in [
+            ("pub port sp \"SP\"; splice sp;", "a port"),
+            ("splice sp; port sp \"SP\";", "a port"),
+            ("sp: leaf; splice sp;", "an instance"),
+            (
+                "inline sp { port a \"A\" pin 1; } splice sp;",
+                "an inline connector",
+            ),
+            (
+                "connector sp { port a \"A\" pin 1; } splice sp;",
+                "a connector",
+            ),
+            ("cable sp { } splice sp;", "a cable"),
+            ("splice sp; splice sp;", "another splice"),
+        ] {
+            let found = clashes(members);
+            assert!(
+                found.contains(&format!("splice `sp` has the same name as {other} of `m`")),
+                "{members}: {found:?}"
+            );
+        }
+        assert!(clashes("splice sp; splice sq;").is_empty());
+    }
+
+    #[test]
+    fn a_splice_clashing_with_a_port_of_another_fragment_points_at_both() {
+        use miette::Diagnostic;
+        let p = problems(&[
+            (
+                "main.wb",
+                "fragment \"loom.wb\";\ncomponent m { pub port gnd \"GND\"; }\n",
+            ),
+            ("loom.wb", "extend m { splice gnd; }\n"),
+        ]);
+        let [problem] = p.as_slice() else {
+            panic!("one problem: {:?}", codes(&p));
+        };
+        assert!(has(&p, "wirebug::duplicate_splice_name"));
+        // One label, on the splice; the port is a related note in its file.
+        assert_eq!(problem.labels().into_iter().flatten().count(), 1);
+        let related: Vec<String> = problem
+            .related()
+            .into_iter()
+            .flatten()
+            .map(ToString::to_string)
+            .collect();
+        assert_eq!(related, ["a port `gnd` is declared here"]);
     }
 
     #[test]
