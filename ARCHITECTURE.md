@@ -92,14 +92,22 @@ Five CLI commands share it:
   and oblique, `assets/fonts/dejavu/`, compiled in by `render/fonts.rs`),
   whose database both `PngRasterizer` and `PdfExporter` parse with: it
   holds those faces only, every generic family maps to them, and no
-  system font is ever loaded, so a given SVG becomes the same PNG and PDF
-  on every machine (the PDF outlines the glyphs, `embed_text: false`, so
-  its text is paths, not a font). SVG output still asks for `sans-serif`
-  and is drawn with whatever font the viewer resolves; the font is not
-  embedded in it. That is why the text-width estimators (schematic and
-  harness `*CHAR_WIDTH` constants, the pinout's `fit::Font`) stay
-  conservative upper bounds for the widest common `sans-serif` rather
-  than DejaVu Sans's exact advances.
+  system font is ever loaded, so a given SVG is drawn in the same font on
+  every machine (pixels may still differ slightly between CPU
+  architectures, where tiny-skia takes different SIMD paths; the PDF
+  outlines the glyphs, `embed_text: false`, so its text is paths, not a
+  font). A character DejaVu Sans has no glyph for (CJK, Thai, Devanagari,
+  …) is drawn as an empty `.notdef` box in PNG and PDF; nothing falls back
+  to another font. SVG output still asks for `sans-serif` and is drawn
+  with whatever font the viewer resolves, which may cover those scripts;
+  the font is not embedded in it. So the text-width estimators are not
+  made exact for DejaVu Sans: the pinout's `fit::Font` is built on DejaVu
+  Sans's widths per character class, the widest common `sans-serif`. The
+  schematic and harness `*CHAR_WIDTH` constants are flat per-character
+  averages and are *not* upper bounds for DejaVu Sans Bold — a known
+  limit: a long bold title (a harness `.connector-title`, bold 13 px
+  against 7 px per character) can run past its box in PNG and PDF, and
+  in any viewer whose `sans-serif` is as wide.
   The legacy YAML model/view loader has been removed; `ir::Design` is the
   only thing the renderer consumes.
 - **`export` (`src/export/`)** — runs `check_project` like `render`,

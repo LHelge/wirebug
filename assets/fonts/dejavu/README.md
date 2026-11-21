@@ -2,7 +2,7 @@
 
 The font `render --png` and `render --pdf` draw every label with. It is
 compiled into the wirebug binary (`src/render/fonts.rs`) so PNG and PDF
-output look the same on every machine; no system font is consulted.
+output use the same font on every machine; no system font is consulted.
 
 | File                     | Face                | Bytes   | SHA-256                                                            |
 |--------------------------|---------------------|---------|--------------------------------------------------------------------|
