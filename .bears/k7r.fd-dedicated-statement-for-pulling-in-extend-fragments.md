@@ -1,12 +1,13 @@
 ---
 id: k7r.fd
 title: Dedicated statement for pulling in `extend` fragments
-status: open
+status: done
 priority: P3
 created: "2026-11-20T21:40:32.007032838Z"
-updated: "2026-11-21T01:36:29.869189758Z"
+updated: "2026-11-21T03:06:59.329682670Z"
 tags:
   - dsl
+attempts: 1
 ---
 
 ## Summary
