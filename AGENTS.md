@@ -211,8 +211,9 @@ code --install-extension wirebug-*.vsix
 
 Releases are **tag-driven**: pushing a `vX.Y.Z` tag runs
 `.github/workflows/release.yml`, which gates on the shared
-`quality-checks.yml` (the same reusable job `ci.yml` runs on PRs, with the
-font install the render tests need), then, in order:
+`quality-checks.yml` (the same reusable job `ci.yml` runs on PRs; it
+installs no fonts, since PNG and PDF output draw with the font compiled
+into the binary), then, in order:
 
 - **build** the binary for `x86_64-unknown-linux-gnu`,
   `x86_64-apple-darwin`, and `aarch64-apple-darwin` (no Windows);

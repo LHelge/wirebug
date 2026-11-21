@@ -18,12 +18,6 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      # `render --png`/`--pdf` rasterise text through resvg/usvg, which need
-      # fonts on the machine. The runner ships none, so install a sans-serif
-      # family for the PNG/PDF tests (and to mirror the runtime requirement).
-      - name: Install fonts
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends fonts-dejavu-core
-
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
 
