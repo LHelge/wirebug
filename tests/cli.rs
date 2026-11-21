@@ -327,7 +327,7 @@ fn check_accepts_the_fixture_project() {
 const INVALID_VALUES_ROOT: &str = "tests/fixtures/invalid_values_project";
 
 #[test]
-fn check_rejects_non_positive_gauges_and_lengths() {
+fn check_rejects_non_positive_gauges_and_lengths_and_unknown_units() {
     let output = Command::cargo_bin("wirebug")
         .expect("binary present")
         .args(["check", "--format", "json", INVALID_VALUES_ROOT])
@@ -341,7 +341,8 @@ fn check_rejects_non_positive_gauges_and_lengths() {
     let main =
         std::fs::read_to_string(format!("{INVALID_VALUES_ROOT}/main.wb")).expect("fixture main.wb");
 
-    // Each problem is an error labelled on the offending number itself.
+    // Each problem is an error labelled on the offending number itself (its
+    // unit included), or on the unit that is no length unit.
     let found: Vec<(&str, &str)> = problems
         .iter()
         .map(|p| {
@@ -360,8 +361,9 @@ fn check_rejects_non_positive_gauges_and_lengths() {
         [
             ("wirebug::invalid_gauge", "-1"),
             ("wirebug::invalid_gauge", "0"),
-            ("wirebug::invalid_length", "-0.5"),
+            ("wirebug::invalid_length", "-500mm"),
             ("wirebug::invalid_length", "-2"),
+            ("wirebug::unknown_length_unit", "in"),
         ]
     );
 }
@@ -1223,8 +1225,8 @@ fn check_text_output_explains_the_reserved_word() {
         .stderr(predicate::str::contains("help:"));
 }
 
-/// Two broken statements in `lamp.wb` and two in `main.wb`, plus a wire of
-/// gauge zero in `main.wb`.
+/// Two broken statements in `lamp.wb` and three in `main.wb` (one a grid
+/// with a unit), plus a wire of gauge zero in `main.wb`.
 const SYNTAX_ERRORS_ROOT: &str = "tests/fixtures/syntax_errors_project";
 
 #[test]
@@ -1270,12 +1272,21 @@ fn check_reports_every_syntax_error_and_what_else_is_wrong() {
     assert_eq!(
         found,
         [
-            at("main.wb", "wirebug::parse", "[", 11),
-            at("main.wb", "wirebug::parse", "2", 15),
+            at("main.wb", "wirebug::parse", "[", 12),
+            at("main.wb", "wirebug::parse", "2", 16),
+            at("main.wb", "wirebug::parse", "1cm", 17),
             at("lamp.wb", "wirebug::parse", ";", 4),
             at("lamp.wb", "wirebug::parse", ";", 6),
-            at("main.wb", "wirebug::invalid_gauge", "0", 10),
+            at("main.wb", "wirebug::invalid_gauge", "0", 11),
         ]
+    );
+    let unit = problems
+        .iter()
+        .find(|p| p["labels"][0]["span"]["length"] == 3)
+        .expect("the grid's unit");
+    assert_eq!(
+        unit["message"],
+        "only a `length` takes a unit: write `1`, without the `cm`"
     );
 }
 

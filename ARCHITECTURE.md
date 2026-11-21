@@ -204,6 +204,15 @@ Distinct from clap's `--version`, which prints the wirebug app version.
   `length` overrides its cable's, and `Instance::effective_length(wire)`
   answers the one that applies (its own, else its cable's
   `CableMeta.length`); `CableMeta.length` itself stays the cable's. A
+  length is an `ir::Length`, whole micrometres (`u64`, always at least
+  one), built by `Length::new(value, LengthUnit)` from the AST's
+  `ast::Quantity` (the number and the unit written after it, `150mm`;
+  `Quantity::length`, a bare number in metres), so lengths in any unit
+  compare (`Ord`) and print exactly: `Length::metres()` normalises,
+  `Display` prints metres with only the decimals the length has
+  (`0.15 m`). The closed `LengthUnit` set (`m`, `cm`, `mm`) is
+  `LengthUnit::ALL`. A length that does not convert (an unknown unit, not
+  positive) elaborates to `None`; validate reports it. A
   component type's part data elaborates to `Instance.part`, an
   `ir::PartMeta` of typed optional strings (`number` from `part:`,
   `manufacturer`, `description`, `rating`) collected across the type's
@@ -330,7 +339,8 @@ those whose two connectors are included and records them as
 
 Kept conductors split by `Wire.cable`. A **declared cable** draws as a
 **cable box** (`CableBox`/`render_cable_box`) on the spine: a titled table
-(label + `type · length · ×count`), one coloured strand per row. A
+(label + `type · length · ×count`, the length in metres as
+`ir::Length` displays it, `0.15 m`), one coloured strand per row. A
 `twisted { }` pair (exactly two conductors, grammar-enforced —
 `ast::TwistedGroup` holds `[Wire; 2]`) draws its box run as a **symbolic
 braid** (`draw::braid_d` — chained flex cubics swapping the pair's two
@@ -381,6 +391,12 @@ so one run reports many. Errors fail the run; warnings fail only under
 
 - **Load** — file not found for a `use`; no `wirebug.toml`; IO.
 - **Parse/lex** — syntax and lexical errors (with expected-token sets),
+  a unit on a number where no length goes (a gauge, a coordinate, a
+  `grid:`, a pin, `rows`/`cols`, a `connector_type` property: the bare
+  `number` and `whole` productions refuse it, naming the number to write;
+  only a property value parses one, `quantity`), and a length unit after
+  a space (`length: 2 m;`, which says to write the unit against the
+  number in place of "expected ';'"),
   and a reserved keyword written where a name belongs (`reserved_word`,
   on the word, with a rename hint). The parse takes the word as the name
   and goes on, so every occurrence of the word is reported, and the later
@@ -486,8 +502,12 @@ so one run reports many. Errors fail the run; warnings fail only under
   (`unknown_cable_property`, `duplicate_cable_property`,
   `cable_property_type`); the messages name the owner (`unknown wire
   property`). Non-positive values (`invalid_gauge` on a wire or cable
-  conductor's gauge, `invalid_length` on a cable's or a wire's `length`,
-  both labelled on the number); an endpoint listed twice in one wire or cable
+  conductor's gauge, `invalid_length` on a cable's or a wire's `length` —
+  under a micrometre included, the finest an `ir::Length` holds — both
+  labelled on the number, a length's unit included); a `length` whose
+  unit is none of `m`, `cm`, `mm` (`unknown_length_unit`, labelled on the
+  unit, the help listing the units; a unit on a key that takes a string
+  is the usual `cable_property_type`); an endpoint listed twice in one wire or cable
   conductor (`duplicate_endpoint`, labelled on both occurrences — compared
   as resolved `ir::WireEnd`s, so own port `gnd` and `ecu.gnd` never alias;
   two *different* wires on one port are a deliberate double crimp and are
@@ -758,6 +778,12 @@ DSL pipeline notes:
 - The lexer recognises trivia (whitespace, comments) as first-class spanned
   lexemes; `lex::significant()` is the *dial* that drops them today — a
   future `fmt` swaps it for a trivia collector without touching the parser.
+- A number token carries the unit written against it: the name-shaped run
+  touching its digits (`Token::Number { digits, unit }`, `150mm`), one
+  token spanning both. So a number directly followed by a name is always
+  one token, whatever the name spells (`1at` is no pin); after a space the
+  name is a token of its own. The lexer judges no unit: the parser says
+  where one may go, validate which ones exist.
 - `chumsky` parses a `(Token, Span)` slice; our `Span` implements
   `chumsky::span::Span` (context = `FileId`), so `e.span()` yields
   file-tagged spans directly. `Rich` errors become owned `ParseError`s.

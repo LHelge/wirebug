@@ -21,7 +21,7 @@
 
 use std::collections::HashMap;
 
-use crate::dsl::ast::{Item, Member, Port, Property, PropertyValue, Wire};
+use crate::dsl::ast::{Item, Member, Port, Property, PropertyValue, Quantity, Wire};
 use crate::dsl::diagnostics::{FirstProperty, Problem, PropertyKind, PropertyOwner};
 use crate::dsl::ir::{ColorName, WireEnd};
 use crate::dsl::resolve::{DefId, Resolved};
@@ -318,20 +318,27 @@ fn validate_distinct_endpoints(
     }
 }
 
-/// A physical length in metres must be positive. Takes the spanned number
-/// itself, not its owner, so any `length` value can be checked the same way.
+/// A physical length is in a length unit (metres when it has none) and
+/// positive. Takes the spanned number itself, not its owner, so any
+/// `length` value can be checked the same way.
 fn validate_length(
-    length: &Spanned<f64>,
+    length: &Spanned<Quantity>,
     file: FileId,
     resolved: &Resolved,
     problems: &mut Vec<Problem>,
 ) {
-    if length.node <= 0.0 {
-        problems.push(Problem::InvalidLength {
-            value: length.node,
+    match (length.node.length_unit(), &length.node.unit) {
+        (None, Some(unit)) => problems.push(Problem::UnknownLengthUnit {
+            unit: unit.node.clone(),
+            src: resolved.project.source(file),
+            at: unit.span.into(),
+        }),
+        _ if length.node.length().is_none() => problems.push(Problem::InvalidLength {
+            value: length.node.to_string(),
             src: resolved.project.source(file),
             at: length.span.into(),
-        });
+        }),
+        _ => {}
     }
 }
 
@@ -522,6 +529,64 @@ mod tests {
             "component m { pub port a \"A\"; pub port b \"B\"; cable w { length: -2; wire red 1 [a, b]; } }\n",
         );
         assert_eq!(labels, ["-2"]);
+    }
+
+    #[test]
+    fn lengths_in_each_unit_are_clean() {
+        let codes = cable(
+            "length: 2m; wire red 1 [a, b] { length: 150mm; } wire red 1 [a, c] { length: 15cm; }",
+        );
+        assert!(codes.is_empty(), "{codes:?}");
+    }
+
+    #[test]
+    fn an_unknown_length_unit_errors_on_the_unit() {
+        let src = "component m { pub port a \"A\"; pub port b \"B\"; cable w { length: 2in; wire red 1 [a, b] { length: 3km; } } }\n";
+        assert_eq!(labelled_text(src), ["km", "in"]);
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("main.wb"), src).expect("write");
+        let (project, _) = load(&dir.path().join("main.wb"));
+        let problems = validate(&resolve(&project.expect("loads")));
+        let report: Vec<String> = problems
+            .iter()
+            .map(|p| {
+                let code = p.code().map(|c| c.to_string()).unwrap_or_default();
+                let help = p.help().map(|h| h.to_string()).unwrap_or_default();
+                format!("{code}: {p} | {help}")
+            })
+            .collect();
+        insta::assert_snapshot!(report.join("\n"), @r"
+        wirebug::unknown_length_unit: unknown length unit `km` | write a length as a positive number of metres (`length: 2.5;`), or with one of the units `m`, `cm` or `mm` directly after the number (`length: 150mm;`)
+        wirebug::unknown_length_unit: unknown length unit `in` | write a length as a positive number of metres (`length: 2.5;`), or with one of the units `m`, `cm` or `mm` directly after the number (`length: 150mm;`)
+        ");
+    }
+
+    #[test]
+    fn a_non_positive_length_with_a_unit_errors_on_the_number_and_its_unit() {
+        let labels = labelled_text(
+            "component m { pub port a \"A\"; pub port b \"B\"; cable w { length: -150mm; wire red 1 [a, b] { length: 0cm; } } }\n",
+        );
+        assert_eq!(labels, ["0cm", "-150mm"]);
+        let codes = cable("length: -150mm; wire red 1 [a, b];");
+        assert_eq!(codes, ["wirebug::invalid_length"]);
+    }
+
+    #[test]
+    fn a_length_under_a_micrometre_is_not_positive() {
+        let codes = cable("length: 0.0001mm; wire red 1 [a, b];");
+        assert_eq!(codes, ["wirebug::invalid_length"]);
+    }
+
+    #[test]
+    fn a_unit_on_a_string_key_is_a_type_error() {
+        let codes = cable("type: 2m; wire red 1 [a, b] { part: 5mm; }");
+        assert_eq!(
+            codes,
+            [
+                "wirebug::cable_property_type",
+                "wirebug::cable_property_type"
+            ]
+        );
     }
 
     #[test]

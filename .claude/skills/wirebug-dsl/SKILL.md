@@ -460,13 +460,26 @@ wire red 0.5 "12V" [fuses.ecu, ecu.b_pos] {
     type:   "FLRY-B";
     part:   "FLRY-B-0.5-RD";
 }
+
+wire black 1.5 "GND" [ecu.gnd, ecu.case_gnd] { length: 150mm; }
 ```
 
-- `length: <number>;` — the wire's length in **metres** (a bare number, no unit suffix). It must be positive (`invalid_length`).
+- `length: <length>;` — the wire's length (see Lengths below). It must be positive (`invalid_length`).
 - `type: "<string>";` — the insulation/construction type, free text (e.g. `"FLRY-B"`).
 - `part: "<string>";` — the part number.
 
 All three are optional, and each may appear once. Any other key is an error (`unknown_cable_property`, the code cable, wire and component bodies share), as is a key set twice (`duplicate_cable_property`) or a value of the wrong kind — a string for `length`, a number for `type` or `part` (`cable_property_type`). The positional form without a body is unchanged.
+
+### Lengths
+
+A length — a wire's or a cable's `length` — is a positive number with an optional unit written **directly after it**, no space between:
+
+- `length: 2;` — a bare number is **metres**.
+- `length: 2m;`, `length: 15cm;`, `length: 150mm;` — the units are exactly `m`, `cm` and `mm` (no inches, no `km`). Pick whichever reads best: a 150 mm jumper is clearer as `150mm` than as `0.15`.
+
+Every length normalises to metres (to the micrometre), so `150mm`, `15cm` and `0.15` are the same length, and a harness cable box shows it in metres (`0.15 m`). Any other suffix is an error on the unit (`unknown_length_unit`, its help listing the units); a length that is zero, negative or under a micrometre is `invalid_length`, labelled on the number and its unit. `length: 2 m;` (a space before the unit) is a syntax error that says to write the unit directly after the number.
+
+**Only a length takes a unit.** Every other number is bare — a wire's gauge (mm², `wire red 1.5 …`, not `1.5mm`), a view's `grid:`, `at (x, y)` coordinates, pin numbers, a layout's `rows`/`cols`, a `connector_type` property: a unit on any of them is a syntax error. Since a unit is whatever touches the digits, a number directly followed by a name is one token: write `cavity 1 at (…)`, never `cavity 1at (…)`.
 
 ## Cables
 
@@ -488,7 +501,7 @@ Format:
 - `cable <name> ["<label>"] { <properties> <wires> }` — `name` is a snake_case designator (unique within the component, like a connector's); the optional quoted label is shown on the cable box (the designator is used when omitted).
 - Properties are `key: value;` lines, before the wires. Two keys are supported:
   - `type: "<string>";` — a free-text construction note (e.g. `"Twisted pair"`).
-  - `length: <number>;` — length in **metres** (a bare number, e.g. `2.5`; no unit suffix). It must be positive: `check` rejects `0` or a negative length (`invalid_length`).
+  - `length: <length>;` — the cable's length: metres when bare (`2.5`), or with a unit (`2.5m`, `80cm`, `800mm`; see Lengths). It must be positive: `check` rejects `0` or a negative length (`invalid_length`).
 - A cable needs at least one conductor: `check` warns on a cable with no wires (`empty_cable`).
 - Each `wire` uses the exact same syntax as a loose wire, **but must have exactly two endpoints** — a cable conductor is one physical run from one pin to another. (A shared rail that fans out to three+ pins is not a single conductor; keep it a loose multi-endpoint `wire`, outside any cable.)
 - A conductor may carry a property body like any wire (see Wire properties), inside a `twisted { }` group too. A conductor's own `length` **overrides** its cable's `length` for that conductor — a phase lead that routes further than its siblings, say; the conductors without one take the cable's. The cable's own `length` stays what the cable box shows. A cable body itself takes only `type` and `length` (`part` is a wire key).
@@ -496,10 +509,10 @@ Format:
 
 ```
 cable sensor_loom "Sensor loom" {
-    length: 2.0;
+    length: 2m;
 
     wire red 1.5 "12V" [ecu.pwr, sensor.pwr] {
-        length: 2.3;                // routes round the bracket: longer than the loom
+        length: 230cm;              // routes round the bracket: longer than the loom
     }
     twisted {
         wire white/blue 0.5 "SIG H" [ecu.h, sensor.h];
@@ -688,6 +701,7 @@ wire orange 50 [pack.hv_neg, inv.dc_neg, charger.hv_neg, conv.hv_neg];
 - **Do not** add junction nodes by hand — multi-endpoint wires imply junctions automatically.
 - **Do not** put `pub` on an inline connector's ports, include both halves of one inline in a single harness view, or include an inline in a schematic view.
 - **Do not** write a `;` after a wire's property body (`[a, b] { length: 1; }`, not `{ … };`), or put `part` on a cable — it is a per-wire key.
+- **Do not** put a space between a length and its unit (`150mm`, not `150 mm`), or a unit on any number but a `length` (a gauge is `1.5`, not `1.5mm`).
 - **Do not** put part numbers in labels or comments when the type can carry them: write `part: "…";` (and `manufacturer`, `description`, `rating`) in the component body. Quote the value — `part: Fuse;` is an instance named `part`, not a part number.
 - **Do not** put a multi-endpoint wire inside a `cable` — cable conductors are point-to-point (exactly two endpoints). Keep fan-out rails as loose wires.
 - **Do not** use block comments (`/* */`). Line comments (`//`) only.

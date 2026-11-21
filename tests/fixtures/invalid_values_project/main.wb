@@ -1,6 +1,6 @@
 // Every reference here resolves; only the values are nonsense. `check`
-// must reject the negative and zero gauges and the negative cable and
-// conductor lengths.
+// must reject the negative and zero gauges, the negative cable and
+// conductor lengths (one written in millimetres), and a length in inches.
 
 use Device from "components/device.wb";
 
@@ -13,8 +13,12 @@ component Vehicle {
     cable w1 "Supply" {
         length: -2;
         wire red 0 [ecu.pwr, pump.pwr] {
-            length: -0.5;
+            length: -500mm;
         }
+    }
+
+    wire black 1 [ecu.gnd, pump.gnd] {
+        length: 12in;
     }
 }
 

@@ -117,14 +117,23 @@ pub fn lex(src: &str, file: FileId) -> Result<Vec<SpannedLexeme>, LexError> {
                         i += 1;
                     }
                 }
-                let text = src[start..i].to_string();
-                push(&mut out, Lexeme::Token(Token::Number(text)), start, i);
+                let digits = src[start..i].to_string();
+                // A unit touches its number (`150mm`); after a space a name
+                // is a token of its own.
+                let unit_start = i;
+                if i < n && (bytes[i] == b'_' || bytes[i].is_ascii_alphabetic()) {
+                    i = name_end(bytes, i);
+                }
+                let unit = (i > unit_start).then(|| src[unit_start..i].to_string());
+                push(
+                    &mut out,
+                    Lexeme::Token(Token::Number { digits, unit }),
+                    start,
+                    i,
+                );
             }
             b'_' | b'a'..=b'z' | b'A'..=b'Z' => {
-                i += 1;
-                while i < n && (bytes[i] == b'_' || bytes[i].is_ascii_alphanumeric()) {
-                    i += 1;
-                }
+                i = name_end(bytes, i);
                 let text = &src[start..i];
                 let token = Token::keyword(text).unwrap_or_else(|| Token::Ident(text.to_string()));
                 push(&mut out, Lexeme::Token(token), start, i);
@@ -167,6 +176,15 @@ pub fn lex(src: &str, file: FileId) -> Result<Vec<SpannedLexeme>, LexError> {
     Ok(out)
 }
 
+/// The end of the name-shaped run (`[A-Za-z0-9_]*`) whose first byte, a
+/// letter or `_`, is at `start`: an identifier, or a number's unit.
+fn name_end(bytes: &[u8], start: usize) -> usize {
+    bytes[start + 1..]
+        .iter()
+        .position(|&b| b != b'_' && !b.is_ascii_alphanumeric())
+        .map_or(bytes.len(), |len| start + 1 + len)
+}
+
 /// THE DIAL. Drop trivia, yielding the significant `(Token, Span)` stream
 /// the parser consumes. A future `fmt` replaces this with a pass that
 /// attaches trivia to neighbouring tokens instead of discarding it.
@@ -191,6 +209,77 @@ mod tests {
         significant(&lexemes).into_iter().map(|(t, _)| t).collect()
     }
 
+    /// A number without a unit.
+    fn num(digits: &str) -> Token {
+        Token::Number {
+            digits: digits.into(),
+            unit: None,
+        }
+    }
+
+    /// A number with a unit written directly after it.
+    fn with_unit(digits: &str, unit: &str) -> Token {
+        Token::Number {
+            digits: digits.into(),
+            unit: Some(unit.into()),
+        }
+    }
+
+    #[test]
+    fn a_unit_touching_its_number_lexes_into_the_number() {
+        assert_eq!(
+            tokens("2m 150mm -0.5cm 1.5e3 2in"),
+            vec![
+                with_unit("2", "m"),
+                with_unit("150", "mm"),
+                with_unit("-0.5", "cm"),
+                with_unit("1.5", "e3"),
+                with_unit("2", "in"),
+            ]
+        );
+        // The token's span covers the number and its unit.
+        let src = "length: 150mm;";
+        let sig = significant(&lex(src, F).expect("lexes"));
+        let (_, span) = &sig[2];
+        assert_eq!(&src[span.start..span.end], "150mm");
+    }
+
+    #[test]
+    fn a_name_after_a_space_stays_its_own_token() {
+        assert_eq!(
+            tokens("2 m cavity 1 at"),
+            vec![
+                num("2"),
+                Token::Ident("m".into()),
+                Token::Cavity,
+                num("1"),
+                Token::At,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_name_with_digits_is_still_an_identifier() {
+        // Only a run that starts with a digit is a number: `A1` and `x1`
+        // stay names, and `2.m` keeps its dot.
+        assert_eq!(
+            tokens("A1 x1 2.m"),
+            vec![
+                Token::Ident("A1".into()),
+                Token::Ident("x1".into()),
+                num("2"),
+                Token::Dot,
+                Token::Ident("m".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_number_displays_with_its_unit() {
+        assert_eq!(with_unit("150", "mm").to_string(), "150mm");
+        assert_eq!(num("-0.5").to_string(), "-0.5");
+    }
+
     #[test]
     fn lexes_keywords_punctuation_and_leaves() {
         let toks = tokens(r#"pub port hv_pos "HV+" pin 1;"#);
@@ -202,7 +291,7 @@ mod tests {
                 Token::Ident("hv_pos".into()),
                 Token::Str("HV+".into()),
                 Token::Pin,
-                Token::Number("1".into()),
+                num("1"),
                 Token::Semicolon,
             ]
         );
@@ -217,7 +306,7 @@ mod tests {
                 Token::Ident("pack".into()),
                 Token::Dot,
                 Token::Ident("hv_pos".into()),
-                Token::Number("0.25".into()),
+                num("0.25"),
             ]
         );
     }
@@ -312,11 +401,11 @@ mod tests {
             vec![
                 Token::Pins,
                 Token::LBracket,
-                Token::Number("2".into()),
+                num("2"),
                 Token::Comma,
-                Token::Number("3".into()),
+                num("3"),
                 Token::Comma,
-                Token::Number("4".into()),
+                num("4"),
                 Token::RBracket,
             ]
         );
@@ -329,9 +418,9 @@ mod tests {
             vec![
                 Token::At,
                 Token::LParen,
-                Token::Number("-2".into()),
+                num("-2"),
                 Token::Comma,
-                Token::Number("-0.5".into()),
+                num("-0.5"),
                 Token::RParen,
             ]
         );
@@ -374,7 +463,7 @@ mod tests {
                 Token::Ident("a".into()),
                 Token::Str("A".into()),
                 Token::Pin,
-                Token::Number("1".into()),
+                num("1"),
                 Token::Semicolon,
                 Token::RBrace,
             ]

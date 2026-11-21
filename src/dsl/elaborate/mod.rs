@@ -466,7 +466,7 @@ fn rewrite_wire(w: &ast::Wire, cable: Option<CableName>, twisted_group: Option<u
     };
     for p in &w.properties {
         match (p.key.node.as_str(), &p.value) {
-            ("length", PropertyValue::Number(n)) => wire.length = Some(n.node),
+            ("length", PropertyValue::Number(n)) => wire.length = n.node.length(),
             ("type", PropertyValue::Str(s)) => wire.r#type = Some(s.node.clone()),
             ("part", PropertyValue::Str(s)) => wire.part = Some(s.node.clone()),
             _ => {}
@@ -486,7 +486,7 @@ fn cable_meta(c: &ast::Cable) -> CableMeta {
     for p in &c.properties {
         match (p.key.node.as_str(), &p.value) {
             ("type", PropertyValue::Str(s)) => meta.r#type = Some(s.node.clone()),
-            ("length", PropertyValue::Number(n)) => meta.length = Some(n.node),
+            ("length", PropertyValue::Number(n)) => meta.length = n.node.length(),
             _ => {}
         }
     }
@@ -588,6 +588,7 @@ fn connector_type_layout(connector_type: &ast::ConnectorType) -> Option<Connecto
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dsl::ir::Length;
     use crate::dsl::project::load;
     use crate::dsl::resolve::resolve;
 
@@ -695,7 +696,7 @@ mod tests {
                 wire black 1 [a, b];
                 cable feed \"Power feed\" {
                     type: \"2-core\";
-                    length: 0.8;
+                    length: 800mm;
                     wire red 1 [x, y];
                 }
             }\n",
@@ -721,7 +722,8 @@ mod tests {
             .expect("cable meta");
         assert_eq!(meta.label.as_deref(), Some("Power feed"));
         assert_eq!(meta.r#type.as_deref(), Some("2-core"));
-        assert_eq!(meta.length, Some(0.8));
+        // `800mm` normalises to metres.
+        assert_eq!(meta.length.map(Length::metres), Some(0.8));
     }
 
     #[test]
@@ -730,7 +732,7 @@ mod tests {
             "main.wb",
             "component m {
                 pub port a \"A\"; pub port b \"B\";
-                wire red 0.5 [a, b] { length: 1.2; type: \"FLRY-B\"; part: \"W-1\"; }
+                wire red 0.5 [a, b] { length: 120cm; type: \"FLRY-B\"; part: \"W-1\"; }
                 wire black 0.5 [a, b];
             }\n",
         )]);
@@ -740,7 +742,7 @@ mod tests {
         let [with_body, bare] = root.wires.as_slice() else {
             panic!("expected two wires");
         };
-        assert_eq!(with_body.length, Some(1.2));
+        assert_eq!(with_body.length.map(Length::metres), Some(1.2));
         assert_eq!(with_body.r#type.as_deref(), Some("FLRY-B"));
         assert_eq!(with_body.part.as_deref(), Some("W-1"));
         assert_eq!(
@@ -844,7 +846,7 @@ mod tests {
         let lengths: Vec<Option<f64>> = root
             .wires
             .iter()
-            .map(|w| root.effective_length(w))
+            .map(|w| root.effective_length(w).map(Length::metres))
             .collect();
         // Loose wires have only their own; a conductor's own wins over its
         // cable's, a conductor without one takes the cable's, and a cable
@@ -854,7 +856,12 @@ mod tests {
             [Some(0.3), None, Some(2.4), Some(2.1), Some(2.0), None]
         );
         // The cable's own length is untouched by its conductors'.
-        assert_eq!(root.cables[&CableName::from("feed")].length, Some(2.0));
+        assert_eq!(
+            root.cables[&CableName::from("feed")]
+                .length
+                .map(Length::metres),
+            Some(2.0)
+        );
     }
 
     #[test]
