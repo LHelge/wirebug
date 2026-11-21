@@ -1,0 +1,4 @@
+[project]
+name = "paper-sizes-project"
+version = "0.1.0"
+description = "A view too wide to read on A4 but legible on A3, for --paper tests"

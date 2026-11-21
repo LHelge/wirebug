@@ -9,7 +9,7 @@ use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::pdf::PdfExporter;
+use super::pdf::{Paper, PdfExporter, SmallText};
 use super::png::PngRasterizer;
 use super::{
     EMBED_MANIFEST_FILENAME, EMBED_STYLESHEET_FILENAME, INDEX_FILENAME, RenderedView, SvgMode,
@@ -37,8 +37,8 @@ pub enum Output {
     /// [`EMBED_STYLESHEET_FILENAME`] and each build table's JSON in place
     /// of the index.
     Views { format: ViewFormat, embed: bool },
-    /// One A4 PDF with a page per view, named by [`pdf_filename`].
-    Pdf,
+    /// One PDF with a page of `paper` per view, named by [`pdf_filename`].
+    Pdf { paper: Paper },
 }
 
 impl Output {
@@ -47,7 +47,7 @@ impl Output {
     /// fixed size), naked for embedding, self-contained otherwise.
     fn svg_mode(self) -> SvgMode {
         match self {
-            Self::Pdf => SvgMode::Plain,
+            Self::Pdf { .. } => SvgMode::Plain,
             Self::Views { embed: true, .. } => SvgMode::Embed,
             Self::Views { embed: false, .. } => SvgMode::Standalone,
         }
@@ -57,7 +57,8 @@ impl Output {
     /// creating it. A view that fails to render (or to rasterise or
     /// convert) is left out and named in [`Written::failures`]; the others
     /// are still written. Only a disk error, or the index or manifest
-    /// failing to build, stops the write.
+    /// failing to build, stops the write. A PDF page whose text prints too
+    /// small is written and named in [`Written::small_text`].
     pub fn write(self, design: &Design, out_dir: &Path) -> Result<Written> {
         let views = render_views(design, self.svg_mode());
         let total = views.len();
@@ -67,18 +68,18 @@ impl Output {
         })?;
         let manifest = design.manifest.as_ref();
 
-        let (label, entry, failures) = match self {
+        let (label, entry, failures, small_text) = match self {
             // One artifact for the whole design, not per-view files plus a
             // sidecar. Its pages are the views that rendered; the export
             // decides whether that leaves a document to write.
-            Self::Pdf => {
-                let export = PdfExporter::new().to_pdf(views, manifest);
+            Self::Pdf { paper } => {
+                let export = PdfExporter::new().to_pdf(views, manifest, paper);
                 let filename = pdf_filename(manifest);
                 let entry = match export.document() {
                     Some(bytes) => Entry::Written(write_file(out_dir, &filename, bytes)?),
                     None => Entry::NoPdf(filename),
                 };
-                ("pdf", entry, export.failures)
+                ("pdf", entry, export.failures, export.small_text)
             }
             Self::Views { format, embed } => {
                 let views = format.write_views(views, out_dir)?;
@@ -110,11 +111,12 @@ impl Output {
                     .into_iter()
                     .filter_map(std::result::Result::err)
                     .collect();
-                (format.label(), Entry::Written(entry), failures)
+                (format.label(), Entry::Written(entry), failures, Vec::new())
             }
         };
         Ok(Written {
             failures,
+            small_text,
             total,
             label,
             out_dir: out_dir.to_path_buf(),
@@ -190,6 +192,10 @@ fn write_file(out_dir: &Path, filename: &str, contents: &[u8]) -> Result<PathBuf
 pub struct Written {
     /// Each view that was left out, in view order.
     pub failures: Vec<ViewError>,
+    /// Each PDF page whose view's text prints too small on its paper, in
+    /// view order — written all the same; always empty for the other
+    /// outputs, which have no paper.
+    pub small_text: Vec<SmallText>,
     /// How many views the design has.
     total: usize,
     /// The output's format, as the summary names it.
@@ -256,6 +262,8 @@ mod tests {
         format: ViewFormat::Svg,
         embed: false,
     };
+
+    const PDF: Output = Output::Pdf { paper: Paper::A4 };
 
     fn failed(written: &Written) -> Vec<String> {
         written.failures.iter().map(ToString::to_string).collect()
@@ -409,7 +417,7 @@ mod tests {
 
     #[test]
     fn pdf_output_pages_only_the_views_that_render() {
-        let (tmp, written, entries) = write(Output::Pdf, &["Overview", "Lost", "Detail"]);
+        let (tmp, written, entries) = write(PDF, &["Overview", "Lost", "Detail"]);
         assert_eq!(entries, ["views.pdf"]);
         assert_eq!(failed(&written), [LOST]);
         let out = tmp.path().join("out");
@@ -427,8 +435,32 @@ mod tests {
     }
 
     #[test]
+    fn pdf_output_writes_a_page_whose_text_prints_too_small_and_names_it() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut design = design_with_views(&["Overview", "Wide", "Lost"]);
+        // 110 grid steps east: some 1800 units across, too wide for A4.
+        design.views[1].includes[1].x = 110.0;
+
+        let a4 = PDF.write(&design, &tmp.path().join("a4")).expect("writes");
+        let titles: Vec<&str> = a4.small_text.iter().map(|s| s.title.as_str()).collect();
+        assert_eq!(titles, ["Wide"], "the failed view gets no warning");
+        assert_eq!(failed(&a4), [LOST]);
+        assert!(a4.to_string().starts_with("rendered 2 of 3 view(s) as pdf"));
+        let pdf = fs::read(tmp.path().join("a4/views.pdf")).expect("pdf");
+        assert!(pdf.windows(8).any(|w| w == b"/Count 2"), "the page is kept");
+
+        let a3 = Output::Pdf { paper: Paper::A3 };
+        let a3 = a3.write(&design, &tmp.path().join("a3")).expect("writes");
+        assert!(a3.small_text.is_empty(), "{:?}", a3.small_text);
+
+        // Views on screen have no paper to be small on.
+        let svg = SVG.write(&design, &tmp.path().join("svg")).expect("writes");
+        assert!(svg.small_text.is_empty());
+    }
+
+    #[test]
     fn pdf_output_writes_no_pdf_when_every_view_fails() {
-        let (_tmp, written, entries) = write(Output::Pdf, &["Lost"]);
+        let (_tmp, written, entries) = write(PDF, &["Lost"]);
         assert!(entries.is_empty(), "nothing is written: {entries:?}");
         assert_eq!(failed(&written), [LOST]);
         assert_eq!(

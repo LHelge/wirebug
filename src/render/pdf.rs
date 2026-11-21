@@ -1,14 +1,19 @@
-//! SVG → single-file A4 PDF export for `render --pdf`.
+//! SVG → single-file PDF export for `render --pdf`.
 //!
-//! Each rendered view becomes one A4 page: the SVG is parsed with
-//! [`svg2pdf`]'s own `usvg` (a separate crate version from the resvg pair
-//! the PNG path uses — the two never interoperate), converted to a
-//! unit-sized Form XObject via [`svg2pdf::to_chunk`], and placed on a page
-//! whose orientation follows the view's aspect ratio. The multi-page
-//! document is assembled by hand with [`pdf_writer`]. Fixed-size page
-//! furniture replaces the in-SVG title and stamp a standalone render
-//! carries: a title header, plus a footer with the identity stamp and a
-//! `<page> / <total>` number.
+//! Each rendered view becomes one page of the chosen [`Paper`] (A4 unless
+//! `--paper` says otherwise): the SVG is parsed with [`svg2pdf`]'s own
+//! `usvg` (a separate crate version from the resvg pair the PNG path uses —
+//! the two never interoperate), converted to a unit-sized Form XObject via
+//! [`svg2pdf::to_chunk`], and placed on a page whose orientation follows the
+//! view's aspect ratio. The multi-page document is assembled by hand with
+//! [`pdf_writer`]. Fixed-size page furniture replaces the in-SVG title and
+//! stamp a standalone render carries: a title header, plus a footer with
+//! the identity stamp and a `<page> / <total>` number.
+//!
+//! A view is scaled to fit its page, so a wide one shrinks its text with
+//! it: a page whose view's smallest text comes out below
+//! [`MIN_LEGIBLE_PT`] is reported as a [`SmallText`], naming the smallest
+//! paper that would print it legibly.
 //!
 //! Text is outlined to paths at conversion time (`embed_text: false`), so
 //! labels survive any PDF viewer without font embedding — but only if the
@@ -16,6 +21,7 @@
 //! [`super::png::PngRasterizer`]; an empty fontdb drops text silently.
 
 use std::collections::HashMap;
+use std::fmt;
 
 use pdf_writer::{Chunk, Content, Finish, Name, Pdf, Rect, Ref, Str, TextStr};
 
@@ -24,14 +30,120 @@ use super::{RenderedView, ViewOutcome};
 use crate::dsl::manifest::Manifest;
 use crate::error::{ViewError, ViewErrorKind, ViewResult};
 
-/// A4 short edge (210 mm) in PDF points.
-const A4_SHORT_PT: f32 = 595.276;
-/// A4 long edge (297 mm) in PDF points.
-const A4_LONG_PT: f32 = 841.89;
 /// Page margin (15 mm) in PDF points.
 const MARGIN_PT: f32 = 42.52;
 /// Cap on blowing up small views, so a lone tiny box doesn't fill a page.
 const MAX_UPSCALE: f32 = 2.0;
+
+/// The smallest a view's text may print, in points, before its page is
+/// reported: 5 pt is a common floor for lettering on printed technical
+/// drawings — below it pin numbers and wire codes stop being readable on
+/// paper. One number, so the threshold is easy to move.
+pub const MIN_LEGIBLE_PT: f32 = 5.0;
+
+/// The paper sheet each view of a `render --pdf` is laid on.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum Paper {
+    /// ISO A4, 210 × 297 mm.
+    #[default]
+    A4,
+    /// ISO A3, 297 × 420 mm.
+    A3,
+    /// US Letter, 8.5 × 11 in.
+    Letter,
+    /// US Tabloid (ledger), 11 × 17 in.
+    Tabloid,
+}
+
+impl Paper {
+    /// Every paper, smallest sheet (by area) first: the order in which a
+    /// [`SmallText`] looks for one that prints its view legibly.
+    const BY_AREA: [Self; 4] = [Self::Letter, Self::A4, Self::Tabloid, Self::A3];
+
+    /// The sheet's short and long edge, in PDF points (1/72 in).
+    #[must_use]
+    pub fn size(self) -> (f32, f32) {
+        match self {
+            Self::A4 => (595.276, 841.89),
+            Self::A3 => (841.89, 1190.551),
+            Self::Letter => (612.0, 792.0),
+            Self::Tabloid => (792.0, 1224.0),
+        }
+    }
+
+    /// The paper's name as `--paper` takes it.
+    fn flag(self) -> &'static str {
+        match self {
+            Self::A4 => "a4",
+            Self::A3 => "a3",
+            Self::Letter => "letter",
+            Self::Tabloid => "tabloid",
+        }
+    }
+}
+
+impl fmt::Display for Paper {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::A4 => "A4",
+            Self::A3 => "A3",
+            Self::Letter => "Letter",
+            Self::Tabloid => "Tabloid",
+        })
+    }
+}
+
+/// A view whose smallest text prints below [`MIN_LEGIBLE_PT`] on the paper
+/// its page was laid on — a warning: the page is in the document all the
+/// same. It prints `view "<title>": smallest text <n> pt on <paper>, …`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SmallText {
+    /// The view's title.
+    pub title: String,
+    /// The paper its page was laid on.
+    pub paper: Paper,
+    /// Its smallest text's size on that paper, in points.
+    pub points: f32,
+    /// The smallest paper (by area) of the four on which that text would
+    /// reach [`MIN_LEGIBLE_PT`], or `None` when even the largest leaves it
+    /// too small.
+    pub legible_on: Option<Paper>,
+}
+
+impl SmallText {
+    /// Judge a view titled `title`, `size` user units large, whose smallest
+    /// text is `smallest` units, laid on `paper`: `None` when that text is
+    /// legible there.
+    fn check(title: &str, smallest: f32, size: svg2pdf::usvg::Size, paper: Paper) -> Option<Self> {
+        let points = |paper| smallest * PageLayout::fit(size, paper).scale;
+        let on_paper = points(paper);
+        (on_paper < MIN_LEGIBLE_PT).then(|| Self {
+            title: title.to_string(),
+            paper,
+            points: on_paper,
+            legible_on: Paper::BY_AREA
+                .into_iter()
+                .find(|&paper| points(paper) >= MIN_LEGIBLE_PT),
+        })
+    }
+}
+
+impl fmt::Display for SmallText {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Rounded down, so a size just under the minimum never reads as it.
+        let points = (self.points * 10.0).floor() / 10.0;
+        write!(
+            f,
+            "view \"{}\": smallest text {points:.1} pt on {}, below the {MIN_LEGIBLE_PT} pt \
+             legibility minimum; ",
+            self.title, self.paper
+        )?;
+        match self.legible_on {
+            Some(paper) => write!(f, "legible on {paper} (--paper {})", paper.flag()),
+            None => f.write_str("too small on every paper size"),
+        }
+    }
+}
 
 /// Footer text size in points. The footer uses the built-in Courier so
 /// its fixed metrics (0.6 em per glyph) make alignment exact without
@@ -51,8 +163,8 @@ const HEADER_SIZE: f32 = 12.0;
 /// the margin, so no glyph metrics are needed (Helvetica-Bold, built-in).
 const HEADER_GAP: f32 = 8.0;
 
-/// Exports rendered views into one multi-page A4 PDF, holding a font
-/// database loaded once up front.
+/// Exports rendered views into one multi-page PDF, holding a font database
+/// loaded once up front.
 ///
 /// The fontdb setup mirrors [`super::png::PngRasterizer::new`]; it cannot
 /// be shared because svg2pdf's `usvg` is a different crate version than
@@ -95,7 +207,7 @@ impl PdfExporter {
     }
 
     /// Export `views` (as [`super::render_views`] returns them) into one
-    /// PDF, one A4 page per rendered view in order.
+    /// PDF, one `paper` page per rendered view in order.
     ///
     /// `manifest` supplies the document title (`<name> v<version>`) and
     /// the footer's project-identity stamp; pass `None` for synthetic
@@ -106,8 +218,15 @@ impl PdfExporter {
     ///
     /// A view that failed to render, or fails to convert, is left out — the
     /// pages that remain number `1 / n` among themselves — and named in
-    /// [`PdfExport::failures`], in view order.
-    pub fn to_pdf(&self, views: Vec<ViewOutcome>, manifest: Option<&Manifest>) -> PdfExport {
+    /// [`PdfExport::failures`], in view order. A page whose view's text
+    /// prints too small to read is kept, and named in
+    /// [`PdfExport::small_text`].
+    pub fn to_pdf(
+        &self,
+        views: Vec<ViewOutcome>,
+        manifest: Option<&Manifest>,
+        paper: Paper,
+    ) -> PdfExport {
         let mut alloc = Ref::new(1);
         let catalog_id = alloc.bump();
         let page_tree_id = alloc.bump();
@@ -129,10 +248,14 @@ impl PdfExporter {
         // Convert every view before laying out any page, so the footer's
         // page total counts only the views that made it.
         let mut failures = Vec::new();
+        let mut small_text = Vec::new();
         let mut pages = Vec::new();
         for view in views {
-            match view.and_then(|view| self.convert(view, &mut alloc)) {
-                Ok(page) => pages.push(page),
+            match view.and_then(|view| self.convert(view, paper, &mut alloc)) {
+                Ok((page, small)) => {
+                    pages.push(page);
+                    small_text.extend(small);
+                }
                 Err(failure) => failures.push(failure),
             }
         }
@@ -185,26 +308,43 @@ impl PdfExporter {
             bytes: pdf.finish(),
             pages: pages.len(),
             failures,
+            small_text,
         }
     }
 
     /// Convert one view's SVG into a Form XObject chunk numbered from
-    /// `alloc`, with the page geometry that fits it; a failure names the
-    /// view.
-    fn convert(&self, view: RenderedView, alloc: &mut Ref) -> Result<Page, ViewError> {
+    /// `alloc`, with the `paper` page geometry that fits it, and judge
+    /// whether its text is legible there; a failure names the view.
+    fn convert(
+        &self,
+        view: RenderedView,
+        paper: Paper,
+        alloc: &mut Ref,
+    ) -> Result<(Page, Option<SmallText>), ViewError> {
         match self.convert_svg(&view.svg, alloc) {
-            Ok((layout, chunk, svg_id)) => Ok(Page {
-                title: view.title,
-                layout,
-                chunk,
-                svg_id,
-            }),
+            Ok((size, chunk, svg_id)) => {
+                let small = view.smallest_text().and_then(|smallest| {
+                    SmallText::check(&view.title, smallest as f32, size, paper)
+                });
+                let page = Page {
+                    title: view.title,
+                    layout: PageLayout::fit(size, paper),
+                    chunk,
+                    svg_id,
+                };
+                Ok((page, small))
+            }
             Err(cause) => Err(view.failed(cause)),
         }
     }
 
-    /// The conversion half of [`Self::convert`], before the view is named.
-    fn convert_svg(&self, svg: &str, alloc: &mut Ref) -> ViewResult<(PageLayout, Chunk, Ref)> {
+    /// The conversion half of [`Self::convert`], before the view is named:
+    /// the view's size in user units, its chunk and the chunk's root.
+    fn convert_svg(
+        &self,
+        svg: &str,
+        alloc: &mut Ref,
+    ) -> ViewResult<(svg2pdf::usvg::Size, Chunk, Ref)> {
         let tree = svg2pdf::usvg::Tree::from_str(svg, &self.options)
             .map_err(|e| ViewErrorKind::SvgParse(e.to_string()))?;
         let conversion = svg2pdf::ConversionOptions {
@@ -218,14 +358,15 @@ impl PdfExporter {
         let svg_id = map.get(&svg_ref).copied().ok_or_else(|| {
             ViewErrorKind::PdfConvert("svg root object missing after renumber".into())
         })?;
-        Ok((PageLayout::fit(tree.size()), chunk, svg_id))
+        Ok((tree.size(), chunk, svg_id))
     }
 }
 
 /// What [`PdfExporter::to_pdf`] produced: the document, how many pages it
-/// holds, and the views left out because they failed to render or
-/// convert. The bytes are reached only through [`Self::document`], which
-/// decides whether there is a document worth writing.
+/// holds, the views left out because they failed to render or convert, and
+/// the pages whose text prints too small. The bytes are reached only
+/// through [`Self::document`], which decides whether there is a document
+/// worth writing.
 #[derive(Debug)]
 #[must_use]
 pub struct PdfExport {
@@ -234,6 +375,9 @@ pub struct PdfExport {
     pub pages: usize,
     /// The views left out, each naming why.
     pub failures: Vec<ViewError>,
+    /// The pages kept whose view's smallest text prints below
+    /// [`MIN_LEGIBLE_PT`], in view order.
+    pub small_text: Vec<SmallText>,
 }
 
 impl PdfExport {
@@ -328,24 +472,31 @@ fn win_ansi(text: &str) -> Vec<u8> {
         .collect()
 }
 
-/// A4 page geometry for one view: the page size (orientation chosen by the
+/// Page geometry for one view: the page size (orientation chosen by the
 /// view's aspect ratio) plus the content-stream matrix that scales and
 /// centers svg2pdf's unit-sized XObject inside the margins.
 struct PageLayout {
     width: f32,
     height: f32,
+    /// Points per view user unit: the view is scaled down to fit inside
+    /// the margins, or up to fill them, but at most [`MAX_UPSCALE`].
+    scale: f32,
     /// `[dw, 0, 0, dh, tx, ty]` — the XObject is a unit square with image
     /// orientation (already y-flipped), so one `cm` both sizes and places it.
     matrix: [f32; 6],
 }
 
 impl PageLayout {
-    fn fit(view: svg2pdf::usvg::Size) -> Self {
+    /// Lay a view `view` user units large on `paper`: landscape for a view
+    /// wider than tall, portrait otherwise — with equal margins all round
+    /// that is also the orientation that gives the view the larger scale.
+    fn fit(view: svg2pdf::usvg::Size, paper: Paper) -> Self {
+        let (short, long) = paper.size();
         let (vw, vh) = (view.width(), view.height());
         let (width, height) = if vw > vh {
-            (A4_LONG_PT, A4_SHORT_PT)
+            (long, short)
         } else {
-            (A4_SHORT_PT, A4_LONG_PT)
+            (short, long)
         };
         let scale = ((width - 2.0 * MARGIN_PT) / vw)
             .min((height - 2.0 * MARGIN_PT) / vh)
@@ -354,6 +505,7 @@ impl PageLayout {
         Self {
             width,
             height,
+            scale,
             matrix: [dw, 0.0, 0.0, dh, (width - dw) / 2.0, (height - dh) / 2.0],
         }
     }
@@ -363,6 +515,7 @@ impl PageLayout {
 mod tests {
     use super::*;
     use crate::dsl::ir::ViewKind;
+    use clap::ValueEnum;
 
     fn size(w: f32, h: f32) -> svg2pdf::usvg::Size {
         svg2pdf::usvg::Size::from_wh(w, h).expect("positive size")
@@ -386,27 +539,71 @@ mod tests {
         haystack.windows(needle.len()).any(|w| w == needle)
     }
 
+    const A4_SHORT_PT: f32 = 595.276;
+    const A4_LONG_PT: f32 = 841.89;
+
     #[test]
-    fn page_layout_picks_orientation_from_aspect_ratio() {
-        let wide = PageLayout::fit(size(200.0, 100.0));
-        assert_eq!((wide.width, wide.height), (A4_LONG_PT, A4_SHORT_PT));
+    fn paper_sizes_are_the_standard_sheets_in_points() {
+        let mm = |mm: f32| mm * 72.0 / 25.4;
+        let close = |(short, long): (f32, f32), (w, h): (f32, f32)| {
+            (short - w).abs() < 0.01 && (long - h).abs() < 0.01
+        };
+        assert!(close(Paper::A4.size(), (mm(210.0), mm(297.0))));
+        assert!(close(Paper::A3.size(), (mm(297.0), mm(420.0))));
+        assert_eq!(Paper::Letter.size(), (8.5 * 72.0, 11.0 * 72.0));
+        assert_eq!(Paper::Tabloid.size(), (11.0 * 72.0, 17.0 * 72.0));
+        // The A4 sheet is exactly what every PDF before `--paper` used, so
+        // a default render writes the same bytes as before.
+        assert_eq!(Paper::default().size(), (A4_SHORT_PT, A4_LONG_PT));
+    }
 
-        let tall = PageLayout::fit(size(100.0, 200.0));
-        assert_eq!((tall.width, tall.height), (A4_SHORT_PT, A4_LONG_PT));
+    #[test]
+    fn paper_flags_are_the_names_the_cli_parses() {
+        for paper in Paper::value_variants() {
+            assert_eq!(Paper::from_str(paper.flag(), false), Ok(*paper));
+        }
+    }
 
-        // A square view stays portrait, the conventional default.
-        let square = PageLayout::fit(size(100.0, 100.0));
-        assert_eq!((square.width, square.height), (A4_SHORT_PT, A4_LONG_PT));
+    #[test]
+    fn papers_by_area_run_smallest_first() {
+        let area = |paper: Paper| paper.size().0 * paper.size().1;
+        assert!(Paper::BY_AREA.windows(2).all(|w| area(w[0]) < area(w[1])));
+        assert_eq!(Paper::BY_AREA.len(), Paper::value_variants().len());
+    }
+
+    #[test]
+    fn page_layout_picks_orientation_from_aspect_ratio_on_every_paper() {
+        for &paper in Paper::value_variants() {
+            let (short, long) = paper.size();
+            let wide = PageLayout::fit(size(200.0, 100.0), paper);
+            assert_eq!((wide.width, wide.height), (long, short), "{paper}");
+
+            let tall = PageLayout::fit(size(100.0, 200.0), paper);
+            assert_eq!((tall.width, tall.height), (short, long), "{paper}");
+
+            // A square view stays portrait, the conventional default.
+            let square = PageLayout::fit(size(100.0, 100.0), paper);
+            assert_eq!((square.width, square.height), (short, long), "{paper}");
+        }
     }
 
     #[test]
     fn page_layout_caps_upscaling_at_two_x() {
         // Raw fit would be ~7.5×; the cap keeps it at 2×, centered.
-        let layout = PageLayout::fit(size(100.0, 50.0));
+        let layout = PageLayout::fit(size(100.0, 50.0), Paper::A4);
+        assert_eq!(layout.scale, 2.0);
         assert_eq!(layout.matrix[0], 200.0);
         assert_eq!(layout.matrix[3], 100.0);
         assert_eq!(layout.matrix[4], (A4_LONG_PT - 200.0) / 2.0);
         assert_eq!(layout.matrix[5], (A4_SHORT_PT - 100.0) / 2.0);
+    }
+
+    #[test]
+    fn a_small_view_is_not_blown_up_further_on_larger_paper() {
+        let a4 = PageLayout::fit(size(100.0, 50.0), Paper::A4);
+        let a3 = PageLayout::fit(size(100.0, 50.0), Paper::A3);
+        assert_eq!(a3.scale, a4.scale);
+        assert_eq!((a3.matrix[0], a3.matrix[3]), (200.0, 100.0));
     }
 
     fn assert_close(actual: f32, expected: f32) {
@@ -418,12 +615,117 @@ mod tests {
 
     #[test]
     fn page_layout_centers_a_large_view_inside_the_margins() {
-        let layout = PageLayout::fit(size(2000.0, 1000.0));
+        let layout = PageLayout::fit(size(2000.0, 1000.0), Paper::A4);
         let scale = (A4_LONG_PT - 2.0 * MARGIN_PT) / 2000.0;
+        assert_close(layout.scale, scale);
         assert_close(layout.matrix[0], A4_LONG_PT - 2.0 * MARGIN_PT);
         assert_close(layout.matrix[3], scale * 1000.0);
         assert_close(layout.matrix[4], MARGIN_PT);
         assert_close(layout.matrix[5], (A4_SHORT_PT - scale * 1000.0) / 2.0);
+    }
+
+    #[test]
+    fn page_layout_fits_a_tall_view_by_its_height() {
+        let layout = PageLayout::fit(size(500.0, 3000.0), Paper::A3);
+        assert_close(layout.scale, (1190.551 - 2.0 * MARGIN_PT) / 3000.0);
+    }
+
+    #[test]
+    fn small_text_is_the_smallest_font_times_the_page_scale() {
+        // 2000 units wide on A4 landscape: 756.85 pt of content width, so
+        // 9-unit text prints at 9 × 756.85 / 2000 ≈ 3.41 pt.
+        let small =
+            SmallText::check("Wide", 9.0, size(2000.0, 600.0), Paper::A4).expect("too small on A4");
+        assert_eq!(small.title, "Wide");
+        assert_eq!(small.paper, Paper::A4);
+        assert_close(small.points, 9.0 * (A4_LONG_PT - 2.0 * MARGIN_PT) / 2000.0);
+    }
+
+    #[test]
+    fn text_at_or_above_the_minimum_is_legible() {
+        // 1000 units on A4 landscape: 9-unit text prints at ≈ 6.8 pt.
+        assert_eq!(
+            SmallText::check("Fits", 9.0, size(1000.0, 500.0), Paper::A4),
+            None
+        );
+        // A view whose text prints at exactly the minimum passes: 5 pt
+        // text on a view scaled 1:1 (scale capped at 2 here, so 2.5 units).
+        assert_eq!(
+            SmallText::check("Edge", 2.5, size(100.0, 50.0), Paper::A4),
+            None
+        );
+    }
+
+    #[test]
+    fn small_text_names_the_smallest_paper_that_prints_it_legibly() {
+        // 1800 units wide: ≈ 3.8 pt on A4 and 3.5 on Letter, but 5.7 on
+        // Tabloid and 5.5 on A3 — Tabloid is the smaller sheet.
+        let small =
+            SmallText::check("Wide", 9.0, size(1800.0, 400.0), Paper::A4).expect("too small on A4");
+        assert_eq!(small.legible_on, Some(Paper::Tabloid));
+
+        // ≈ 4.9 pt on A4, but Letter's taller short edge fits a nearly
+        // square view larger: Letter, smaller than A4, is enough.
+        let squarish = SmallText::check("Square", 9.0, size(1000.0, 940.0), Paper::A4)
+            .expect("too small on A4");
+        assert_eq!(squarish.legible_on, Some(Paper::Letter));
+
+        let huge =
+            SmallText::check("Huge", 9.0, size(6000.0, 400.0), Paper::A4).expect("too small on A4");
+        assert_eq!(huge.legible_on, None);
+    }
+
+    #[test]
+    fn small_text_warning_names_the_view_the_size_and_a_remedy() {
+        let small = SmallText {
+            title: "HV System Overview".to_string(),
+            paper: Paper::A4,
+            points: 3.06,
+            legible_on: Some(Paper::A3),
+        };
+        assert_eq!(
+            small.to_string(),
+            "view \"HV System Overview\": smallest text 3.0 pt on A4, below the 5 pt \
+             legibility minimum; legible on A3 (--paper a3)"
+        );
+        let hopeless = SmallText {
+            legible_on: None,
+            points: 4.99,
+            ..small
+        };
+        assert_eq!(
+            hopeless.to_string(),
+            "view \"HV System Overview\": smallest text 4.9 pt on A4, below the 5 pt \
+             legibility minimum; too small on every paper size"
+        );
+    }
+
+    #[test]
+    fn to_pdf_lays_every_page_on_the_chosen_paper() {
+        let views = [
+            view(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"></svg>"#),
+            view(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 200"></svg>"#),
+        ];
+        let pdf = PdfExporter::new()
+            .to_pdf(rendered(views), None, Paper::A3)
+            .bytes;
+        assert!(contains(&pdf, b"/MediaBox [0 0 1190.551 841.89]"));
+        assert!(contains(&pdf, b"/MediaBox [0 0 841.89 1190.551]"));
+    }
+
+    #[test]
+    fn to_pdf_warns_of_small_text_on_a_kept_page_only() {
+        let wide = view(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 3000 400"></svg>"#);
+        let mut narrow =
+            view(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300"></svg>"#);
+        narrow.title = "Narrow".to_string();
+        let mut broken = view("this is not svg");
+        broken.title = "Broken".to_string();
+        let export = PdfExporter::new().to_pdf(rendered([wide, narrow, broken]), None, Paper::A4);
+
+        assert_eq!(export.pages, 2, "a small-text page is kept");
+        let titles: Vec<&str> = export.small_text.iter().map(|s| s.title.as_str()).collect();
+        assert_eq!(titles, ["Test"], "only the wide view, not the failed one");
     }
 
     #[test]
@@ -436,7 +738,9 @@ mod tests {
                 r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 200"><rect x="10" y="10" width="80" height="180" fill="blue"/></svg>"#,
             ),
         ];
-        let pdf = PdfExporter::new().to_pdf(rendered(views), None).bytes;
+        let pdf = PdfExporter::new()
+            .to_pdf(rendered(views), None, Paper::A4)
+            .bytes;
         assert!(pdf.starts_with(b"%PDF-"), "missing PDF magic header");
         assert!(contains(&pdf, b"/Count 2"), "expected a two-page tree");
     }
@@ -448,8 +752,8 @@ mod tests {
             r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"><text x="20" y="50" font-family="sans-serif" font-size="16">Battery Pack</text></svg>"#,
         );
         let exporter = PdfExporter::new();
-        let blank_pdf = exporter.to_pdf(rendered([blank]), None).bytes;
-        let labelled_pdf = exporter.to_pdf(rendered([labelled]), None).bytes;
+        let blank_pdf = exporter.to_pdf(rendered([blank]), None, Paper::A4).bytes;
+        let labelled_pdf = exporter.to_pdf(rendered([labelled]), None, Paper::A4).bytes;
         // Outlined glyph paths add real bytes; if text were silently
         // dropped the two documents would be nearly identical.
         assert!(
@@ -465,7 +769,9 @@ mod tests {
         let views = [view(
             r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"></svg>"#,
         )];
-        let pdf = PdfExporter::new().to_pdf(rendered(views), None).bytes;
+        let pdf = PdfExporter::new()
+            .to_pdf(rendered(views), None, Paper::A4)
+            .bytes;
         // The `view` helper titles its view "Test"; the header shows it
         // literally in the uncompressed page content stream.
         assert!(contains(&pdf, b"(Test)"), "view title header missing");
@@ -477,7 +783,9 @@ mod tests {
             view(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"></svg>"#),
             view(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 200"></svg>"#),
         ];
-        let pdf = PdfExporter::new().to_pdf(rendered(views), None).bytes;
+        let pdf = PdfExporter::new()
+            .to_pdf(rendered(views), None, Paper::A4)
+            .bytes;
         // Page content streams are uncompressed, so the footer's shown
         // strings appear literally.
         assert!(contains(&pdf, b"(1 / 2)"), "page 1 number missing");
@@ -500,7 +808,7 @@ mod tests {
             view(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 200"></svg>"#),
         ];
         let pdf = PdfExporter::new()
-            .to_pdf(rendered(views), Some(&manifest))
+            .to_pdf(rendered(views), Some(&manifest), Paper::A4)
             .bytes;
         // The stamp text sits in each page's content stream; pdf-writer
         // hex-encodes strings with non-ASCII bytes (the `·` is WinAnsi
@@ -527,7 +835,7 @@ mod tests {
         let good = view(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"></svg>"#);
         let mut bad = view("this is not svg");
         bad.title = "Broken".to_string();
-        let export = PdfExporter::new().to_pdf(rendered([bad, good]), None);
+        let export = PdfExporter::new().to_pdf(rendered([bad, good]), None, Paper::A4);
 
         assert_eq!(export.pages, 1);
         assert!(contains(&export.bytes, b"/Count 1"), "one page left");

@@ -139,6 +139,126 @@ fn render_rejects_pdf_combined_with_png_or_embed() {
     }
 }
 
+const PAPER_SIZES_ROOT: &str = "tests/fixtures/paper_sizes_project";
+
+/// Render `root` with `--pdf` plus `extra` into `out`, returning the
+/// command's assertion for its exit status and stderr.
+fn render_pdf(root: &str, out: &std::path::Path, extra: &[&str]) -> assert_cmd::assert::Assert {
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["render", root, "--out", out.to_str().unwrap(), "--pdf"])
+        .args(extra)
+        .assert()
+}
+
+/// Every page's `/MediaBox`, in the order the pages are written.
+fn media_boxes(pdf: &[u8]) -> Vec<String> {
+    let text = String::from_utf8_lossy(pdf);
+    text.match_indices("/MediaBox [")
+        .map(|(at, prefix)| {
+            let rest = &text[at + prefix.len()..];
+            rest[..rest.find(']').expect("closed box")].to_string()
+        })
+        .collect()
+}
+
+#[test]
+fn render_pdf_lays_pages_on_a4_unless_told_otherwise() {
+    let tmp = tempdir().expect("tempdir");
+    render_pdf(FIXTURE_ROOT, &tmp.path().join("default"), &[]).success();
+    render_pdf(FIXTURE_ROOT, &tmp.path().join("a4"), &["--paper", "a4"]).success();
+
+    let default = std::fs::read(tmp.path().join("default/basic_project.pdf")).expect("pdf");
+    let a4 = std::fs::read(tmp.path().join("a4/basic_project.pdf")).expect("pdf");
+    assert!(default == a4, "`--paper a4` is the default");
+    // A4 landscape or portrait, 210 × 297 mm in points.
+    let boxes = media_boxes(&default);
+    assert_eq!(boxes.len(), 4);
+    for page in boxes {
+        assert!(
+            ["0 0 841.89 595.276", "0 0 595.276 841.89"].contains(&page.as_str()),
+            "not A4: {page}"
+        );
+    }
+}
+
+#[test]
+fn render_pdf_on_a3_lays_every_page_on_a3() {
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("a3");
+    render_pdf(PAPER_SIZES_ROOT, &out, &["--paper", "a3"]).success();
+
+    let pdf = std::fs::read(out.join("paper_sizes_project.pdf")).expect("pdf");
+    // Both views are wider than tall: A3 landscape, 420 × 297 mm.
+    assert_eq!(
+        media_boxes(&pdf),
+        ["0 0 1190.551 841.89", "0 0 1190.551 841.89"]
+    );
+}
+
+#[test]
+fn render_pdf_warns_of_a_view_too_wide_to_read_on_its_paper() {
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("a4");
+    // The warning neither fails the run nor keeps the page out.
+    render_pdf(PAPER_SIZES_ROOT, &out, &[]).success().stderr(
+        predicate::str::contains(
+            "warning: view \"Wide\": smallest text 3.6 pt on A4, below the 5 pt \
+                 legibility minimum; legible on Tabloid (--paper tabloid)",
+        )
+        .and(predicate::str::contains("Compact").not())
+        .and(predicate::str::contains("rendered 2 view(s) as pdf")),
+    );
+    let pdf = std::fs::read(out.join("paper_sizes_project.pdf")).expect("pdf");
+    assert_eq!(media_boxes(&pdf).len(), 2, "the wide view keeps its page");
+
+    render_pdf(PAPER_SIZES_ROOT, &tmp.path().join("a3"), &["--paper", "a3"])
+        .success()
+        .stderr(predicate::str::contains("warning").not());
+}
+
+#[test]
+fn render_pdf_small_text_warning_does_not_fail_a_strict_run() {
+    let tmp = tempdir().expect("tempdir");
+    render_pdf(PAPER_SIZES_ROOT, &tmp.path().join("pdf"), &["--strict"])
+        .success()
+        .stderr(predicate::str::contains("warning: view \"Wide\""));
+}
+
+#[test]
+fn render_rejects_paper_without_pdf() {
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args([
+            "render",
+            PAPER_SIZES_ROOT,
+            "--out",
+            "unused",
+            "--paper",
+            "a3",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "the following required arguments were not provided",
+        ))
+        .stderr(predicate::str::contains("--pdf"));
+}
+
+#[test]
+fn render_help_states_the_legibility_minimum_and_that_strict_ignores_it() {
+    let minimum = wirebug::render::pdf::MIN_LEGIBLE_PT;
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["render", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!("below {minimum} pt")))
+        .stdout(predicate::str::contains("- a4:").and(predicate::str::contains("- tabloid:")))
+        .stdout(predicate::str::contains("[default: a4]"))
+        .stdout(predicate::str::contains("even under `--strict`"));
+}
+
 #[test]
 fn render_embed_writes_manifest_and_no_index() {
     let tmp = tempdir().expect("tempdir");

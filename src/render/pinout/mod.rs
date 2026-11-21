@@ -25,6 +25,7 @@ use crate::render::geometry::{Bounds, Point};
 use crate::render::lint::{IncludeBox, ViewLayout};
 use crate::render::stamp::{STAMP_HEIGHT, STAMP_INSET, stamp_element};
 use crate::render::{Canvas, GridFault, SvgMode};
+pub(super) use fit::MIN_LABEL_SIZE;
 use fit::{FittedLabel, Font};
 use rows::{Entry, Row};
 

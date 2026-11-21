@@ -1,0 +1,35 @@
+// Two units drawn far apart: some 1800 units across, a schematic's 9-unit
+// wire codes print at under 4 pt on A4 landscape but at over 5 pt on A3.
+// The same pair drawn close together prints legibly on A4.
+use Unit from "components/unit.wb";
+
+component Rig {
+    left:  Unit "Left";
+    right: Unit "Right";
+
+    wire red 1 [left.sig, right.sig];
+}
+
+view schematic "Compact" {
+    grid: 20;
+
+    include left at (0, 0) ports {
+        east: sig;
+    }
+
+    include right at (12, 0) ports {
+        west: sig;
+    }
+}
+
+view schematic "Wide" {
+    grid: 20;
+
+    include left at (0, 0) ports {
+        east: sig;
+    }
+
+    include right at (80, 0) ports {
+        west: sig;
+    }
+}
