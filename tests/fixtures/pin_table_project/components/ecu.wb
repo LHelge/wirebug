@@ -1,0 +1,29 @@
+// A 12-cavity control connector whose ports are declared out of pin order,
+// one ganged, five cavities used by no port; and a connectorless port.
+
+connector_type Ecu12 "ECU 12p" {
+    part: "ECU-12";
+    layout grid {
+        rows: 2;
+        cols: 6;
+    }
+}
+
+component Ecu {
+    connector x1: Ecu12 {
+        pub port sig   "SIG"   pin 10;
+        pub port gnd   "GND"   pins [2, 3];
+        pub port pwr   "12V"   pin 1;
+        pub port can_h "CAN H" pin 4;
+        pub port can_l "CAN L" pin 5;
+        pub port shld  "SHLD"  pin 6;
+    }
+    pub port sense "SENSE";
+}
+
+component Sensor {
+    connector x1 "Sensor 2p" {
+        pub port sig "SIG" pin 1;
+        pub port ret "RET" pin 2;
+    }
+}

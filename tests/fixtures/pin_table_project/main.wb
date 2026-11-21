@@ -1,0 +1,82 @@
+// The pin tables: a double crimp, a ganged port, unused cavities, a drain
+// on a pin at each end, a splice three conductors meet at, a far end on a
+// connectorless port, a sub-loom placed twice whose connector takes a
+// conductor from each side, and an inline connector whose harness views
+// place one conductor in each half and draw another into both.
+
+use Ecu    from "components/ecu.wb";
+use Sensor from "components/ecu.wb";
+use Loom   from "components/loom.wb";
+
+connector_type Dt04_2p "Deutsch DT04-2P" {
+    part: "DT04-2P";
+    layout grid {
+        rows: 1;
+        cols: 2;
+    }
+}
+
+connector_type Dt06_2s "Deutsch DT06-2S" {
+    part: "DT06-2S";
+}
+
+component Vehicle {
+    ecu:   Ecu    "ECU";
+    bcm:   Ecu    "BCM";
+    pedal: Sensor "Pedal";
+    front: Loom   "Front loom";
+    rear:  Loom   "Rear loom";
+
+    inline ic "Pedal branch" {
+        male:   Dt04_2p;
+        female: Dt06_2s;
+        port sig "SIG" pin 1;
+        port ret "RET" pin 2;
+    }
+
+    splice sp_gnd "Ground splice";
+
+    wire red 1.5 "12V" [ecu.pwr, bcm.pwr];
+    wire red 0.5 "12V" [ecu.pwr, front.feed];
+    wire red 0.5 "12V" [bcm.pwr, rear.feed];
+
+    cable can "CAN" {
+        twisted {
+            wire yellow 0.5 "CAN H" [ecu.can_h, bcm.can_h];
+            wire green  0.5 "CAN L" [ecu.can_l, bcm.can_l];
+        }
+        shield "CAN SHLD" [ecu.shld, bcm.shld];
+    }
+
+    wire blue 0.35 "SENSE" [bcm.sig, ecu.sense];
+
+    wire black 1   "GND" [ecu.gnd, sp_gnd];
+    wire black 0.5 "GND" [bcm.gnd, sp_gnd];
+    wire black 0.5 "RET" [sp_gnd, ic.ret];
+
+    wire green 0.5 "SIG" [ecu.sig, ic.sig];
+    wire green 0.5 "SIG" [ic.sig, pedal.sig];
+    wire black 0.5 "RET" [ic.ret, pedal.ret];
+}
+
+view harness "Main loom" {
+    grid: 20;
+    include ecu.x1    at (0, 0);
+    include bcm.x1    at (0, 24);
+    include front.x9  at (40, 0);
+    include rear.x9   at (40, 24);
+    include sp_gnd    at (20, 40);
+    include ic.female at (40, 48);
+}
+
+view harness "Pedal stub" {
+    grid: 20;
+    include ic.male  at (0, 0);
+    include pedal.x1 at (20, 0);
+}
+
+view harness "Ground branch" {
+    grid: 20;
+    include sp_gnd  at (0, 0);
+    include ic.male at (20, 0);
+}
