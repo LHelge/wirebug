@@ -46,6 +46,23 @@ impl Cubic {
         )
     }
 
+    /// The SVG path data for consecutive curves, each starting where the
+    /// one before ends, as one path: `M` to the first's start, then a `C`
+    /// per curve. Empty for no curves.
+    pub(super) fn chain_d(curves: &[Cubic]) -> String {
+        let Some(first) = curves.first() else {
+            return String::new();
+        };
+        let mut d = format!("M{},{}", first.p0.x, first.p0.y);
+        for c in curves {
+            d.push_str(&format!(
+                " C{},{} {},{} {},{}",
+                c.c1.x, c.c1.y, c.c2.x, c.c2.y, c.p3.x, c.p3.y
+            ));
+        }
+        d
+    }
+
     /// The point on the curve at parameter `t` (0 = start, 1 = end). Used to
     /// anchor a loose wire's annotation at its midpoint.
     pub(super) fn point_at(&self, t: f64) -> Point {
@@ -88,6 +105,18 @@ mod tests {
         let c = flex(Point::new(20.0, 0.0), Point::new(20.0, 50.0), 0.4);
         assert_eq!(c.c1, Point::new(20.0, 0.0));
         assert_eq!(c.c2, Point::new(20.0, 50.0));
+    }
+
+    #[test]
+    fn a_chain_is_one_path_and_a_lone_curve_matches_its_own_path() {
+        let a = flex(Point::new(0.0, 0.0), Point::new(10.0, 20.0), 0.5);
+        let b = flex(Point::new(10.0, 20.0), Point::new(30.0, 20.0), 0.5);
+        assert_eq!(
+            Cubic::chain_d(&[a, b]),
+            "M0,0 C5,0 5,20 10,20 C20,20 20,20 30,20"
+        );
+        assert_eq!(Cubic::chain_d(&[a]), a.path_d());
+        assert_eq!(Cubic::chain_d(&[]), "");
     }
 
     #[test]

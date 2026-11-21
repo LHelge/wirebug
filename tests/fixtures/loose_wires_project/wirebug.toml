@@ -1,0 +1,5 @@
+[project]
+name = "loose-wires-project"
+version = "0.1.0"
+description = "Loose wire fixture: loose wires between connectors a harness view also runs cables between"
+revision = "fixture"
