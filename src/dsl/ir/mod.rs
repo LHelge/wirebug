@@ -382,6 +382,49 @@ pub struct Instance {
     /// shared by both housing halves; the halves' part metadata lives here.
     /// `None` for every ordinary instance.
     pub inline: Option<InlineMeta>,
+    /// The part data of the instance's type (its `part:`, `manufacturer:`,
+    /// … lines, merged across `extend` fragments): every placement of the
+    /// type carries the same. Empty for a synthetic inline instance, whose
+    /// halves' part data is in `inline`.
+    pub part: PartMeta,
+}
+
+/// What a component type is bought as, from the `key: value;` lines of its
+/// body. Every field is optional: a type without part data is still a
+/// component, only one a bill of materials cannot name.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PartMeta {
+    /// The manufacturer part number, from `part:`.
+    pub number: Option<String>,
+    pub manufacturer: Option<String>,
+    /// A human description of the part, e.g. `"Main contactor, 12 V coil"`.
+    pub description: Option<String>,
+    /// A free-text rating, e.g. `"500 A"`: text, since ratings mix units.
+    pub rating: Option<String>,
+}
+
+/// A type's part data from its authored property lines, in source order
+/// (the root fragment's first). Unknown keys, values of the wrong kind and
+/// repeats are reported in validate; here the first well-typed value of
+/// each key is kept and the rest dropped.
+impl<'a> FromIterator<&'a ast::Property> for PartMeta {
+    fn from_iter<I: IntoIterator<Item = &'a ast::Property>>(properties: I) -> Self {
+        let mut meta = PartMeta::default();
+        for p in properties {
+            let ast::PropertyValue::Str(value) = &p.value else {
+                continue;
+            };
+            let field = match p.key.node.as_str() {
+                "part" => &mut meta.number,
+                "manufacturer" => &mut meta.manufacturer,
+                "description" => &mut meta.description,
+                "rating" => &mut meta.rating,
+                _ => continue,
+            };
+            field.get_or_insert_with(|| value.node.clone());
+        }
+        meta
+    }
 }
 
 impl Instance {

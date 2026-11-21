@@ -1,0 +1,5 @@
+[project]
+name = "part-data-errors-project"
+version = "0.1.0"
+description = "Check fixture: part data with an unknown key, a wrongly typed value and a key an extend fragment sets again"
+revision = "fixture"

@@ -1,0 +1,40 @@
+// Part data on component types: every placement of a type carries its
+// type's part data, a type may have none, an instance may be named like a
+// property key, and an `extend` fragment may set a key the root left unset.
+
+use Contactor from "components/contactor.wb";
+use Fuse      from "components/fuse.wb";
+use Lamp      from "components/lamp.wb";
+use Vehicle   from "loom.wb";
+
+component Vehicle {
+    description: "Demo vehicle";
+
+    pos:  Contactor "Main +";
+    neg:  Contactor "Main -";
+    part: Fuse      "F1";      // an instance named `part`, not part data
+    lamp: Lamp      "Lamp";
+
+    wire red 2.5 [pos.out, part.supply];
+    wire red 1   [part.load, lamp.a];
+    wire black 1 [lamp.b, neg.in];
+}
+
+view schematic "Main" {
+    grid: 20;
+
+    include pos at (6, 4) ports {
+        east: out;
+    }
+    include part at (18, 4) ports {
+        west: supply;
+        east: load;
+    }
+    include lamp at (30, 4) ports {
+        west: a;
+        south: b;
+    }
+    include neg at (30, 14) ports {
+        north: in;
+    }
+}

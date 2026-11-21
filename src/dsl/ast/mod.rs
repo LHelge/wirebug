@@ -135,6 +135,17 @@ pub struct Definition {
     pub span: Span,
 }
 
+impl Definition {
+    /// The type's `key: value;` part-data lines (`part: "…";`), in source
+    /// order, wherever they sit among the other members.
+    pub fn properties(&self) -> impl Iterator<Item = &Property> {
+        self.members.iter().filter_map(|m| match m {
+            Member::Property(p) => Some(p),
+            _ => None,
+        })
+    }
+}
+
 /// One entry inside a component body.
 #[derive(Debug, Clone)]
 pub enum Member {
@@ -145,6 +156,10 @@ pub enum Member {
     Instance(Instance),
     Wire(Wire),
     Cable(Cable),
+    /// A part-data line of the type (`part: "…";`): a `<name>:` followed
+    /// by a value, where an instance has a type name. Keys and value kinds
+    /// are checked in validate.
+    Property(Property),
     /// A nested (private) definition.
     Definition(Definition),
 }
@@ -159,6 +174,7 @@ impl Member {
             Member::Instance(i) => i.span,
             Member::Wire(w) => w.span,
             Member::Cable(c) => c.span,
+            Member::Property(p) => p.span,
             Member::Definition(d) => d.span,
         }
     }
@@ -331,8 +347,8 @@ pub struct TwistedGroup {
     pub span: Span,
 }
 
-/// `<key>: <value>;` inside a `cable` body or a wire's body. Keys and value
-/// kinds are checked in validate, per owner.
+/// `<key>: <value>;` inside a `cable` body, a wire's body or a component
+/// body. Keys and value kinds are checked in validate, per owner.
 #[derive(Debug, Clone)]
 pub struct Property {
     pub key: Spanned<Ident>,

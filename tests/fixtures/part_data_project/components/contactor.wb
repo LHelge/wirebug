@@ -1,0 +1,9 @@
+component Contactor {
+    part:         "EV200AAANA";
+    manufacturer: "TE Connectivity";
+    description:  "Main contactor, 12 V coil";
+    rating:       "500 A";
+
+    pub port in  "IN";
+    pub port out "OUT";
+}

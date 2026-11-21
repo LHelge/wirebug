@@ -1,0 +1,12 @@
+// Every reference resolves; only the part data is wrong. `check` must
+// reject the unknown key, the number where a string belongs, and the
+// `part` that `harness.wb` sets again after this root set it.
+
+use Relay   from "components/relay.wb";
+use Vehicle from "harness.wb";
+
+component Vehicle {
+    part: "VH-100";
+
+    k1: Relay "K1";
+}

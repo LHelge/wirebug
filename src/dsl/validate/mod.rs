@@ -6,8 +6,9 @@
 //!
 //! - wire arity (a wire needs at least two endpoints) — an error;
 //! - pin number range (pins are positive integers) — an error;
-//! - the property bodies of cables and wires (known keys, each once, with
-//!   the right kind of value) — errors;
+//! - the property bodies of cables and wires, and a component's part data
+//!   (known keys, each once — across a component's `extend` fragments too —
+//!   with the right kind of value) — errors;
 //! - wire gauge and any `length` (both must be positive) — errors;
 //! - an endpoint repeated within one wire — an error;
 //! - a cable with no conductors — a warning;
@@ -21,9 +22,9 @@
 use std::collections::HashMap;
 
 use crate::dsl::ast::{Member, Port, Property, PropertyValue, Wire};
-use crate::dsl::diagnostics::{Problem, PropertyKind, PropertyOwner};
+use crate::dsl::diagnostics::{FirstProperty, Problem, PropertyKind, PropertyOwner};
 use crate::dsl::ir::{ColorName, WireEnd};
-use crate::dsl::resolve::Resolved;
+use crate::dsl::resolve::{DefId, Resolved};
 use crate::dsl::span::{FileId, Span, Spanned};
 
 /// Validate the resolved registry, returning any problems.
@@ -92,7 +93,15 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
                 _ => {}
             }
         }
+        validate_properties(
+            PropertyOwner::Component,
+            def.ast.properties(),
+            def.file,
+            resolved,
+            &mut problems,
+        );
     }
+    validate_fragment_properties(resolved, &mut problems);
 
     for (fi, file) in resolved.project.files.iter().enumerate() {
         let fid = FileId(fi);
@@ -152,9 +161,9 @@ fn validate_wire(wire: &Wire, file: FileId, resolved: &Resolved, problems: &mut 
 /// Check a property body against the keys its `owner` takes: an unknown
 /// key, a key set twice, a value of the wrong kind, and a length that is
 /// not positive are each reported, on the key or the value.
-fn validate_properties(
+fn validate_properties<'a>(
     owner: PropertyOwner,
-    properties: &[Property],
+    properties: impl IntoIterator<Item = &'a Property>,
     file: FileId,
     resolved: &Resolved,
     problems: &mut Vec<Problem>,
@@ -194,6 +203,54 @@ fn validate_properties(
                 src: resolved.project.source(file),
                 at: p.value.span().into(),
             }),
+        }
+    }
+}
+
+/// A component split with `extend` sets each property once across its
+/// fragments: a key one fragment sets again after another set it is
+/// reported against the first setting (the root `component`'s, when it has
+/// one, since the root fragment comes first). A key set twice within one
+/// fragment is [`validate_properties`]' to report.
+fn validate_fragment_properties(resolved: &Resolved, problems: &mut Vec<Problem>) {
+    for d in 0..resolved.defs.len() {
+        let fragments = resolved.fragments(d);
+        if fragments.len() < 2 || fragments[0] != d {
+            continue;
+        }
+        let mut first: HashMap<&str, (DefId, Span)> = HashMap::new();
+        for &frag in &fragments {
+            let file = resolved.defs[frag].file;
+            for p in resolved.defs[frag].ast.properties() {
+                let key = p.key.node.as_str();
+                let Some(&(set_in, span)) = first.get(key) else {
+                    first.insert(key, (frag, p.key.span));
+                    continue;
+                };
+                if set_in == frag {
+                    continue;
+                }
+                problems.push(if span.file == file {
+                    Problem::DuplicateProperty {
+                        owner: PropertyOwner::Component,
+                        key: key.to_string(),
+                        src: resolved.project.source(file),
+                        at: p.key.span.into(),
+                        first: span.into(),
+                    }
+                } else {
+                    Problem::DuplicateFragmentProperty {
+                        key: key.to_string(),
+                        src: resolved.project.source(file),
+                        at: p.key.span.into(),
+                        first: [FirstProperty {
+                            key: key.to_string(),
+                            src: resolved.project.source(span.file),
+                            at: span.into(),
+                        }],
+                    }
+                });
+            }
         }
     }
 }
@@ -725,6 +782,184 @@ mod tests {
         cable property `length` expects a number
         duplicate cable property `type`
         "#);
+    }
+
+    /// A component `m` with `body` among its members.
+    fn component_body(body: &str) -> Vec<String> {
+        validate_files(&[(
+            "main.wb",
+            &format!("component m {{ pub port a \"A\"; {body} }}\n"),
+        )])
+    }
+
+    #[test]
+    fn component_part_data_is_clean() {
+        let codes = component_body(
+            "part: \"EV200AAANA\"; manufacturer: \"TE\"; description: \"Main contactor\"; rating: \"500 A\";",
+        );
+        assert!(codes.is_empty(), "{codes:?}");
+    }
+
+    #[test]
+    fn component_property_problems_reuse_the_cable_property_codes() {
+        assert_eq!(
+            component_body("colour: \"red\";"),
+            ["wirebug::unknown_cable_property"]
+        );
+        assert_eq!(
+            component_body("part: \"A\"; pub port b \"B\"; part: \"B\";"),
+            ["wirebug::duplicate_cable_property"]
+        );
+        assert_eq!(
+            component_body("rating: 500;"),
+            ["wirebug::cable_property_type"]
+        );
+    }
+
+    #[test]
+    fn component_property_problems_name_the_component() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("main.wb"),
+            "component m { length: 2; rating: 500; part: \"A\"; part: \"B\"; }\n",
+        )
+        .expect("write");
+        let (project, _) = load(&dir.path().join("main.wb"));
+        let resolved = resolve(project.as_ref().expect("loads"));
+        let messages: Vec<String> = validate(&resolved)
+            .iter()
+            .map(|p| match p.help() {
+                Some(help) => format!("{p} | {help}"),
+                None => p.to_string(),
+            })
+            .collect();
+        insta::assert_snapshot!(messages.join("\n"), @r#"
+        unknown component property `length` | a component supports `part: "...";`, `manufacturer: "...";`, `description: "...";` and `rating: "...";`
+        component property `rating` expects a string
+        duplicate component property `part`
+        "#);
+    }
+
+    #[test]
+    fn component_part_data_in_a_type_instantiated_twice_reports_once() {
+        let codes = validate_files(&[(
+            "main.wb",
+            "component leaf { pub port a \"A\"; colour: \"red\"; }\n\
+             component m { l1: leaf; l2: leaf; }\n",
+        )]);
+        assert_eq!(codes, ["wirebug::unknown_cable_property"]);
+    }
+
+    /// A component `M` whose root sets `root` and whose two `extend`
+    /// fragments, in their own files, set `one` and `two`.
+    fn split_component(root: &str, one: &str, two: &str) -> Vec<Problem> {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let files = [
+            (
+                "main.wb",
+                format!(
+                    "use M from \"one.wb\";\nuse M from \"two.wb\";\ncomponent M {{ pub port a \"A\"; {root} }}\n"
+                ),
+            ),
+            ("one.wb", format!("extend M {{ {one} }}\n")),
+            ("two.wb", format!("extend M {{ {two} }}\n")),
+        ];
+        for (name, body) in &files {
+            std::fs::write(dir.path().join(name), body).expect("write");
+        }
+        let (project, _) = load(&dir.path().join("main.wb"));
+        let resolved = resolve(project.as_ref().expect("loads"));
+        assert!(
+            resolved.problems.is_empty(),
+            "resolve: {:?}",
+            resolved.problems
+        );
+        validate(&resolved)
+    }
+
+    /// Each problem as `<code> @ <file>` plus a `first @ <file>` per related
+    /// note: where the repeat and the first setting are reported.
+    fn placed(problems: &[Problem]) -> Vec<String> {
+        problems
+            .iter()
+            .map(|p| {
+                let file = |d: &dyn Diagnostic| {
+                    d.source_code()
+                        .and_then(|src| {
+                            let label = d.labels()?.next()?;
+                            let contents = src.read_span(label.inner(), 0, 0).ok()?;
+                            let name = std::path::Path::new(contents.name()?).file_name()?;
+                            Some(name.to_string_lossy().into_owned())
+                        })
+                        .unwrap_or_default()
+                };
+                let mut line = format!("{} @ {}", p.code().expect("a code"), file(p));
+                for related in p.related().into_iter().flatten() {
+                    line.push_str(&format!(" | first @ {}", file(related)));
+                }
+                line
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_extend_fragment_cannot_set_again_a_property_the_root_set() {
+        let problems = split_component("part: \"P-1\";", "part: \"P-2\";", "");
+        let [problem] = problems.as_slice() else {
+            panic!("expected one problem, got {problems:?}");
+        };
+        assert_eq!(
+            placed(&problems),
+            ["wirebug::duplicate_cable_property @ one.wb | first @ main.wb"]
+        );
+        assert_eq!(problem.to_string(), "duplicate component property `part`");
+    }
+
+    #[test]
+    fn two_extend_fragments_cannot_both_set_a_property() {
+        let problems = split_component("", "rating: \"500 A\";", "rating: \"400 A\";");
+        assert_eq!(
+            placed(&problems),
+            ["wirebug::duplicate_cable_property @ two.wb | first @ one.wb"]
+        );
+    }
+
+    #[test]
+    fn an_extend_fragment_may_set_a_property_the_root_left_unset() {
+        let problems = split_component(
+            "part: \"P-1\";",
+            "manufacturer: \"TE\";",
+            "rating: \"500 A\";",
+        );
+        assert!(problems.is_empty(), "{problems:?}");
+    }
+
+    #[test]
+    fn a_repeat_inside_one_fragment_is_reported_once() {
+        // The fragment's own duplicate is the per-body check's; the
+        // cross-fragment check does not report it again.
+        let problems = split_component("", "part: \"A\"; part: \"B\";", "");
+        assert_eq!(
+            placed(&problems),
+            ["wirebug::duplicate_cable_property @ one.wb"]
+        );
+    }
+
+    #[test]
+    fn fragments_in_one_file_report_a_repeat_with_two_labels() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("main.wb"),
+            "component M { part: \"P-1\"; }\nextend M { part: \"P-2\"; }\n",
+        )
+        .expect("write");
+        let (project, _) = load(&dir.path().join("main.wb"));
+        let resolved = resolve(project.as_ref().expect("loads"));
+        let problems = validate(&resolved);
+        let [Problem::DuplicateProperty { owner, .. }] = problems.as_slice() else {
+            panic!("expected one two-label duplicate, got {problems:?}");
+        };
+        assert_eq!(*owner, PropertyOwner::Component);
     }
 
     #[test]

@@ -13,7 +13,7 @@ use crate::dsl::ir::{
     CableMeta, CableName, Connector, ConnectorCavity, ConnectorFaceLayout, ConnectorGridLayout,
     ConnectorLayout, ConnectorName, ConnectorPin, ConnectorRef, ConnectorTypeName, Design,
     EnclosurePort, Half, Include, InlineHalfMeta, InlineMeta, Instance, InstanceName, InstancePath,
-    Port, PortName, Side, TypeName, View, ViewGrid, Visibility, Wire, WireColor, WireEnd,
+    PartMeta, Port, PortName, Side, TypeName, View, ViewGrid, Visibility, Wire, WireColor, WireEnd,
 };
 use crate::dsl::resolve::{DefId, Resolved};
 
@@ -226,6 +226,10 @@ impl Elaborator<'_> {
                 cables,
                 connectors,
                 inline: None,
+                part: fragments
+                    .iter()
+                    .flat_map(|&frag| self.resolved.defs[frag].ast.properties())
+                    .collect(),
             },
         );
 
@@ -311,6 +315,7 @@ impl Elaborator<'_> {
                 male: half_meta(facts.male),
                 female: half_meta(facts.female),
             }),
+            part: PartMeta::default(),
         }
     }
 
@@ -741,6 +746,76 @@ mod tests {
         assert_eq!(
             (bare.length, bare.r#type.as_deref(), bare.part.as_deref()),
             (None, None, None)
+        );
+    }
+
+    #[test]
+    fn part_data_reaches_every_placement_of_the_type() {
+        let (design, problems) = elaborate_files(&[
+            (
+                "main.wb",
+                "use Contactor from \"parts.wb\";\nuse Lamp from \"parts.wb\";\n\
+                 component m { pos: Contactor; neg: Contactor; l: Lamp; }\n",
+            ),
+            (
+                "parts.wb",
+                "component Contactor {
+                    part: \"EV200AAANA\";
+                    pub port a \"A\";
+                    manufacturer: \"TE Connectivity\";
+                    description: \"Main contactor\";
+                    rating: \"500 A\";
+                }
+                component Lamp { pub port a \"A\"; }\n",
+            ),
+        ]);
+        assert!(problems.is_empty(), "{problems:?}");
+        let design = design.expect("a design");
+        let contactor = PartMeta {
+            number: Some("EV200AAANA".into()),
+            manufacturer: Some("TE Connectivity".into()),
+            description: Some("Main contactor".into()),
+            rating: Some("500 A".into()),
+        };
+        let part = |path: &str| {
+            let inst = design
+                .instances
+                .values()
+                .find(|i| i.path.to_string() == path)
+                .unwrap_or_else(|| panic!("no instance {path}"));
+            inst.part.clone()
+        };
+        assert_eq!(part("m.pos"), contactor);
+        assert_eq!(part("m.neg"), contactor);
+        assert_eq!(part("m.l"), PartMeta::default());
+        assert_eq!(part("m"), PartMeta::default());
+    }
+
+    #[test]
+    fn part_data_merges_across_extend_fragments() {
+        let (design, problems) = elaborate_files(&[
+            (
+                "main.wb",
+                "use m from \"more.wb\";\ncomponent m { part: \"P-1\"; colour: \"red\"; rating: 5; }\n",
+            ),
+            (
+                "more.wb",
+                "extend m { manufacturer: \"Acme\"; part: \"P-2\"; }\n",
+            ),
+        ]);
+        assert!(problems.is_empty(), "{problems:?}");
+        let design = design.expect("a design");
+        let root = design.get(&design.root).expect("root");
+        // The root fragment's value wins a repeat (validate reports it);
+        // unknown keys and wrongly typed values are dropped.
+        assert_eq!(
+            root.part,
+            PartMeta {
+                number: Some("P-1".into()),
+                manufacturer: Some("Acme".into()),
+                description: None,
+                rating: None,
+            }
         );
     }
 

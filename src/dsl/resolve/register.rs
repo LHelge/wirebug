@@ -182,7 +182,8 @@ impl<'a> Resolver<'a> {
                         },
                     );
                 }
-                Member::Wire(_) => {} // endpoints resolved in pass 2
+                Member::Wire(_) => {}     // endpoints resolved in pass 2
+                Member::Property(_) => {} // checked in validate
                 Member::Cable(cable) => {
                     // endpoints resolved in pass 2; here, guard the designator.
                     let n = cable.name.node.as_str();

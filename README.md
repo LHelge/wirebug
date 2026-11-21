@@ -146,7 +146,7 @@ version.)
 
 ## Concepts
 
-**Component** — a *type*, not an instance: a named definition with `pub` ports (its interface) and, optionally, instances of other components plus the wires between them (its implementation). Components can nest; nested definitions are private to their parent.
+**Component** — a *type*, not an instance: a named definition with `pub` ports (its interface) and, optionally, instances of other components plus the wires between them (its implementation). Components can nest; nested definitions are private to their parent. A component may also say what it is bought as, with `part: "EV200AAANA"; manufacturer: "TE Connectivity"; description: "HV main contactor"; rating: "500 A";` lines in its body (all optional, each once, all strings); every placement of the type carries them. A `<name>:` followed by a type is an instance instead, so `part: Fuse;` places a `Fuse` named `part`.
 
 **Port** — a named connection point with a human-readable label. `pub` exposes it to instantiators; visibility does not propagate automatically — a parent re-exports by declaring its own `pub` port and wiring it through.
 
