@@ -434,6 +434,14 @@ splice of the subject; an end is a `layout::HarnessEnd`, `Connector` or
 `HarnessLayout::compute` keeps those whose two ends' connectors or splices
 are included and records them as `HarnessLayout.drawn` (`lint::Segment`,
 wire and pair index), which is what `check`'s `undrawn_conductor` reads.
+That scoping rule is written once, in the IR (`ir::HarnessScope`, built
+from a harness view and the instance it is drawn against, over
+`ir::HarnessNode`, what an end or an include lands on): `draws` (both
+ends' nodes included, and distinct — `HarnessNode::between`, which also
+bounds `HarnessConductor::all`), `draws_screen` and `draws_drain` (below),
+and `half` (the half an inline is included through). The layout asks it,
+and so does the pin-table export, which reads off it which housing half
+of an inline connector a conductor is drawn into.
 
 A **splice** include (`include sp`, an `ir::Include` with no connector
 naming one of the subject's `Instance.splices`; `NodeKey::of`) draws as a
@@ -951,7 +959,10 @@ src/
 │   │   │                #   endpoint reference binding
 │   │   └── views.rs     # view subject binding + include/enclosure checks
 │   ├── elaborate/mod.rs # AST/registry → ir::Design; containment-cycle guard
-│   ├── ir/mod.rs        # id newtypes + elaborated Design/Instance/Port/Wire/View
+│   ├── ir/
+│   │   ├── mod.rs       # id newtypes + elaborated Design/Instance/Port/Wire/View
+│   │   └── harness.rs   # HarnessScope: what a harness view draws, through which
+│   │                    #   inline half (shared by render/harness and export)
 │   ├── validate/mod.rs  # wire arity, cable/wire properties, pin/gauge/length values (errors) + --strict warnings
 │   └── diagnostics/mod.rs # miette `Problem` enum (one variant per failure class)
 │
