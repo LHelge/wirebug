@@ -87,13 +87,53 @@ fn render_png_writes_a_png_per_view_and_index_references_png() {
     assert!(!index.contains(".svg"));
 }
 
-/// Every file `render <mode>` writes for the basic fixture into `out`, by
-/// name. With `hide_fonts` the run sees no system font: fontconfig is
+/// Copy every file under `from` to the same place under `to`.
+fn copy_tree(from: &std::path::Path, to: &std::path::Path) {
+    std::fs::create_dir_all(to).expect("copy target");
+    for entry in std::fs::read_dir(from).expect("copy source") {
+        let path = entry.expect("entry").path();
+        let target = to.join(path.file_name().unwrap());
+        if path.is_dir() {
+            copy_tree(&path, &target);
+        } else {
+            std::fs::copy(&path, &target).expect("file copied");
+        }
+    }
+}
+
+/// A copy of the basic fixture in `dir` whose manifest authors its
+/// revision. The stamp then never asks git, whose answer depends on the
+/// environment: with `HOME` and `XDG_CONFIG_HOME` moved, git stops reading
+/// the user's global excludes, files it ignored become untracked, and the
+/// revision turns `-dirty`.
+fn basic_fixture_with_fixed_revision(dir: &std::path::Path) -> std::path::PathBuf {
+    let root = dir.join("basic_project");
+    copy_tree(std::path::Path::new(FIXTURE_ROOT), &root);
+    let manifest = root.join("wirebug.toml");
+    let mut text = std::fs::read_to_string(&manifest).expect("manifest read");
+    text.push_str("revision = \"fixture\"\n");
+    std::fs::write(&manifest, text).expect("manifest written");
+    root
+}
+
+/// Every file `render <mode>` writes for the project at `root` into `out`,
+/// by name. With `hide_fonts` the run sees no system font: fontconfig is
 /// pointed at a config whose only font directory is empty, and `HOME` at an
 /// empty directory, so a lookup of the system fonts would find none.
-fn rendered_files(out: &std::path::Path, mode: &str, hide_fonts: bool) -> Vec<(String, Vec<u8>)> {
+fn rendered_files(
+    root: &std::path::Path,
+    out: &std::path::Path,
+    mode: &str,
+    hide_fonts: bool,
+) -> Vec<(String, Vec<u8>)> {
     let mut render = Command::cargo_bin("wirebug").expect("binary present");
-    render.args(["render", FIXTURE_ROOT, "--out", out.to_str().unwrap(), mode]);
+    render.args([
+        "render",
+        root.to_str().unwrap(),
+        "--out",
+        out.to_str().unwrap(),
+        mode,
+    ]);
     let empty = out.with_extension("empty");
     if hide_fonts {
         std::fs::create_dir_all(&empty).expect("empty dir");
@@ -129,13 +169,14 @@ fn png_and_pdf_output_is_the_same_with_or_without_system_fonts() {
     // font changes no byte. (With the system fonts loaded instead, the
     // hidden run found no font and dropped every label.)
     let tmp = tempdir().expect("tempdir");
+    let root = basic_fixture_with_fixed_revision(tmp.path());
     for (mode, drawing) in [
         ("--png", "system_overview.png"),
         ("--pdf", "basic_project.pdf"),
     ] {
         let dir = mode.trim_start_matches('-');
-        let seen = rendered_files(&tmp.path().join(format!("{dir}-seen")), mode, false);
-        let hidden = rendered_files(&tmp.path().join(format!("{dir}-hidden")), mode, true);
+        let seen = rendered_files(&root, &tmp.path().join(format!("{dir}-seen")), mode, false);
+        let hidden = rendered_files(&root, &tmp.path().join(format!("{dir}-hidden")), mode, true);
         let names = |files: &[(String, Vec<u8>)]| -> Vec<String> {
             files.iter().map(|(name, _)| name.clone()).collect()
         };
