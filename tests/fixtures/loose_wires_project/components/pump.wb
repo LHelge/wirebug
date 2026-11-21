@@ -1,0 +1,10 @@
+component Pump {
+    connector x1 "Pump 6p" {
+        pub port can_h "CAN H" pin 1;
+        pub port can_l "CAN L" pin 2;
+        pub port wake  "WAKE"  pin 3;
+        pub port fault "FAULT" pin 4;
+        pub port pwr   "PWR"   pin 5;
+        pub port gnd   "GND"   pin 6;
+    }
+}

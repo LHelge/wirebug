@@ -8,8 +8,10 @@
 //! shrinks to what the harness actually uses, and an include with no
 //! conductors draws as a header-only box. The renderer derives a vertical
 //! **spine** midway between the connectors; each node faces the spine,
-//! declared cables stack along it as boxes, and wires run pin → cable → pin
-//! (or pin → pin for loose wires). Each subject wire is chain-decomposed
+//! declared cables stack along it as boxes, and wires run pin → cable → pin.
+//! A loose wire that crosses the spine runs through a lane of its own
+//! there, stacked with the boxes so it never passes behind one; any other
+//! loose wire runs pin → pin. Each subject wire is chain-decomposed
 //! into consecutive pairs (`[a, b, c]` → `a–b, b–c`), its
 //! [`HarnessConductor`]s; a pair is kept only when both ends land on
 //! *included* connectors. Connectorless ports, `Own` ends, and ends on
@@ -26,6 +28,7 @@ use std::collections::{HashMap, HashSet};
 
 use indexmap::IndexMap;
 
+use super::bezier::{Cubic, FLEX, flex};
 use super::draw::wire_annotation;
 use super::{
     BADGE_INSET, BADGE_SIZE, BRAID_SECTION, CABLE_GAP, CABLE_LABEL_PAD, CHAR_WIDTH, HEADER_HEIGHT,
@@ -162,13 +165,152 @@ impl ConnectorNode {
 }
 
 /// A loose wire (one not in a declared cable), resolved to its two attach
-/// points. Drawn as a single bezier with no box.
+/// points. One whose ends lie either side of the spine runs through a
+/// [`Lane`] of its own there, so it never passes behind a cable box; any
+/// other is a single bezier pin to pin.
 pub(super) struct LooseWire {
     pub(super) from: Point,
     pub(super) to: Point,
     pub(super) color: WireColor,
     pub(super) gauge: f64,
     pub(super) label: Option<String>,
+    /// The wire's straight run on the spine, when it crosses it.
+    pub(super) lane: Option<Lane>,
+}
+
+/// A loose wire's straight run through the spine: a row of the spine's
+/// occupancy no cable box shares, spanning the full width of the spine
+/// column (the widest box or lane), so its flexed leads stay clear of
+/// every box beside it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) struct Lane {
+    /// World y of the run.
+    pub(super) y: f64,
+    /// Where the run starts, on the spine column's left edge.
+    pub(super) left: f64,
+    /// Where the run ends, on the spine column's right edge.
+    pub(super) right: f64,
+}
+
+impl LooseWire {
+    /// The curves the wire is drawn as, in order: one flex pin to pin, or,
+    /// through its lane, a lead-in flex, the straight run (a flat cubic)
+    /// and a lead-out flex — the shape a cable strand takes, with no box.
+    pub(super) fn curves(&self) -> Vec<Cubic> {
+        let Some(lane) = self.lane else {
+            return vec![flex(self.from, self.to, FLEX)];
+        };
+        let (left, right) = if self.from.x <= self.to.x {
+            (self.from, self.to)
+        } else {
+            (self.to, self.from)
+        };
+        let (entry, exit) = (
+            Point::new(lane.left, lane.y),
+            Point::new(lane.right, lane.y),
+        );
+        vec![
+            flex(left, entry, FLEX),
+            flex(entry, exit, FLEX),
+            flex(exit, right, FLEX),
+        ]
+    }
+
+    /// Where the wire's annotation is anchored (its text's centre on the
+    /// baseline): over the middle of its lane's run, as a cable strand's is
+    /// over its row, or over the midpoint of its single curve.
+    pub(super) fn annotation_at(&self) -> Point {
+        match self.lane {
+            Some(lane) => Point::new((lane.left + lane.right) / 2.0, lane.y - 4.0),
+            None => {
+                let mid = flex(self.from, self.to, FLEX).point_at(0.5);
+                Point::new(mid.x, mid.y - 2.0)
+            }
+        }
+    }
+
+    /// The width its annotation needs on a lane's run.
+    fn lane_width(&self) -> f64 {
+        wire_annotation(self.label.as_deref(), self.gauge, &self.color)
+            .chars()
+            .count() as f64
+            * LABEL_CHAR_WIDTH
+            + 2.0 * NODE_PAD
+    }
+}
+
+/// The midpoint y of a conductor between `a` and `b`: what the spine's
+/// occupancy orders rows by and centres a stack of rows on.
+fn midpoint_y(a: Point, b: Point) -> f64 {
+    (a.y + b.y) / 2.0
+}
+
+/// The lanes of the loose wires between one pair of nodes that cross the
+/// spine: one row each, stacked like a cable box's rows (ordered by
+/// midpoint y, centred on their centroid) but with no box round them.
+struct LooseSlot {
+    /// The wires, as indices into the layout's loose wires, top to bottom.
+    wires: Vec<usize>,
+    /// World y of the slot's top edge.
+    top: f64,
+}
+
+impl LooseSlot {
+    fn height(&self) -> f64 {
+        self.wires.len() as f64 * ROW_HEIGHT
+    }
+
+    /// World y of the `k`th lane from the top.
+    fn lane_y(&self, k: usize) -> f64 {
+        self.top + (k as f64 + 0.5) * ROW_HEIGHT
+    }
+}
+
+/// Something that takes a stretch of the spine: a cable box, or the lanes
+/// of a [`LooseSlot`]. They are stacked along it together, so none
+/// overlaps another.
+enum Occupant<'a> {
+    Cable(&'a mut CableBox),
+    Loose(&'a mut LooseSlot),
+}
+
+impl Occupant<'_> {
+    fn top(&self) -> f64 {
+        match self {
+            Self::Cable(cable) => cable.origin.y,
+            Self::Loose(slot) => slot.top,
+        }
+    }
+
+    fn height(&self) -> f64 {
+        match self {
+            Self::Cable(cable) => cable.height,
+            Self::Loose(slot) => slot.height(),
+        }
+    }
+
+    fn move_top_to(&mut self, top: f64) {
+        match self {
+            Self::Cable(cable) => cable.move_top_to(top),
+            Self::Loose(slot) => slot.top = top,
+        }
+    }
+
+    /// De-overlap along the spine: sort by top edge (ties in source order,
+    /// by the first conductor each occupant carries), then sweep top-down
+    /// pushing each occupant clear of the previous one's bottom edge.
+    fn stack(mut occupants: Vec<(usize, Self)>) {
+        occupants.sort_by(|(first_a, a), (first_b, b)| {
+            a.top().total_cmp(&b.top()).then(first_a.cmp(first_b))
+        });
+        let mut floor = f64::NEG_INFINITY;
+        for (_, occupant) in &mut occupants {
+            if occupant.top() < floor {
+                occupant.move_top_to(floor);
+            }
+            floor = occupant.top() + occupant.height() + CABLE_GAP;
+        }
+    }
 }
 
 /// One conductor of a declared cable: it leads in from the left connector to
@@ -439,6 +581,22 @@ enum Anchor {
     Splice(usize),
 }
 
+/// The node an [`Anchor`] is on: a connector node or a splice, by index.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+enum AnchorNode {
+    Connector(usize),
+    Splice(usize),
+}
+
+impl Anchor {
+    fn node(self) -> AnchorNode {
+        match self {
+            Self::Pin { node, .. } => AnchorNode::Connector(node),
+            Self::Splice(splice) => AnchorNode::Splice(splice),
+        }
+    }
+}
+
 /// The laid-out nodes a conductor can attach to.
 struct Anchors<'a> {
     nodes: &'a [ConnectorNode],
@@ -468,6 +626,9 @@ impl Anchors<'_> {
 /// A pending connection between two anchors, before facing (and thus the
 /// pins' attach points) is known.
 struct RawWire {
+    /// The conductor's place among those drawn, in wire order: the
+    /// source-order tie-break along the spine.
+    order: usize,
     a: Anchor,
     b: Anchor,
     color: WireColor,
@@ -598,6 +759,7 @@ impl HarnessLayout {
             };
             let wire = conductor.wire;
             raws.push(RawWire {
+                order: raws.len(),
                 a,
                 b,
                 color: wire.color.clone(),
@@ -647,21 +809,44 @@ impl HarnessLayout {
             });
         }
 
-        // Declared cables draw as boxes on the spine; loose wires draw as
-        // direct pin-to-pin beziers.
+        // Declared cables draw as boxes on the spine. A loose wire whose
+        // ends lie either side of the spine crosses it, so it takes a lane
+        // there, sharing the spine's occupancy with the boxes (the loose
+        // wires between one pair of nodes in one slot); any other draws as
+        // a direct pin-to-pin bezier.
         let (tagged, loose_raws): (Vec<RawWire>, Vec<RawWire>) =
             raws.into_iter().partition(|r| r.cable.is_some());
-        let cable_boxes = Self::build_cable_boxes(&anchors, subject, spine_x, tagged, marks);
-        let loose = loose_raws
-            .into_iter()
-            .map(|raw| LooseWire {
-                from: anchors.attach(raw.a),
-                to: anchors.attach(raw.b),
+        let (mut cable_boxes, box_firsts) =
+            Self::build_cable_boxes(&anchors, subject, spine_x, tagged, marks);
+        let mut loose = Vec::new();
+        let mut crossing: IndexMap<[AnchorNode; 2], (usize, Vec<usize>)> = IndexMap::new();
+        for raw in loose_raws {
+            let (from, to) = (anchors.attach(raw.a), anchors.attach(raw.b));
+            if from.x.min(to.x) < spine_x && spine_x < from.x.max(to.x) {
+                let mut pair = [raw.a.node(), raw.b.node()];
+                pair.sort();
+                crossing
+                    .entry(pair)
+                    .or_insert_with(|| (raw.order, Vec::new()))
+                    .1
+                    .push(loose.len());
+            }
+            loose.push(LooseWire {
+                from,
+                to,
                 color: raw.color,
                 gauge: raw.gauge,
                 label: raw.label,
-            })
-            .collect();
+                lane: None,
+            });
+        }
+        Self::occupy_spine(
+            spine_x,
+            &mut cable_boxes,
+            box_firsts,
+            &mut loose,
+            crossing.into_values(),
+        );
         HarnessLayout {
             nodes,
             splices,
@@ -756,15 +941,17 @@ impl HarnessLayout {
         }
     }
 
-    /// Group tagged conductors by their cable designator, lay out one box per
-    /// cable on the spine, then push overlapping boxes apart vertically.
+    /// Group tagged conductors by their cable designator and lay out one
+    /// box per cable on the spine, in the order the cables first appear.
+    /// Each box comes with its first conductor's
+    /// [`RawWire::order`]; [`Self::occupy_spine`] stacks them.
     fn build_cable_boxes(
         anchors: &Anchors,
         subject: &Instance,
         spine_x: f64,
         raws: Vec<RawWire>,
         mut marks: HashMap<&CableName, Vec<ShieldMark>>,
-    ) -> Vec<CableBox> {
+    ) -> (Vec<CableBox>, Vec<usize>) {
         let mut groups: IndexMap<CableName, Vec<RawWire>> = IndexMap::new();
         for mut raw in raws {
             let Some(name) = raw.cable.take() else {
@@ -772,25 +959,73 @@ impl HarnessLayout {
             };
             groups.entry(name).or_default().push(raw);
         }
-        let mut boxes: Vec<CableBox> = groups
+        groups
             .into_iter()
             .map(|(name, raws)| {
+                let first = raws.first().map_or(0, |raw| raw.order);
                 let shields = marks.remove(&name).unwrap_or_default();
-                build_cable_box(anchors, subject, &name, spine_x, raws, shields)
+                let cable_box = build_cable_box(anchors, subject, &name, spine_x, raws, shields);
+                (cable_box, first)
             })
-            .collect();
+            .unzip()
+    }
 
-        // De-overlap along the spine: sort by centre y, then sweep top-down
-        // pushing each box clear of the previous one's bottom edge.
-        boxes.sort_by(|a, b| a.origin.y.total_cmp(&b.origin.y));
-        let mut floor = f64::NEG_INFINITY;
-        for b in &mut boxes {
-            if b.origin.y < floor {
-                b.move_top_to(floor);
+    /// Share the spine between the cable boxes (each with its first
+    /// conductor's order, `box_firsts`) and the loose wires that cross it
+    /// (`crossing`: per pair of nodes, the first conductor's order and the
+    /// wires' indices in `loose`). Each pair's wires get a slot of lanes,
+    /// ordered and centred by their midpoints as a box's rows are; boxes
+    /// and slots are then stacked along the spine together, and every lane
+    /// spans the spine column, the widest box or lane. Leaves the boxes in
+    /// their order down the spine.
+    fn occupy_spine(
+        spine_x: f64,
+        cable_boxes: &mut [CableBox],
+        box_firsts: Vec<usize>,
+        loose: &mut [LooseWire],
+        crossing: impl Iterator<Item = (usize, Vec<usize>)>,
+    ) {
+        let midpoint = |i: &usize| midpoint_y(loose[*i].from, loose[*i].to);
+        let (slot_firsts, mut slots): (Vec<usize>, Vec<LooseSlot>) = crossing
+            .map(|(first, mut wires)| {
+                wires.sort_by(|a, b| midpoint(a).total_cmp(&midpoint(b)));
+                let centre = wires.iter().map(midpoint).sum::<f64>() / wires.len() as f64;
+                let mut slot = LooseSlot { wires, top: 0.0 };
+                slot.top = centre - slot.height() / 2.0;
+                (first, slot)
+            })
+            .unzip();
+
+        let boxes = cable_boxes
+            .iter_mut()
+            .zip(box_firsts)
+            .map(|(cable, first)| (first, Occupant::Cable(cable)));
+        let lanes = slots
+            .iter_mut()
+            .zip(slot_firsts)
+            .map(|(slot, first)| (first, Occupant::Loose(slot)));
+        Occupant::stack(boxes.chain(lanes).collect());
+        cable_boxes.sort_by(|a, b| a.origin.y.total_cmp(&b.origin.y));
+
+        let column = cable_boxes
+            .iter()
+            .map(|cable| cable.width)
+            .chain(
+                slots
+                    .iter()
+                    .flat_map(|slot| &slot.wires)
+                    .map(|&i| loose[i].lane_width()),
+            )
+            .fold(0.0, f64::max);
+        for slot in &slots {
+            for (k, &i) in slot.wires.iter().enumerate() {
+                loose[i].lane = Some(Lane {
+                    y: slot.lane_y(k),
+                    left: spine_x - column / 2.0,
+                    right: spine_x + column / 2.0,
+                });
             }
-            floor = b.origin.y + b.height + CABLE_GAP;
         }
-        boxes
     }
 
     /// The drawing's bounding box, padded for margins and the title.
@@ -818,6 +1053,10 @@ impl HarnessLayout {
         for w in &self.loose {
             grow(w.from);
             grow(w.to);
+            if let Some(lane) = w.lane {
+                grow(Point::new(lane.left, lane.y));
+                grow(Point::new(lane.right, lane.y));
+            }
         }
         for cb in &self.cable_boxes {
             grow(cb.origin);
@@ -1026,7 +1265,7 @@ fn build_cable_box(
     // two pairs with equal centroids (or a loose strand landing exactly on
     // a pair's centroid) would otherwise interleave by raw midpoint and
     // neither pair could braid.
-    let midpoint = |s: &Strand| (s.left.y + s.right.y) / 2.0;
+    let midpoint = |s: &Strand| midpoint_y(s.left, s.right);
     let group_centroid: HashMap<u32, f64> = {
         let mut sums: HashMap<u32, (f64, f64)> = HashMap::new();
         for s in &strands {
@@ -1095,11 +1334,7 @@ fn build_cable_box(
 
     let subtitle = cable_subtitle(meta, strands.len());
     let n = strands.len().max(1) as f64;
-    let cy = strands
-        .iter()
-        .map(|s| (s.left.y + s.right.y) / 2.0)
-        .sum::<f64>()
-        / n;
+    let cy = strands.iter().map(midpoint).sum::<f64>() / n;
 
     let annotation_widths: Vec<f64> = strands
         .iter()
@@ -1348,6 +1583,64 @@ component Root {
                 );
             }
         }
+    }
+
+    fn loose(from: Point, to: Point, lane: Option<Lane>) -> LooseWire {
+        LooseWire {
+            from,
+            to,
+            color: "white".into(),
+            gauge: 0.5,
+            label: Some("WAKE".into()),
+            lane,
+        }
+    }
+
+    #[test]
+    fn a_wire_in_a_lane_leads_in_runs_straight_and_leads_out_whichever_way_it_runs() {
+        let lane = Lane {
+            y: 50.0,
+            left: 100.0,
+            right: 200.0,
+        };
+        let (west, east) = (Point::new(0.0, 0.0), Point::new(300.0, 80.0));
+        // Authored east to west: drawn left to right all the same.
+        let [lead_in, run, lead_out] = loose(east, west, Some(lane)).curves()[..] else {
+            panic!("three curves");
+        };
+        assert_eq!(lead_in.p0, west);
+        assert_eq!(lead_in.p3, Point::new(100.0, 50.0));
+        assert_eq!(run.p3, Point::new(200.0, 50.0));
+        assert!(
+            [run.p0, run.c1, run.c2, run.p3].iter().all(|p| p.y == 50.0),
+            "the run is straight"
+        );
+        assert_eq!(lead_out.p3, east);
+        assert_eq!(
+            loose(east, west, Some(lane)).annotation_at(),
+            Point::new(150.0, 46.0)
+        );
+
+        let direct = loose(west, east, None);
+        assert_eq!(direct.curves(), [flex(west, east, FLEX)]);
+    }
+
+    #[test]
+    fn spine_occupants_tied_on_their_top_stack_in_source_order() {
+        let mut later = LooseSlot {
+            wires: vec![0],
+            top: 10.0,
+        };
+        let mut earlier = LooseSlot {
+            wires: vec![1, 2],
+            top: 10.0,
+        };
+        Occupant::stack(vec![
+            (5, Occupant::Loose(&mut later)),
+            (2, Occupant::Loose(&mut earlier)),
+        ]);
+        assert_eq!(earlier.top, 10.0, "the earlier conductor keeps its place");
+        assert_eq!(later.top, 10.0 + 2.0 * ROW_HEIGHT + CABLE_GAP);
     }
 
     #[test]

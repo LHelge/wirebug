@@ -1,0 +1,50 @@
+// Loose wires beside cables. Two cables and two loose wires run between
+// the same pair of connectors, the loose ones (one of them two-tone) on
+// the pins between the cables', so a pin-to-pin curve would run straight
+// behind a cable box. And a loose wire to a splice leaves from a pin
+// between a cable's two conductors.
+
+use Ecu  from "components/ecu.wb";
+use Pump from "components/pump.wb";
+use Lamp from "components/lamp.wb";
+
+component Vehicle {
+    ecu:  Ecu  "ECU";
+    pump: Pump "Pump";
+    lamp: Lamp "Lamp";
+
+    cable can "CAN" {
+        twisted {
+            wire white/blue 0.5 "CAN H" [ecu.can_h, pump.can_h];
+            wire white/red  0.5 "CAN L" [ecu.can_l, pump.can_l];
+        }
+    }
+
+    wire white        0.5 "WAKE"  [ecu.wake, pump.wake];
+    wire green/yellow 0.5 "FAULT" [ecu.fault, pump.fault];
+
+    cable power "Power" {
+        wire red   1.5 "PWR" [ecu.pwr, pump.pwr];
+        wire black 1.5 "GND" [ecu.gnd, pump.gnd];
+    }
+
+    splice sp_sense "Sense splice";
+
+    cable lamp_feed "Lamp feed" {
+        wire red   1 "LAMP"     [ecu.lamp, lamp.pwr];
+        wire black 1 "LAMP GND" [ecu.lamp_gnd, lamp.gnd];
+    }
+    wire blue 0.5 "SENSE" [ecu.sense, sp_sense];
+    wire blue 0.5 "SENSE" [sp_sense, lamp.sense];
+}
+
+view harness "Pump loom" {
+    include ecu.x1  at (0, 0);
+    include pump.x1 at (30, 0);
+}
+
+view harness "Lamp loom" {
+    include ecu.x1   at (0, 0);
+    include lamp.x1  at (30, -4);
+    include sp_sense at (36, 1);
+}

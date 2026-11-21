@@ -3,7 +3,7 @@
 
 use svg::node::element::{Circle, Group, Line, Path, Rectangle, Text};
 
-use super::bezier::{FLEX, flex};
+use super::bezier::{Cubic, FLEX, flex};
 use super::layout::{
     CableBox, ConnectorNode, DrainRow, LooseWire, SpliceNode, SpliceText, braid_partners,
 };
@@ -29,6 +29,25 @@ const WIRE_LAYERS: WireLayers = WireLayers {
 /// dresses it as one layer.
 fn strand_path(d: String) -> Path {
     Path::new().set("d", d)
+}
+
+/// Add to `group` a wire of `color` drawn as consecutive `pieces` (SVG path
+/// data). Every casing is emitted before the cores, or a later casing would
+/// overdraw the core at the joins between pieces.
+fn add_strand(mut group: Group, color: &WireColor, pieces: &[String]) -> Group {
+    let stroke = WIRE_LAYERS.stroke(color);
+    for d in pieces {
+        group = group.add(stroke.casing(strand_path(d.clone())));
+    }
+    for d in pieces {
+        group = group.add(stroke.core(strand_path(d.clone())));
+    }
+    for d in pieces {
+        if let Some(tracer) = stroke.tracer(strand_path(d.clone())) {
+            group = group.add(tracer);
+        }
+    }
+    group
 }
 
 /// A connector as a titled pin table: header (instance + connector), then
@@ -296,21 +315,7 @@ pub(super) fn render_cable_box(cb: &CableBox) -> Group {
             None => format!("M{},{} L{},{}", entry.x, entry.y, exit.x, exit.y),
         };
         let lead_out = flex(exit, strand.right_attach, FLEX).path_d();
-        // Every casing of a strand is emitted before its cores, or a later
-        // casing would overdraw the core at the segment joins.
-        let stroke = WIRE_LAYERS.stroke(&strand.color);
-        let pieces = [lead_in, run, lead_out];
-        for d in &pieces {
-            group = group.add(stroke.casing(strand_path(d.clone())));
-        }
-        for d in &pieces {
-            group = group.add(stroke.core(strand_path(d.clone())));
-        }
-        for d in pieces {
-            if let Some(tracer) = stroke.tracer(strand_path(d)) {
-                group = group.add(tracer);
-            }
-        }
+        group = add_strand(group, &strand.color, &[lead_in, run, lead_out]);
 
         // A braided run only sits on its own row over the straight ends, so
         // the label anchors there — the pair's first row left, second
@@ -414,27 +419,22 @@ fn render_drain(cb: &CableBox, drain: &DrainRow) -> Group {
     )
 }
 
-/// A loose wire (no cable): a single flexed bezier pin-to-pin, annotated at
-/// its midpoint.
+/// A loose wire (no cable), along its [`LooseWire::curves`] — through its
+/// lane on the spine (flexed in, a straight run, flexed out) or one flexed
+/// bezier pin-to-pin — as one path per layer, so a host picks the wire out
+/// as one element; annotated where [`LooseWire::annotation_at`] says.
 pub(super) fn render_loose(wire: &LooseWire) -> Group {
-    let curve = flex(wire.from, wire.to, FLEX);
-    let mid = curve.point_at(0.5);
-    let mut group = Group::new().set("class", "cable");
-    for layer in WIRE_LAYERS
-        .stroke(&wire.color)
-        .layers(strand_path(curve.path_d()))
-    {
-        group = group.add(layer);
-    }
-    group.add(
+    let d = Cubic::chain_d(&wire.curves());
+    let at = wire.annotation_at();
+    add_strand(Group::new().set("class", "cable"), &wire.color, &[d]).add(
         Text::new(wire_annotation(
             wire.label.as_deref(),
             wire.gauge,
             &wire.color,
         ))
         .set("class", "cable-label")
-        .set("x", mid.x)
-        .set("y", mid.y - 2.0),
+        .set("x", at.x)
+        .set("y", at.y),
     )
 }
 

@@ -1170,9 +1170,11 @@ component sys {
             crate::render::geometry::Point::new(400.0, 100.0)
         );
         // Every conductor ends at the dot: both loose wires, and the cable
-        // strand's left end.
+        // strand's left end. The loose wires stay on the splice's side of
+        // the spine, so each is one curve, with no lane.
         assert_eq!(layout.loose.len(), 2);
         assert!(layout.loose.iter().all(|w| w.to == splice.centre));
+        assert!(layout.loose.iter().all(|w| w.lane.is_none()));
         assert_eq!(layout.cable_boxes[0].strands[0].left_attach, splice.centre);
         // The pins face the splice they run to.
         use crate::render::geometry::Side;
@@ -1211,6 +1213,120 @@ component sys {
         assert_eq!(includes, [0, 1, 2, 3], "every include, in include order");
         let splice = &layout.boxes[3].bounds;
         assert!(splice.width > 0.0 && splice.height > 0.0);
+    }
+
+    /// The `loose_wires_project` fixture's design and each of its harness
+    /// views' layouts, by title.
+    fn loose_wire_layouts() -> Vec<(String, HarnessLayout)> {
+        let main = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/loose_wires_project/main.wb");
+        let report = crate::check_project(Some(&main));
+        assert!(report.problems.is_empty(), "{:?}", report.problems);
+        let design = report.design.expect("a design");
+        design
+            .views
+            .iter()
+            .filter(|view| view.kind == ViewKind::Harness)
+            .map(|view| (view.title.clone(), compute(&design, view)))
+            .collect()
+    }
+
+    /// Whether `p` lies strictly inside the cable box (its outline itself
+    /// is not inside).
+    fn inside(cable: &layout::CableBox, p: crate::render::geometry::Point) -> bool {
+        const EPS: f64 = 1e-6;
+        p.x > cable.origin.x + EPS
+            && p.x < cable.origin.x + cable.width - EPS
+            && p.y > cable.origin.y + EPS
+            && p.y < cable.origin.y + cable.height - EPS
+    }
+
+    /// Regression: a loose wire was one pin-to-pin curve that ran straight
+    /// behind any cable box on the spine (and its annotation with it), so
+    /// it read as a conductor of that cable. Every loose wire's path and
+    /// annotation now stay outside every box.
+    #[test]
+    fn loose_wires_and_their_annotations_clear_every_cable_box() {
+        let layouts = loose_wire_layouts();
+        assert_eq!(layouts.len(), 2);
+        for (title, layout) in &layouts {
+            assert!(!layout.cable_boxes.is_empty(), "{title} draws cables");
+            assert!(!layout.loose.is_empty(), "{title} draws loose wires");
+            for (w, wire) in layout.loose.iter().enumerate() {
+                let samples = wire
+                    .curves()
+                    .into_iter()
+                    .flat_map(|curve| (0..=64).map(move |i| curve.point_at(f64::from(i) / 64.0)));
+                for p in samples.chain([wire.annotation_at()]) {
+                    for cable in &layout.cable_boxes {
+                        assert!(
+                            !inside(cable, p),
+                            "{title}: loose wire {w} passes behind {:?} at {p:?}",
+                            cable.title
+                        );
+                    }
+                }
+            }
+            // What `check` counts as drawn is unchanged: one segment per
+            // strand and loose wire.
+            let strands: usize = layout.cable_boxes.iter().map(|b| b.strands.len()).sum();
+            assert_eq!(strands + layout.loose.len(), layout.drawn.len(), "{title}");
+        }
+    }
+
+    #[test]
+    fn parallel_loose_wires_each_run_in_a_lane_of_their_own() {
+        let layouts = loose_wire_layouts();
+        let (_, pump) = layouts
+            .iter()
+            .find(|(title, _)| title == "Pump loom")
+            .expect("pump loom");
+        let lanes: Vec<(Option<&str>, layout::Lane)> = pump
+            .loose
+            .iter()
+            .map(|w| (w.label.as_deref(), w.lane.expect("crosses the spine")))
+            .collect();
+        let [(Some("WAKE"), wake), (Some("FAULT"), fault)] = lanes.as_slice() else {
+            panic!("WAKE and FAULT, in source order: {lanes:?}");
+        };
+        // One slot, a row each, in pin order; both span the spine column,
+        // as wide as the widest cable box.
+        assert_eq!(fault.y - wake.y, ROW_HEIGHT);
+        assert_eq!((wake.left, wake.right), (fault.left, fault.right));
+        let widest = pump.cable_boxes.iter().map(|b| b.width).fold(0.0, f64::max);
+        assert!(wake.right - wake.left >= widest);
+        // Each annotation sits over its own lane's run.
+        for wire in &pump.loose {
+            let lane = wire.lane.expect("lane");
+            let at = wire.annotation_at();
+            assert_eq!(at.y, lane.y - 4.0);
+            assert!(lane.left < at.x && at.x < lane.right);
+        }
+    }
+
+    #[test]
+    fn a_loose_wire_to_a_splice_across_the_spine_takes_a_lane() {
+        let layouts = loose_wire_layouts();
+        let (_, lamp) = layouts
+            .iter()
+            .find(|(title, _)| title == "Lamp loom")
+            .expect("lamp loom");
+        let [splice] = lamp.splices.as_slice() else {
+            panic!("one splice");
+        };
+        let [to_splice, from_splice] = lamp.loose.as_slice() else {
+            panic!("two loose wires");
+        };
+        // From the ECU across the spine to the splice: through a lane, and
+        // still converging on the splice's dot.
+        assert!(to_splice.lane.is_some());
+        assert_eq!(to_splice.to, splice.centre);
+        let curves = to_splice.curves();
+        assert_eq!(curves.last().map(|c| c.p3), Some(splice.centre));
+        // From the splice on to the lamp, both right of the spine: a
+        // single curve.
+        assert!(from_splice.lane.is_none());
+        assert_eq!(from_splice.curves().len(), 1);
     }
 
     /// Build the layout for `view` against `design`'s subject instance.
@@ -1262,7 +1378,11 @@ component sys {
             }
         }
         for w in &layout.loose {
-            writeln!(s, "loose {} {}->{}", w.color, pt(w.from), pt(w.to)).unwrap();
+            let lane = w
+                .lane
+                .map(|l| format!(" lane y={:.0} {:.0}..{:.0}", l.y, l.left, l.right))
+                .unwrap_or_default();
+            writeln!(s, "loose {} {}->{}{lane}", w.color, pt(w.from), pt(w.to)).unwrap();
         }
         s
     }

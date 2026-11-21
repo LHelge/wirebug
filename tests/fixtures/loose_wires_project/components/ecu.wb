@@ -1,0 +1,13 @@
+component Ecu {
+    connector x1 "ECU 9p" {
+        pub port can_h    "CAN H"    pin 1;
+        pub port can_l    "CAN L"    pin 2;
+        pub port wake     "WAKE"     pin 3;
+        pub port fault    "FAULT"    pin 4;
+        pub port pwr      "PWR"      pin 5;
+        pub port gnd      "GND"      pin 6;
+        pub port lamp     "LAMP"     pin 7;
+        pub port sense    "SENSE"    pin 8;
+        pub port lamp_gnd "LAMP GND" pin 9;
+    }
+}
