@@ -394,9 +394,21 @@ adds no inference (`src/render/schematic/layout.rs`):
   strokes a strand (see Wire strokes below): a `wire-casing` polyline, the
   `wire` core in the base color, and a `wire-tracer` for a two-tone wire —
   so a splice rail shows which conductor brings each port in. Wires are
-  drawn whole (casing, core, tracer, code) one after another in
-  connection order, so where two cross, the later one's casing cuts the
-  earlier one's core and they read as passing over each other.
+  drawn **one net at a time** (`Connection::nets`: connections joined,
+  directly or through each other, by a shared placed port — the segments
+  of a multi-endpoint wire or of a splice net, and wires crimped into one
+  port): all of a net's casings, then its cores, its tracers and its codes,
+  members in source order, nets in the order of their first connection
+  (an order-preserving union-find, nothing hash-ordered). Connections
+  sharing a port leave it through the same stub, so drawing wire by wire
+  would lay a later casing over an earlier core where they split and cut
+  the joint like a crossing; per net, a joint reads as a plain T. Where
+  two nets cross, the later net's casing cuts the earlier one's core and
+  they read as passing over each other. Members of one net in different
+  colors (a splice net's conductors, a double crimp) overlap along their
+  shared stub, where the later core covers the earlier one; the color
+  changes where they split, with no black line between them. Code anchors
+  are still placed wire by wire in connection order.
 - **Enclosure** — an optional `enclosure { }` block draws the subject itself
   as a dashed box *wrapping* the schematic, with the subject's own ports on its
   boundary as **inverted** ports (facing inward, so an `Own` end's wire routes
