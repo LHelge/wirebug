@@ -10,7 +10,7 @@
 
 mod cli;
 
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::net::IpAddr;
 use std::path::Path;
 use std::process::ExitCode;
@@ -44,7 +44,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             target,
             strict,
             format,
-        } => Ok(check_command(target.as_deref(), strict, format.into())),
+        } => check_command(target.as_deref(), strict, format.into()),
         Command::Render {
             target,
             out,
@@ -90,7 +90,7 @@ fn serve_command(target: Option<&Path>, host: IpAddr, port: u16) -> Result<ExitC
     Ok(ExitCode::SUCCESS)
 }
 
-fn check_command(target: Option<&Path>, strict: bool, format: Format) -> ExitCode {
+fn check_command(target: Option<&Path>, strict: bool, format: Format) -> Result<ExitCode> {
     let report = wirebug::check_project(target);
     let counts = report.counts();
 
@@ -118,11 +118,12 @@ fn check_command(target: Option<&Path>, strict: bool, format: Format) -> ExitCod
                     s
                 })
                 .collect();
-            println!("[{}]", items.join(","));
+            print_stdout(&format!("[{}]\n", items.join(",")))
+                .context("writing the diagnostics to stdout")?;
         }
     }
 
-    exit_code(&report, strict)
+    Ok(exit_code(&report, strict))
 }
 
 fn render_command(
@@ -172,12 +173,19 @@ fn export_command(table: Table, args: &ExportArgs) -> Result<ExitCode> {
     let export = Export::new(design, table, args.format.into())?;
     match &args.out {
         Some(path) => eprintln!("{}", export.write(path)?),
-        None => std::io::stdout()
-            .lock()
-            .write_all(export.text().as_bytes())
-            .context("writing the table to stdout")?,
+        None => print_stdout(export.text()).context("writing the table to stdout")?,
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Write `text` to stdout. A reader that stops early (`| head`) closes the
+/// pipe while it is still being written; that is the reader's choice, not
+/// a failure, so a broken pipe counts as written.
+fn print_stdout(text: &str) -> std::io::Result<()> {
+    match std::io::stdout().lock().write_all(text.as_bytes()) {
+        Err(error) if error.kind() == ErrorKind::BrokenPipe => Ok(()),
+        written => written,
+    }
 }
 
 /// Print the check's problems to stderr, then the design to `action`
