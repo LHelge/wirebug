@@ -631,7 +631,8 @@ conductor to it attaches at the dot's centre (`layout::Anchor::Splice`; a
 pin's is `Anchor::Pin`), so they visibly converge there, and a pin wired
 to a splice faces it as it faces a connector. A conductor to a splice
 draws by the same rule as any other: a cable's through its cable box on
-the spine, a loose wire as one bezier. The splice's box (dot and text) is
+the spine, a loose wire through a lane on the spine when it crosses it,
+else as one bezier (below). The splice's box (dot and text) is
 `SpliceNode.bounds`, counted in the spine (`spine_x` takes every node's
 and splice's bounds) and the viewBox, and reported as an `IncludeBox`, so
 the overlap and canvas checks see it. One cable box per cable on one
@@ -657,13 +658,36 @@ partner, defensively straightening any non-pair group a hand-built
 design might carry); the box is sized per-row, a pair needing label +
 braid + label (`LABEL_CHAR_WIDTH` for the 9px font). Rows are
 ordered by each conductor's endpoint-y midpoint (the 1D occupancy step), the
-box's vertical centre is its strands' centroid, and multiple boxes are pushed
-apart along the spine (`build_cable_boxes`, gap `CABLE_GAP`). **Loose wires**
-(`LooseWire`/`render_loose`) draw as a single bezier pin-to-pin, no box.
+box's vertical centre is its strands' centroid (`layout::midpoint_y`).
+
+**Loose wires** (`LooseWire`/`render_loose`, a conductor in no cable)
+share the spine's occupancy with the boxes. One whose two ends lie either
+side of the spine (it crosses it — a pin-to-pin curve would run behind
+whatever box sits there and read as that cable's conductor) gets a
+**lane** (`layout::Lane`): a row of its own, like a one-conductor box
+without the box. The crossing loose wires between one pair of nodes
+(connector or splice, `AnchorNode`) form one `LooseSlot`, a lane each,
+ordered by midpoint y and centred on their centroid as a box's rows are.
+Boxes and slots are then stacked along the spine together
+(`HarnessLayout::occupy_spine`, `Occupant::stack`: sorted by top edge,
+ties in source order by each one's first conductor, then swept top-down,
+gap `CABLE_GAP`), and every lane's straight run spans the **spine
+column** — the widest box or lane, all centred on the spine — so a
+lane's leads end beyond every box's edge and, staying within their
+endpoints' x-span, never enter a box, and the annotation sits over the
+run's middle (`LooseWire::annotation_at`). A loose wire that stays on
+one side of the spine is one bezier pin to pin, annotated at its
+midpoint; it can only meet a box when one of its ends lies inside the
+spine column. The lanes are the only avoidance: leads still cross other
+leads, and a lane's lead can cross a strand's lead or another lane's.
+Lanes add their run's ends to the viewBox, so the canvas `check` sizes
+(`viewbox`) grows with them. A loose wire is drawn as one path per layer
+(`Cubic::chain_d`, class `cable-wire`, in a `<g class="cable">`).
 
 Every wire segment is one horizontally-flexed cubic bezier (`bezier.rs::flex`,
-`FLEX = 0.4`): a cabled conductor is lead-in → straight box run → lead-out;
-a loose wire is one curve. Control points share each endpoint's y and stay
+`FLEX = 0.4`): a cabled conductor is lead-in → straight box run → lead-out,
+and so is a loose wire in a lane (its run a flat cubic); any other loose
+wire is one curve. Control points share each endpoint's y and stay
 within the endpoints' x-span, so the curve never overshoots its bounding box
 (no viewbox padding needed). Each strand is stroked with `wire.color` (the SVG
 `stroke`) over a wider black casing path (WireViz's trick, so light
@@ -680,8 +704,8 @@ Three deliberate departures from the schematic's no-inference rule: pin
 **facing** is derived per pin from where its conductor goes (above),
 **pin-table scope** is derived from the view's conductors (above — an
 explicit `ports { }` listing was considered and rejected for harnesses),
-and wire routing is the bezier flex above — no object avoidance, unlike the
-schematic's orthogonal router.
+and wire routing is the bezier flex above — no object avoidance beyond a
+loose wire's lane, unlike the schematic's orthogonal router.
 **Shields** draw with their cable (`layout.rs`, `DrawnShield`): a cable
 box is drawn only for its conductors, as before, and then carries the
 screens of its cable — the overall one, and a pair's own when that pair is
@@ -1404,7 +1428,7 @@ src/
 │   │   ├── mod.rs       # HarnessRenderer; render orchestration + STYLE
 │   │   ├── layout.rs    # conductors (HarnessConductor), pin-table nodes, splices,
 │   │   │                #   spine + facing, cable boxes (centroid placement
-│   │   │                #   + de-overlap), loose wires
+│   │   │                #   + de-overlap), loose wires and their spine lanes
 │   │   ├── bezier.rs    # horizontally-flexed cubic bezier math (FLEX)
 │   │   └── draw.rs      # SVG emission: pin tables, cable boxes, bezier wires
 │   └── pinout/      # connector-face + pin-table renderer (kind: pinout)
