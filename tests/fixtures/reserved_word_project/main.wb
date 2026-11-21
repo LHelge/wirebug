@@ -1,0 +1,6 @@
+// `size` is contextual and a fine port name; `wire` is reserved, so
+// `check` reports it, once, on the word.
+component Lamp {
+    pub port size "SIZE";
+    pub port wire "W";
+}

@@ -17,7 +17,7 @@ use crate::dsl::ast;
 use crate::dsl::diagnostics::Problem;
 use crate::dsl::lex::{lex, significant};
 use crate::dsl::manifest::{self, Manifest};
-use crate::dsl::parse::parse_file;
+use crate::dsl::parse::{ParseError, parse_file};
 use crate::dsl::span::FileId;
 
 /// One loaded source file. `files[id.0]` is the file with that [`FileId`].
@@ -236,10 +236,17 @@ impl Loader<'_> {
 
         let parsed = parse_file(significant(&lexemes), id, src.len());
         for err in parsed.errors {
-            self.problems.push(Problem::Parse {
-                message: err.message,
-                src: named(),
-                at: err.span.into(),
+            self.problems.push(match err {
+                ParseError::Syntax { span, message } => Problem::Parse {
+                    message,
+                    src: named(),
+                    at: span.into(),
+                },
+                ParseError::ReservedWord { span, word } => Problem::ReservedWord {
+                    word,
+                    src: named(),
+                    at: span.into(),
+                },
             });
         }
         let ast = parsed.file?;

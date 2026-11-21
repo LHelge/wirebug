@@ -145,3 +145,75 @@ fn did_open_publishes_diagnostics() {
     );
     assert!(child.wait().expect("server exits").success());
 }
+
+/// A reserved word used as a name reaches the editor as its own diagnostic,
+/// ranged on the word, like any other parse problem.
+#[test]
+fn reserved_word_diagnostic_points_at_the_word() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join("wirebug.toml"),
+        "[project]\nname = \"t\"\nversion = \"0.0.0\"\n",
+    )
+    .expect("write manifest");
+    let main = dir.path().join("main.wb");
+    std::fs::write(&main, "component Root { pub port p \"P\"; }\n").expect("write main.wb");
+    let main = main.canonicalize().expect("canonical path");
+
+    let (mut child, mut stdin, mut stdout) = spawn_server();
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}"#,
+    );
+    read_message(&mut stdout);
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#,
+    );
+
+    // `size` is a contextual keyword and a fine name; `cable` is reserved.
+    let text = "component Root { pub port size \\\"S\\\"; pub port cable \\\"C\\\"; }\\n";
+    let open = format!(
+        r#"{{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{{"textDocument":{{"uri":"file://{}","languageId":"wirebug","version":1,"text":"{}"}}}}}}"#,
+        main.display(),
+        text,
+    );
+    send(&mut stdin, &open);
+
+    let note = read_message(&mut stdout);
+    assert_eq!(note["method"], "textDocument/publishDiagnostics");
+    let diagnostics = note["params"]["diagnostics"]
+        .as_array()
+        .expect("diagnostics array");
+    let [diagnostic] = diagnostics.as_slice() else {
+        panic!("expected one diagnostic: {note}");
+    };
+    assert_eq!(diagnostic["code"], "wirebug::reserved_word");
+    // The help line rides on the message, so the editor shows it too.
+    let message = diagnostic["message"].as_str().expect("message");
+    assert!(
+        message.starts_with("'cable' is a reserved word\n") && message.contains("rename it"),
+        "{message}"
+    );
+    let range = &diagnostic["range"];
+    assert_eq!(range["start"]["line"], 0);
+    // `component Root { pub port size "S"; pub port ` is 45 characters.
+    assert_eq!(range["start"]["character"], 45);
+    assert_eq!(range["end"]["character"], 50);
+
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}"#,
+    );
+    loop {
+        let message = read_message(&mut stdout);
+        if message["id"] == 2 {
+            break;
+        }
+    }
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","method":"exit","params":null}"#,
+    );
+    assert!(child.wait().expect("server exits").success());
+}

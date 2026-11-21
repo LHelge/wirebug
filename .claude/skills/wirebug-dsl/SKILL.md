@@ -560,6 +560,15 @@ Views live in the same file as the component they primarily document — like un
 - **Port labels** are short, human-readable, quoted: `"HV+"`, `"COIL+"`, `"ISO SPI+"`.
 - **Instance names** can carry role: `c_main_pos`, `c_precharge`, `module_1`, `inv`. Short is fine when context is clear.
 
+### Reserved and contextual words
+
+Keywords come in two kinds. Words are case-sensitive, so `Layout` or `Wire` is never a keyword.
+
+- **Reserved** — the words that declare the design: `use`, `component`, `extend`, `connector_type`, `connector`, `inline`, `port`, `pub`, `pin`, `pins`, `wire`, `cable`, `twisted`, `view`. They can never name anything; `pub port wire "W";` is an error, `'wire' is a reserved word`. Pick another name (`wire_1`, `w`).
+- **Contextual** — words that mean something only inside a view, a `connector_type` layout, a cavity line or a `use` line: `from`, `include`, `text`, `at`, `grid`, `enclosure`, `ports`, `layout`, `face`, `cavity`, `rows`, `cols`, `numbering`, `size`. Anywhere a name belongs they are ordinary names, so `pub port size "SIZE";`, an instance `grid: Sensor;`, `connector layout: Plug { … }`, `cable text { … }` and `include at at (1, 2);` are all valid.
+
+Other words the grammar reads in one place only (`schematic`, `harness`, `pinout`, `type`, `length`, `part`, `male`, `female`, `north`, `east`, `south`, `west`, the wire colors, the numbering modes, `large`) are not keywords at all.
+
 ## Common patterns
 
 **Series chain through a composite's external ports** — wires alternate between connecting external pub ports and chaining internal instances:

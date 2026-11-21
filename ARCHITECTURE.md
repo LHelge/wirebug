@@ -338,7 +338,10 @@ so one run reports many. Errors fail the run; warnings fail only under
 `--strict`. The checks, by phase:
 
 - **Load** — file not found for a `use`; no `wirebug.toml`; IO.
-- **Parse/lex** — syntax and lexical errors (with expected-token sets).
+- **Parse/lex** — syntax and lexical errors (with expected-token sets),
+  and a reserved keyword written where a name belongs (`reserved_word`,
+  on the word, with a rename hint; the parse takes the word as the name
+  and goes on, so one misused word is one error).
 - **Resolve** — undefined type, unresolved import, duplicate
   type/instance/port, unknown instance/port in a wire endpoint,
   private-port access (a non-`pub` port referenced from outside), unknown
@@ -635,6 +638,20 @@ DSL pipeline notes:
   `wire.then(wire)` once took builds from seconds to OOM. Boxing erases
   the type at each production for one dynamic dispatch per node. Keep
   new productions boxed, and never embed an unboxed heavyweight twice.
+- Keywords are **reserved** or **contextual** (`Token::is_contextual`;
+  one `KEYWORDS` table in `lex/token.rs` drives both lexing and display).
+  Contextual ones — the view, `connector_type` layout and cavity words,
+  plus `from` — mean something only in their own production; everywhere a
+  name belongs they are names. Every name goes through the one boxed
+  `ident` production, which takes an identifier or a contextual keyword
+  (`Token::as_name`). The reserved ones (the words that declare the design:
+  `component`, `port`, `pin`, `wire`, `cable`, `view`, …) are taken as
+  names too but recorded in the parser state, a chumsky `TruncateState`
+  that forgets what a backtracked branch recorded; `parse_file` turns them
+  into `ParseError::ReservedWord`. A new keyword is reserved unless listed
+  as contextual. LSP completion reads names through `Token::as_name` and
+  only treats `ports {`/`enclosure {` as their blocks in their own
+  position, so a connector named `ports` stays a connector body.
 - Files are loaded once each (by canonical path), so a `use` cycle or a
   diamond import is harmless and never double-reports. Directory layout
   never affects logical hierarchy — only `use` paths and DSL nesting do.

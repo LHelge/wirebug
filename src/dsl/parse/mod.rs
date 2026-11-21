@@ -4,8 +4,14 @@
 //! is `definition` (components nest), handled with [`recursive`]. Errors
 //! are chumsky `Rich` values carrying a span and an expected-set; we copy
 //! them into owned [`ParseError`]s so no parser lifetime escapes.
+//!
+//! Every name goes through one production, `ident`: an identifier, or a
+//! contextual keyword ([`Token::is_contextual`]) read as a name. A reserved
+//! keyword in name position is read as the name too, so the parse carries
+//! on, and recorded in the parser state for a reserved-word error.
 
-use chumsky::input::{Input, Stream, ValueInput};
+use chumsky::input::{Input, MapExtra, Stream, ValueInput};
+use chumsky::inspector::TruncateState;
 use chumsky::prelude::{IterParser, Parser, Rich, choice, end, extra, just, recursive, select};
 
 use crate::dsl::ast::*;
@@ -39,16 +45,36 @@ impl chumsky::span::Span for Span {
     }
 }
 
-/// An owned parse error (span + rendered message), independent of any
-/// parser lifetime. Becomes a miette diagnostic in the diagnostics layer.
+/// The reserved keywords read as names during a parse. A `TruncateState`
+/// forgets the ones recorded on a branch the parser backtracks out of, so
+/// only the words of the parse that stood are reported.
+type ReservedNames = TruncateState<Spanned<Token>>;
+
+/// The parser's extra: `Rich` errors, plus the reserved names seen.
+type Extra<'tok> = extra::Full<Rich<'tok, Token, Span>, ReservedNames, ()>;
+
+/// An owned parse error, independent of any parser lifetime. Becomes a
+/// miette diagnostic in the diagnostics layer.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ParseError {
-    pub span: Span,
-    pub message: String,
+pub enum ParseError {
+    /// A syntax error: the span and chumsky's rendered reason.
+    Syntax { span: Span, message: String },
+    /// A reserved keyword written where a name belongs
+    /// (`pub port wire "W";`). The parse took it as the name and went on.
+    ReservedWord { span: Span, word: String },
+}
+
+impl ParseError {
+    /// Where in the source the error points.
+    pub fn span(&self) -> Span {
+        match self {
+            ParseError::Syntax { span, .. } | ParseError::ReservedWord { span, .. } => *span,
+        }
+    }
 }
 
 /// Result of parsing one file: the AST (absent only on unrecoverable
-/// failure) and any errors encountered.
+/// failure) and any errors encountered, in source order.
 #[derive(Debug)]
 pub struct Parsed {
     pub file: Option<File>,
@@ -105,28 +131,52 @@ pub fn parse_file(tokens: Vec<(Token, Span)>, file: FileId, src_len: usize) -> P
         end: src_len,
     };
     let stream = Stream::from_iter(tokens).map(eoi, |(t, s)| (t, s));
-    let (file, errors) = parser().parse(stream).into_output_errors();
-    Parsed {
-        file,
-        errors: errors
-            .into_iter()
-            .map(|e| ParseError {
-                span: *e.span(),
-                message: e.reason().to_string(),
-            })
-            .collect(),
-    }
+    let mut reserved = ReservedNames::from(Vec::new());
+    let (file, syntax) = parser()
+        .parse_with_state(stream, &mut reserved)
+        .into_output_errors();
+    let mut errors: Vec<ParseError> = reserved
+        .0
+        .into_iter()
+        .map(|word| ParseError::ReservedWord {
+            span: word.span,
+            word: word.node.to_string(),
+        })
+        .chain(syntax.into_iter().map(|e| ParseError::Syntax {
+            span: *e.span(),
+            message: e.reason().to_string(),
+        }))
+        .collect();
+    errors.sort_by_key(|e| e.span().start);
+    Parsed { file, errors }
 }
 
-#[allow(clippy::type_complexity)]
-fn parser<'tok, I>() -> impl Parser<'tok, I, File, extra::Err<Rich<'tok, Token, Span>>>
+fn parser<'tok, I>() -> impl Parser<'tok, I, File, Extra<'tok>>
 where
     I: ValueInput<'tok, Token = Token, Span = Span>,
 {
     // --- Leaves ---
 
-    let ident = select! { Token::Ident(name) => name }
-        .map_with(|name, e| Spanned::new(Ident(name), e.span()));
+    // A name. A reserved keyword is accepted too, so one misused word is
+    // one targeted error instead of a parse that stops there.
+    let ident = select! {
+        Token::Ident(name) => Ok(name),
+        token if token.is_contextual() => Ok(token.to_string()),
+        token if token.is_reserved() => Err(token),
+    }
+    .map_with(|name, e: &mut MapExtra<'tok, '_, I, Extra<'tok>>| {
+        let span = e.span();
+        let name = match name {
+            Ok(name) => name,
+            Err(reserved) => {
+                let name = reserved.to_string();
+                e.state().push(Spanned::new(reserved, span));
+                name
+            }
+        };
+        Spanned::new(Ident(name), span)
+    })
+    .boxed();
 
     let string = select! { Token::Str(s) => s }.map_with(|s, e| Spanned::new(s, e.span()));
 
@@ -143,6 +193,7 @@ where
     });
 
     let connector_property = ident
+        .clone()
         .then_ignore(just(Token::Colon))
         .then(choice((
             string.map(ConnectorPropertyValue::Str),
@@ -171,7 +222,7 @@ where
                 .then(
                     just(Token::Numbering)
                         .ignore_then(just(Token::Colon))
-                        .ignore_then(ident)
+                        .ignore_then(ident.clone())
                         .then_ignore(just(Token::Semicolon))
                         .or_not(),
                 )
@@ -195,7 +246,7 @@ where
                 .then(number)
                 .delimited_by(just(Token::LParen), just(Token::RParen)),
         )
-        .then(just(Token::Size).ignore_then(ident).or_not())
+        .then(just(Token::Size).ignore_then(ident.clone()).or_not())
         .then_ignore(just(Token::Semicolon))
         .map_with(|((pin, (x, y)), size), e| ConnectorCavity {
             pin,
@@ -228,7 +279,7 @@ where
     ));
 
     let connector_type = just(Token::ConnectorType)
-        .ignore_then(ident)
+        .ignore_then(ident.clone())
         .then(string)
         .then(
             connector_type_item
@@ -272,7 +323,7 @@ where
     let port = just(Token::Pub)
         .or_not()
         .then_ignore(just(Token::Port))
-        .then(ident)
+        .then(ident.clone())
         .then(string)
         .then(pins)
         .then_ignore(just(Token::Semicolon))
@@ -290,7 +341,7 @@ where
         .boxed();
 
     let connector = just(Token::Connector)
-        .ignore_then(ident)
+        .ignore_then(ident.clone())
         .then(string.or_not())
         .then(
             port.clone()
@@ -307,9 +358,9 @@ where
         .boxed();
 
     let connector_instance = just(Token::Connector)
-        .ignore_then(ident)
+        .ignore_then(ident.clone())
         .then_ignore(just(Token::Colon))
-        .then(ident)
+        .then(ident.clone())
         .then(
             port.clone()
                 .repeated()
@@ -330,8 +381,9 @@ where
     // (`male`/`female` are validated in resolve, not the grammar) so a typo
     // gets a targeted diagnostic instead of a generic parse error.
     let inline_half = ident
+        .clone()
         .then_ignore(just(Token::Colon))
-        .then(ident)
+        .then(ident.clone())
         .then_ignore(just(Token::Semicolon))
         .map_with(|(key, type_name), e| InlineHalfDecl {
             key,
@@ -347,7 +399,7 @@ where
     ));
 
     let inline = just(Token::Inline)
-        .ignore_then(ident)
+        .ignore_then(ident.clone())
         .then(string.or_not())
         .then(
             inline_item
@@ -377,8 +429,9 @@ where
     // --- Instances ---
 
     let instance = ident
+        .clone()
         .then_ignore(just(Token::Colon))
-        .then(ident)
+        .then(ident.clone())
         .then(string.or_not())
         .then_ignore(just(Token::Semicolon))
         .map_with(|((name, type_name), label), e| Instance {
@@ -392,7 +445,8 @@ where
     // --- Wires ---
 
     let endpoint = ident
-        .then(just(Token::Dot).ignore_then(ident).or_not())
+        .clone()
+        .then(just(Token::Dot).ignore_then(ident.clone()).or_not())
         .map_with(|(first, second), e| match second {
             Some(port) => Endpoint {
                 instance: Some(first),
@@ -408,8 +462,8 @@ where
 
     // A color is `base` or two-tone `base/tracer` (`green/yellow`).
     let wire = just(Token::Wire)
-        .ignore_then(ident)
-        .then(just(Token::Slash).ignore_then(ident).or_not())
+        .ignore_then(ident.clone())
+        .then(just(Token::Slash).ignore_then(ident.clone()).or_not())
         .then(number)
         .then(string.or_not())
         .then(
@@ -434,11 +488,12 @@ where
     // --- Cables ---
 
     let cable_property = ident
+        .clone()
         .then_ignore(just(Token::Colon))
         .then(choice((
             string.map(CablePropertyValue::Str),
             number.map(CablePropertyValue::Number),
-            ident.map(CablePropertyValue::Ident),
+            ident.clone().map(CablePropertyValue::Ident),
         )))
         .then_ignore(just(Token::Semicolon))
         .map_with(|(key, value), e| CableProperty {
@@ -480,7 +535,7 @@ where
     ));
 
     let cable = just(Token::Cable)
-        .ignore_then(ident)
+        .ignore_then(ident.clone())
         .then(string.or_not())
         .then(
             cable_item
@@ -512,9 +567,11 @@ where
     // A `<side>: <port>, <port>;` line, flattened to one placement per port
     // (all sharing the line's side and span).
     let port_line = ident
+        .clone()
         .then_ignore(just(Token::Colon))
         .then(
             ident
+                .clone()
                 .separated_by(just(Token::Comma))
                 .allow_trailing()
                 .at_least(1)
@@ -544,13 +601,15 @@ where
 
     // One anchor slot: a grid coordinate or a side keyword. Resolve checks
     // that exactly one of an enclosure port's two slots is a side.
-    let anchor = choice((number.map(Anchor::Coord), ident.map(Anchor::Edge)));
+    let anchor = choice((number.map(Anchor::Coord), ident.clone().map(Anchor::Edge)));
 
     // `<port> at (<x>, <y>);` — a subject port placed on the enclosure edge.
     let enclosure_port = ident
+        .clone()
         .then_ignore(just(Token::At))
         .then(
             anchor
+                .clone()
                 .then_ignore(just(Token::Comma))
                 .then(anchor)
                 .delimited_by(just(Token::LParen), just(Token::RParen)),
@@ -573,8 +632,8 @@ where
         .map_with(|ports, e| Spanned::new(ports, e.span()));
 
     let include = just(Token::Include)
-        .ignore_then(ident)
-        .then(just(Token::Dot).ignore_then(ident).or_not())
+        .ignore_then(ident.clone())
+        .then(just(Token::Dot).ignore_then(ident.clone()).or_not())
         .then_ignore(just(Token::At))
         .then(
             number
@@ -597,7 +656,7 @@ where
         });
 
     let text_box = just(Token::Text)
-        .ignore_then(ident)
+        .ignore_then(ident.clone())
         .then_ignore(just(Token::At))
         .then(
             number
@@ -630,7 +689,7 @@ where
     ));
 
     let view = just(Token::View)
-        .ignore_then(ident)
+        .ignore_then(ident.clone())
         .then(string)
         .then(
             view_item
@@ -690,7 +749,7 @@ where
             just(Token::Component).to(DefKind::Component),
             just(Token::Extend).to(DefKind::Extend),
         ));
-        head.then(ident)
+        head.then(ident.clone())
             .then(
                 member
                     .repeated()
@@ -1417,6 +1476,97 @@ component b { }
         assert!(matches!(file.items[0], Item::Definition(_)));
         assert!(matches!(file.items[1], Item::View(_)));
         assert!(matches!(file.items[2], Item::Definition(_)));
+    }
+
+    #[test]
+    fn contextual_keywords_are_names_wherever_a_name_belongs() {
+        let file = parse_ok(
+            r#"use from from "from.wb";
+            component c {
+                pub port size "SIZE";
+                grid: Lamp;
+                connector layout "L" { pub port text "T" pin 1; }
+                connector face: Plug { pub port rows "R" pin 2; }
+                inline cavity { female: Plug; port numbering "N" pin 3; }
+                cable ports { wire red 1 [at.from, size]; }
+            }
+            view schematic "V" {
+                include at at (1, 2) ports { west: cols, enclosure; }
+                enclosure { include at (west, 1); }
+                text grid at (0, 4) "note";
+            }"#,
+        );
+        assert_eq!(file.uses[0].name.node.as_str(), "from");
+        let names: Vec<&str> = members(&file)
+            .iter()
+            .map(|m| match m {
+                Member::Port(p) => p.name.node.as_str(),
+                Member::Instance(i) => i.name.node.as_str(),
+                Member::Connector(c) => c.name.node.as_str(),
+                Member::ConnectorInstance(c) => c.name.node.as_str(),
+                Member::Inline(i) => i.name.node.as_str(),
+                Member::Cable(c) => c.name.node.as_str(),
+                other => panic!("unexpected member {other:?}"),
+            })
+            .collect();
+        assert_eq!(names, ["size", "grid", "layout", "face", "cavity", "ports"]);
+        let Item::View(v) = &file.items[1] else {
+            panic!("expected a view");
+        };
+        assert_eq!(v.includes[0].instance.node.as_str(), "at");
+        let placed: Vec<&str> = v.includes[0]
+            .ports
+            .iter()
+            .map(|p| p.port.node.as_str())
+            .collect();
+        assert_eq!(placed, ["cols", "enclosure"]);
+        assert_eq!(v.enclosure[0].port.node.as_str(), "include");
+        assert_eq!(v.texts[0].name.node.as_str(), "grid");
+    }
+
+    #[test]
+    fn reserved_word_as_a_name_is_reported_on_the_word_and_parsed_through() {
+        let src = r#"component c { pub port wire "W" pin 1; port ok "OK"; }"#;
+        let parsed = parse_str(src);
+        let [ParseError::ReservedWord { span, word }] = parsed.errors.as_slice() else {
+            panic!("expected one reserved-word error, got {:?}", parsed.errors);
+        };
+        assert_eq!(word, "wire");
+        assert_eq!(&src[span.start..span.end], "wire");
+        // The parse carried on: both ports are in the AST.
+        let file = parsed.file.expect("a file");
+        assert_eq!(members(&file).len(), 2);
+    }
+
+    #[test]
+    fn reserved_word_as_an_instance_name_is_reported() {
+        let parsed = parse_str("component c { cable: Lamp; }");
+        let words: Vec<&str> = parsed
+            .errors
+            .iter()
+            .map(|e| match e {
+                ParseError::ReservedWord { word, .. } => word.as_str(),
+                ParseError::Syntax { message, .. } => message.as_str(),
+            })
+            .collect();
+        assert_eq!(words, ["cable"]);
+    }
+
+    #[test]
+    fn reserved_words_read_as_names_on_an_abandoned_branch_are_not_reported() {
+        // An inline body and a cable body try a `<name>:` line before the
+        // statement that starts with `port`/`wire`/`twisted`; that attempt
+        // backtracks and must leave no error behind.
+        let parsed = parse_str(
+            r#"component c {
+                inline ic { port a "A" pin 1; pub port b "B" pin 2; }
+                cable cab {
+                    wire red 1 [x.a, y.a];
+                    twisted { wire red 1 [x.b, y.b]; wire blue 1 [x.c, y.c]; }
+                }
+            }"#,
+        );
+        assert!(parsed.is_ok(), "{:?}", parsed.errors);
     }
 
     #[test]
