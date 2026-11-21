@@ -105,9 +105,14 @@ impl RenderedView {
     }
 }
 
-/// Every font size, in px, that the rules of `style` set — through the
-/// `font` shorthand or `font-size`.
+/// Every font size, in px, that the rules of `style` set.
 fn font_sizes(style: &str) -> impl Iterator<Item = f64> + '_ {
+    font_declarations(style).flat_map(px_sizes)
+}
+
+/// The value of every `font` shorthand and `font-size` declaration in the
+/// rules of `style`.
+fn font_declarations(style: &str) -> impl Iterator<Item = &str> {
     style
         .split(['{', '}'])
         .skip(1)
@@ -115,8 +120,17 @@ fn font_sizes(style: &str) -> impl Iterator<Item = f64> + '_ {
         .flat_map(|body| body.split(';'))
         .filter_map(|declaration| declaration.split_once(':'))
         .filter(|(property, _)| matches!(property.trim(), "font" | "font-size"))
-        .flat_map(|(_, value)| value.split_whitespace())
-        .filter_map(|token| token.strip_suffix("px")?.parse().ok())
+        .map(|(_, value)| value)
+}
+
+/// The px sizes in a font declaration's `value`: `11px`, or `11px/1.2`
+/// with a line height. Sizes in other units are not read — a test holds
+/// every built-in stylesheet to one px size per declaration.
+fn px_sizes(value: &str) -> impl Iterator<Item = f64> + '_ {
+    value.split_whitespace().filter_map(|token| {
+        let size = token.split('/').next()?;
+        size.strip_suffix("px")?.parse().ok()
+    })
 }
 
 /// One view's entry in what [`render_views`] returns: the rendered view, or
@@ -586,6 +600,37 @@ pub(crate) mod tests {
 .b text { font-size: 7.5px; fill: #555; }
 .c { stroke: black; }";
         assert_eq!(font_sizes(style).collect::<Vec<_>>(), [13.0, 7.5]);
+    }
+
+    #[test]
+    fn px_sizes_reads_a_size_with_a_line_height_but_no_other_unit() {
+        let sizes = |value| px_sizes(value).collect::<Vec<_>>();
+        assert_eq!(sizes(" italic 8px/1.2 sans-serif"), [8.0]);
+        assert_eq!(sizes(" 7pt"), [] as [f64; 0]);
+        assert_eq!(sizes(" .6em"), [] as [f64; 0]);
+    }
+
+    /// The smallest-text check reads only px sizes, so a rule written in
+    /// any other form would slip past it: every font declaration of every
+    /// built-in stylesheet must carry exactly one size the check reads.
+    #[test]
+    fn every_built_in_font_declaration_has_one_size_the_check_reads() {
+        for (kind, style) in [
+            ("schematic", schematic::STYLE),
+            ("harness", harness::STYLE),
+            ("pinout", pinout::STYLE),
+        ] {
+            let declarations: Vec<&str> = font_declarations(style).collect();
+            assert!(!declarations.is_empty(), "{kind} sets no font");
+            for value in declarations {
+                assert_eq!(
+                    px_sizes(value).count(),
+                    1,
+                    "{kind} font `{}` must give one size in px",
+                    value.trim()
+                );
+            }
+        }
     }
 
     #[test]
