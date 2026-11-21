@@ -27,7 +27,7 @@ use crate::render::stamp::{STAMP_HEIGHT, STAMP_INSET, stamp_element};
 use crate::render::{Canvas, Drawing, SvgMode};
 
 use layout::{Connection, Grid, PlacedPort, Placement, ViewBox};
-use off_view::{OffView, Settled};
+use off_view::{Drawn, OffView};
 use route::Router;
 
 /// Grid step (world units) used when a view doesn't specify one. Ports
@@ -115,14 +115,13 @@ impl SchematicRenderer {
         let placement = Placement::compute(design, subject, view, grid)?;
 
         // Route before sizing the canvas: wires can detour outside the
-        // component bounds, so the viewBox has to enclose them too.
+        // component bounds, so the viewBox has to enclose them too. The
+        // off-view references are fitted round what is drawn, after.
+        let router = Router::build(&placement, grid.step());
         let connections = placement.connections();
-        let settled = Settled::new(&placement, &connections, grid);
-        let wires = match settled.wires {
-            Some(wires) => wires,
-            None => route(&settled.router, &connections, grid)?,
-        };
-        let references = settled.references;
+        let wires = route(&router, &connections, grid)?;
+        let codes = draw::code_anchors(&wires);
+        let references = off_views(design, view, &placement, &connections, &wires, &codes, grid);
 
         let mut doc = Document::new().set("xmlns", "http://www.w3.org/2000/svg");
         if mode.is_embed() {
@@ -165,27 +164,6 @@ impl SchematicRenderer {
             components_group = components_group.add(draw::render_component(name, pc));
         }
         doc = doc.add(components_group);
-
-        // Codes dodge wire crossings (the halo would visually cut the
-        // crossed wire) and each other (parallel wires in a channel would
-        // stack their codes); placed anchors become obstacles for the rest,
-        // in source order.
-        let crossings = draw::wire_crossings(&wires);
-        let mut placed: Vec<Point> = Vec::new();
-        let anchors: Vec<_> = wires
-            .iter()
-            .zip(&crossings)
-            .map(|(polyline, crossings)| {
-                let obstacles: Vec<_> = crossings
-                    .iter()
-                    .map(|&p| draw::CodeObstacle::crossing(p))
-                    .chain(placed.iter().map(|&p| draw::CodeObstacle::code(p)))
-                    .collect();
-                let anchor = draw::wire_code_anchor(polyline, &obstacles);
-                placed.extend(anchor.as_ref().map(|a| a.at));
-                anchor
-            })
-            .collect();
 
         // One net at a time, in source order: all its casings, then its
         // cores, its tracers and its codes. Within a net no casing lies over
@@ -239,7 +217,7 @@ impl SchematicRenderer {
                 wires_group = wires_group.add(tracer);
             }
             for &i in net {
-                if let Some(anchor) = &anchors[i] {
+                if let Some(anchor) = &codes[i] {
                     wires_group =
                         wires_group.add(draw::render_wire_code(anchor, connections[i].color));
                 }
@@ -247,8 +225,8 @@ impl SchematicRenderer {
         }
         doc = doc.add(wires_group);
 
-        // The references' texts go over every wire: only a reference with
-        // no room to keep clear can have one run under it.
+        // The references' texts go over every wire, though each is fitted
+        // clear of them.
         if !references.is_empty() {
             let mut off_views_group = Group::new().set("class", "off-views");
             for reference in &references {
@@ -297,9 +275,7 @@ impl SchematicRenderer {
                 })
             })
             .collect();
-        let connections = placement.connections();
-        let settled = Settled::new(&placement, &connections, grid);
-        let router = &settled.router;
+        let router = Router::build(&placement, grid.step());
         let crowded: Vec<_> = router
             .blocked_stubs(&placement)
             .into_iter()
@@ -315,6 +291,7 @@ impl SchematicRenderer {
             include: owner.and_then(include_named),
             port: port.port.clone(),
         };
+        let connections = placement.connections();
         let unroutable: Vec<_> = connections
             .iter()
             .filter(|c| !router.connects(c.a, c.b))
@@ -325,13 +302,16 @@ impl SchematicRenderer {
         // The canvas encloses the routed wires, and only a view whose every
         // wire routes is drawn at all.
         let canvas = if crowded.is_empty() && unroutable.is_empty() {
-            settled.wires.as_ref().map(|wires| {
+            route(&router, &connections, grid).ok().map(|wires| {
+                let codes = draw::code_anchors(&wires);
+                let references =
+                    off_views(design, view, &placement, &connections, &wires, &codes, grid);
                 let vb = viewbox(
                     design,
                     view,
                     &placement,
-                    wires,
-                    &settled.references,
+                    &wires,
+                    &references,
                     SvgMode::Standalone,
                 );
                 Canvas::new(vb.width, vb.height)
@@ -363,6 +343,37 @@ fn route(
     router.route_all(&pairs, grid.pitch()).map_err(|unrouted| {
         let [from, to] = connections[unrouted.pair].ends();
         ViewErrorKind::RouteFailed { from, to }
+    })
+}
+
+/// The off-view references of `view`, fitted round its routed `wires` and
+/// their `codes` ([`Placement::off_views`]), on the standalone SVG's canvas
+/// — the largest of the output modes, and the one `check` measures — so
+/// every mode draws the same references.
+fn off_views(
+    design: &Design,
+    view: &View,
+    placement: &Placement,
+    connections: &[Connection<'_>],
+    wires: &[Vec<Point>],
+    codes: &[Option<draw::CodeAnchor>],
+    grid: Grid,
+) -> Vec<OffView> {
+    let drawn = Drawn {
+        connections,
+        wires,
+        codes,
+    };
+    placement.off_views(&drawn, grid, |references| {
+        let vb = viewbox(
+            design,
+            view,
+            placement,
+            wires,
+            references,
+            SvgMode::Standalone,
+        );
+        Canvas::new(vb.width, vb.height)
     })
 }
 
