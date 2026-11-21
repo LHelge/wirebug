@@ -1,10 +1,10 @@
 ---
 id: a5p
 title: Dedicated statement for pulling in `extend` fragments
-status: proposed
+status: open
 priority: P3
 created: "2026-11-20T21:40:32.007032838Z"
-updated: "2026-11-20T21:40:32.009919338Z"
+updated: "2026-11-21T01:36:29.869189758Z"
 tags:
   - dsl
 parent: k7r
