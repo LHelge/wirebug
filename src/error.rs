@@ -110,7 +110,13 @@ pub enum ViewErrorKind {
     #[error(
         "canvas is {width} × {height} units, more than the {limit} units a view may span on a side"
     )]
-    CanvasTooLarge { width: f64, height: f64, limit: f64 },
+    CanvasTooLarge {
+        /// The canvas's sides, rounded up to whole units
+        /// (`render::Canvas::reported`).
+        width: f64,
+        height: f64,
+        limit: f64,
+    },
 
     /// Failed to parse our own rendered SVG before converting it (to PNG
     /// or PDF).

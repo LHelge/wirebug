@@ -553,6 +553,8 @@ pub enum Problem {
     )]
     ViewTooLarge {
         view: String,
+        /// The canvas's sides, rounded up to whole units
+        /// (`render::Canvas::reported`).
         width: f64,
         height: f64,
         limit: f64,

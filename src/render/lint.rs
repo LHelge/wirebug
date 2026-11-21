@@ -461,10 +461,11 @@ impl ViewLayout {
             .max_by(|a, b| span(a).1.total_cmp(&span(b).1))
             .map(|b| b.include);
         let label = |include: Option<usize>| include.map(|i| view.includes[i].span.into());
+        let (width, height) = canvas.reported();
         Some(Problem::ViewTooLarge {
             view: view.title.clone(),
-            width: canvas.width(),
-            height: canvas.height(),
+            width,
+            height,
             limit: MAX_CANVAS,
             src: project.source(view.span.file),
             at: view.span.into(),
