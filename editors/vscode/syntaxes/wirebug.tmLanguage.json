@@ -13,6 +13,7 @@
     { "include": "#declared-name" },
     { "include": "#include-target" },
     { "include": "#instance-name" },
+    { "include": "#property-key" },
     { "include": "#member-access" },
     { "include": "#enclosure-port" },
     { "include": "#ports-block" },
@@ -92,6 +93,14 @@
       "match": "\\b(?!(?:male|female)\\s*:)([a-z_][A-Za-z0-9_]*)\\s*(:)\\s*(?=[A-Z])",
       "captures": {
         "1": { "name": "variable.other.declaration.wirebug" },
+        "2": { "name": "punctuation.separator.key-value.wirebug" }
+      }
+    },
+    "property-key": {
+      "comment": "`key: value;` in a cable body, a wire body, or a connector_type: `length`, `type` and `part` are property keys, not keywords. After #instance-name, so `part: Plug;` stays an instance.",
+      "match": "\\b(length|type|part)\\s*(:)",
+      "captures": {
+        "1": { "name": "support.type.property-name.wirebug" },
         "2": { "name": "punctuation.separator.key-value.wirebug" }
       }
     },
