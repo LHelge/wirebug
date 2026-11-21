@@ -11,6 +11,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use wirebug::dsl::Format;
 use wirebug::export::{self, Table};
+use wirebug::render::pdf::Paper;
 
 /// Diagnostic output format for `check`, mirrored into [`Format`].
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]
@@ -89,12 +90,20 @@ pub enum Command {
         /// `.png` files.
         #[arg(long)]
         png: bool,
-        /// Export every view into a single A4 PDF (one page per view,
-        /// portrait or landscape chosen per view by aspect ratio) named
-        /// after the project (`<name>.pdf`), instead of per-view SVGs
-        /// and the HTML index.
+        /// Export every view into a single PDF (one page per view, on the
+        /// `--paper` size, portrait or landscape chosen per view by aspect
+        /// ratio) named after the project (`<name>.pdf`), instead of
+        /// per-view SVGs and the HTML index.
         #[arg(long, conflicts_with_all = ["png", "embed"])]
         pdf: bool,
+        /// The paper size of the `--pdf` pages. Each view is scaled to fit
+        /// its page; a view whose smallest text would print below 5 pt is
+        /// named in a warning with a paper size that would print it
+        /// legibly. The warning neither stops the PDF nor fails the run,
+        /// even under `--strict`, which concerns the project's own
+        /// warnings.
+        #[arg(long, value_enum, default_value_t = Paper::A4, requires = "pdf")]
+        paper: Paper,
         /// Emit SVGs suitable for embedding into another document or
         /// site: the built-in `<style>` is dropped (the host owns the
         /// look), the project-identity stamp is suppressed, and the root

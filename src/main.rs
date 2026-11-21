@@ -2,11 +2,13 @@
 //!
 //! Subcommands over the `.wb` DSL pipeline: `check` reports problems,
 //! `render` writes one SVG (or PNG) per view in the design — or, with
-//! `--pdf`, a single multi-page A4 PDF — `export` writes a build table as
-//! CSV or JSON, and `serve` runs a live-reloading dev server. Each
-//! discovers the project by walking up to `wirebug.toml` when given no
-//! target. A view that fails to render is reported by title and left out;
-//! the others are still written, and `render` exits non-zero.
+//! `--pdf`, a single multi-page PDF on the `--paper` size — `export`
+//! writes a build table as CSV or JSON, and `serve` runs a live-reloading
+//! dev server. Each discovers the project by walking up to `wirebug.toml`
+//! when given no target. A view that fails to render is reported by title
+//! and left out; the others are still written, and `render` exits
+//! non-zero. A PDF page whose text prints too small to read is written and
+//! warned of, without changing the exit status.
 
 mod cli;
 
@@ -26,6 +28,7 @@ use wirebug::dsl::ir::Design;
 use wirebug::dsl::{self, CheckReport, Format};
 use wirebug::export::{Export, Table};
 use wirebug::render::output::{Output, ViewFormat};
+use wirebug::render::pdf::Paper;
 use wirebug::render::png::PNG_SCALE;
 
 fn main() -> ExitCode {
@@ -51,8 +54,16 @@ fn run(cli: Cli) -> Result<ExitCode> {
             strict,
             png,
             pdf,
+            paper,
             embed,
-        } => render_command(target.as_deref(), &out, strict, png, pdf, embed),
+        } => render_command(
+            target.as_deref(),
+            &out,
+            strict,
+            png,
+            pdf.then_some(paper),
+            embed,
+        ),
         Command::Export { table } => {
             let (table, args) = table.into_parts();
             export_command(table, &args)
@@ -131,7 +142,7 @@ fn render_command(
     out_dir: &Path,
     strict: bool,
     png: bool,
-    pdf: bool,
+    pdf: Option<Paper>,
     embed: bool,
 ) -> Result<ExitCode> {
     let report = wirebug::check_project(target);
@@ -139,8 +150,8 @@ fn render_command(
         return Ok(ExitCode::FAILURE);
     };
 
-    let output = if pdf {
-        Output::Pdf
+    let output = if let Some(paper) = pdf {
+        Output::Pdf { paper }
     } else {
         let format = if png {
             ViewFormat::Png { scale: PNG_SCALE }
@@ -152,6 +163,11 @@ fn render_command(
     let written = output.write(design, out_dir)?;
     for failure in &written.failures {
         eprintln!("error: {failure}");
+    }
+    // Text too small to read on paper is the paper's fault, not the
+    // project's: warned of, never fatal, so `--strict` leaves it be.
+    for small in &written.small_text {
+        eprintln!("warning: {small}");
     }
     eprintln!("{written}");
     // A render that left out a failed view fails, so scripts and CI notice.

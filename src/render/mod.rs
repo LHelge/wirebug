@@ -83,6 +83,40 @@ impl RenderedView {
     pub fn failed(&self, cause: ViewErrorKind) -> ViewError {
         cause.in_view(&self.title, &self.kind)
     }
+
+    /// The smallest text a view of this kind can carry, in SVG user units
+    /// (px), or `None` for a kind no renderer draws.
+    ///
+    /// Read from the renderer's own stylesheet — the smallest `font` size
+    /// in any of its rules — plus, for a pinout, the floor its cavity
+    /// labels shrink to, the one text sized outside the stylesheet. So a
+    /// rule added with a smaller font is counted without being listed
+    /// here. It is the kind's smallest, not this drawing's: a schematic
+    /// without wire codes is judged by their size all the same.
+    #[must_use]
+    pub fn smallest_text(&self) -> Option<f64> {
+        let (style, shrinks_to) = match &self.kind {
+            ViewKind::Schematic => (schematic::STYLE, None),
+            ViewKind::Harness => (harness::STYLE, None),
+            ViewKind::Pinout => (pinout::STYLE, Some(pinout::MIN_LABEL_SIZE)),
+            ViewKind::Other(_) => return None,
+        };
+        font_sizes(style).chain(shrinks_to).reduce(f64::min)
+    }
+}
+
+/// Every font size, in px, that the rules of `style` set — through the
+/// `font` shorthand or `font-size`.
+fn font_sizes(style: &str) -> impl Iterator<Item = f64> + '_ {
+    style
+        .split(['{', '}'])
+        .skip(1)
+        .step_by(2)
+        .flat_map(|body| body.split(';'))
+        .filter_map(|declaration| declaration.split_once(':'))
+        .filter(|(property, _)| matches!(property.trim(), "font" | "font-size"))
+        .flat_map(|(_, value)| value.split_whitespace())
+        .filter_map(|token| token.strip_suffix("px")?.parse().ok())
 }
 
 /// One view's entry in what [`render_views`] returns: the rendered view, or
@@ -546,6 +580,26 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn font_sizes_reads_font_and_font_size_declarations_only() {
+        let style = "\
+.a { font: bold 13px sans-serif; stroke-width: 3px; }
+.b text { font-size: 7.5px; fill: #555; }
+.c { stroke: black; }";
+        assert_eq!(font_sizes(style).collect::<Vec<_>>(), [13.0, 7.5]);
+    }
+
+    #[test]
+    fn smallest_text_is_the_smallest_font_a_view_kind_draws() {
+        // Schematic wire codes and harness cable labels are the smallest
+        // stylesheet fonts; a pinout's cavity label can shrink below its
+        // stylesheet's smallest, to the fitting floor.
+        assert_eq!(view("S", "s.svg", "schematic").smallest_text(), Some(9.0));
+        assert_eq!(view("H", "h.svg", "harness").smallest_text(), Some(9.0));
+        assert_eq!(view("P", "p.svg", "pinout").smallest_text(), Some(6.0));
+        assert_eq!(view("O", "o.svg", "bom").smallest_text(), None);
+    }
+
+    #[test]
     fn pdf_filename_slugs_the_project_name() {
         let manifest = Manifest {
             name: "Aphid EVPack".to_string(),
@@ -712,7 +766,7 @@ component sys {
         let exporter = pdf::PdfExporter::new();
         let export = |titles: &[&str]| {
             let design = design_with_views(titles);
-            exporter.to_pdf(render_views(&design, SvgMode::Plain), None)
+            exporter.to_pdf(render_views(&design, SvgMode::Plain), None, pdf::Paper::A4)
         };
 
         let none_rendered = export(&["Lost", "Lost Too"]);

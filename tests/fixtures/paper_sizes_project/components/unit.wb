@@ -1,0 +1,3 @@
+component Unit {
+    pub port sig "SIG";
+}

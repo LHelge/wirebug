@@ -12,7 +12,7 @@
 pub(super) const LABEL_SIZE: f64 = 8.0;
 /// The smallest size a label shrinks to before it is cut: below it a
 /// printed label stops being readable.
-pub(super) const MIN_LABEL_SIZE: f64 = 6.0;
+pub(in crate::render) const MIN_LABEL_SIZE: f64 = 6.0;
 /// Sizes step down by this much, so a drawing holds a few distinct sizes
 /// rather than one per label.
 const SIZE_STEP: f64 = 0.5;
