@@ -1062,16 +1062,18 @@ where
         .ignore_then(block(enclosure_port))
         .map_with(|ports, e| Spanned::new(ports, e.span()));
 
+    // `(<x>, <y>)`: where an include or a text box sits, in grid cells.
+    let point = number
+        .then_ignore(just(Token::Comma))
+        .then(number)
+        .delimited_by(just(Token::LParen), just(Token::RParen))
+        .boxed();
+
     let include = just(Token::Include)
         .ignore_then(ident.clone())
         .then(just(Token::Dot).ignore_then(ident.clone()).or_not())
         .then_ignore(just(Token::At))
-        .then(
-            number
-                .then_ignore(just(Token::Comma))
-                .then(number)
-                .delimited_by(just(Token::LParen), just(Token::RParen)),
-        )
+        .then(point.clone())
         .then(choice((
             // A ports block ends the include — no trailing `;` after `}`.
             ports_block.map(Some),
@@ -1086,24 +1088,31 @@ where
             span: e.span(),
         });
 
+    // `text "<label>" at (<x>, <y>);`, or the deprecated named form
+    // `text <name> at (<x>, <y>) "<label>";`, which resolve warns about. The
+    // token after `text`, a string or a name, tells the two apart.
     let text_box = just(Token::Text)
-        .ignore_then(ident.clone())
-        .then_ignore(just(Token::At))
-        .then(
-            number
-                .then_ignore(just(Token::Comma))
-                .then(number)
-                .delimited_by(just(Token::LParen), just(Token::RParen)),
-        )
-        .then(string)
+        .ignore_then(choice((
+            string
+                .then_ignore(just(Token::At))
+                .then(point.clone())
+                .map(|(label, (x, y))| (None, x, y, label)),
+            ident
+                .clone()
+                .then_ignore(just(Token::At))
+                .then(point)
+                .then(string)
+                .map(|((name, (x, y)), label)| (Some(name), x, y, label)),
+        )))
         .then_ignore(just(Token::Semicolon))
-        .map_with(|((name, (x, y)), label), e| TextBox {
+        .map_with(|(name, x, y, label), e| TextBox {
             name,
             x,
             y,
             label,
             span: e.span(),
-        });
+        })
+        .boxed();
 
     let grid = just(Token::Grid)
         .ignore_then(just(Token::Colon))
@@ -1755,6 +1764,7 @@ inverter_control = face 47@(1, 0) large 21@(5, 0) 13@(16, 3)
             "view schematic \"V\" { grid: 10mm; }",
             "view schematic \"V\" { include a at (2cm, 0); }",
             "view schematic \"V\" { text t at (0, 1m) \"T\"; }",
+            "view schematic \"V\" { text \"T\" at (3mm, 0); }",
             "view schematic \"V\" { enclosure { p at (west, 2mm); } }",
             "connector_type T \"t\" { pitch: 2.54mm; }",
             "connector_type T \"t\" { layout grid { rows: 2mm; cols: 2; } }",
@@ -1770,6 +1780,7 @@ inverter_control = face 47@(1, 0) large 21@(5, 0) 13@(16, 3)
         10mm: only a `length` takes a unit: write `10`, without the `mm`
         2cm: only a `length` takes a unit: write `2`, without the `cm`
         1m: only a `length` takes a unit: write `1`, without the `m`
+        3mm: only a `length` takes a unit: write `3`, without the `mm`
         2mm: only a `length` takes a unit: write `2`, without the `mm`
         2.54mm: only a `length` takes a unit: write `2.54`, without the `mm`
         2mm: `rows` must be a whole number, got `2mm`
@@ -2230,7 +2241,8 @@ inverter_control = face 47@(1, 0) large 21@(5, 0) 13@(16, 3)
         assert_eq!(v.includes[0].instance.node.as_str(), "for");
         assert_eq!(v.includes[0].ports[0].port.node.as_str(), "for");
         assert_eq!(v.enclosure[0].port.node.as_str(), "for");
-        assert_eq!(v.texts[0].name.node.as_str(), "for");
+        let name = v.texts[0].name.as_ref().expect("the named form");
+        assert_eq!(name.node.as_str(), "for");
     }
 
     #[test]
@@ -2260,16 +2272,81 @@ inverter_control = face 47@(1, 0) large 21@(5, 0) 13@(16, 3)
     }
 
     #[test]
-    fn view_text_box_parses() {
+    fn view_text_box_parses_label_first_without_a_name() {
+        let file = parse_ok(r#"view schematic "V" { text "This is my textbox!" at (3, -4); }"#);
+        let Item::View(v) = &file.items[0] else {
+            panic!("expected view");
+        };
+        assert_eq!(v.texts.len(), 1);
+        assert!(v.texts[0].name.is_none(), "the current form has no name");
+        assert_eq!((v.texts[0].x.node, v.texts[0].y.node), (3.0, -4.0));
+        assert_eq!(v.texts[0].label.node, "This is my textbox!");
+    }
+
+    #[test]
+    fn deprecated_named_text_box_still_parses() {
         let file =
             parse_ok(r#"view schematic "V" { text note_1 at (3, 4) "This is my textbox!"; }"#);
         let Item::View(v) = &file.items[0] else {
             panic!("expected view");
         };
         assert_eq!(v.texts.len(), 1);
-        assert_eq!(v.texts[0].name.node.as_str(), "note_1");
+        let name = v.texts[0].name.as_ref().expect("the named form");
+        assert_eq!(name.node.as_str(), "note_1");
         assert_eq!((v.texts[0].x.node, v.texts[0].y.node), (3.0, 4.0));
         assert_eq!(v.texts[0].label.node, "This is my textbox!");
+    }
+
+    #[test]
+    fn both_text_box_forms_mix_in_one_view() {
+        let file = parse_ok(
+            r#"view schematic "V" {
+                text "new" at (0, 0);
+                text old at (1, 1) "old";
+                text "newer" at (2, 2);
+            }"#,
+        );
+        let Item::View(v) = &file.items[0] else {
+            panic!("expected view");
+        };
+        let got: Vec<(Option<&str>, &str)> = v
+            .texts
+            .iter()
+            .map(|t| {
+                (
+                    t.name.as_ref().map(|n| n.node.as_str()),
+                    t.label.node.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [(None, "new"), (Some("old"), "old"), (None, "newer")],
+            "source order, whatever the form"
+        );
+    }
+
+    #[test]
+    fn text_box_written_with_a_name_and_a_label_first_is_a_syntax_error() {
+        // The forms do not blend: a name before the label is the named
+        // form, whose label comes after the coordinates.
+        let parsed = parse_str(r#"view schematic "V" { text note "N" at (0, 0); }"#);
+        assert!(!parsed.errors.is_empty(), "a name and a leading label");
+    }
+
+    #[test]
+    fn text_box_current_form_rewrites_either_form() {
+        let file = parse_ok(
+            r#"view schematic "V" { text note at (8, -2.5) "120 Ω"; text "A" at (0, 1); }"#,
+        );
+        let Item::View(v) = &file.items[0] else {
+            panic!("expected view");
+        };
+        let rewritten: Vec<String> = v.texts.iter().map(|t| t.current_form()).collect();
+        assert_eq!(
+            rewritten,
+            [r#"text "120 Ω" at (8, -2.5);"#, r#"text "A" at (0, 1);"#]
+        );
     }
 
     #[test]
@@ -2345,7 +2422,8 @@ component b { }
             .collect();
         assert_eq!(placed, ["cols", "enclosure"]);
         assert_eq!(v.enclosure[0].port.node.as_str(), "include");
-        assert_eq!(v.texts[0].name.node.as_str(), "grid");
+        let name = v.texts[0].name.as_ref().expect("the named form");
+        assert_eq!(name.node.as_str(), "grid");
     }
 
     #[test]

@@ -906,6 +906,28 @@ pub enum Problem {
         at: SourceSpan,
     },
 
+    /// A text box written in the deprecated named form, `text <name> at (x,
+    /// y) "<label>";`. It still renders as before; the help shows the
+    /// statement in the current form, `text "<label>" at (x, y);`, whose box
+    /// takes no name.
+    #[error("text box `{name}` is written in the deprecated named form")]
+    #[diagnostic(
+        severity(Warning),
+        code(wirebug::deprecated_text_syntax),
+        help(
+            "write the label first and drop the name: `{rewrite}`; the named form will be removed"
+        )
+    )]
+    DeprecatedTextSyntax {
+        name: String,
+        /// The statement in the current form, with its label and coordinates.
+        rewrite: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("deprecated form")]
+        at: SourceSpan,
+    },
+
     /// An enclosure port's `at (x, y)` anchor isn't exactly one side keyword
     /// and one coordinate: two coordinates, two sides, or a side in the
     /// wrong slot (west/east must be the x slot, north/south the y slot).
@@ -1272,6 +1294,7 @@ impl Problem {
             | Problem::DuplicateViewText { .. }
             | Problem::DuplicateViewTitle { .. }
             | Problem::UnsupportedViewText { .. }
+            | Problem::DeprecatedTextSyntax { .. }
             | Problem::EnclosureAnchor { .. }
             | Problem::ContainmentCycle { .. }
             | Problem::WireArity { .. }

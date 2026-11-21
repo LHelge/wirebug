@@ -489,14 +489,22 @@ impl<'a> Resolver<'a> {
                 }
                 let mut text_names: HashMap<&str, Span> = HashMap::new();
                 for text in &view.texts {
-                    let name = text.name.node.as_str();
-                    if let Some(first) = text_names.insert(name, text.name.span) {
-                        problems.push(Problem::DuplicateViewText {
-                            name: name.to_string(),
+                    // Only the deprecated named form has a name to clash.
+                    if let Some(name) = &text.name {
+                        problems.push(Problem::DeprecatedTextSyntax {
+                            name: name.node.to_string(),
+                            rewrite: text.current_form(),
                             src: self.project.source(FileId(fi)),
-                            at: text.name.span.into(),
-                            first: first.into(),
+                            at: text.span.into(),
                         });
+                        if let Some(first) = text_names.insert(name.node.as_str(), name.span) {
+                            problems.push(Problem::DuplicateViewText {
+                                name: name.node.to_string(),
+                                src: self.project.source(FileId(fi)),
+                                at: name.span.into(),
+                                first: first.into(),
+                            });
+                        }
                     }
                     if !view_kind.is_schematic() {
                         problems.push(Problem::UnsupportedViewText {
@@ -784,6 +792,14 @@ mod tests {
             "component m { } view schematic \"V\" { text note at (0, 0) \"A\"; text note at (1, 1) \"B\"; }\n",
         )]);
         assert!(has(&p, "wirebug::duplicate_view_text"), "{:?}", codes(&p));
+        assert_eq!(
+            codes(&p)
+                .iter()
+                .filter(|c| *c == "wirebug::deprecated_text_syntax")
+                .count(),
+            2,
+            "each named box is also deprecated"
+        );
     }
 
     #[test]
@@ -840,9 +856,52 @@ mod tests {
     fn text_box_in_harness_view_is_reported() {
         let p = problems(&[(
             "main.wb",
-            "component m { } view harness \"H\" { text note at (0, 0) \"A\"; }\n",
+            "component m { } view harness \"H\" { text \"A\" at (0, 0); }\n",
         )]);
-        assert!(has(&p, "wirebug::unsupported_view_text"), "{:?}", codes(&p));
+        assert_eq!(codes(&p), ["wirebug::unsupported_view_text"]);
+    }
+
+    #[test]
+    fn named_text_box_warns_and_shows_the_current_form() {
+        use miette::Diagnostic;
+        let src = "component m { }\nview schematic \"V\" { text front_term at (8, -4)  \"120 Ω termination\"; }\n";
+        let p = problems(&[("main.wb", src)]);
+        let [problem] = p.as_slice() else {
+            panic!("expected one problem, got {:?}", codes(&p));
+        };
+        let Problem::DeprecatedTextSyntax { at, .. } = problem else {
+            panic!("expected the deprecation, got {:?}", codes(&p));
+        };
+        assert_eq!(problem.severity(), Some(miette::Severity::Warning));
+        assert_eq!(
+            &src[at.offset()..at.offset() + at.len()],
+            "text front_term at (8, -4)  \"120 Ω termination\";",
+            "labelled on the whole statement"
+        );
+        assert_eq!(
+            problem.help().map(|h| h.to_string()).as_deref(),
+            Some(
+                "write the label first and drop the name: `text \"120 Ω termination\" at (8, -4);`; the named form will be removed"
+            )
+        );
+    }
+
+    #[test]
+    fn text_boxes_in_the_current_form_have_no_name_to_clash() {
+        let p = problems(&[(
+            "main.wb",
+            "component m { } view schematic \"V\" { text \"A\" at (0, 0); text \"A\" at (0, 0); }\n",
+        )]);
+        assert!(p.is_empty(), "unexpected problems: {:?}", codes(&p));
+    }
+
+    #[test]
+    fn mixed_text_box_forms_warn_only_on_the_named_one() {
+        let p = problems(&[(
+            "main.wb",
+            "component m { } view schematic \"V\" { text note at (0, 0) \"A\"; text \"note\" at (1, 1); }\n",
+        )]);
+        assert_eq!(codes(&p), ["wirebug::deprecated_text_syntax"]);
     }
 
     /// A two-file project whose `main.wb` holds one `leaf` instance `l` and a

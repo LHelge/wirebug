@@ -38,7 +38,7 @@ view schematic "Overview" {
         west: at, from;
     }
 
-    text ports at (6, 14) "Two sensors on one loom";
+    text "Two sensors on one loom" at (6, 14);
 }
 
 view harness "Loom" {

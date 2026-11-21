@@ -151,7 +151,8 @@ pub(super) struct PlacedPort {
 }
 
 pub(super) struct PlacedText {
-    pub(super) name: String,
+    /// The deprecated named form's name, drawn as `data-text`.
+    pub(super) name: Option<String>,
     pub(super) origin: Point,
     pub(super) width: f64,
     pub(super) height: f64,

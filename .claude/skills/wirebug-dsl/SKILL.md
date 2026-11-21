@@ -580,6 +580,7 @@ Format:
 - `view <kind> "<title>" [for <Component>] { ... }` — `kind` is `schematic`, `harness`, or `pinout`; `for` names the subject (see above). Titles are unique across the project: a repeated title (in any file) is the `duplicate_view_title` warning; the repeat still renders, to a `_2`-suffixed file.
 - `grid: <n>;` — pixels per grid cell. Optional; a sensible default applies. It must be positive (`invalid_grid`), and in a `schematic` at least 7.5: ports sit two steps apart and the pitch must clear a port label, so `check` rejects a finer grid (`grid_too_fine`, naming the minimum). Harness and pinout views take any positive grid.
 - `include <name> at (x, y);` or `include <name> at (x, y) ports { ... }` — place a component by its instance name in the surrounding scope, at grid-cell coordinates (negative is fine). A bare include is a statement and ends with `;`; an include with a `ports { }` block ends at the closing brace, with **no** trailing `;` (like any other brace block).
+- `text "<label>" at (x, y);` — a free-text note at grid-cell coordinates (see Text boxes).
 - `ports { <side>: <port>, <port>; ... }` — optional. Each line lists the ports on one `side` (`north`, `east`, `south`, `west`), in the order they should appear on that edge. A `west: a, b;` line puts `a` above `b` on the west edge. List the same side more than once and the lines concatenate.
 
 **The `ports` block controls both layout and scope.** A port is drawn only if it's listed; everything else is hidden. An include with no `ports` block is a bare labelled box.
@@ -591,6 +592,27 @@ Sides are authored, never guessed: place a port on the side facing the box it wi
 Leave room between boxes. `check` lays each view out with the renderer's own box sizes and rejects includes whose boxes overlap (`overlapping_includes`, in every view kind; touching edges are fine). In a schematic a wire leaves its port by one grid step and keeps one step clear of every other box, so a wired port needs **two grid steps** of space before the box it faces (`include_too_close`), and boxes closer than two steps to each other leave no gap to route through (`unroutable_wire` when a wire is walled in). The enclosure is never in the way.
 
 Keep a view compact: its drawing may span at most 8192 units on a side, margins, title and stamp included (`view_too_large`, an error in every view kind, naming the size and labelled on the title and the includes farthest apart). Positions count grid steps, so `at (1000, 0)` on `grid: 20;` is already 20000 units out; split a sprawling drawing into several views instead.
+
+### Text boxes
+
+A schematic view may carry free-text notes — a termination resistor, a fitting instruction — each drawn as a small boxed label:
+
+```
+view schematic "CAN bus" {
+    grid: 20;
+
+    include front at (8, 12) ports {
+        south: can_h, can_l;
+    }
+
+    text "120 Ω termination" at (8, 4);
+}
+```
+
+- `text "<label>" at (x, y);` — the label first, as every declaration writes its display string, then the box's **centre** in grid cells (like an include's `at`; negative is fine). A text box has no name: nothing references it. The box sizes itself to the label.
+- Schematic views only: a `text` in a harness or pinout view is `unsupported_view_text`.
+- A text box is an annotation, not an include: `check` does not test it for overlap, so keep it clear of the boxes and wires yourself.
+- **Deprecated:** the older named form, `text <name> at (x, y) "<label>";`, still renders but will be removed. `check` warns on it (`deprecated_text_syntax`, fatal under `--strict`), its help showing the statement rewritten in the form above; two named boxes sharing a name in one view are `duplicate_view_text`. Write new text boxes label-first.
 
 ### Harness views
 
@@ -704,5 +726,6 @@ wire orange 50 [pack.hv_neg, inv.dc_neg, charger.hv_neg, conv.hv_neg];
 - **Do not** put a space between a length and its unit (`150mm`, not `150 mm`), or a unit on any number but a `length` (a gauge is `1.5`, not `1.5mm`).
 - **Do not** put part numbers in labels or comments when the type can carry them: write `part: "…";` (and `manufacturer`, `description`, `rating`) in the component body. Quote the value — `part: Fuse;` is an instance named `part`, not a part number.
 - **Do not** put a multi-endpoint wire inside a `cable` — cable conductors are point-to-point (exactly two endpoints). Keep fan-out rails as loose wires.
+- **Do not** name a text box (`text note at (0, 4) "…";` is the deprecated form): write the label first, `text "…" at (0, 4);`.
 - **Do not** use block comments (`/* */`). Line comments (`//`) only.
 - **Do not** mix grid coordinates with pixel coordinates. View positions are in grid cells.

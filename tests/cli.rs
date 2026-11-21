@@ -1143,7 +1143,7 @@ fn render_stops_at_check_instead_of_failing_on_an_uninstantiated_subject() {
 }
 
 /// Ports, instances, a connector and a cable named with contextual keywords
-/// (`at`, `from`, `size`, `grid`, `layout`, `text`, `ports`).
+/// (`at`, `from`, `size`, `grid`, `layout`, `text`).
 const CONTEXTUAL_NAMES_ROOT: &str = "tests/fixtures/contextual_names_project";
 
 #[test]
@@ -1177,6 +1177,100 @@ fn render_draws_a_project_named_with_contextual_keywords() {
         "text box drawn"
     );
     assert!(out.join("loom.svg").exists(), "harness view drawn");
+}
+
+/// A schematic view with one text box in the current form and one in the
+/// deprecated named form.
+const DEPRECATED_TEXT_ROOT: &str = "tests/fixtures/deprecated_text_project";
+
+#[test]
+fn check_warns_on_a_text_box_in_the_deprecated_named_form() {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--format", "json", DEPRECATED_TEXT_ROOT])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+    let main =
+        std::fs::read_to_string(format!("{DEPRECATED_TEXT_ROOT}/main.wb")).expect("fixture file");
+
+    // One warning, for the named box only, labelled on its statement, its
+    // help the statement rewritten with the author's label and position.
+    let [problem] = problems.as_slice() else {
+        panic!("expected one problem, got {problems:?}");
+    };
+    assert_eq!(problem["code"], "wirebug::deprecated_text_syntax");
+    assert_eq!(problem["severity"], "warning");
+    let [label] = problem["labels"].as_array().expect("labels").as_slice() else {
+        panic!("expected one label: {problem}");
+    };
+    let offset = label["span"]["offset"].as_u64().expect("offset") as usize;
+    let length = label["span"]["length"].as_u64().expect("length") as usize;
+    assert_eq!(
+        &main[offset..offset + length],
+        "text old_note at (26, 14) \"Deprecated form\";"
+    );
+    assert!(
+        problem["help"]
+            .as_str()
+            .expect("help")
+            .contains("`text \"Deprecated form\" at (26, 14);`"),
+        "{problem}"
+    );
+}
+
+#[test]
+fn check_strict_fails_on_a_text_box_in_the_deprecated_named_form() {
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--strict", DEPRECATED_TEXT_ROOT])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "text box `old_note` is written in the deprecated named form",
+        ));
+}
+
+#[test]
+fn render_draws_both_text_box_forms_and_keeps_the_named_box_data_text() {
+    for mode in [None, Some("--embed")] {
+        let tmp = tempdir().expect("tempdir");
+        let out = tmp.path().join("out");
+        let mut args = vec![
+            "render",
+            DEPRECATED_TEXT_ROOT,
+            "--out",
+            out.to_str().unwrap(),
+        ];
+        args.extend(mode);
+
+        Command::cargo_bin("wirebug")
+            .expect("binary present")
+            .args(&args)
+            .assert()
+            .success();
+        let svg = std::fs::read_to_string(out.join("bench.svg")).expect("bench.svg");
+        let boxes: Vec<&str> = svg
+            .match_indices("<g class=\"text-box\"")
+            .map(|(at, _)| &svg[at..at + svg[at..].find('>').expect("tag ends")])
+            .collect();
+        // Source order: the current form has no name to carry; the named
+        // box keeps the `data-text` a host may style against.
+        assert_eq!(
+            boxes,
+            [
+                "<g class=\"text-box\"",
+                "<g class=\"text-box\" data-text=\"old_note\""
+            ],
+            "{mode:?}"
+        );
+        assert!(svg.contains("Current form"), "{mode:?}");
+        assert!(svg.contains("Deprecated form"), "{mode:?}");
+    }
 }
 
 /// A port named with the reserved word `wire`.

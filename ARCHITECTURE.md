@@ -161,8 +161,16 @@ Distinct from clap's `--version`, which prints the wirebug app version.
   `part`), a string or number a property. A `Definition.kind` marks it
   `component` (introduces the type) or `extend` (a fragment merged into a
   same-named component). Every node carries a `Span`; type/instance/port
-  references are *unresolved* `Spanned<Ident>`. A statement with a
-  syntax error is skipped and leaves no node (see DSL validation).
+  references are *unresolved* `Spanned<Ident>`. A view's `text` boxes
+  (`ast::TextBox`, schematic annotations) are written label first, `text
+  "<label>" at (x, y);`, and have no name; the deprecated named form,
+  `text <name> at (x, y) "<label>";`, parses into the same node with
+  `name: Some(_)` (one boxed `text_box` production, the token after `text`
+  choosing the form) and flows through to `ir::TextBox.name`, which the
+  schematic renderer draws as the box's `data-text` — so a host styling an
+  old box keeps working until it is migrated; a nameless box has none. A
+  statement with a syntax error is skipped and leaves no node (see DSL
+  validation).
 - **Resolved registry** — every definition (top-level and nested) keyed by
   `DefId`, with flattened ports (connectors are grouping metadata, not a
   namespace — port names are unique per component), per-file type scopes
@@ -471,7 +479,13 @@ so one run reports many. Errors fail the run; warnings fail only under
   *subject*: each anchor must name exactly one side in the slot for its axis
   (`enclosure_anchor`) and an existing `pub` subject port (`unknown_port` /
   `private_port`), with the same duplicate guard (`duplicate_view_port`).
-  As a warning: a view title already used by another view anywhere in the
+  A `text` box outside a schematic view is `unsupported_view_text`; two
+  boxes of one view sharing a name are `duplicate_view_text` (only the
+  deprecated named form has a name to clash).
+  As warnings: a text box in the deprecated named form
+  (`deprecated_text_syntax`, labelled on the statement, its help the
+  statement rewritten label first by `ast::TextBox::current_form`); and a
+  view title already used by another view anywhere in the
   project (`duplicate_view_title`, compared exactly). The repeat is the
   primary label; the first view rides along as a miette `#[related]` note
   (`FirstViewTitle`), because one diagnostic carries one source file and the
