@@ -108,6 +108,15 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Create a new project: a wirebug.toml manifest, a minimal main.wb and,
+    /// when there is none, a .gitignore for the render output.
+    Init {
+        /// The project directory, created if absent. Defaults to the
+        /// current directory. The project is named after it. Refuses,
+        /// writing nothing, if it already holds a wirebug.toml or a
+        /// main.wb.
+        dir: Option<PathBuf>,
+    },
     /// Parse and validate a wirebug project, reporting any problems.
     Check {
         /// A project manifest, project directory, or `.wb` file. Defaults

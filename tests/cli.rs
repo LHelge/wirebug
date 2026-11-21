@@ -2581,3 +2581,162 @@ fn a_reader_that_stops_early_is_not_an_error() {
     assert!(ok, "check --format json: {stderr}");
     assert!(!stderr.contains("panicked"), "{stderr}");
 }
+
+#[test]
+fn init_scaffolds_a_project_that_checks_strictly_and_renders() {
+    let tmp = tempdir().expect("tempdir");
+    let dir = tmp.path().join("new").join("lamp-test");
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .arg("init")
+        .arg(&dir)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(format!(
+            "created {}",
+            dir.join("wirebug.toml").display()
+        )))
+        .stderr(predicate::str::contains(format!(
+            "created {}",
+            dir.join("main.wb").display()
+        )))
+        .stderr(predicate::str::contains(format!(
+            "created {}",
+            dir.join(".gitignore").display()
+        )))
+        .stderr(predicate::str::contains("next: `wirebug check "));
+
+    let manifest = std::fs::read_to_string(dir.join("wirebug.toml")).expect("manifest");
+    assert!(manifest.contains("name = \"lamp-test\""), "{manifest}");
+    assert!(manifest.contains("version = \"0.1.0\""), "{manifest}");
+    let gitignore = std::fs::read_to_string(dir.join(".gitignore")).expect(".gitignore");
+    assert!(gitignore.lines().any(|line| line == "out/"), "{gitignore}");
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--strict"])
+        .arg(&dir)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("ok — 3 instances, 1 views"));
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .arg("render")
+        .arg(&dir)
+        .assert()
+        .success();
+    let svg = std::fs::read_to_string(dir.join("out").join("overview.svg")).expect("view rendered");
+    assert!(svg.contains("Sensor"));
+    assert!(svg.contains("Controller"));
+    assert!(svg.contains("class=\"wire\""));
+}
+
+#[test]
+fn init_with_no_directory_scaffolds_the_current_one() {
+    let tmp = tempdir().expect("tempdir");
+    let dir = tmp.path().join("bench rig");
+    std::fs::create_dir(&dir).expect("mkdir");
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .arg("init")
+        .current_dir(&dir)
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "next: `wirebug check`, then `wirebug render`",
+        ));
+
+    let manifest = std::fs::read_to_string(dir.join("wirebug.toml")).expect("manifest");
+    assert!(manifest.contains("name = \"bench-rig\""), "{manifest}");
+    assert!(dir.join("main.wb").is_file());
+}
+
+#[test]
+fn init_refuses_a_directory_that_already_has_a_manifest() {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join("wirebug.toml"), "[project]\n").expect("write");
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .arg("init")
+        .arg(tmp.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(format!(
+            "{} already exists; not overwriting it",
+            tmp.path().join("wirebug.toml").display()
+        )));
+
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("wirebug.toml")).expect("read"),
+        "[project]\n"
+    );
+    assert!(!tmp.path().join("main.wb").exists());
+    assert!(!tmp.path().join(".gitignore").exists());
+}
+
+#[test]
+fn init_refuses_a_directory_that_already_has_a_main_wb() {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join("main.wb"), "// mine\n").expect("write");
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .arg("init")
+        .arg(tmp.path())
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("main.wb already exists"));
+
+    assert!(!tmp.path().join("wirebug.toml").exists());
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("main.wb")).expect("read"),
+        "// mine\n"
+    );
+}
+
+#[test]
+fn init_keeps_an_existing_gitignore() {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join(".gitignore"), "target/\n").expect("write");
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .arg("init")
+        .arg(tmp.path())
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(".gitignore").not());
+
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join(".gitignore")).expect("read"),
+        "target/\n"
+    );
+}
+
+#[test]
+fn help_text_mentions_init() {
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("init"));
+}
+
+#[test]
+fn init_help_says_what_it_writes_and_refuses() {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["init", "--help"])
+        .output()
+        .expect("runs");
+    assert!(output.status.success());
+    insta::assert_snapshot!(
+        "init_help",
+        String::from_utf8(output.stdout).expect("utf-8")
+    );
+}

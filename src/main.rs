@@ -1,6 +1,7 @@
 //! `wirebug` CLI binary.
 //!
-//! Subcommands over the `.wb` DSL pipeline: `check` reports problems,
+//! `init` scaffolds a new project. The other subcommands run over the
+//! `.wb` DSL pipeline: `check` reports problems,
 //! `render` writes one SVG (or PNG) per view in the design — or, with
 //! `--pdf`, a single multi-page PDF on the `--paper` size — `export`
 //! writes a build table as CSV or JSON, and `serve` runs a live-reloading
@@ -28,6 +29,7 @@ use wirebug::dsl::ir::Design;
 use wirebug::dsl::project;
 use wirebug::dsl::{self, CheckReport, Format};
 use wirebug::export::{Export, Table};
+use wirebug::init::Scaffold;
 use wirebug::render::output::{Output, ViewFormat};
 use wirebug::render::pdf::{BestPaper, Paper};
 use wirebug::render::png::PNG_SCALE;
@@ -44,6 +46,7 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> Result<ExitCode> {
     match cli.command {
+        Command::Init { dir } => init_command(dir.as_deref().unwrap_or(Path::new("."))),
         Command::Check {
             target,
             strict,
@@ -73,6 +76,13 @@ fn run(cli: Cli) -> Result<ExitCode> {
         Command::Lsp => lsp_command(),
         Command::Serve { target, port, host } => serve_command(target.as_deref(), host, port),
     }
+}
+
+/// Scaffold a project in `dir`, then say what was written and what to run
+/// next.
+fn init_command(dir: &Path) -> Result<ExitCode> {
+    eprintln!("{}", Scaffold::new(dir).write()?);
+    Ok(ExitCode::SUCCESS)
 }
 
 /// Run the language server. Stdout is the protocol channel, so tracing
