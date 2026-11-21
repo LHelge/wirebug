@@ -6,7 +6,7 @@
 //! [`render::render_views`] renders that design's views to SVG;
 //! [`export`] derives the build tables (the wire list and the pin tables)
 //! from it and writes them as CSV or JSON; [`init`] scaffolds a new
-//! project.
+//! project; [`skill`] carries the agent skill for the language.
 //!
 //! See the workspace `README.md` for the user-facing tour, `ARCHITECTURE.md`
 //! for how it works and `AGENTS.md` for the conventions.
@@ -19,6 +19,7 @@ pub mod lsp;
 mod pipeline;
 pub mod render;
 pub mod serve;
+pub mod skill;
 
 pub use error::{Error, Result};
 pub use pipeline::check_project;

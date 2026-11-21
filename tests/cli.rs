@@ -2913,3 +2913,133 @@ fn fmt_help_says_what_is_formatted_and_what_check_does() {
     assert!(output.status.success());
     insta::assert_snapshot!("fmt_help", String::from_utf8(output.stdout).expect("utf-8"));
 }
+
+#[test]
+fn skill_prints_the_embedded_skill_and_nothing_else() {
+    let tmp = tempdir().expect("tempdir");
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .current_dir(tmp.path())
+        .arg("skill")
+        .output()
+        .expect("runs");
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty(), "{:?}", output.stderr);
+    assert_eq!(
+        String::from_utf8(output.stdout).expect("utf-8"),
+        wirebug::skill::Skill::current().as_str()
+    );
+    assert_eq!(
+        std::fs::read_dir(tmp.path()).expect("read dir").count(),
+        0,
+        "printing the skill writes nothing"
+    );
+}
+
+#[test]
+fn printed_skill_names_the_wirebug_version_in_its_frontmatter() {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .arg("skill")
+        .output()
+        .expect("runs");
+    let text = String::from_utf8(output.stdout).expect("utf-8");
+    let frontmatter = text
+        .strip_prefix("---\n")
+        .and_then(|rest| rest.split_once("\n---\n"))
+        .map(|(front, _)| front)
+        .expect("the skill opens with a frontmatter block");
+    assert!(
+        frontmatter.starts_with("name: wirebug-dsl\n"),
+        "{frontmatter}"
+    );
+    assert!(
+        frontmatter.ends_with(&format!(
+            "\nmetadata:\n  wirebug-version: \"{}\"",
+            env!("CARGO_PKG_VERSION")
+        )),
+        "{frontmatter}"
+    );
+}
+
+#[test]
+fn skill_install_claude_creates_the_tree_under_the_current_directory_and_overwrites() {
+    let tmp = tempdir().expect("tempdir");
+    let installed = tmp.path().join(".claude/skills/wirebug-dsl/SKILL.md");
+    let install = || {
+        Command::cargo_bin("wirebug")
+            .expect("binary present")
+            .current_dir(tmp.path())
+            .args(["skill", "--install", "claude"])
+            .assert()
+            .success()
+            .stderr(predicate::str::contains(
+                "wrote .claude/skills/wirebug-dsl/SKILL.md",
+            ));
+    };
+
+    install();
+    let skill = wirebug::skill::Skill::current();
+    assert_eq!(
+        std::fs::read_to_string(&installed).expect("installed"),
+        skill.as_str()
+    );
+
+    std::fs::write(&installed, "stale").expect("write");
+    install();
+    assert_eq!(
+        std::fs::read_to_string(&installed).expect("reinstalled"),
+        skill.as_str()
+    );
+}
+
+#[test]
+fn skill_install_ignores_the_enclosing_project_root() {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(
+        tmp.path().join("wirebug.toml"),
+        "[project]\nname = \"p\"\nversion = \"0.1.0\"\n",
+    )
+    .expect("manifest");
+    let sub = tmp.path().join("sub");
+    std::fs::create_dir(&sub).expect("subdir");
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .current_dir(&sub)
+        .args(["skill", "--install", "claude"])
+        .assert()
+        .success();
+    assert!(sub.join(".claude/skills/wirebug-dsl/SKILL.md").is_file());
+    assert!(!tmp.path().join(".claude").exists());
+}
+
+#[test]
+fn skill_install_failure_names_the_path() {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(tmp.path().join(".claude"), "a file in the way").expect("write");
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .current_dir(tmp.path())
+        .args(["skill", "--install", "claude"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "failed to install the skill at .claude/skills/wirebug-dsl",
+        ));
+}
+
+#[test]
+fn skill_help_says_it_prints_or_installs() {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["skill", "--help"])
+        .output()
+        .expect("runs");
+    assert!(output.status.success());
+    insta::assert_snapshot!(
+        "skill_help",
+        String::from_utf8(output.stdout).expect("utf-8")
+    );
+}

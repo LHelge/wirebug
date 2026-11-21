@@ -1,6 +1,7 @@
-//! The language reference (`docs/`) and the agent skill
-//! (`.claude/skills/wirebug-dsl/SKILL.md`) show only `.wb` code the parser
-//! accepts.
+//! The language reference (`docs/`) and the agent skill's source
+//! (`skill/SKILL.md`) show only `.wb` code the parser accepts, and this
+//! repository's own installed skill is what `wirebug skill --install claude`
+//! writes.
 //!
 //! Every fenced block in those files carries an info string, so no `.wb`
 //! code can hide in an untagged block. A block tagged `wb` is checked:
@@ -33,7 +34,10 @@ use wirebug::dsl::parse::{Completeness, parse_file};
 use wirebug::dsl::span::FileId;
 
 const DOCS_DIR: &str = "docs";
-const SKILL: &str = ".claude/skills/wirebug-dsl/SKILL.md";
+const SKILL: &str = "skill/SKILL.md";
+/// Where `wirebug skill --install claude` puts the skill, so this
+/// repository's own agents read it.
+const INSTALLED_SKILL: &str = ".claude/skills/wirebug-dsl/SKILL.md";
 
 /// What a `wb` block holds, and so what it is wrapped in to parse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -254,6 +258,29 @@ fn skill_does_not_point_at_this_repository() {
             "the skill must stay self-contained, but it names `{pointer}`"
         );
     }
+}
+
+/// `skill` without its version line, which changes with every release and
+/// so is not part of what must stay in sync.
+fn without_version_line(skill: &str) -> String {
+    let version_line = format!("  {}: ", wirebug::skill::VERSION_KEY);
+    skill
+        .lines()
+        .filter(|line| !line.starts_with(&version_line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn the_installed_skill_is_the_install_output_of_the_source() {
+    let installed =
+        std::fs::read_to_string(repo_path(INSTALLED_SKILL)).expect("installed skill readable");
+    assert!(
+        without_version_line(&installed)
+            == without_version_line(wirebug::skill::Skill::current().as_str()),
+        "{INSTALLED_SKILL} differs from {SKILL}: edit {SKILL}, then run \
+         `cargo run -- skill --install claude`"
+    );
 }
 
 #[test]

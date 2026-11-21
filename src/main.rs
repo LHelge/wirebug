@@ -1,6 +1,7 @@
 //! `wirebug` CLI binary.
 //!
-//! `init` scaffolds a new project. The other subcommands run over the
+//! `init` scaffolds a new project and `skill` prints or installs the agent
+//! skill for the language. The other subcommands run over the
 //! `.wb` DSL pipeline: `check` reports problems,
 //! `render` writes one SVG (or PNG) per view in the design — or, with
 //! `--pdf`, a single multi-page PDF on the `--paper` size — `export`
@@ -23,7 +24,7 @@ use clap::Parser;
 use miette::{GraphicalReportHandler, JSONReportHandler};
 use tracing_subscriber::EnvFilter;
 
-use cli::{Cli, Command, ExportArgs, ManifestCommand, PaperArg};
+use cli::{Cli, Command, ExportArgs, Harness, ManifestCommand, PaperArg};
 use wirebug::dsl::diagnostics::Problem;
 use wirebug::dsl::format::ProjectFormat;
 use wirebug::dsl::ir::Design;
@@ -34,6 +35,7 @@ use wirebug::init::Scaffold;
 use wirebug::render::output::{Output, ViewFormat};
 use wirebug::render::pdf::{BestPaper, Paper};
 use wirebug::render::png::PNG_SCALE;
+use wirebug::skill::Skill;
 
 fn main() -> ExitCode {
     match run(Cli::parse()) {
@@ -76,6 +78,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
         }
         Command::Manifest { what } => Ok(manifest_command(what)),
         Command::Lsp => lsp_command(),
+        Command::Skill { install } => skill_command(install),
         Command::Serve { target, port, host } => serve_command(target.as_deref(), host, port),
     }
 }
@@ -84,6 +87,21 @@ fn run(cli: Cli) -> Result<ExitCode> {
 /// next.
 fn init_command(dir: &Path) -> Result<ExitCode> {
     eprintln!("{}", Scaffold::new(dir).write()?);
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Print the skill to stdout or, given a harness, install it under the
+/// current directory and name the file written on stderr.
+fn skill_command(install: Option<Harness>) -> Result<ExitCode> {
+    let skill = Skill::current();
+    match install {
+        None => print_stdout(skill.as_str()).context("writing the skill to stdout")?,
+        Some(harness) => {
+            let path = harness.install_path();
+            skill.install(path)?;
+            eprintln!("wrote {}", path.display());
+        }
+    }
     Ok(ExitCode::SUCCESS)
 }
 

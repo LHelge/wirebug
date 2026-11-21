@@ -12,6 +12,7 @@ categories = ["command-line-utilities", "visualization"]
 include = [
     "src/**",
     "templates/**",
+    "skill/**",
     "assets/fonts/**",
     "Cargo.toml",
     "Cargo.lock",

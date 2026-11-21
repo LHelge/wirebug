@@ -1,0 +1,19 @@
+---
+source: tests/cli.rs
+expression: "String::from_utf8(output.stdout).expect(\"utf-8\")"
+---
+Print the agent skill for the .wb language, matching this wirebug's version, or install it for a coding agent.
+
+Without `--install`, writes the skill to stdout and nothing else.
+
+Usage: wirebug skill [OPTIONS]
+
+Options:
+      --install <HARNESS>
+          Write the skill where this agent harness looks for it, under the current directory (not the project root; no project is needed), creating missing directories and overwriting an older copy. Prints the path written
+
+          Possible values:
+          - claude: Claude Code: `.claude/skills/wirebug-dsl/SKILL.md`
+
+  -h, --help
+          Print help (see a summary with '-h')
