@@ -767,7 +767,9 @@ view pinout "Inverter pinouts" {
 - The table is a crimping sheet: each pin's row lists what is crimped into
   the cavity, from the design's wires — per conductor a colour swatch with
   its IEC code, the gauge and the far end (`→ Vehicle.vcm.wake (x1:3)`; a
-  splice with what it joins, `→ Vehicle.sp_gnd (lamp.gnd, +2 more)`), a
+  splice with what it joins, `→ Vehicle.sp_gnd (lamp.gnd, +2 more)`; a
+  wire-through out of the component's own connectorless port,
+  `→ Vehicle.loom.out (leaves Loom)`), a
   double crimp as two lines under the pin, a screen's drain as `drain`
   (no colour or gauge), an unwired pin as a dash. A ganged port's
   conductors appear on each of its pins, marked `ganged 46+48`. Wires

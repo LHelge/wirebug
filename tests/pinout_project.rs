@@ -481,12 +481,21 @@ fn a_conductor_to_a_splice_names_it_and_what_it_joins_as_room_allows() {
 #[test]
 fn a_pin_no_conductor_reaches_is_listed_visibly_unwired() {
     let tables = tables();
-    for pin in ["42", "45"] {
-        let row = tables[0].row(pin);
-        assert!(row.unwired, "pin {pin}");
-        assert!(row.entries.is_empty(), "pin {pin}");
-    }
+    let ignition = tables[0].row("42");
+    assert!(ignition.unwired);
+    assert!(ignition.entries.is_empty());
     assert!(!tables[0].row("46").unwired);
+}
+
+#[test]
+fn a_conductor_leaving_through_a_boundary_port_is_marked_as_leaving() {
+    // The inverter's own TEMP+ conductor leaves it at the connectorless
+    // TEMP OUT, where the vehicle's wire carries it on: not a destination.
+    let tables = tables();
+    assert_eq!(
+        entries(tables[0].row("45")),
+        ["GY 0.5mm² → Vehicle.inv.temp_out (leaves Inverter)"]
+    );
 }
 
 #[test]

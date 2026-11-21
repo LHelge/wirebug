@@ -10,5 +10,6 @@ component Ecu {
         pub port gnd   "GND"   pin 5;
         pub port shld  "SHLD"  pin 6;
         pub port spare "SPARE" pin 7;
+        pub port temp  "TEMP"  pin 8;
     }
 }

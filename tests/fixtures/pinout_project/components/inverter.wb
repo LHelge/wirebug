@@ -1,12 +1,17 @@
 // Pins declared out of order (42 after 45; 46, 48, 47, 49), a label too
 // long for its cavity, cavities no port uses (40, 41, 43, 44 on the face;
-// 5, 6 on the grid), a port with no pin (SPARE), and ports no conductor
-// reaches (TEMP+, IGNITION SWITCHED FEED).
+// 5, 6 on the grid), a port with no pin (SPARE), a port no conductor
+// reaches (IGNITION SWITCHED FEED), and a conductor of the inverter's own
+// that leaves it through a connectorless port (TEMP+ out to TEMP OUT, the
+// wire-through pattern; the vehicle carries it on).
 
 use Control from "connectors.wb";
 use Signal from "connectors.wb";
 
 component Inverter {
+    pub port temp_out "TEMP OUT";
+    wire grey 0.5 [temp_pos, temp_out];
+
     connector control: Control {
         pub port temp_pos "TEMP+" pin 45;
         pub port ignition "IGNITION SWITCHED FEED" pin 42;
