@@ -33,34 +33,12 @@ use super::{
     SPLICE_LINE_HEIGHT, SVG_MARGIN,
 };
 use crate::dsl::ir::{
-    CableMeta, CableName, ConnectorName, ConnectorPropertyValue, Design, Half, Instance,
-    InstanceName, Pin, PortName, Screened, Shield, Splice, SpliceName, Wire, WireColor, WireEnd,
+    CableMeta, CableName, ConnectorName, ConnectorPropertyValue, Design, Half, HarnessNode,
+    HarnessScope, Instance, InstanceName, Pin, PortName, Screened, Shield, Splice, SpliceName,
+    Wire, WireColor, WireEnd,
 };
 use crate::render::geometry::{Bounds, Point, Side};
 use crate::render::lint::{DeclaredHalves, EndTarget, IncludeTarget, Segment};
-
-/// What a conductor end lands on in a harness view, and what an include
-/// places there: an instance's connector, or one of the subject's splices.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
-enum NodeKey<'d> {
-    Connector(&'d InstanceName, &'d ConnectorName),
-    Splice(&'d SpliceName),
-}
-
-impl<'d> NodeKey<'d> {
-    /// What `include` places in a view of `subject`: an instance's
-    /// connector, a splice (an include naming one alone), or nothing a
-    /// harness draws.
-    fn of(subject: &'d Instance, include: &'d crate::dsl::ir::Include) -> Option<Self> {
-        match &include.connector {
-            Some(connector) => Some(Self::Connector(&include.instance, connector)),
-            None => subject
-                .splices
-                .get_key_value(&SpliceName::from(include.instance.as_str()))
-                .map(|(name, _)| Self::Splice(name)),
-        }
-    }
-}
 
 /// One pin of a connector node, as a table row.
 pub(super) struct PinRow {
@@ -335,8 +313,8 @@ impl<'d> ConnectorEnd<'d> {
     }
 
     /// The node this end draws in.
-    fn node(&self) -> NodeKey<'d> {
-        NodeKey::Connector(self.instance, self.connector)
+    fn node(&self) -> HarnessNode<'d> {
+        HarnessNode::Connector(self.instance, self.connector)
     }
 
     /// How a harness view can include this end's connector. An inline
@@ -391,14 +369,6 @@ impl<'d> HarnessEnd<'d> {
         }
     }
 
-    /// The node this end draws in.
-    fn node(&self) -> NodeKey<'d> {
-        match self {
-            Self::Connector(connector) => connector.node(),
-            Self::Splice { splice, .. } => NodeKey::Splice(splice),
-        }
-    }
-
     /// The include that draws this end's node.
     pub(super) fn target(&self) -> EndTarget<'d> {
         match self {
@@ -426,10 +396,11 @@ impl<'d> HarnessConductor<'d> {
     pub(super) fn all(design: &'d Design, subject: &'d Instance) -> impl Iterator<Item = Self> {
         subject.wires.iter().enumerate().flat_map(move |(w, wire)| {
             wire.segments().filter_map(move |segment| {
+                HarnessNode::between(design, subject, segment.ends)?;
                 let [from, to] = segment.ends;
                 let from = HarnessEnd::of(design, subject, from)?;
                 let to = HarnessEnd::of(design, subject, to)?;
-                (from.node() != to.node()).then_some(Self {
+                Some(Self {
                     segment: Segment {
                         wire: w,
                         index: segment.index,
@@ -521,41 +492,27 @@ impl HarnessLayout {
     ) -> Self {
         let mut nodes = Vec::new();
         let mut splices = Vec::new();
-        let mut node_index: HashMap<NodeKey, usize> = HashMap::new();
+        let mut node_index: HashMap<HarnessNode, usize> = HashMap::new();
         let mut splice_index: HashMap<&SpliceName, usize> = HashMap::new();
 
         // The conductors this view draws: those whose two ends' nodes (a
         // connector or a splice) are both included.
-        let included: HashSet<NodeKey> = view
-            .includes
-            .iter()
-            .filter_map(|inc| NodeKey::of(subject, inc))
-            .collect();
+        let scope = HarnessScope::new(design, subject, view);
         let kept: Vec<HarnessConductor> = HarnessConductor::all(design, subject)
-            .filter(|c| c.ends.iter().all(|end| included.contains(&end.node())))
+            .filter(|c| scope.draws(c.ends.each_ref().map(HarnessEnd::end)))
             .collect();
 
         // The shields of the cables drawn: the overall one of each, and a
         // pair's own when the pair is drawn. A cable none of whose
         // conductors is drawn draws no box, and so none of its shields.
-        let drawn_cables: HashSet<&CableName> =
-            kept.iter().filter_map(|c| c.wire.cable.as_ref()).collect();
-        let drawn_pairs: HashSet<(&CableName, u32)> = kept
-            .iter()
-            .filter_map(|c| Some((c.wire.cable.as_ref()?, c.wire.twisted_group?)))
-            .collect();
         let shields: Vec<DrawnShield> = subject
             .cables
             .iter()
-            .filter(|(name, _)| drawn_cables.contains(name))
             .flat_map(|(cable, meta)| {
                 meta.shields()
                     .map(move |(screened, shield)| (cable, screened, shield))
             })
-            .filter(|&(cable, screened, _)| match screened {
-                Screened::Cable => true,
-                Screened::Pair(group) => drawn_pairs.contains(&(cable, group)),
-            })
+            .filter(|&(cable, screened, _)| scope.draws_screen(cable, screened))
             .map(|(cable, screened, shield)| DrawnShield {
                 cable,
                 screened,
@@ -563,19 +520,19 @@ impl HarnessLayout {
                 ends: shield
                     .ends()
                     .iter()
+                    .filter(|end| scope.draws_drain(cable, screened, end))
                     .filter_map(|end| match HarnessEnd::of(design, subject, end)? {
                         HarnessEnd::Connector(connector) => Some(connector),
                         // A drain lands on a pin: resolve rejects a splice.
                         HarnessEnd::Splice { .. } => None,
                     })
-                    .filter(|end| included.contains(&end.node()))
                     .collect(),
             })
             .collect();
 
         // Auto-scope: which ports of each included connector carry a kept
         // conductor or a drawn shield's drain.
-        let mut wired: HashMap<NodeKey, HashSet<PortName>> = HashMap::new();
+        let mut wired: HashMap<HarnessNode, HashSet<PortName>> = HashMap::new();
         let conductor_ends = kept
             .iter()
             .flat_map(|c| &c.ends)
@@ -594,8 +551,8 @@ impl HarnessLayout {
         let no_pins = HashSet::new();
         for (i, inc) in view.includes.iter().enumerate() {
             let centre = Point::new(inc.x * step, inc.y * step);
-            match NodeKey::of(subject, inc) {
-                Some(key @ NodeKey::Connector(instance, conn)) => {
+            match HarnessNode::of_include(subject, inc) {
+                Some(key @ HarnessNode::Connector(instance, conn)) => {
                     let Some(child) = subject.children.get(instance).and_then(|p| design.get(p))
                     else {
                         continue;
@@ -607,7 +564,7 @@ impl HarnessLayout {
                     node_index.insert(key, nodes.len());
                     nodes.push(node);
                 }
-                Some(NodeKey::Splice(name)) => {
+                Some(HarnessNode::Splice(name)) => {
                     splice_index.insert(name, splices.len());
                     splices.push(SpliceNode::new(i, &subject.splices[name], centre));
                 }

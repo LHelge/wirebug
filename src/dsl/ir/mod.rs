@@ -12,6 +12,10 @@ use crate::dsl::ast;
 use crate::dsl::manifest::Manifest;
 use crate::dsl::span::Span;
 
+mod harness;
+
+pub use harness::{HarnessNode, HarnessScope};
+
 macro_rules! name_newtype {
     ($name:ident, $doc:literal) => {
         #[doc = $doc]
@@ -305,7 +309,9 @@ impl fmt::Display for ViewKind {
     }
 }
 
-/// A physical connector pin (a positive integer in the DSL).
+/// A physical connector pin (a positive integer in the DSL). Pins order
+/// numerically (`1, 2, 10`): the order a connector's pin table lists its
+/// cavities in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Pin(pub u32);
 
