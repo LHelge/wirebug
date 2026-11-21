@@ -96,16 +96,6 @@ impl Dir {
             Dir::West => Dir::East,
         }
     }
-
-    /// Unit step `(dx, dy)` in SVG coordinates.
-    pub(super) fn unit(self) -> (f64, f64) {
-        match self {
-            Dir::North => (0.0, -1.0),
-            Dir::South => (0.0, 1.0),
-            Dir::East => (1.0, 0.0),
-            Dir::West => (-1.0, 0.0),
-        }
-    }
 }
 
 impl From<Side> for Dir {

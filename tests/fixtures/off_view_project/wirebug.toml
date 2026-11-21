@@ -1,0 +1,5 @@
+[project]
+name = "off-view-project"
+version = "0.1.0"
+description = "Off-view fixture: listed ports whose wires reach ends the view does not draw"
+revision = "fixture"

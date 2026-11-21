@@ -5,11 +5,14 @@
 //! polyline between two ports.
 //!
 //! - `layout` turns a design's view into positioned boxes and ports.
+//! - `off_view` lays out the reference beside a port whose wires the view
+//!   does not draw, and settles the routing around those references.
 //! - `draw` emits the SVG for those boxes, ports, and wires.
 //! - `route` finds object-avoiding orthogonal paths for the wires.
 
 mod draw;
 pub(super) mod layout;
+mod off_view;
 mod pin;
 mod route;
 
@@ -24,6 +27,7 @@ use crate::render::stamp::{STAMP_HEIGHT, STAMP_INSET, stamp_element};
 use crate::render::{Canvas, SvgMode};
 
 use layout::{Connection, Grid, PlacedPort, Placement, ViewBox};
+use off_view::{OffView, Settled};
 use route::Router;
 
 /// Grid step (world units) used when a view doesn't specify one. Ports
@@ -74,6 +78,7 @@ pub(super) const STYLE: &str = "\
 .wire { fill: none; stroke-width: 2; }
 .wire-tracer { fill: none; stroke-width: 2; stroke-dasharray: 4 4; }
 .wire-code { font: italic 9px sans-serif; fill: #555; text-anchor: middle; paint-order: stroke; stroke: white; stroke-width: 3px; stroke-linejoin: round; }
+.off-view-label { font: 10px sans-serif; fill: #333; paint-order: stroke; stroke: white; stroke-width: 3px; stroke-linejoin: round; }
 .enclosure rect { fill: none; stroke: #888; stroke-width: 1.5; stroke-dasharray: 6 4; }
 .enclosure-label { font: bold 13px sans-serif; text-anchor: middle; fill: #555; }
 .text-box rect { fill: #fff9d6; stroke: #8a7a2f; stroke-width: 1.25; }
@@ -108,9 +113,13 @@ impl SchematicRenderer {
 
         // Route before sizing the canvas: wires can detour outside the
         // component bounds, so the viewBox has to enclose them too.
-        let router = Router::build(&placement, grid.step());
         let connections = placement.connections();
-        let wires = route(&router, &connections, grid)?;
+        let settled = Settled::new(&placement, &connections, grid);
+        let wires = match settled.wires {
+            Some(wires) => wires,
+            None => route(&settled.router, &connections, grid)?,
+        };
+        let references = settled.references;
 
         let mut doc = Document::new().set("xmlns", "http://www.w3.org/2000/svg");
         if mode.is_embed() {
@@ -120,7 +129,7 @@ impl SchematicRenderer {
         }
 
         let has_title = mode.shows_title(view);
-        let viewbox = viewbox(design, view, &placement, &wires, mode);
+        let viewbox = viewbox(design, view, &placement, &wires, &references, mode);
         let manifest = mode.stamp(design);
         doc = doc.set(
             "viewBox",
@@ -184,23 +193,54 @@ impl SchematicRenderer {
         // cores, its tracers and its codes. Within a net no casing lies over
         // a core, so where its wires meet they read as joined; the next
         // net's casing cuts an earlier net's core where they cross, so the
-        // two read as passing over each other.
+        // two read as passing over each other. An off-view stub belongs to
+        // the net of the drawn wires leaving its port, under their cores,
+        // so where a drawn wire shares its first run the drawn colour
+        // shows; a stub on a port with no drawn wire is a net of its own,
+        // drawn before the rest.
+        let nets = Connection::nets(&connections);
+        let net_of = |reference: &OffView| {
+            let end = reference.end();
+            nets.iter()
+                .position(|net| net.iter().any(|&i| connections[i].ends().contains(&end)))
+        };
+        let stub_nets: Vec<Option<usize>> = references.iter().map(net_of).collect();
+        let stubs_of = |net: Option<usize>| {
+            references
+                .iter()
+                .zip(&stub_nets)
+                .filter(move |(_, n)| **n == net)
+                .map(|(reference, _)| draw::WireDrawing::off_view_stub(reference))
+        };
         let mut wires_group = Group::new().set("class", "wires");
-        for net in Connection::nets(&connections) {
+        for stub in stubs_of(None) {
+            for layer in [Some(stub.casing()), Some(stub.core()), stub.tracer()]
+                .into_iter()
+                .flatten()
+            {
+                wires_group = wires_group.add(layer);
+            }
+        }
+        for (n, net) in nets.iter().enumerate() {
+            let stubs: Vec<_> = stubs_of(Some(n)).collect();
             let drawn: Vec<_> = net
                 .iter()
                 .map(|&i| draw::WireDrawing::new(&wires[i], connections[i].color))
                 .collect();
-            for wire in &drawn {
+            for wire in drawn.iter().chain(&stubs) {
                 wires_group = wires_group.add(wire.casing());
             }
-            for wire in &drawn {
+            for wire in stubs.iter().chain(&drawn) {
                 wires_group = wires_group.add(wire.core());
             }
-            for tracer in drawn.iter().filter_map(draw::WireDrawing::tracer) {
+            for tracer in stubs
+                .iter()
+                .chain(&drawn)
+                .filter_map(draw::WireDrawing::tracer)
+            {
                 wires_group = wires_group.add(tracer);
             }
-            for &i in &net {
+            for &i in net {
                 if let Some(anchor) = &anchors[i] {
                     wires_group =
                         wires_group.add(draw::render_wire_code(anchor, connections[i].color));
@@ -208,6 +248,16 @@ impl SchematicRenderer {
             }
         }
         doc = doc.add(wires_group);
+
+        // The references' texts go over every wire: only a reference with
+        // no room to keep clear can have one run under it.
+        if !references.is_empty() {
+            let mut off_views_group = Group::new().set("class", "off-views");
+            for reference in &references {
+                off_views_group = off_views_group.add(draw::render_off_view(reference));
+            }
+            doc = doc.add(off_views_group);
+        }
 
         let mut texts_group = Group::new().set("class", "text-boxes");
         for text in &placement.texts {
@@ -249,7 +299,9 @@ impl SchematicRenderer {
                 })
             })
             .collect();
-        let router = Router::build(&placement, grid.step());
+        let connections = placement.connections();
+        let settled = Settled::new(&placement, &connections, grid);
+        let router = &settled.router;
         let crowded: Vec<_> = router
             .blocked_stubs(&placement)
             .into_iter()
@@ -265,7 +317,6 @@ impl SchematicRenderer {
             include: owner.and_then(include_named),
             port: port.port.clone(),
         };
-        let connections = placement.connections();
         let unroutable: Vec<_> = connections
             .iter()
             .filter(|c| !router.connects(c.a, c.b))
@@ -276,8 +327,15 @@ impl SchematicRenderer {
         // The canvas encloses the routed wires, and only a view whose every
         // wire routes is drawn at all.
         let canvas = if crowded.is_empty() && unroutable.is_empty() {
-            route(&router, &connections, grid).ok().map(|wires| {
-                let vb = viewbox(design, view, &placement, &wires, SvgMode::Standalone);
+            settled.wires.as_ref().map(|wires| {
+                let vb = viewbox(
+                    design,
+                    view,
+                    &placement,
+                    wires,
+                    &settled.references,
+                    SvgMode::Standalone,
+                );
                 Canvas::new(vb.width, vb.height)
             })
         } else {
@@ -310,17 +368,18 @@ fn route(
     })
 }
 
-/// The viewBox `view` is drawn in under `mode`: `placement` and its routed
-/// `wires`, with room for the title and the identity stamp when the mode
-/// draws them.
+/// The viewBox `view` is drawn in under `mode`: `placement`, its routed
+/// `wires` and its off-view `references`, with room for the title and the
+/// identity stamp when the mode draws them.
 fn viewbox(
     design: &Design,
     view: &View,
     placement: &Placement,
     wires: &[Vec<Point>],
+    references: &[OffView],
     mode: SvgMode,
 ) -> ViewBox {
-    let mut viewbox = placement.viewbox(mode.shows_title(view), wires);
+    let mut viewbox = placement.viewbox(mode.shows_title(view), wires, references);
     if mode.stamp(design).is_some() {
         viewbox.height += STAMP_HEIGHT;
     }
@@ -793,12 +852,84 @@ component sys {
     }
 
     #[test]
-    fn wire_to_excluded_box_is_dropped() {
+    fn wire_to_excluded_box_draws_as_an_off_view_reference() {
         let design = two_box_design();
-        // Only `a` is included; the wire's `b` end isn't placed.
+        // Only `a` is included; the wire's `b` end isn't placed, so no wire
+        // is drawn, only `a.p`'s stub in the wire's colour and where it goes.
         let view = view_of("sys", &[("a", 0.0, 0.0, &[("p", Side::East)])]);
         let svg = render(&design, &view).unwrap();
         assert!(!svg.contains("class=\"wire\""));
+        let layers = wire_layers(&svg);
+        let classes: Vec<&str> = layers.iter().map(|l| l.class.as_str()).collect();
+        assert_eq!(classes, ["wire-casing off-view-stub", "wire off-view-stub"]);
+        assert_eq!(layers[1].stroke.as_deref(), Some("red"));
+        assert!(svg.contains(
+            "<g class=\"off-view\" data-component=\"a\" data-port=\"p\">\n<title>b.p</title>"
+        ));
+        assert!(svg.contains(">\n→ b.p\n</text>"));
+    }
+
+    #[test]
+    fn a_view_drawing_every_wire_has_no_off_view_reference() {
+        let svg = render(&two_box_design(), &one_wire_view()).expect("renders");
+        assert!(!svg.contains("class=\"off-view"), "{svg}");
+        assert!(!svg.contains("off-view-stub"), "{svg}");
+    }
+
+    #[test]
+    fn an_off_view_stub_joins_the_net_of_the_drawn_wire_leaving_its_port() {
+        // `a.p` is wired to `b.p`, drawn, and to `c.p`, left out: the stub
+        // is drawn with the drawn wire's net, its casing among the net's
+        // casings and its core under the drawn wire's, so their shared
+        // first run shows the drawn colour.
+        let design = design_from(
+            r#"
+component sys {
+    a: alpha;
+    b: beta;
+    c: beta;
+    wire red 1 [a.p, b.p];
+    wire white/blue 1 [a.p, c.p];
+    component alpha {
+        pub port p "Out" pin 1;
+    }
+    component beta {
+        pub port p "In" pin 1;
+    }
+}
+"#,
+        );
+        let svg = render(&design, &one_wire_view()).expect("renders");
+        let classes: Vec<String> = wire_layers(&svg).into_iter().map(|l| l.class).collect();
+        assert_eq!(
+            classes,
+            [
+                "wire-casing",
+                "wire-casing off-view-stub",
+                "wire off-view-stub",
+                "wire",
+                "wire-tracer off-view-stub",
+            ]
+        );
+        let stub = &wire_layers(&svg)[2];
+        assert_eq!(stub.stroke.as_deref(), Some("white"));
+        assert_eq!(stub.data_color.as_deref(), Some("white/blue"));
+    }
+
+    #[test]
+    fn embed_mode_carries_the_stub_colour_and_starter_styles_its_text() {
+        let design = two_box_design();
+        let view = view_of("sys", &[("a", 0.0, 0.0, &[("p", Side::East)])]);
+        let svg = render_embed(&design, &view).expect("renders");
+        let core = &wire_layers(&svg)[1];
+        assert_eq!(core.stroke.as_deref(), Some("red"));
+        assert_eq!(core.data_color.as_deref(), Some("red"));
+        assert!(svg.contains("class=\"off-view-label\""));
+        assert!(
+            STYLE
+                .lines()
+                .any(|rule| rule.starts_with(".off-view-label {"))
+        );
     }
 
     fn render_embed(design: &Design, view: &View) -> ViewResult<String> {
