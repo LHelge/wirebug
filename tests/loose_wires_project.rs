@@ -30,22 +30,83 @@ fn view(title: &str) -> String {
         .svg
 }
 
-/// The SVG text element carrying exactly `text`.
-fn text(text: &str) -> String {
-    format!(">\n{text}\n</text>")
+/// The value of attribute `name` on the one-line SVG `element`.
+fn attr(element: &str, name: &str) -> f64 {
+    element
+        .split(&format!(" {name}=\""))
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .and_then(|value| value.parse().ok())
+        .unwrap_or_else(|| panic!("no numeric {name} on {element}"))
 }
 
-#[test]
-fn each_loose_wire_carries_its_label_gauge_and_colour_code() {
-    let pump = view("Pump loom");
-    for annotation in ["WAKE · 0.5mm² · WH", "FAULT · 0.5mm² · GN/YE"] {
-        assert_eq!(pump.matches(&text(annotation)).count(), 1, "{annotation}");
-    }
-    // The cables' own conductors keep theirs.
-    assert!(pump.contains(&text("PWR · 1.5mm² · RD")));
+/// A rectangle as `(left, top, right, bottom)`.
+type Rect = (f64, f64, f64, f64);
 
-    let lamp = view("Lamp loom");
-    assert_eq!(lamp.matches(&text("SENSE · 0.5mm² · BU")).count(), 2);
+/// The outline of every cable box in `svg`: the first `<rect>` of each
+/// `cable-box` group.
+fn cable_boxes(svg: &str) -> Vec<Rect> {
+    svg.split("<g class=\"connector cable-box\">")
+        .skip(1)
+        .map(|group| {
+            let rect = group
+                .lines()
+                .find(|l| l.starts_with("<rect"))
+                .expect("rect");
+            let (x, y) = (attr(rect, "x"), attr(rect, "y"));
+            (x, y, x + attr(rect, "width"), y + attr(rect, "height"))
+        })
+        .collect()
+}
+
+/// Each loose wire's annotation in `svg`: its text, and the area the 9px
+/// text covers round its centred anchor (5.5 units a character).
+fn loose_annotations(svg: &str) -> Vec<(String, Rect)> {
+    svg.split("<g class=\"cable\">")
+        .skip(1)
+        .map(|group| {
+            let mut lines = group.lines().skip_while(|l| !l.starts_with("<text"));
+            let element = lines.next().expect("an annotation");
+            let text = lines.next().expect("its text").to_string();
+            let (x, y) = (attr(element, "x"), attr(element, "y"));
+            let half = text.chars().count() as f64 * 5.5 / 2.0;
+            (text, (x - half, y - 9.0, x + half, y + 2.0))
+        })
+        .collect()
+}
+
+/// Regression: a loose wire's annotation was drawn under any cable box its
+/// pin-to-pin curve passed behind, so the box's fill hid it.
+#[test]
+fn no_loose_wire_annotation_lies_under_a_cable_box() {
+    let expected = [
+        (
+            "Pump loom",
+            vec!["WAKE · 0.5mm² · WH", "FAULT · 0.5mm² · GN/YE"],
+        ),
+        (
+            "Lamp loom",
+            vec!["SENSE · 0.5mm² · BU", "SENSE · 0.5mm² · BU"],
+        ),
+        (
+            "Horn loom",
+            vec!["W1 · 0.5mm² · WH", "W2 · 0.5mm² · WH", "HORN · 0.5mm² · BU"],
+        ),
+    ];
+    for (title, annotations) in expected {
+        let svg = view(title);
+        let boxes = cable_boxes(&svg);
+        assert!(!boxes.is_empty(), "{title}");
+        let found = loose_annotations(&svg);
+        let texts: Vec<&str> = found.iter().map(|(text, _)| text.as_str()).collect();
+        assert_eq!(texts, annotations, "{title}");
+        for (text, (l, t, r, b)) in &found {
+            for &(bl, bt, br, bb) in &boxes {
+                let covered = *l < br && bl < *r && *t < bb && bt < *b;
+                assert!(!covered, "{title}: {text:?} lies under a cable box");
+            }
+        }
+    }
 }
 
 #[test]
