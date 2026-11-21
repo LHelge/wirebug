@@ -25,6 +25,7 @@ use tracing_subscriber::EnvFilter;
 
 use cli::{Cli, Command, ExportArgs, ManifestCommand, PaperArg};
 use wirebug::dsl::diagnostics::Problem;
+use wirebug::dsl::format::ProjectFormat;
 use wirebug::dsl::ir::Design;
 use wirebug::dsl::project;
 use wirebug::dsl::{self, CheckReport, Format};
@@ -52,6 +53,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             strict,
             format,
         } => check_command(target.as_deref(), strict, format.into()),
+        Command::Fmt { target, check } => fmt_command(target.as_deref(), check),
         Command::Render {
             target,
             out,
@@ -146,6 +148,50 @@ fn check_command(target: Option<&Path>, strict: bool, format: Format) -> Result<
     }
 
     Ok(exit_code(&report, strict))
+}
+
+/// Format the project's files in place (or, with `check`, only say which
+/// would change): each such file on stdout, a summary on stderr. Fails
+/// when a file could not be formatted, or with `check` when one would
+/// change.
+fn fmt_command(target: Option<&Path>, check: bool) -> Result<ExitCode> {
+    let run = ProjectFormat::load(target);
+    eprint!("{}", render_problems(&run.problems));
+    let cwd = std::env::current_dir()
+        .and_then(|dir| dir.canonicalize())
+        .ok();
+    let mut listed = String::new();
+    let mut changed = 0;
+    for file in run.changed() {
+        if !check {
+            file.write()
+                .with_context(|| format!("writing {}", file.path.display()))?;
+        }
+        let shown = cwd
+            .as_deref()
+            .and_then(|cwd| file.path.strip_prefix(cwd).ok())
+            .unwrap_or(&file.path);
+        listed.push_str(&format!("{}\n", shown.display()));
+        changed += 1;
+    }
+    print_stdout(&listed).context("writing the file list to stdout")?;
+    let total = run.files.len();
+    if check {
+        eprintln!("{changed} of {total} file(s) would be reformatted");
+    } else {
+        eprintln!("{changed} of {total} file(s) reformatted");
+    }
+    if !run.problems.is_empty() {
+        eprintln!(
+            "{} error(s) — the files they are in were left as they are",
+            run.problems.len()
+        );
+    }
+    Ok(if run.problems.is_empty() && !(check && changed > 0) {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    })
 }
 
 fn render_command(

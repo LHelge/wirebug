@@ -1,0 +1,24 @@
+// A panel, laid out carelessly: `wirebug fmt` puts it in the house style.
+use Lamp from "components/lamp.wb";
+use Switch    from "components/switch.wb";
+
+
+
+component Panel {
+  lamp: Lamp "Lamp";
+    sw : Switch "Switch";   // the only switch
+  pub port feed "FEED";
+    pub port ground "GND";
+
+
+      // Feed through the switch to the lamp.
+  wire red 1.5 "FEED" [feed,sw.a];
+  wire red 1.5 "SW" [ sw.b , lamp.anode ];
+  wire black 1 [lamp.cathode, ground,];
+}
+
+view schematic "Panel" {
+grid: 20;
+include lamp at (30, 0);
+include sw at (4,0) ports { west: a; east: b; }
+}

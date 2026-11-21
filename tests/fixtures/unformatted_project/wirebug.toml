@@ -1,0 +1,4 @@
+[project]
+name = "unformatted-project"
+version = "0.1.0"
+description = "A project written without care for layout, for `fmt` tests"
