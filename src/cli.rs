@@ -1,9 +1,12 @@
 //! Command-line interface definition: the clap argument tree for the
 //! `wirebug` binary. This module is parsing only — it owns the `Cli`,
-//! `Command`, `OutputFormat` and `ExportFormat` types and the mapping from
-//! the CLI's format flags into the library's [`Format`] and
-//! [`export::Format`]. The command implementations live in `main.rs`.
+//! `Command`, `OutputFormat`, `ExportFormat` and `PaperArg` types and the
+//! mapping from the CLI's flags into the library's [`Format`],
+//! [`export::Format`] and [`Paper`] (and from a [`Paper`] back to the
+//! `--paper` value naming it). The command implementations live in
+//! `main.rs`.
 
+use std::fmt;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 
@@ -12,6 +15,51 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use wirebug::dsl::Format;
 use wirebug::export::{self, Table};
 use wirebug::render::pdf::Paper;
+
+/// Paper size for `render --pdf`, mirrored into [`Paper`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+pub enum PaperArg {
+    /// ISO A4, 210 × 297 mm.
+    #[default]
+    A4,
+    /// ISO A3, 297 × 420 mm.
+    A3,
+    /// US Letter, 8.5 × 11 in.
+    Letter,
+    /// US Tabloid (ledger), 11 × 17 in.
+    Tabloid,
+}
+
+impl From<PaperArg> for Paper {
+    fn from(paper: PaperArg) -> Self {
+        match paper {
+            PaperArg::A4 => Self::A4,
+            PaperArg::A3 => Self::A3,
+            PaperArg::Letter => Self::Letter,
+            PaperArg::Tabloid => Self::Tabloid,
+        }
+    }
+}
+
+/// The `--paper` value that asks for a paper, so a warning can say how.
+impl From<Paper> for PaperArg {
+    fn from(paper: Paper) -> Self {
+        match paper {
+            Paper::A4 => Self::A4,
+            Paper::A3 => Self::A3,
+            Paper::Letter => Self::Letter,
+            Paper::Tabloid => Self::Tabloid,
+        }
+    }
+}
+
+/// The value as `--paper` takes it (`a4`, `tabloid`).
+impl fmt::Display for PaperArg {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = self.to_possible_value().ok_or(fmt::Error)?;
+        f.write_str(value.get_name())
+    }
+}
 
 /// Diagnostic output format for `check`, mirrored into [`Format`].
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]
@@ -102,8 +150,8 @@ pub enum Command {
         /// legibly. The warning neither stops the PDF nor fails the run,
         /// even under `--strict`, which concerns the project's own
         /// warnings.
-        #[arg(long, value_enum, default_value_t = Paper::A4, requires = "pdf")]
-        paper: Paper,
+        #[arg(long, value_enum, default_value_t = PaperArg::A4, requires = "pdf")]
+        paper: PaperArg,
         /// Emit SVGs suitable for embedding into another document or
         /// site: the built-in `<style>` is dropped (the host owns the
         /// look), the project-identity stamp is suppressed, and the root
@@ -200,4 +248,19 @@ pub enum ManifestCommand {
         /// walking up to `wirebug.toml`).
         target: Option<PathBuf>,
     },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_paper_maps_to_the_paper_value_that_asks_for_it() {
+        for &arg in PaperArg::value_variants() {
+            assert_eq!(PaperArg::from(Paper::from(arg)), arg);
+            assert_eq!(PaperArg::from_str(&arg.to_string(), false), Ok(arg));
+        }
+        assert_eq!(PaperArg::Tabloid.to_string(), "tabloid");
+        assert_eq!(Paper::from(PaperArg::default()), Paper::default());
+    }
 }

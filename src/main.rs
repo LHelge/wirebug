@@ -22,13 +22,13 @@ use clap::Parser;
 use miette::{GraphicalReportHandler, JSONReportHandler};
 use tracing_subscriber::EnvFilter;
 
-use cli::{Cli, Command, ExportArgs, ManifestCommand};
+use cli::{Cli, Command, ExportArgs, ManifestCommand, PaperArg};
 use wirebug::dsl::diagnostics::Problem;
 use wirebug::dsl::ir::Design;
 use wirebug::dsl::{self, CheckReport, Format};
 use wirebug::export::{Export, Table};
 use wirebug::render::output::{Output, ViewFormat};
-use wirebug::render::pdf::Paper;
+use wirebug::render::pdf::{BestPaper, Paper};
 use wirebug::render::png::PNG_SCALE;
 
 fn main() -> ExitCode {
@@ -61,7 +61,7 @@ fn run(cli: Cli) -> Result<ExitCode> {
             &out,
             strict,
             png,
-            pdf.then_some(paper),
+            pdf.then_some(paper.into()),
             embed,
         ),
         Command::Export { table } => {
@@ -167,7 +167,12 @@ fn render_command(
     // Text too small to read on paper is the paper's fault, not the
     // project's: warned of, never fatal, so `--strict` leaves it be.
     for small in &written.small_text {
-        eprintln!("warning: {small}");
+        match small.best {
+            BestPaper::Legible(paper) => {
+                eprintln!("warning: {small} (--paper {})", PaperArg::from(paper));
+            }
+            BestPaper::Closest { .. } => eprintln!("warning: {small}"),
+        }
     }
     eprintln!("{written}");
     // A render that left out a failed view fails, so scripts and CI notice.

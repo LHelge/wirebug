@@ -41,8 +41,8 @@ const MAX_UPSCALE: f32 = 2.0;
 /// paper. One number, so the threshold is easy to move.
 pub const MIN_LEGIBLE_PT: f32 = 5.0;
 
-/// The paper sheet each view of a `render --pdf` is laid on.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
+/// The paper sheet each view of a PDF is laid on.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Paper {
     /// ISO A4, 210 × 297 mm.
     #[default]
@@ -70,16 +70,6 @@ impl Paper {
             Self::Tabloid => (792.0, 1224.0),
         }
     }
-
-    /// The paper's name as `--paper` takes it.
-    fn flag(self) -> &'static str {
-        match self {
-            Self::A4 => "a4",
-            Self::A3 => "a3",
-            Self::Letter => "letter",
-            Self::Tabloid => "tabloid",
-        }
-    }
 }
 
 impl fmt::Display for Paper {
@@ -104,10 +94,21 @@ pub struct SmallText {
     pub paper: Paper,
     /// Its smallest text's size on that paper, in points.
     pub points: f32,
-    /// The smallest paper (by area) of the four on which that text would
-    /// reach [`MIN_LEGIBLE_PT`], or `None` when even the largest leaves it
-    /// too small.
-    pub legible_on: Option<Paper>,
+    /// The paper that would serve the view best.
+    pub best: BestPaper,
+}
+
+/// Which of the four papers would serve a [`SmallText`] view best.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BestPaper {
+    /// The smallest paper (by area) on which its smallest text reaches
+    /// [`MIN_LEGIBLE_PT`].
+    Legible(Paper),
+    /// No paper makes it legible: the one that prints it largest (the
+    /// paper in use unless another prints it larger, else the smaller sheet
+    /// on a tie), and the size it prints at there, in points — telling a
+    /// near miss from a hopeless case.
+    Closest { paper: Paper, points: f32 },
 }
 
 impl SmallText {
@@ -117,30 +118,54 @@ impl SmallText {
     fn check(title: &str, smallest: f32, size: svg2pdf::usvg::Size, paper: Paper) -> Option<Self> {
         let points = |paper| smallest * PageLayout::fit(size, paper).scale;
         let on_paper = points(paper);
-        (on_paper < MIN_LEGIBLE_PT).then(|| Self {
+        if on_paper >= MIN_LEGIBLE_PT {
+            return None;
+        }
+        let sizes = Paper::BY_AREA.map(|paper| (paper, points(paper)));
+        let best = match sizes.iter().find(|(_, points)| *points >= MIN_LEGIBLE_PT) {
+            Some(&(paper, _)) => BestPaper::Legible(paper),
+            None => {
+                // From the paper in use, so another only wins by printing
+                // larger; among the others the smaller sheet wins a tie.
+                let (paper, points) = sizes.into_iter().fold((paper, on_paper), |best, next| {
+                    if next.1 > best.1 { next } else { best }
+                });
+                BestPaper::Closest { paper, points }
+            }
+        };
+        Some(Self {
             title: title.to_string(),
             paper,
             points: on_paper,
-            legible_on: Paper::BY_AREA
-                .into_iter()
-                .find(|&paper| points(paper) >= MIN_LEGIBLE_PT),
+            best,
         })
     }
 }
 
+/// `points` to one decimal, rounded down, so a size just under the minimum
+/// never reads as the minimum.
+fn round_down(points: f32) -> f32 {
+    (points * 10.0).floor() / 10.0
+}
+
 impl fmt::Display for SmallText {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // Rounded down, so a size just under the minimum never reads as it.
-        let points = (self.points * 10.0).floor() / 10.0;
         write!(
             f,
-            "view \"{}\": smallest text {points:.1} pt on {}, below the {MIN_LEGIBLE_PT} pt \
+            "view \"{}\": smallest text {:.1} pt on {}, below the {MIN_LEGIBLE_PT} pt \
              legibility minimum; ",
-            self.title, self.paper
+            self.title,
+            round_down(self.points),
+            self.paper
         )?;
-        match self.legible_on {
-            Some(paper) => write!(f, "legible on {paper} (--paper {})", paper.flag()),
-            None => f.write_str("too small on every paper size"),
+        match self.best {
+            BestPaper::Legible(paper) => write!(f, "legible on {paper}"),
+            BestPaper::Closest { paper, .. } if paper == self.paper => {
+                f.write_str("no paper size prints it larger")
+            }
+            BestPaper::Closest { paper, points } => {
+                write!(f, "closest is {paper} at {:.1} pt", round_down(points))
+            }
         }
     }
 }
@@ -515,7 +540,6 @@ impl PageLayout {
 mod tests {
     use super::*;
     use crate::dsl::ir::ViewKind;
-    use clap::ValueEnum;
 
     fn size(w: f32, h: f32) -> svg2pdf::usvg::Size {
         svg2pdf::usvg::Size::from_wh(w, h).expect("positive size")
@@ -558,22 +582,14 @@ mod tests {
     }
 
     #[test]
-    fn paper_flags_are_the_names_the_cli_parses() {
-        for paper in Paper::value_variants() {
-            assert_eq!(Paper::from_str(paper.flag(), false), Ok(*paper));
-        }
-    }
-
-    #[test]
     fn papers_by_area_run_smallest_first() {
         let area = |paper: Paper| paper.size().0 * paper.size().1;
         assert!(Paper::BY_AREA.windows(2).all(|w| area(w[0]) < area(w[1])));
-        assert_eq!(Paper::BY_AREA.len(), Paper::value_variants().len());
     }
 
     #[test]
     fn page_layout_picks_orientation_from_aspect_ratio_on_every_paper() {
-        for &paper in Paper::value_variants() {
+        for paper in Paper::BY_AREA {
             let (short, long) = paper.size();
             let wide = PageLayout::fit(size(200.0, 100.0), paper);
             assert_eq!((wide.width, wide.height), (long, short), "{paper}");
@@ -662,41 +678,76 @@ mod tests {
         // Tabloid and 5.5 on A3 — Tabloid is the smaller sheet.
         let small =
             SmallText::check("Wide", 9.0, size(1800.0, 400.0), Paper::A4).expect("too small on A4");
-        assert_eq!(small.legible_on, Some(Paper::Tabloid));
+
+        assert_eq!(small.best, BestPaper::Legible(Paper::Tabloid));
 
         // ≈ 4.9 pt on A4, but Letter's taller short edge fits a nearly
         // square view larger: Letter, smaller than A4, is enough.
         let squarish = SmallText::check("Square", 9.0, size(1000.0, 940.0), Paper::A4)
             .expect("too small on A4");
-        assert_eq!(squarish.legible_on, Some(Paper::Letter));
-
-        let huge =
-            SmallText::check("Huge", 9.0, size(6000.0, 400.0), Paper::A4).expect("too small on A4");
-        assert_eq!(huge.legible_on, None);
+        assert_eq!(squarish.best, BestPaper::Legible(Paper::Letter));
     }
 
     #[test]
-    fn small_text_warning_names_the_view_the_size_and_a_remedy() {
+    fn small_text_legible_on_no_paper_names_the_closest_and_its_size() {
+        // 6000 units wide: Tabloid's long edge, the longest of the four,
+        // prints 9-unit text at 9 × 1138.96 / 6000 ≈ 1.7 pt.
+        let huge =
+            SmallText::check("Huge", 9.0, size(6000.0, 400.0), Paper::A4).expect("too small on A4");
+        let BestPaper::Closest { paper, points } = huge.best else {
+            panic!("no paper is legible: {:?}", huge.best);
+        };
+        assert_eq!(paper, Paper::Tabloid);
+        assert_close(points, 9.0 * (1224.0 - 2.0 * MARGIN_PT) / 6000.0);
+
+        // A view small enough to be capped at 2× on every sheet prints the
+        // same everywhere: no other paper beats the one in use.
+        let tiny =
+            SmallText::check("Tiny", 1.0, size(100.0, 50.0), Paper::A3).expect("too small on A3");
+        assert_eq!(
+            tiny.best,
+            BestPaper::Closest {
+                paper: Paper::A3,
+                points: 2.0
+            }
+        );
+    }
+
+    #[test]
+    fn small_text_warning_names_the_view_the_size_and_the_best_paper() {
         let small = SmallText {
             title: "HV System Overview".to_string(),
             paper: Paper::A4,
             points: 3.06,
-            legible_on: Some(Paper::A3),
+            best: BestPaper::Legible(Paper::A3),
         };
         assert_eq!(
             small.to_string(),
             "view \"HV System Overview\": smallest text 3.0 pt on A4, below the 5 pt \
-             legibility minimum; legible on A3 (--paper a3)"
+             legibility minimum; legible on A3"
         );
-        let hopeless = SmallText {
-            legible_on: None,
-            points: 4.99,
+        let near_miss = SmallText {
+            best: BestPaper::Closest {
+                paper: Paper::Tabloid,
+                points: 4.99,
+            },
             ..small
         };
         assert_eq!(
-            hopeless.to_string(),
-            "view \"HV System Overview\": smallest text 4.9 pt on A4, below the 5 pt \
-             legibility minimum; too small on every paper size"
+            near_miss.to_string(),
+            "view \"HV System Overview\": smallest text 3.0 pt on A4, below the 5 pt \
+             legibility minimum; closest is Tabloid at 4.9 pt"
+        );
+        // Already on the closest paper: there is nothing better to name.
+        let on_closest = SmallText {
+            paper: Paper::Tabloid,
+            points: 4.99,
+            ..near_miss
+        };
+        assert_eq!(
+            on_closest.to_string(),
+            "view \"HV System Overview\": smallest text 4.9 pt on Tabloid, below the 5 pt \
+             legibility minimum; no paper size prints it larger"
         );
     }
 
