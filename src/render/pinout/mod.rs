@@ -2,25 +2,31 @@
 //!
 //! A `pinout` view documents connectors on the view subject itself. Each
 //! `include <connector> at (x, y);` becomes a pin table headed by the
-//! component and the connector, its rows sorted by pin, optionally with a
-//! physical cavity face above the rows when the connector type carries a
-//! layout. A face is always drawn from the harness side (the language's
+//! component and the connector, its rows sorted by pin, each listing what
+//! is crimped into the cavity — colour, gauge and far end of every
+//! conductor, and any screen's drain — from the connector's
+//! [`PinTable`](crate::export::PinTable). When the connector type carries a
+//! layout, its physical cavity face sits in a panel of its own on top of
+//! the table. A face is always drawn from the harness side (the language's
 //! convention for `layout`; it has no other) and says so in a caption.
 
 mod fit;
+mod rows;
 
 use svg::Document;
-use svg::node::element::{Group, Line, Rectangle, Style, Text, Title};
+use svg::node::element::{Group, Line, Path, Rectangle, Style, Text, Title};
 
 use crate::dsl::ir::{
-    Connector, ConnectorLayout, ConnectorName, Design, Include, Instance, Pin, PortName, View,
+    Connector, ConnectorLayout, ConnectorName, Design, Include, Instance, Pin, View, WireColor,
 };
 use crate::error::{ViewErrorKind, ViewResult};
+use crate::export::{PinTable, PinTables};
 use crate::render::geometry::{Bounds, Point};
 use crate::render::lint::{IncludeBox, ViewLayout};
 use crate::render::stamp::{STAMP_HEIGHT, STAMP_INSET, stamp_element};
 use crate::render::{Canvas, GridFault, SvgMode};
-use fit::FittedLabel;
+use fit::{FittedLabel, Font};
+use rows::{Entry, Row};
 
 /// The caption under every cavity face.
 const FACE_CAPTION: &str = "Viewed from harness side";
@@ -31,16 +37,46 @@ const CAVITY_LABEL_INSET: f64 = 3.0;
 const DEFAULT_GRID: f64 = 20.0;
 const HEADER_HEIGHT: f64 = 44.0;
 const HEADER_LINE_HEIGHT: f64 = 14.0;
+/// A row's height with one entry (or none).
 const ROW_HEIGHT: f64 = 22.0;
+/// What each entry past a row's first adds to it: a double crimp's second
+/// conductor is a sub-row of its pin's row.
+const SUB_ROW_HEIGHT: f64 = 18.0;
 const PIN_COL_WIDTH: f64 = 34.0;
 const PAD_X: f64 = 10.0;
-const MIN_WIDTH: f64 = 180.0;
+/// Room between a port's label and its note.
+const NOTE_GAP: f64 = 6.0;
+/// The narrowest each wire column is drawn, so a table whose pins carry
+/// no conductor still reads as having the columns, empty.
+const WIRE_MIN_WIDTH: f64 = 40.0;
+const GAUGE_MIN_WIDTH: f64 = 36.0;
+const FAR_MIN_WIDTH: f64 = 60.0;
+/// The widest the far-end column grows; past it, far ends lose detail and
+/// then are cut, rather than widen the table without bound.
+const FAR_MAX_WIDTH: f64 = 280.0;
+/// A wire colour's swatch, and the room between it and the colour's code.
+const SWATCH_WIDTH: f64 = 16.0;
+const SWATCH_HEIGHT: f64 = 9.0;
+const SWATCH_GAP: f64 = 4.0;
+/// What the wire column says of a pin no conductor reaches.
+const UNWIRED: &str = "–";
+/// What the wire column says of a screen's drain.
+const DRAIN: &str = "drain";
+const NO_PINS: &str = "No pins assigned";
 const CAVITY_SIZE: f64 = 38.0;
 const CAVITY_GAP: f64 = 6.0;
 const FACE_PAD: f64 = 12.0;
-const CHAR_WIDTH: f64 = 7.0;
 const SVG_MARGIN: f64 = 48.0;
 const TITLE_GAP: f64 = 12.0;
+
+/// The fonts of the stylesheet's table text, which sizes are estimated
+/// in: keep each in step with its rule in [`STYLE`].
+const TITLE_FONT: Font = Font::bold(13.0);
+const HEADER_LINE_FONT: Font = Font::regular(10.0);
+const CAPTION_FONT: Font = Font::regular(10.0);
+const LABEL_FONT: Font = Font::regular(11.0);
+const NOTE_FONT: Font = Font::regular(9.0);
+const WIRE_FONT: Font = Font::regular(10.0);
 
 pub(super) const STYLE: &str = "\
 .pinout rect { fill: white; stroke: black; stroke-width: 1.5; }
@@ -50,6 +86,15 @@ pub(super) const STYLE: &str = "\
 .row-sep { stroke: #ddd; stroke-width: 1; }
 .pin-num { font: italic 10px sans-serif; fill: #555; text-anchor: middle; dominant-baseline: central; }
 .pin-label { font: 11px sans-serif; dominant-baseline: central; }
+.pin-note { font: italic 9px sans-serif; fill: #555; text-anchor: end; dominant-baseline: central; }
+.pin-wire { font: 10px sans-serif; dominant-baseline: central; }
+.pin-drain { font-style: italic; fill: #555; }
+.pin-unwired { fill: #999; }
+.pin-gauge { font: 10px sans-serif; dominant-baseline: central; }
+.pin-far { font: 10px sans-serif; dominant-baseline: central; }
+.wire-swatch { stroke: #333; stroke-width: 0.75; }
+.wire-swatch-tracer { stroke: none; }
+.wire-sep { stroke: #e4e4e4; stroke-width: 1; stroke-dasharray: 2 2; }
 .cavity { fill: white; stroke: black; stroke-width: 1.25; }
 .pinout rect.cavity-unused { fill: #f2f2f2; stroke: #999; stroke-width: 1; stroke-dasharray: 3 2; }
 .cavity-pin { font: bold 11px sans-serif; text-anchor: middle; dominant-baseline: central; }
@@ -65,15 +110,18 @@ pub(super) const STYLE: &str = "\
 pub struct PinoutRenderer;
 
 impl PinoutRenderer {
-    pub(super) fn render(
+    /// `view` drawn against `subject`, its rows read from `tables`, the
+    /// design's pin tables (built once for every view of a run).
+    pub(super) fn render<'d>(
         &self,
-        design: &Design,
-        subject: &Instance,
+        design: &'d Design,
+        tables: &PinTables<'d>,
+        subject: &'d Instance,
         view: &View,
         mode: SvgMode,
     ) -> ViewResult<String> {
         let step = GridFault::positive_step(view, DEFAULT_GRID)?;
-        let tables = Table::all(design, subject, view, step)?;
+        let tables = Table::all(design, tables, subject, view, step)?;
 
         let has_title = mode.shows_title(view);
         let vb = viewbox(design, view, &tables, mode);
@@ -115,30 +163,38 @@ impl PinoutRenderer {
         Ok(doc.add(group).to_string())
     }
 
-    /// Each include's table box, sized as [`Self::render`] sizes it, and
-    /// the canvas of the standalone SVG, or only the fault for a
-    /// non-positive grid. An include naming no connector on the subject is
-    /// skipped, and leaves no canvas: rendering reports it.
-    pub(super) fn layout(&self, design: &Design, subject: &Instance, view: &View) -> ViewLayout {
+    /// Each include's box (its table and face panel), sized as
+    /// [`Self::render`] sizes it from the same `tables`, and the canvas of
+    /// the standalone SVG, or only the fault for a non-positive grid. An
+    /// include naming no connector on the subject is skipped, and leaves no
+    /// canvas: rendering reports it.
+    pub(super) fn layout<'d>(
+        &self,
+        design: &'d Design,
+        tables: &PinTables<'d>,
+        subject: &'d Instance,
+        view: &View,
+    ) -> ViewLayout {
         let step = match GridFault::positive_step(view, DEFAULT_GRID) {
             Ok(step) => step,
             Err(fault) => return ViewLayout::bad_grid(fault),
         };
-        let boxes = view
+        let built: Vec<Option<Table>> = view
             .includes
             .iter()
+            .map(|inc| Table::of_include(design, tables, subject, inc, step).ok())
+            .collect();
+        let boxes = built
+            .iter()
             .enumerate()
-            .filter_map(|(include, inc)| {
-                let connector = subject
-                    .connectors
-                    .get(&ConnectorName::from(inc.instance.as_str()))?;
+            .filter_map(|(include, table)| {
                 Some(IncludeBox {
                     include,
-                    bounds: Table::new(design, connector, subject, inc, step).bounds(),
+                    bounds: table.as_ref()?.bounds(),
                 })
             })
             .collect();
-        let canvas = Table::all(design, subject, view, step).ok().map(|tables| {
+        let canvas = built.into_iter().collect::<Option<Vec<_>>>().map(|tables| {
             let vb = viewbox(design, view, &tables, SvgMode::Standalone);
             Canvas::new(vb.width, vb.height)
         });
@@ -150,98 +206,196 @@ impl PinoutRenderer {
     }
 }
 
-struct Table {
+/// One include's drawing: the pin table (header, then rows) and, when the
+/// connector type has a layout, the face's panel on top of it. Each is as
+/// wide as its own content, and both are centred on the include's point.
+struct Table<'d> {
     header: Header,
     face: Option<Face>,
-    rows: Vec<Row>,
-    x: f64,
-    y: f64,
-    width: f64,
-    height: f64,
+    rows: Vec<Row<'d>>,
+    columns: Columns,
+    /// The table: header and rows.
+    frame: Bounds,
+    /// The face's panel, its bottom edge on the table's top edge.
+    face_frame: Option<Bounds>,
 }
 
-impl Table {
+impl<'d> Table<'d> {
     /// One table per include of `view`, in include order, on a grid of
     /// `step` world units; fails on an include naming no connector of
     /// `subject`.
-    fn all(design: &Design, subject: &Instance, view: &View, step: f64) -> ViewResult<Vec<Self>> {
+    fn all(
+        design: &'d Design,
+        tables: &PinTables<'d>,
+        subject: &'d Instance,
+        view: &View,
+        step: f64,
+    ) -> ViewResult<Vec<Self>> {
         view.includes
             .iter()
-            .map(|inc| {
-                let name = inc.instance.as_str();
-                let connector = subject
-                    .connectors
-                    .get(&ConnectorName::from(name))
-                    .ok_or_else(|| ViewErrorKind::UnknownConnector {
-                        subject: subject.type_name.to_string(),
-                        connector: name.to_string(),
-                    })?;
-                Ok(Self::new(design, connector, subject, inc, step))
-            })
+            .map(|inc| Self::of_include(design, tables, subject, inc, step))
             .collect()
     }
 
-    /// The table for `connector` of `subject`, centred where `inc` places
-    /// it on a grid of `step` world units: under its [`Header`], its rows
-    /// in pin order.
-    fn new(
-        design: &Design,
-        connector: &Connector,
-        subject: &Instance,
+    /// The table `inc` places: of `subject`'s connector it names, from that
+    /// connector's pin table in `tables`.
+    fn of_include(
+        design: &'d Design,
+        tables: &PinTables<'d>,
+        subject: &'d Instance,
         inc: &Include,
         step: f64,
-    ) -> Self {
-        let (cx, cy) = (inc.x * step, inc.y * step);
-        let header = Header::new(design, subject, connector);
-        let mut rows = connector
-            .pins
-            .iter()
-            .map(|pin| {
-                let port = subject.ports.get(&pin.port);
-                Row {
-                    pin: pin.pin,
-                    label: port_label(&pin.port, port),
-                }
-            })
-            .collect::<Vec<_>>();
-        rows.sort_by_key(|row| row.pin);
-        let face = Face::from_connector(connector, subject);
+    ) -> ViewResult<Self> {
+        let name = inc.instance.as_str();
+        let table = tables
+            .of(subject, &ConnectorName::from(name))
+            .ok_or_else(|| ViewErrorKind::UnknownConnector {
+                subject: subject.type_name.to_string(),
+                connector: name.to_string(),
+            })?;
+        Ok(Self::new(design, table, inc, step))
+    }
 
-        let max_chars = std::iter::once(header.widest_chars())
-            .chain(
-                rows.iter()
-                    .map(|r| r.label.chars().count() + r.pin.to_string().chars().count()),
-            )
-            .max()
-            .unwrap_or(0);
-        let table_width =
-            MIN_WIDTH.max(max_chars as f64 * CHAR_WIDTH + PIN_COL_WIDTH + 3.0 * PAD_X);
-        let face_width = face.as_ref().map_or(0.0, |f| {
-            (f.width() + 2.0 * FACE_PAD)
-                .max(FACE_CAPTION.chars().count() as f64 * CHAR_WIDTH + 2.0 * PAD_X)
-        });
-        let width = table_width.max(face_width);
-        let row_count = rows.len().max(1);
-        let face_height = face.as_ref().map_or(0.0, Face::band_height);
-        let height = header.height() + face_height + row_count as f64 * ROW_HEIGHT;
+    /// The drawing of `table`, centred where `inc` places it on a grid of
+    /// `step` world units: its [`Header`], its rows in pin order, and its
+    /// face's panel on top.
+    fn new(design: &Design, table: &PinTable<'d>, inc: &Include, step: f64) -> Self {
+        let (cx, cy) = (inc.x * step, inc.y * step);
+        let header = Header::new(design, table.instance, table.connector);
+        let rows = Row::all(table);
+        let face = Face::from_connector(table.connector, table.instance);
+        let columns = Columns::of(&rows);
+
+        let width = columns.width().max(header.width());
+        let height = header.height() + rows.iter().map(Row::height).sum::<f64>().max(ROW_HEIGHT);
+        let face_size = face
+            .as_ref()
+            .map(|face| (face.panel_width(), face.band_height()));
+        let face_height = face_size.map_or(0.0, |(_, height)| height);
+        let top = cy - (face_height + height) / 2.0;
 
         Self {
             header,
             face,
             rows,
-            x: cx - width / 2.0,
-            y: cy - height / 2.0,
-            width,
-            height,
+            columns,
+            frame: Bounds {
+                origin: Point::new(cx - width / 2.0, top + face_height),
+                width,
+                height,
+            },
+            face_frame: face_size.map(|(width, height)| Bounds {
+                origin: Point::new(cx - width / 2.0, top),
+                width,
+                height,
+            }),
         }
     }
 
+    /// The whole include's box: the table and the face's panel.
     fn bounds(&self) -> Bounds {
+        let Some(face) = self.face_frame else {
+            return self.frame;
+        };
+        let left = self.frame.origin.x.min(face.origin.x);
+        let right = (self.frame.origin.x + self.frame.width).max(face.origin.x + face.width);
         Bounds {
-            origin: Point::new(self.x, self.y),
-            width: self.width,
-            height: self.height,
+            origin: Point::new(left, face.origin.y),
+            width: right - left,
+            height: face.height + self.frame.height,
         }
+    }
+}
+
+impl Row<'_> {
+    /// The row's height: one entry's, and a sub-row for each further one.
+    fn height(&self) -> f64 {
+        ROW_HEIGHT + self.entries.len().saturating_sub(1) as f64 * SUB_ROW_HEIGHT
+    }
+
+    /// The centre line of each of the row's entries, from the row's top.
+    fn entry_offset(index: usize) -> f64 {
+        ROW_HEIGHT / 2.0 + index as f64 * SUB_ROW_HEIGHT
+    }
+}
+
+/// The width of each column's content after the pin's, as wide as the
+/// widest cell in it (the far end's capped at [`FAR_MAX_WIDTH`]), each
+/// [`PAD_X`] clear of the column before it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Columns {
+    label: f64,
+    wire: f64,
+    gauge: f64,
+    far: f64,
+}
+
+impl Columns {
+    fn of(rows: &[Row]) -> Self {
+        let entries = || rows.iter().flat_map(|row| &row.entries);
+        let label = if rows.is_empty() {
+            LABEL_FONT.width(NO_PINS)
+        } else {
+            Self::widest(rows.iter().map(|row| {
+                let note = row
+                    .note
+                    .as_ref()
+                    .map_or(0.0, |note| NOTE_GAP + NOTE_FONT.width(&note.to_string()));
+                LABEL_FONT.width(&row.label) + note
+            }))
+        };
+        let wire = Self::widest(entries().map(|entry| match entry {
+            Entry::Conductor { color, .. } => {
+                SWATCH_WIDTH + SWATCH_GAP + WIRE_FONT.width(&color.code())
+            }
+            Entry::Drain { .. } => WIRE_FONT.width(DRAIN),
+        }));
+        let gauge = Self::widest(
+            entries()
+                .filter_map(|entry| entry.gauge())
+                .map(|gauge| WIRE_FONT.width(&gauge)),
+        );
+        // Capped, the column narrows again to the widest far end as it is
+        // drawn there, since a far end past the cap loses detail.
+        let cap = Self::widest(entries().map(|entry| WIRE_FONT.width(entry.far().full())))
+            .min(FAR_MAX_WIDTH);
+        let far = Self::widest(entries().map(|entry| {
+            let fitted = entry.far().fit(WIRE_FONT, cap);
+            WIRE_FONT.width(&fitted.text)
+        }));
+        Self {
+            label,
+            wire: wire.max(WIRE_MIN_WIDTH),
+            gauge: gauge.max(GAUGE_MIN_WIDTH),
+            far: far.max(FAR_MIN_WIDTH),
+        }
+    }
+
+    /// The widest of `widths`, 0 for none.
+    fn widest(widths: impl Iterator<Item = f64>) -> f64 {
+        widths.fold(0.0, f64::max)
+    }
+
+    /// Where each column's content starts, from the table's left edge.
+    fn label_x(&self) -> f64 {
+        PIN_COL_WIDTH + PAD_X
+    }
+
+    fn wire_x(&self) -> f64 {
+        self.label_x() + self.label + PAD_X
+    }
+
+    fn gauge_x(&self) -> f64 {
+        self.wire_x() + self.wire + PAD_X
+    }
+
+    fn far_x(&self) -> f64 {
+        self.gauge_x() + self.gauge + PAD_X
+    }
+
+    /// The width the columns take, padding on the right included.
+    fn width(&self) -> f64 {
+        self.far_x() + self.far + PAD_X
     }
 }
 
@@ -328,10 +482,16 @@ impl Face {
         self.rows as f64 * CAVITY_SIZE + (self.rows.saturating_sub(1)) as f64 * CAVITY_GAP
     }
 
-    /// The height the face takes in its table: padding above and below
-    /// it, and the caption band under it.
+    /// The height of the face's panel: padding above and below the face,
+    /// and the caption band under it.
     fn band_height(&self) -> f64 {
         self.height() + FACE_PAD + CAPTION_HEIGHT
+    }
+
+    /// The width of the face's panel: the face with [`FACE_PAD`] each
+    /// side, or the caption's, whichever is wider — never the table's.
+    fn panel_width(&self) -> f64 {
+        (self.width() + 2.0 * FACE_PAD).max(CAPTION_FONT.width(FACE_CAPTION) + 2.0 * PAD_X)
     }
 }
 
@@ -519,11 +679,6 @@ impl Cell {
     }
 }
 
-struct Row {
-    pin: Pin,
-    label: String,
-}
-
 #[derive(Clone, Copy)]
 struct ViewBox {
     x: f64,
@@ -547,11 +702,13 @@ impl Header {
     /// documents a component type, so its title names the subject by its
     /// label only when the type is placed once in `design`; a label would
     /// name one placement of several, so a type placed more than once (or
-    /// a placement with no label) is named by its type.
+    /// a placement with no label) is named by its type. The wires belong
+    /// to a placement, so a type placed more than once gets a line naming
+    /// the one whose wires the table lists.
     fn new(design: &Design, subject: &Instance, connector: &Connector) -> Self {
-        let placed_once = design.placements_of(&subject.type_name).nth(1).is_none();
+        let placements = design.placements_of(&subject.type_name).count();
         let component = match &subject.label {
-            Some(label) if placed_once => label.clone(),
+            Some(label) if placements <= 1 => label.clone(),
             _ => subject.type_name.to_string(),
         };
         let part = match connector.properties.get("part") {
@@ -564,11 +721,18 @@ impl Header {
             .into_iter()
             .chain(part)
             .collect();
+        let wires = (placements > 1).then(|| {
+            format!(
+                "Wires shown for {}, one of {placements} placements",
+                subject.path
+            )
+        });
         Self {
             title: format!("{component} · {}", connector.name),
             lines: (!housing.is_empty())
                 .then(|| housing.join(" · "))
                 .into_iter()
+                .chain(wires)
                 .collect(),
         }
     }
@@ -577,127 +741,227 @@ impl Header {
         HEADER_HEIGHT + self.lines.len().saturating_sub(1) as f64 * HEADER_LINE_HEIGHT
     }
 
-    /// The character count of the header's longest text.
-    fn widest_chars(&self) -> usize {
-        std::iter::once(&self.title)
-            .chain(&self.lines)
-            .map(|text| text.chars().count())
-            .max()
-            .unwrap_or(0)
-    }
-}
-
-fn port_label(name: &PortName, port: Option<&crate::dsl::ir::Port>) -> String {
-    match port {
-        Some(port) if port.label == name.as_str() => port.label.clone(),
-        Some(port) => format!("{} · {}", name, port.label),
-        None => name.to_string(),
+    /// The width the header's widest text needs, [`PAD_X`] clear each side.
+    fn width(&self) -> f64 {
+        let lines = self.lines.iter().map(|line| HEADER_LINE_FONT.width(line));
+        TITLE_FONT.width(&self.title).max(lines.fold(0.0, f64::max)) + 2.0 * PAD_X
     }
 }
 
 fn render_table(table: &Table) -> Group {
-    let mut group = Group::new()
-        .set("class", "pinout")
-        .add(
-            Rectangle::new()
-                .set("x", table.x)
-                .set("y", table.y)
-                .set("width", table.width)
-                .set("height", table.height),
-        )
+    let mut group = Group::new().set("class", "pinout");
+    if let (Some(face), Some(panel)) = (&table.face, &table.face_frame) {
+        let centre = panel.origin.x + panel.width / 2.0;
+        group = group
+            .add(rectangle(panel).set("class", "face-panel"))
+            .add(render_face(
+                face,
+                centre - face.width() / 2.0,
+                panel.origin.y + FACE_PAD / 2.0,
+            ))
+            .add(
+                Text::new(FACE_CAPTION)
+                    .set("class", "pinout-caption")
+                    .set("x", centre)
+                    .set("y", panel.origin.y + panel.height - CAPTION_HEIGHT / 2.0),
+            );
+    }
+
+    let frame = &table.frame;
+    let (left, top) = (frame.origin.x, frame.origin.y);
+    let right = left + frame.width;
+    group = group
+        .add(rectangle(frame))
         .add(
             Rectangle::new()
                 .set("class", "header")
-                .set("x", table.x)
-                .set("y", table.y)
-                .set("width", table.width)
+                .set("x", left)
+                .set("y", top)
+                .set("width", frame.width)
                 .set("height", table.header.height()),
         )
         .add(
             Text::new(table.header.title.clone())
                 .set("class", "pinout-title")
-                .set("x", table.x + table.width / 2.0)
-                .set("y", table.y + HEADER_HEIGHT * 0.42),
+                .set("x", left + frame.width / 2.0)
+                .set("y", top + HEADER_HEIGHT * 0.42),
         );
     for (i, line) in table.header.lines.iter().enumerate() {
         group = group.add(
             Text::new(line.clone())
                 .set("class", "pinout-part")
-                .set("x", table.x + table.width / 2.0)
+                .set("x", left + frame.width / 2.0)
                 .set(
                     "y",
-                    table.y + HEADER_HEIGHT * 0.78 + i as f64 * HEADER_LINE_HEIGHT,
+                    top + HEADER_HEIGHT * 0.78 + i as f64 * HEADER_LINE_HEIGHT,
                 ),
         );
     }
 
-    let body_top = table.y + table.header.height();
-    let rows_top = body_top + table.face.as_ref().map_or(0.0, Face::band_height);
-
-    if let Some(face) = &table.face {
-        let face_top = body_top + FACE_PAD / 2.0;
-        group = group
-            .add(render_face(
-                face,
-                table.x + (table.width - face.width()) / 2.0,
-                face_top,
-            ))
-            .add(
-                Text::new(FACE_CAPTION)
-                    .set("class", "pinout-caption")
-                    .set("x", table.x + table.width / 2.0)
-                    .set("y", rows_top - CAPTION_HEIGHT / 2.0),
-            )
-            .add(
-                Line::new()
-                    .set("class", "row-sep")
-                    .set("x1", table.x)
-                    .set("y1", rows_top)
-                    .set("x2", table.x + table.width)
-                    .set("y2", rows_top),
-            );
+    let rows_top = top + table.header.height();
+    if table.rows.is_empty() {
+        return group.add(
+            Text::new(NO_PINS)
+                .set("class", "pin-label")
+                .set("x", left + table.columns.label_x())
+                .set("y", rows_top + ROW_HEIGHT / 2.0),
+        );
     }
-
-    let placeholder = [(String::new(), "No pins assigned")];
-    let rows: Vec<(String, &str)> = if table.rows.is_empty() {
-        placeholder.to_vec()
-    } else {
-        table
-            .rows
-            .iter()
-            .map(|r| (r.pin.to_string(), r.label.as_str()))
-            .collect()
-    };
-
-    for (i, (pin, label)) in rows.into_iter().enumerate() {
-        let row_top = rows_top + i as f64 * ROW_HEIGHT;
-        let row_y = row_top + ROW_HEIGHT / 2.0;
+    let mut row_top = rows_top;
+    for (i, row) in table.rows.iter().enumerate() {
         if i > 0 {
             group = group.add(
                 Line::new()
                     .set("class", "row-sep")
-                    .set("x1", table.x)
+                    .set("x1", left)
                     .set("y1", row_top)
-                    .set("x2", table.x + table.width)
+                    .set("x2", right)
                     .set("y2", row_top),
             );
         }
-        group = group
-            .add(
-                Text::new(pin)
-                    .set("class", "pin-num")
-                    .set("x", table.x + PIN_COL_WIDTH / 2.0)
-                    .set("y", row_y),
-            )
-            .add(
-                Text::new(label)
-                    .set("class", "pin-label")
-                    .set("x", table.x + PIN_COL_WIDTH + PAD_X)
-                    .set("y", row_y),
-            );
+        group = group.add(render_row(row, &table.columns, left, right, row_top));
+        row_top += row.height();
     }
-
     group
+}
+
+/// `row`, its top at `top`, in a table spanning `left` to `right`: the pin
+/// and the port's label centred on the row's height, its note against the
+/// label column's right edge, then one sub-row per entry, a dotted rule
+/// between two, or a dash for a pin no conductor reaches.
+fn render_row(row: &Row, columns: &Columns, left: f64, right: f64, top: f64) -> Group {
+    let middle = top + row.height() / 2.0;
+    let label_x = left + columns.label_x();
+    let mut group = Group::new()
+        .set("class", "pin-row")
+        .add(
+            Text::new(row.pin.map(|pin| pin.to_string()).unwrap_or_default())
+                .set("class", "pin-num")
+                .set("x", left + PIN_COL_WIDTH / 2.0)
+                .set("y", middle),
+        )
+        .add(
+            Text::new(row.label.clone())
+                .set("class", "pin-label")
+                .set("x", label_x)
+                .set("y", middle),
+        );
+    if let Some(note) = &row.note {
+        group = group.add(
+            Text::new(note.to_string())
+                .set("class", note.class())
+                // The anchor rides as an attribute too, for embed mode,
+                // where the built-in stylesheet is absent.
+                .set("text-anchor", "end")
+                .set("x", label_x + columns.label)
+                .set("y", middle),
+        );
+    }
+    let wire_x = left + columns.wire_x();
+    if row.entries.is_empty() {
+        return group.add(
+            Text::new(UNWIRED)
+                .set("class", "pin-wire pin-unwired")
+                .set("x", wire_x)
+                .set("y", middle),
+        );
+    }
+    for (i, entry) in row.entries.iter().enumerate() {
+        let y = top + Row::entry_offset(i);
+        if i > 0 {
+            let rule = y - SUB_ROW_HEIGHT / 2.0;
+            group = group.add(
+                Line::new()
+                    .set("class", "wire-sep")
+                    .set("x1", wire_x - PAD_X / 2.0)
+                    .set("y1", rule)
+                    .set("x2", right)
+                    .set("y2", rule),
+            );
+        }
+        group = group.add(render_entry(entry, columns, left, y));
+    }
+    group
+}
+
+/// One entry of a row on its centre line `y`: a conductor's swatch and
+/// colour code, gauge and far end, or a drain and where it goes.
+fn render_entry(entry: &Entry, columns: &Columns, left: f64, y: f64) -> Group {
+    let wire_x = left + columns.wire_x();
+    let mut group = Group::new().set("class", "pin-entry");
+    group = match entry {
+        Entry::Conductor { color, .. } => group.add(swatch(color, wire_x, y)).add(
+            Text::new(color.code())
+                .set("class", "pin-wire")
+                .set("x", wire_x + SWATCH_WIDTH + SWATCH_GAP)
+                .set("y", y),
+        ),
+        Entry::Drain { .. } => group.add(
+            Text::new(DRAIN)
+                .set("class", "pin-wire pin-drain")
+                .set("x", wire_x)
+                .set("y", y),
+        ),
+    };
+    if let Some(gauge) = entry.gauge() {
+        group = group.add(
+            Text::new(gauge)
+                .set("class", "pin-gauge")
+                .set("x", left + columns.gauge_x())
+                .set("y", y),
+        );
+    }
+    let far = entry.far().fit(WIRE_FONT, columns.far);
+    let mut text = Text::new(far.text.clone())
+        .set("class", "pin-far")
+        .set("x", left + columns.far_x())
+        .set("y", y);
+    if far.text != entry.far().full() {
+        text = text.add(Title::new(entry.far().full()));
+    }
+    group.add(text)
+}
+
+/// A wire colour's swatch, its left edge at `x` and centred on `y`: a
+/// small bar filled with the colour, a two-tone colour's tracer as a stripe
+/// along its middle.
+///
+/// The paint is the harness renderer's for the same colour —
+/// [`WireColor::css`] for the base, [`WireColor::tracer`] for the stripe —
+/// and the authored colour rides along as `data-color` in every mode, as
+/// on a harness strand, so a host stylesheet can restyle it in embed mode.
+/// A `<path>`, not a `<rect>`: the `.pinout rect` rule would paint over a
+/// rectangle's fill.
+fn swatch(color: &WireColor, x: f64, y: f64) -> Group {
+    let top = y - SWATCH_HEIGHT / 2.0;
+    let bar =
+        |top: f64, height: f64| format!("M{x},{top} h{SWATCH_WIDTH} v{height} h-{SWATCH_WIDTH} Z");
+    let mut group = Group::new().add(
+        Path::new()
+            .set("class", "wire-swatch")
+            .set("fill", color.css())
+            .set("data-color", color.to_string())
+            .set("d", bar(top, SWATCH_HEIGHT)),
+    );
+    if let Some(tracer) = color.tracer() {
+        group = group.add(
+            Path::new()
+                .set("class", "wire-swatch-tracer")
+                .set("fill", tracer)
+                .set("data-color", color.to_string())
+                .set("d", bar(top + SWATCH_HEIGHT / 3.0, SWATCH_HEIGHT / 3.0)),
+        );
+    }
+    group
+}
+
+/// An outlined box over `bounds`.
+fn rectangle(bounds: &Bounds) -> Rectangle {
+    Rectangle::new()
+        .set("x", bounds.origin.x)
+        .set("y", bounds.origin.y)
+        .set("width", bounds.width)
+        .set("height", bounds.height)
 }
 
 /// The cavities of `face`, its top-left corner at (`x`, `y`). A cavity no
@@ -768,15 +1032,22 @@ fn tables_viewbox(tables: &[Table], has_title: bool) -> ViewBox {
             height: SVG_MARGIN * 2.0,
         };
     }
-    let min_x = tables.iter().map(|t| t.x).fold(f64::INFINITY, f64::min);
-    let min_y = tables.iter().map(|t| t.y).fold(f64::INFINITY, f64::min);
-    let max_x = tables
+    let boxes: Vec<Bounds> = tables.iter().map(Table::bounds).collect();
+    let min_x = boxes
         .iter()
-        .map(|t| t.x + t.width)
+        .map(|b| b.origin.x)
+        .fold(f64::INFINITY, f64::min);
+    let min_y = boxes
+        .iter()
+        .map(|b| b.origin.y)
+        .fold(f64::INFINITY, f64::min);
+    let max_x = boxes
+        .iter()
+        .map(|b| b.origin.x + b.width)
         .fold(f64::NEG_INFINITY, f64::max);
-    let max_y = tables
+    let max_y = boxes
         .iter()
-        .map(|t| t.y + t.height)
+        .map(|b| b.origin.y + b.height)
         .fold(f64::NEG_INFINITY, f64::max);
 
     let title_space = if has_title {
@@ -798,6 +1069,7 @@ mod tests {
     use crate::dsl::ir::{Include, InstanceName, TypeName, ViewKind};
     use crate::dsl::span::{FileId, Span};
     use crate::render::schematic::tests::design_from;
+    use rows::Note;
 
     fn pinout_view(subject: &str, includes: &[(&str, f64, f64)]) -> View {
         View {
@@ -830,8 +1102,9 @@ mod tests {
             .values()
             .find(|i| i.type_name == view.subject)
             .expect("subject instance");
+        let tables = PinTables::from(design);
         PinoutRenderer
-            .render(design, subject, view, mode)
+            .render(design, &tables, subject, view, mode)
             .expect("renders")
     }
 
@@ -900,10 +1173,13 @@ component m {
         design.expect("a design")
     }
 
-    fn table_of(design: &Design) -> Table {
+    /// The drawing of `x1` on the first instance of `m`.
+    fn table_of(design: &Design) -> Table<'_> {
         let (subject, connector) = subject_x1(design);
+        let tables = PinTables::from(design);
+        let table = tables.of(subject, &connector.name).expect("a pin table");
         let view = pinout_view("m", &[("x1", 0.0, 0.0)]);
-        Table::new(design, connector, subject, &view.includes[0], DEFAULT_GRID)
+        Table::new(design, table, &view.includes[0], DEFAULT_GRID)
     }
 
     #[test]
@@ -921,8 +1197,12 @@ component m {
 }
 "#,
         );
-        let pins: Vec<u32> = table_of(&design).rows.iter().map(|r| r.pin.0).collect();
-        assert_eq!(pins, [9, 42, 45, 46, 47, 48, 49]);
+        let pins: Vec<Option<u32>> = table_of(&design)
+            .rows
+            .iter()
+            .map(|r| r.pin.map(|pin| pin.0))
+            .collect();
+        assert_eq!(pins, [9, 42, 45, 46, 47, 48, 49].map(Some));
     }
 
     #[test]
@@ -958,6 +1238,11 @@ component m {
         );
         let table = table_of(&design);
         assert_eq!(table.header.title, "m · x1");
+        // The wires are one placement's: the header says whose.
+        assert_eq!(
+            table.header.lines,
+            ["X", "Wires shown for top.front, one of 2 placements"]
+        );
         let svg = render(
             &design,
             &pinout_view("m", &[("x1", 0.0, 0.0)]),
@@ -978,7 +1263,9 @@ component m {
             header(&["Box", "more"]).height(),
             HEADER_HEIGHT + HEADER_LINE_HEIGHT
         );
-        assert_eq!(header(&["a much longer line"]).widest_chars(), 18);
+        // A line wider than the title widens the header.
+        assert_eq!(header(&["Box"]).width(), header(&[]).width());
+        assert!(header(&["a much longer line than the title"]).width() > header(&[]).width());
     }
 
     #[test]
@@ -1030,13 +1317,15 @@ component m {
         );
         assert!(!without.contains("class=\"pinout-caption\""));
 
-        // The caption has a band of its own between the face and the rows.
+        // The caption has a band of its own under the face, in the face's
+        // panel, which sits on top of the table.
         let table = table_of(&design);
         let face = table.face.as_ref().expect("face");
-        assert_eq!(
-            table.height,
-            HEADER_HEIGHT + face.height() + FACE_PAD + CAPTION_HEIGHT + ROW_HEIGHT
-        );
+        let panel = table.face_frame.expect("a face panel");
+        assert_eq!(panel.height, face.height() + FACE_PAD + CAPTION_HEIGHT);
+        assert_eq!(table.frame.height, HEADER_HEIGHT + ROW_HEIGHT);
+        assert_eq!(panel.origin.y + panel.height, table.frame.origin.y);
+        assert_eq!(table.bounds().height, panel.height + table.frame.height);
     }
 
     #[test]
@@ -1201,21 +1490,54 @@ component m {
 }
 "#,
         );
-        let subject = design
-            .instances
-            .values()
-            .find(|i| i.type_name == TypeName::from("m"))
-            .expect("subject");
-        let connector = subject
-            .connectors
-            .get(&ConnectorName::from("x1"))
-            .expect("connector");
-
-        let view = pinout_view("m", &[("x1", 0.0, 0.0)]);
-        let table = Table::new(&design, connector, subject, &view.includes[0], DEFAULT_GRID);
+        let table = table_of(&design);
         let face = table.face.as_ref().expect("face");
+        let panel = table.face_frame.expect("a face panel");
 
-        assert_eq!(table.width, face.width() + 2.0 * FACE_PAD);
+        assert_eq!(panel.width, face.width() + 2.0 * FACE_PAD);
+        // Both are centred on the include's point.
+        assert_eq!(panel.origin.x, -panel.width / 2.0);
+        assert_eq!(table.frame.origin.x, -table.frame.width / 2.0);
+    }
+
+    #[test]
+    fn a_narrow_table_is_not_stretched_to_its_wide_face() {
+        let design = design_from(
+            r#"
+connector_type Wide "W" {
+    layout grid { rows: 1; cols: 12; }
+}
+component m {
+    connector x1: Wide { pub port a "A" pin 1; }
+}
+"#,
+        );
+        let table = table_of(&design);
+        let panel = table.face_frame.expect("a face panel");
+        assert_eq!(table.frame.width, table.columns.width());
+        assert!(table.frame.width < panel.width - 100.0);
+        assert_eq!(table.bounds().width, panel.width);
+
+        // A face narrower than its table is not stretched to the table.
+        let design = design_from(
+            r#"
+connector_type One "One" {
+    layout grid { rows: 1; cols: 1; }
+}
+component m {
+    connector x1: One { pub port a "A LONG DESCRIPTIVE PORT LABEL" pin 1; }
+}
+"#,
+        );
+        let table = table_of(&design);
+        let panel = table.face_frame.expect("a face panel");
+        let face = table.face.as_ref().expect("face");
+        assert_eq!(
+            panel.width,
+            (face.width() + 2.0 * FACE_PAD).max(CAPTION_FONT.width(FACE_CAPTION) + 2.0 * PAD_X)
+        );
+        assert!(panel.width < table.frame.width);
+        assert_eq!(table.bounds().width, table.frame.width);
     }
 
     #[test]
@@ -1316,14 +1638,346 @@ component m {
             .values()
             .find(|i| i.type_name == TypeName::from("m"))
             .expect("subject");
+        let tables = PinTables::from(&design);
         let err = PinoutRenderer
             .render(
                 &design,
+                &tables,
                 subject,
                 &pinout_view("m", &[("x1", 0.0, 0.0)]),
                 SvgMode::Standalone,
             )
             .expect_err("unknown connector");
         assert!(matches!(err, ViewErrorKind::UnknownConnector { .. }));
+    }
+
+    /// A design whose root `top` places `m` (its connector `x1` holding
+    /// `ports`) and an `Ecu` (whose `x1` has ports `p1`…`p6` on pins 1–6)
+    /// with `body` (wires, cables, splices) between them.
+    fn wired(ports: &str, body: &str) -> Design {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let lib = format!(
+            "component m {{ connector x1 \"X\" {{ {ports} }} }}\n\
+             component Ecu {{ connector x1 \"ECU\" {{\n\
+               pub port p1 \"P1\" pin 1; pub port p2 \"P2\" pin 2; pub port p3 \"P3\" pin 3;\n\
+               pub port p4 \"P4\" pin 4; pub port p5 \"P5\" pin 5; pub port p6 \"P6\" pin 6;\n\
+             }} }}\n"
+        );
+        let main = format!(
+            "use m from \"lib.wb\";\nuse Ecu from \"lib.wb\";\n\
+             component top {{ dev: m; ecu: Ecu; lamp: Ecu;\n{body}\n}}\n"
+        );
+        std::fs::write(dir.path().join("main.wb"), main).expect("write");
+        std::fs::write(dir.path().join("lib.wb"), lib).expect("write");
+        let (project, _) = crate::dsl::project::load(&dir.path().join("main.wb"));
+        let project = project.expect("loads");
+        let resolved = crate::dsl::resolve::resolve(&project);
+        assert!(resolved.problems.is_empty(), "{:?}", resolved.problems);
+        let (design, problems) = crate::dsl::elaborate::elaborate(&resolved);
+        assert!(problems.is_empty(), "elaboration problems: {problems:?}");
+        design.expect("a design")
+    }
+
+    /// The content of every `<text>` of `svg` whose class is `class`, a
+    /// tooltip left out, in document order.
+    fn texts(svg: &str, class: &str) -> Vec<String> {
+        use svg::node::element::tag::Type;
+        use svg::parser::Event;
+        let mut found = Vec::new();
+        let (mut open, mut in_title) = (None::<String>, false);
+        for event in svg::read(svg).expect("parses") {
+            match event {
+                Event::Tag("text", Type::Start, attrs) => {
+                    let matches = attrs.get("class").is_some_and(|c| &**c == class);
+                    open = matches.then(String::new);
+                }
+                Event::Tag("text", Type::End, _) => found.extend(open.take()),
+                Event::Tag("title", Type::Start, _) => in_title = true,
+                Event::Tag("title", Type::End, _) => in_title = false,
+                Event::Text(content) if !in_title => {
+                    if let Some(text) = open.as_mut() {
+                        text.push_str(content.trim());
+                    }
+                }
+                _ => {}
+            }
+        }
+        found
+    }
+
+    /// Each row's pin, and each of its entries as `colour code · gauge ·
+    /// far end` (`drain · far end` for a drain).
+    fn listing(table: &Table) -> Vec<(Option<u32>, Vec<String>)> {
+        table
+            .rows
+            .iter()
+            .map(|row| {
+                let entries = row
+                    .entries
+                    .iter()
+                    .map(|entry| match entry {
+                        Entry::Conductor { color, gauge, far } => {
+                            format!("{} · {gauge} · {}", color.code(), far.full())
+                        }
+                        Entry::Drain { far } => format!("drain · {}", far.full()),
+                    })
+                    .collect();
+                (row.pin.map(|pin| pin.0), entries)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn each_pin_lists_its_conductors_colour_gauge_and_far_end() {
+        let design = wired(
+            "pub port a \"A\" pin 1; pub port b \"B\" pin 2; pub port c \"C\" pin 3;",
+            "wire red 1 [dev.a, ecu.p1];\n\
+             wire black 0.5 [dev.a, lamp.p2];\n\
+             wire green/yellow 2.5 [dev.b, ecu.p3];",
+        );
+        let table = table_of(&design);
+        assert_eq!(
+            listing(&table),
+            [
+                (
+                    Some(1),
+                    vec![
+                        "RD · 1 · → top.ecu.p1 (x1:1)".to_string(),
+                        "BK · 0.5 · → top.lamp.p2 (x1:2)".to_string(),
+                    ]
+                ),
+                (
+                    Some(2),
+                    vec!["GN/YE · 2.5 · → top.ecu.p3 (x1:3)".to_string()]
+                ),
+                (Some(3), vec![]),
+            ]
+        );
+        // A double crimp is one row, a sub-row taller per further conductor.
+        let heights: Vec<f64> = table.rows.iter().map(Row::height).collect();
+        assert_eq!(
+            heights,
+            [ROW_HEIGHT + SUB_ROW_HEIGHT, ROW_HEIGHT, ROW_HEIGHT]
+        );
+
+        let svg = render(
+            &design,
+            &pinout_view("m", &[("x1", 0.0, 0.0)]),
+            SvgMode::Standalone,
+        );
+        assert_eq!(svg.matches("class=\"pin-row\"").count(), 3);
+        assert_eq!(svg.matches("class=\"pin-entry\"").count(), 3);
+        assert_eq!(svg.matches("class=\"wire-sep\"").count(), 1);
+        assert_eq!(texts(&svg, "pin-gauge"), ["1mm²", "0.5mm²", "2.5mm²"]);
+        assert_eq!(
+            texts(&svg, "pin-far"),
+            [
+                "→ top.ecu.p1 (x1:1)",
+                "→ top.lamp.p2 (x1:2)",
+                "→ top.ecu.p3 (x1:3)"
+            ]
+        );
+        assert_eq!(texts(&svg, "pin-wire"), ["RD", "BK", "GN/YE"]);
+        // A pin no conductor reaches is visibly unwired.
+        assert_eq!(svg.matches("class=\"pin-wire pin-unwired\"").count(), 1);
+    }
+
+    #[test]
+    fn a_swatch_is_painted_as_the_harness_paints_the_wire_in_every_mode() {
+        let design = wired(
+            "pub port a \"A\" pin 1; pub port b \"B\" pin 2;",
+            "wire purple 0.5 [dev.a, ecu.p1];\nwire green/yellow 2.5 [dev.b, ecu.p2];",
+        );
+        let view = pinout_view("m", &[("x1", 0.0, 0.0)]);
+        for mode in [SvgMode::Standalone, SvgMode::Embed] {
+            let svg = render(&design, &view, mode);
+            // The base fills the swatch, the tracer a stripe over it, and
+            // the canonical colour rides along as `data-color`.
+            assert!(svg.contains("fill=\"violet\""), "{mode:?}");
+            assert!(svg.contains("data-color=\"violet\""), "{mode:?}");
+            assert!(svg.contains("fill=\"green\""), "{mode:?}");
+            assert!(svg.contains("fill=\"yellow\""), "{mode:?}");
+            assert_eq!(svg.matches("data-color=\"green/yellow\"").count(), 2);
+            assert_eq!(svg.matches("class=\"wire-swatch\"").count(), 2);
+            assert_eq!(svg.matches("class=\"wire-swatch-tracer\"").count(), 1);
+            assert_eq!(texts(&svg, "pin-wire"), ["VT", "GN/YE"]);
+        }
+        // A swatch is not a `rect`, which the `.pinout rect` rule would
+        // paint white.
+        assert!(STYLE.contains(".wire-swatch {"));
+        assert!(!STYLE.contains(".wire-swatch { fill"));
+        // The embed stylesheet carries the new rules, scoped.
+        let css = crate::render::embed_stylesheet();
+        for rule in [".wire-swatch {", ".pin-far {", ".pin-note {", ".wire-sep {"] {
+            assert!(css.contains(&format!(".wirebug-pinout {rule}")), "{rule}");
+        }
+    }
+
+    #[test]
+    fn a_drain_is_an_entry_of_its_own_with_no_colour_or_gauge() {
+        let design = wired(
+            "pub port s \"S\" pin 1; pub port t \"T\" pin 2;",
+            "cable can \"CAN\" {\n\
+               twisted { wire white 0.5 [dev.t, ecu.p1]; wire blue 0.5 [lamp.p1, ecu.p2]; }\n\
+               shield [dev.s];\n\
+             }\n\
+             cable other \"Other\" { wire red 0.5 [lamp.p3, ecu.p3]; shield \"SCREEN\" [dev.s, ecu.p4]; }",
+        );
+        let table = table_of(&design);
+        assert_eq!(
+            listing(&table)[0],
+            (
+                Some(1),
+                vec![
+                    "drain · can shield".to_string(),
+                    "drain · → top.ecu.p4 (other · SCREEN)".to_string(),
+                ]
+            )
+        );
+        assert!(
+            table.rows[0]
+                .entries
+                .iter()
+                .all(|entry| entry.gauge().is_none())
+        );
+        let svg = render(
+            &design,
+            &pinout_view("m", &[("x1", 0.0, 0.0)]),
+            SvgMode::Standalone,
+        );
+        assert_eq!(svg.matches("class=\"pin-wire pin-drain\"").count(), 2);
+        assert_eq!(svg.matches("class=\"wire-swatch\"").count(), 1);
+    }
+
+    #[test]
+    fn a_conductor_to_a_splice_names_the_splice_and_what_lies_beyond() {
+        let design = wired(
+            "pub port g \"G\" pin 1;",
+            "splice sp \"GND\";\n\
+             wire black 1 [dev.g, sp];\n\
+             wire black 0.5 [ecu.p1, sp];\n\
+             wire black 0.5 [lamp.p1, sp];\n\
+             wire black 0.5 [ecu.p2, sp];",
+        );
+        let table = table_of(&design);
+        let far = table.rows[0].entries[0].far();
+        assert_eq!(far.full(), "→ top.sp (ecu.p1, lamp.p1, ecu.p2)");
+        // Short of room, the list collapses before the splice is cut.
+        let collapsed = far.fit(WIRE_FONT, WIRE_FONT.width("→ top.sp (ecu.p1, +2 more)"));
+        assert_eq!(collapsed.text, "→ top.sp (ecu.p1, +2 more)");
+        let bare = far.fit(WIRE_FONT, WIRE_FONT.width("→ top.sp (ecu"));
+        assert_eq!(bare.text, "→ top.sp");
+    }
+
+    #[test]
+    fn a_ganged_port_is_marked_on_each_of_its_rows() {
+        let design = wired(
+            "pub port pwr \"PWR\" pins [3, 1]; pub port sig \"SIG\" pin 2;",
+            "wire red 2.5 [dev.pwr, ecu.p1];",
+        );
+        let table = table_of(&design);
+        let notes: Vec<(Option<u32>, Option<String>, usize)> = table
+            .rows
+            .iter()
+            .map(|row| {
+                (
+                    row.pin.map(|pin| pin.0),
+                    row.note.as_ref().map(Note::to_string),
+                    row.entries.len(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            notes,
+            [
+                (Some(1), Some("ganged 1+3".to_string()), 1),
+                (Some(2), None, 0),
+                (Some(3), Some("ganged 1+3".to_string()), 1),
+            ]
+        );
+        let svg = render(
+            &design,
+            &pinout_view("m", &[("x1", 0.0, 0.0)]),
+            SvgMode::Standalone,
+        );
+        assert_eq!(svg.matches("class=\"pin-note pin-ganged\"").count(), 2);
+    }
+
+    #[test]
+    fn a_port_with_no_pin_is_listed_after_the_pins_with_its_conductors() {
+        let design = wired(
+            "pub port spare \"SPARE\"; pub port a \"A\" pin 1;",
+            "wire white 0.5 [dev.spare, ecu.p1];",
+        );
+        let table = table_of(&design);
+        assert_eq!(
+            listing(&table),
+            [
+                (Some(1), vec![]),
+                (None, vec!["WH · 0.5 · → top.ecu.p1 (x1:1)".to_string()]),
+            ]
+        );
+        assert_eq!(table.rows[1].note, Some(Note::Unpinned));
+        let svg = render(
+            &design,
+            &pinout_view("m", &[("x1", 0.0, 0.0)]),
+            SvgMode::Standalone,
+        );
+        assert_eq!(svg.matches("class=\"pin-note pin-unpinned\"").count(), 1);
+    }
+
+    #[test]
+    fn a_long_far_end_is_fitted_to_its_capped_column() {
+        let design = wired(
+            "pub port a \"A\" pin 1;",
+            "splice a_splice_with_a_very_long_name_indeed;\n\
+             wire red 1 [dev.a, a_splice_with_a_very_long_name_indeed];\n\
+             wire red 1 [ecu.p1, a_splice_with_a_very_long_name_indeed];",
+        );
+        let table = table_of(&design);
+        assert!(table.columns.far <= FAR_MAX_WIDTH);
+        let far = table.rows[0].entries[0].far();
+        assert!(WIRE_FONT.width(far.full()) > FAR_MAX_WIDTH);
+        let fitted = far.fit(WIRE_FONT, table.columns.far);
+        assert!(fitted.width() <= table.columns.far, "{}", fitted.text);
+        assert!(table.columns.width() <= table.frame.width);
+        let svg = render(
+            &design,
+            &pinout_view("m", &[("x1", 0.0, 0.0)]),
+            SvgMode::Standalone,
+        );
+        // Short of room, the far end drops the splice's beyond and keeps
+        // its whole text as a tooltip.
+        let [drawn] = &texts(&svg, "pin-far")[..] else {
+            panic!("one far end");
+        };
+        assert_eq!(drawn, "→ top.a_splice_with_a_very_long_name_indeed");
+        assert_eq!(drawn, &fitted.text);
+        assert!(svg.contains(&format!("<title>{}</title>", far.full())));
+    }
+
+    #[test]
+    fn the_wire_columns_follow_their_content() {
+        let narrow = wired("pub port a \"A\" pin 1;", "wire red 1 [dev.a, ecu.p1];");
+        let narrow = table_of(&narrow);
+        let wide = wired(
+            "pub port a \"A\" pin 1;",
+            "wire green/yellow 0.35 [dev.a, ecu.p1];",
+        );
+        let wide = table_of(&wide);
+        assert!(wide.columns.wire > narrow.columns.wire);
+        assert!(wide.columns.gauge > narrow.columns.gauge);
+        assert_eq!(narrow.columns.wire, WIRE_MIN_WIDTH);
+        // A table with no conductor keeps its columns, at their minimums.
+        let unwired = wired("pub port a \"A\" pin 1;", "");
+        let unwired = table_of(&unwired);
+        assert_eq!(
+            (
+                unwired.columns.wire,
+                unwired.columns.gauge,
+                unwired.columns.far
+            ),
+            (WIRE_MIN_WIDTH, GAUGE_MIN_WIDTH, FAR_MIN_WIDTH)
+        );
     }
 }

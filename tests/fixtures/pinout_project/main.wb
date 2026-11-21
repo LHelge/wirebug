@@ -1,11 +1,41 @@
 // The inverter is placed once, so its label heads each of its tables; the
-// sensor twice, so its tables are headed by its type.
+// sensor twice, so its tables are headed by its type and say which
+// placement's wires they list (the first, `Vehicle.front_sensor`).
+//
+// The wires give the pinouts' wire columns one of each kind of entry: a
+// two-tone pair in a screened cable whose drain lands on the inverter, a
+// double crimp (two conductors into the inverter's WAKE), a ganged port
+// (B+ and B- over two cavities each), a conductor to a splice that joins
+// three more ends, and a conductor into a port with no pin.
 
 use Inverter from "components/inverter.wb";
 use Sensor from "components/sensor.wb";
+use Ecu from "components/ecu.wb";
 
 component Vehicle {
     inv:          Inverter "Inverter";
     front_sensor: Sensor   "Front sensor";
     rear_sensor:  Sensor   "Rear sensor";
+    vcm:          Ecu      "VCM";
+
+    splice sp_gnd "Ground splice";
+
+    cable can "CAN" {
+        twisted {
+            wire white/blue 0.5 [inv.can_h, vcm.can_h];
+            wire white      0.5 [inv.can_l, vcm.can_l];
+        }
+        shield [inv.shld];
+    }
+
+    wire orange 0.5  [inv.wake, vcm.wake];
+    wire orange 0.35 [inv.wake, front_sensor.sig];
+
+    wire red   2.5 [inv.b_pos, vcm.feed];
+    wire black 2.5 [inv.b_neg, sp_gnd];
+    wire black 0.5 [front_sensor.gnd, sp_gnd];
+    wire black 0.5 [rear_sensor.gnd, sp_gnd];
+    wire black 1   [vcm.gnd, sp_gnd];
+
+    wire violet 0.5 [inv.spare, vcm.spare];
 }

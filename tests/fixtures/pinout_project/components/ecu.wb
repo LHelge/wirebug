@@ -1,0 +1,14 @@
+// The far side of the inverter's and the sensors' conductors: a control
+// unit with no pinout view of its own.
+
+component Ecu {
+    connector x1 "ECU 8p" {
+        pub port can_h "CAN H" pin 1;
+        pub port can_l "CAN L" pin 2;
+        pub port wake  "WAKE"  pin 3;
+        pub port feed  "FEED"  pin 4;
+        pub port gnd   "GND"   pin 5;
+        pub port shld  "SHLD"  pin 6;
+        pub port spare "SPARE" pin 7;
+    }
+}

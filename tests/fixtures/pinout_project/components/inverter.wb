@@ -1,6 +1,7 @@
 // Pins declared out of order (42 after 45; 46, 48, 47, 49), a label too
-// long for its cavity, and cavities no port uses (40, 41, 43, 44 on the
-// face; 2, 5, 6 on the grid).
+// long for its cavity, cavities no port uses (40, 41, 43, 44 on the face;
+// 5, 6 on the grid), a port with no pin (SPARE), and ports no conductor
+// reaches (TEMP+, IGNITION SWITCHED FEED).
 
 use Control from "connectors.wb";
 use Signal from "connectors.wb";
@@ -17,6 +18,8 @@ component Inverter {
         pub port can_h "CAN H" pin 3;
         pub port can_l "CAN L" pin 1;
         pub port wake  "WAKE"  pin 4;
+        pub port shld  "SHLD"  pin 2;
+        pub port spare "SPARE";
     }
 }
 

@@ -6,6 +6,7 @@
 //! renders or fails on its own: a failure is a [`ViewError`] naming the
 //! view, and the other views still render.
 
+use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
 
 use askama::Template;
@@ -14,7 +15,7 @@ use serde::Serialize;
 use crate::dsl::ir::{Design, Instance, View, ViewKind};
 use crate::dsl::manifest::Manifest;
 use crate::error::{Error, Result, ViewError, ViewErrorKind, ViewResult};
-use crate::export::{Format as ExportFormat, Table};
+use crate::export::{Format as ExportFormat, PinTables, Table};
 
 pub mod geometry;
 pub mod harness;
@@ -106,12 +107,13 @@ pub type ViewOutcome = std::result::Result<RenderedView, ViewError>;
 #[must_use]
 pub fn render_views(design: &Design, mode: SvgMode) -> Vec<ViewOutcome> {
     let mut filenames = FilenameAllocator::default();
+    let pin_tables = OnceCell::new();
     design
         .views
         .iter()
         .map(|view| {
             let filename = filenames.svg_filename(&view.title);
-            render_view(design, view, mode)
+            render_view(design, view, mode, &pin_tables)
                 .map(|svg| RenderedView {
                     title: view.title.clone(),
                     filename,
@@ -123,13 +125,23 @@ pub fn render_views(design: &Design, mode: SvgMode) -> Vec<ViewOutcome> {
         .collect()
 }
 
-/// Render one view to SVG with the renderer its kind names.
-fn render_view(design: &Design, view: &View, mode: SvgMode) -> ViewResult<String> {
+/// Render one view to SVG with the renderer its kind names. A pinout
+/// reads the design's pin tables, built in `pin_tables` by the first
+/// pinout view of a run and shared by the rest.
+fn render_view<'d>(
+    design: &'d Design,
+    view: &View,
+    mode: SvgMode,
+    pin_tables: &OnceCell<PinTables<'d>>,
+) -> ViewResult<String> {
     let subject = subject_instance(design, view)?;
     match &view.kind {
         ViewKind::Schematic => schematic::SchematicRenderer.render(design, subject, view, mode),
         ViewKind::Harness => harness::HarnessRenderer.render(design, subject, view, mode),
-        ViewKind::Pinout => pinout::PinoutRenderer.render(design, subject, view, mode),
+        ViewKind::Pinout => {
+            let tables = pin_tables.get_or_init(|| PinTables::from(design));
+            pinout::PinoutRenderer.render(design, tables, subject, view, mode)
+        }
         ViewKind::Other(other) => Err(ViewErrorKind::UnknownViewKind(other.clone())),
     }
 }
