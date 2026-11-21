@@ -844,10 +844,13 @@ pub struct ViewGrid {
     pub span: Span,
 }
 
-/// A named annotation box placed at grid coordinates in a schematic view.
+/// An annotation box placed at grid coordinates in a schematic view.
 #[derive(Debug)]
 pub struct TextBox {
-    pub name: String,
+    /// The name a box written in the deprecated named form carries, which
+    /// the schematic renderer keeps as the box's `data-text`; `None` for the
+    /// current, nameless form.
+    pub name: Option<String>,
     pub x: f64,
     pub y: f64,
     pub label: String,

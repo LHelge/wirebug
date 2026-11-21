@@ -1,0 +1,4 @@
+[project]
+name = "deprecated-text-project"
+version = "0.1.0"
+description = "Fixture with a text box in the deprecated named form beside one in the current form"

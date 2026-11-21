@@ -77,11 +77,14 @@ pub(super) fn render_text_box(text: &PlacedText) -> Group {
         .set("x", text.origin.x + text.width / 2.0)
         .set("y", text.origin.y + text.height / 2.0);
 
-    Group::new()
-        .set("class", "text-box")
-        .set("data-text", text.name.clone())
-        .add(rect)
-        .add(label)
+    let group = Group::new().set("class", "text-box");
+    // Only a box written in the deprecated named form has a name: it keeps
+    // the `data-text` a host may style against until it is migrated.
+    let group = match &text.name {
+        Some(name) => group.set("data-text", name.clone()),
+        None => group,
+    };
+    group.add(rect).add(label)
 }
 
 fn render_port(p: &PlacedPort) -> Group {

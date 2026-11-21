@@ -1,0 +1,29 @@
+// A schematic view mixing both text box forms: the current, label-first
+// `text "<label>" at (x, y);` and the deprecated named
+// `text <name> at (x, y) "<label>";`, which still renders but warns.
+
+component Bench {
+    left:  Lamp "Left lamp";
+    right: Lamp "Right lamp";
+
+    wire red 1 [left.feed, right.feed];
+
+    component Lamp {
+        pub port feed "FEED";
+    }
+}
+
+view schematic "Bench" {
+    grid: 20;
+
+    include left at (6, 8) ports {
+        east: feed;
+    }
+
+    include right at (26, 8) ports {
+        west: feed;
+    }
+
+    text "Current form" at (6, 14);
+    text old_note at (26, 14) "Deprecated form";
+}

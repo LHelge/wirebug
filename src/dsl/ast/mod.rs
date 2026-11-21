@@ -439,15 +439,29 @@ pub struct View {
     pub span: Span,
 }
 
-/// `text <name> at (<x>, <y>) "<label>";` — a named annotation box placed at
-/// grid coordinates in a schematic view.
+/// `text "<label>" at (<x>, <y>);` — an annotation box placed at grid
+/// coordinates in a schematic view.
 #[derive(Debug, Clone)]
 pub struct TextBox {
-    pub name: Spanned<Ident>,
+    /// The name of the deprecated form, `text <name> at (<x>, <y>)
+    /// "<label>";`, which resolve warns about; `None` for the current form,
+    /// whose box has no name.
+    pub name: Option<Spanned<Ident>>,
     pub x: Spanned<f64>,
     pub y: Spanned<f64>,
     pub label: Spanned<String>,
     pub span: Span,
+}
+
+impl TextBox {
+    /// The statement in the current form, `text "<label>" at (<x>, <y>);`,
+    /// whatever form it was written in.
+    pub fn current_form(&self) -> String {
+        format!(
+            "text \"{}\" at ({}, {});",
+            self.label.node, self.x.node, self.y.node
+        )
+    }
 }
 
 /// One `<port> at (<x>, <y>)` placement inside the `enclosure { }` block,
