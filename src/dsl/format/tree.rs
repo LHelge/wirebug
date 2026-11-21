@@ -11,10 +11,12 @@ pub(super) enum Statement<'a, 'src> {
     /// The tokens of a statement up to and including its `;`.
     Simple(&'a [Attached<'src>]),
     /// A statement that opens a block: its tokens up to and including the
-    /// `{`, the block's statements, and its `}`.
+    /// `{`, the block's statements, and its `}`; and all of its tokens, from
+    /// the first to the `}`.
     Block {
         header: &'a [Attached<'src>],
         body: Body<'a, 'src>,
+        tokens: &'a [Attached<'src>],
     },
 }
 
@@ -23,6 +25,29 @@ impl<'a, 'src> Statement<'a, 'src> {
     pub(super) fn first(&self) -> &'a Attached<'src> {
         match self {
             Statement::Simple(tokens) | Statement::Block { header: tokens, .. } => &tokens[0],
+        }
+    }
+
+    /// The tokens of a statement that prints on one line, as one: a simple
+    /// statement, or a block holding a single simple statement that the
+    /// author wrote on one line with its `{` and `}` and no comment inside
+    /// (`include sw at (4, 0) ports { west: a; }`). `None` for any other
+    /// block.
+    pub(super) fn one_line(&self) -> Option<&'a [Attached<'src>]> {
+        match self {
+            Statement::Simple(tokens) => Some(tokens),
+            Statement::Block {
+                header,
+                body,
+                tokens,
+            } => {
+                let inner = &tokens[header.len()..];
+                let single = matches!(body.statements.as_slice(), [Statement::Simple(_)])
+                    && body.close.is_some();
+                let on_its_line = header.last().is_some_and(|open| open.trailing.is_none())
+                    && inner.iter().all(|token| !token.newline_before);
+                (single && on_its_line).then_some(*tokens)
+            }
         }
     }
 }
@@ -81,6 +106,7 @@ impl<'a, 'src> Body<'a, 'src> {
                         statements: inner,
                         close,
                     },
+                    tokens: &tokens[start..*at],
                 });
             } else {
                 statements.push(Statement::Simple(&tokens[start..end]));

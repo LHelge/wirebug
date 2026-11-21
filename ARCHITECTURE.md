@@ -67,14 +67,23 @@ directory shell-quoted when it is not plain).
   (none inside brackets or around `.`, `/`, before `;`, `,`, `:`), a
   comment inside a statement ending its line (the rest continues a level
   deeper), blank lines between statements collapsed to one and dropped at
-  a block's start and end. Consecutive one-line statements of one
+  a block's start and end. Line breaks the author chose are kept where
+  they shape a statement (`Attached::newline_before` says where they
+  were): a `[ … ]` list broken anywhere inside is written one item a line,
+  a level deeper, each with a comma (the last one's added), and the `]`
+  starts the statement's last line; a list on one line stays on one line.
+  A block holding one simple statement, written on one line with its `{`
+  and `}` (`include l at (1, 2) ports { west: a; }`), stays on one line
+  (`Statement::one_line`) and aligns in its run like a simple statement;
+  any other block takes a line per statement. Consecutive one-line statements of one
   `RowKind` (`use`; ports, public and private apart; `name: value` lines;
   wires, labelled and unlabelled apart; `include`/`<port> at`) align in
   columns, a gofmt-style run that a blank line, a block or another kind
   ends; comments ending the lines of a run line up. The only token ever
-  dropped is a comma before a closing bracket. `tests/format.rs` and
+  dropped is a comma before a closing bracket on one line. `tests/format.rs` and
   `tests/docs.rs` hold every fixture and every `wb` doc block to
-  idempotence and an unchanged AST (spans aside).
+  idempotence, an unchanged AST (spans aside) and the same comments between
+  the same tokens (`tests/common/`).
 - **`render` (`src/render/`)** — runs the same DSL pipeline, then draws
   every view in the resulting `ir::Design` to SVG (one file per view) plus
   an `index.html` (`render::index_html`) that embeds them all for browsing,

@@ -31,6 +31,9 @@ pub struct Attached<'src> {
     /// A comment after this token on the same line, trailing whitespace
     /// trimmed.
     pub trailing: Option<&'src str>,
+    /// Whether a line ends between the previous token and this one: where
+    /// the author broke a list or a block over lines.
+    pub newline_before: bool,
 }
 
 /// A file's tokens with their trivia attached, and the trivia after the
@@ -82,6 +85,7 @@ impl<'src> AttachedTokens<'src> {
                     tokens.push(Attached {
                         token: token.clone(),
                         text,
+                        newline_before: newlines > 0 || !pending.is_empty(),
                         leading: std::mem::take(&mut pending),
                         trailing: None,
                     });
@@ -143,6 +147,13 @@ mod tests {
                 Leading::BlankLine
             ]
         );
+    }
+
+    #[test]
+    fn a_token_knows_whether_a_line_ends_before_it() {
+        let attached = collect("[a,\n b, // c\n c]");
+        let breaks: Vec<bool> = attached.tokens.iter().map(|t| t.newline_before).collect();
+        assert_eq!(breaks, [false, false, false, true, false, true, false]);
     }
 
     #[test]

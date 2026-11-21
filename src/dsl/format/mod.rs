@@ -168,7 +168,7 @@ mod tests {
     fn blocks_indent_four_spaces_and_statements_take_a_line_each() {
         assert_eq!(
             fmt("component Lamp{pub port a \"A\";  pub port b \"B\" ;\n\
-                 connector x \"X\"{pub port c \"C\" pin 1;}}"),
+                 connector x \"X\"{\npub port c \"C\" pin 1;}}"),
             "component Lamp {\n    pub port a \"A\";\n    pub port b \"B\";\n    \
              connector x \"X\" {\n        pub port c \"C\" pin 1;\n    }\n}\n"
         );
@@ -177,11 +177,13 @@ mod tests {
     #[test]
     fn tokens_are_single_spaced_with_none_inside_brackets() {
         assert_eq!(
-            fmt("view schematic \"V\" {\n  include  l  at ( -2 ,0.5 ) ports { west : a , b ; }\n}"),
+            fmt(
+                "view schematic \"V\" {\n  include  l  at ( -2 ,0.5 ) ports {\n west : a , b ; }\n}"
+            ),
             "view schematic \"V\" {\n    include l at (-2, 0.5) ports {\n        west: a, b;\n    }\n}\n"
         );
         assert_eq!(
-            fmt("component A { wire green / yellow 1.5 [ a . b , c ] { length : 150mm ; } }"),
+            fmt("component A { wire green / yellow 1.5 [ a . b , c ] {\n length : 150mm ; } }"),
             "component A {\n    wire green/yellow 1.5 [a.b, c] {\n        length: 150mm;\n    }\n}\n"
         );
     }
@@ -300,14 +302,63 @@ mod tests {
 
     #[test]
     fn a_comment_inside_a_statement_breaks_it_there() {
-        let src =
-            "component A {\nwire red 1 [\n  a.b, // first end\n  // the rest\n  c.d,\n];\n}\n";
+        let src = "view schematic \"V\" {\ninclude lamp // left\n at (0, 0);\n}\n";
+        assert_eq!(
+            fmt(src),
+            "view schematic \"V\" {\n\
+             \x20   include lamp // left\n\
+             \x20       at (0, 0);\n\
+             }\n"
+        );
+    }
+
+    #[test]
+    fn a_list_split_over_lines_takes_an_item_a_line() {
+        let src = "component A {\n\
+                   wire black 6.0 [\n\
+                   \x20   charger.out_neg, aux.neg, // the bus\n\
+                   \x20   // the cooling\n\
+                   \x20   pump.gnd, fan.gnd\n\
+                   ];\n\
+                   wire red 1 [a.b, c.d,];\n\
+                   }\n";
         assert_eq!(
             fmt(src),
             "component A {\n\
-             \x20   wire red 1 [a.b, // first end\n\
-             \x20       // the rest\n\
-             \x20       c.d];\n\
+             \x20   wire black 6.0 [\n\
+             \x20       charger.out_neg,\n\
+             \x20       aux.neg, // the bus\n\
+             \x20       // the cooling\n\
+             \x20       pump.gnd,\n\
+             \x20       fan.gnd,\n\
+             \x20   ];\n\
+             \x20   wire red 1 [a.b, c.d];\n\
+             }\n"
+        );
+    }
+
+    #[test]
+    fn a_one_statement_block_written_on_one_line_stays_there_and_aligns() {
+        let src = "view schematic \"V\" {\n\
+                   include bl_left at (26, 3) ports { west: stop; }\n\
+                   include chmsl at (4, 3) ports {   west : stop;  }\n\
+                   include tail at (8, 3);\n\
+                   include x at (1, 1) ports { west: a; east: b; }\n\
+                   include y at (2, 2) ports {\nwest: a; }\n\
+                   }\n";
+        assert_eq!(
+            fmt(src),
+            "view schematic \"V\" {\n\
+             \x20   include bl_left at (26, 3) ports { west: stop; }\n\
+             \x20   include chmsl   at (4, 3) ports { west: stop; }\n\
+             \x20   include tail    at (8, 3);\n\
+             \x20   include x at (1, 1) ports {\n\
+             \x20       west: a;\n\
+             \x20       east: b;\n\
+             \x20   }\n\
+             \x20   include y at (2, 2) ports {\n\
+             \x20       west: a;\n\
+             \x20   }\n\
              }\n"
         );
     }
