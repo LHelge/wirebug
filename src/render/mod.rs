@@ -17,7 +17,7 @@ use crate::error::{Error, Result, ViewError, ViewErrorKind, ViewResult};
 
 pub mod geometry;
 pub mod harness;
-pub mod lint;
+pub(crate) mod lint;
 pub mod output;
 pub mod pdf;
 pub mod pinout;

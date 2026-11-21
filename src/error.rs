@@ -52,7 +52,7 @@ pub struct ViewError {
 }
 
 /// Why a view could not be rendered: what a renderer or converter reports
-/// before the view's identity is attached ([`ViewErrorKind::in_view`]).
+/// before the view's identity is attached (`ViewErrorKind::in_view`).
 #[derive(Debug, Error)]
 pub enum ViewErrorKind {
     /// A view named a renderer this build doesn't know how to dispatch.
@@ -103,7 +103,7 @@ pub enum ViewErrorKind {
 impl ViewErrorKind {
     /// Attach the identity of the view this failure happened in.
     #[must_use]
-    pub fn in_view(self, title: &str, view_kind: &ViewKind) -> ViewError {
+    pub(crate) fn in_view(self, title: &str, view_kind: &ViewKind) -> ViewError {
         ViewError {
             title: title.to_string(),
             view_kind: view_kind.clone(),
