@@ -80,6 +80,19 @@ impl Project {
             .map(FileId)
     }
 
+    /// The path a `use` or `fragment` written in file `from` gives to name
+    /// file `to`.
+    pub fn import_path(&self, from: FileId, to: FileId) -> String {
+        let from = &self.file(from).path;
+        relative_path(from.parent().unwrap_or(from), &self.file(to).path)
+    }
+
+    /// The path of `id` as diagnostics name it: relative to the entry
+    /// file's directory, the project's.
+    pub fn display_path(&self, id: FileId) -> String {
+        self.import_path(self.root, id)
+    }
+
     /// Drop from `problems` those a source that did not parse whole can
     /// cause on its own ([`Problem::reports_an_absence`]): a name that
     /// resolves to nothing may have been declared in a skipped statement.
@@ -90,6 +103,22 @@ impl Project {
             problems.retain(|problem| !problem.reports_an_absence());
         }
     }
+}
+
+/// `to` relative to `from_dir`, with forward slashes — the form a `use`
+/// or `fragment` path is written in. Both paths must be absolute (they
+/// come from the loader's canonicalization).
+pub(crate) fn relative_path(from_dir: &Path, to: &Path) -> String {
+    let from: Vec<_> = from_dir.components().collect();
+    let to: Vec<_> = to.components().collect();
+    let common = from.iter().zip(&to).take_while(|(a, b)| a == b).count();
+    let mut parts: Vec<String> = vec!["..".to_string(); from.len() - common];
+    parts.extend(
+        to[common..]
+            .iter()
+            .map(|c| c.as_os_str().to_string_lossy().into_owned()),
+    );
+    parts.join("/")
 }
 
 /// Find the entry `.wb` file for `target`:
@@ -378,6 +407,21 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/tests/fixtures/basic_project/main.wb"
         ))
+    }
+
+    #[test]
+    fn relative_paths_walk_up_and_down() {
+        assert_eq!(
+            relative_path(
+                Path::new("/p/systems"),
+                Path::new("/p/components/hv/inv.wb")
+            ),
+            "../components/hv/inv.wb"
+        );
+        assert_eq!(
+            relative_path(Path::new("/p"), Path::new("/p/hv.wb")),
+            "hv.wb"
+        );
     }
 
     #[test]

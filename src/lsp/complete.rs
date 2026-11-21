@@ -18,7 +18,7 @@ use super::line_index::LineIndex;
 use crate::dsl::diagnostics::{PropertyKind, PropertyOwner};
 use crate::dsl::ir::{ColorName, LengthUnit};
 use crate::dsl::lex::{LexError, Token, lex, significant};
-use crate::dsl::project::Project;
+use crate::dsl::project::{Project, relative_path};
 use crate::dsl::resolve::Resolved;
 use crate::dsl::span::FileId;
 
@@ -913,22 +913,6 @@ fn length_units(cursor: &Cursor, owner: PropertyOwner) -> Option<Vec<CompletionI
     Some(units.collect())
 }
 
-/// `to` relative to `from_dir`, with forward slashes — the form a `use`
-/// or `fragment` path is written in. Both paths must be absolute (they
-/// come from the loader's canonicalization).
-fn relative_path(from_dir: &Path, to: &Path) -> String {
-    let from: Vec<_> = from_dir.components().collect();
-    let to: Vec<_> = to.components().collect();
-    let common = from.iter().zip(&to).take_while(|(a, b)| a == b).count();
-    let mut parts: Vec<String> = vec!["..".to_string(); from.len() - common];
-    parts.extend(
-        to[common..]
-            .iter()
-            .map(|c| c.as_os_str().to_string_lossy().into_owned()),
-    );
-    parts.join("/")
-}
-
 /// One nesting level at the cursor, tagged by its governing keyword.
 enum Block {
     Component {
@@ -1392,22 +1376,6 @@ mod tests {
 
         let src = "connector_type X \"X\" {\n    layout face {\n        cavity 1 at (0, 0) size ‸\n    }\n}\n";
         assert_eq!(complete_in(&[MAIN], src), ["large"]);
-    }
-
-    #[test]
-    fn relative_paths_walk_up_and_down() {
-        use std::path::Path;
-        assert_eq!(
-            relative_path(
-                Path::new("/p/systems"),
-                Path::new("/p/components/hv/inv.wb")
-            ),
-            "../components/hv/inv.wb"
-        );
-        assert_eq!(
-            relative_path(Path::new("/p"), Path::new("/p/hv.wb")),
-            "hv.wb"
-        );
     }
 
     #[test]
