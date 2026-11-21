@@ -129,7 +129,7 @@ impl Printer {
     /// ends its line, and the statement goes on a level deeper on the next;
     /// a `[ … ]` list the author split over lines is written one item a
     /// line ([`split_list`](Self::split_list)).
-    fn tokens_then<'t>(&mut self, tokens: &'t [Attached<'_>], depth: usize) {
+    fn tokens_then(&mut self, tokens: &[Attached<'_>], depth: usize) {
         self.indent(depth);
         let mut pen = Pen {
             fresh: false,
