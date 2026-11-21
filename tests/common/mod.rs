@@ -1,13 +1,13 @@
 //! Helpers shared by integration tests (not a test target of its own).
 
 use wirebug::dsl::format::Formatted;
-use wirebug::dsl::lex::{lex, significant};
+use wirebug::dsl::lex::{Lexeme, Token, Trivia, lex, significant};
 use wirebug::dsl::parse::parse_file;
 use wirebug::dsl::span::FileId;
 
 /// Whether `fmt` keeps `src` what it was: formatting it again changes
-/// nothing, and the formatted text parses to the AST `src` does, spans
-/// aside. `None` for a source the formatter refuses (one that does not
+/// nothing, the formatted text parses to the AST `src` does, spans aside,
+/// and holds the same comments between the same tokens. `None` for a source the formatter refuses (one that does not
 /// parse); otherwise the first property that fails, or `Ok`.
 pub fn format_faithfully(src: &str) -> Option<Result<(), String>> {
     let once = Formatted::new(src).ok()?;
@@ -31,9 +31,32 @@ pub fn format_faithfully(src: &str) -> Option<Result<(), String>> {
             "the formatted text means something else:\n{}",
             once.as_str()
         ))
+    } else if comments_in_place(src) != comments_in_place(once.as_str()) {
+        Err(format!(
+            "the formatted text drops or moves a comment:\n{}",
+            once.as_str()
+        ))
     } else {
         Ok(())
     })
+}
+
+/// Every comment of `src` and every token around it, in order: the
+/// comments are not in the AST, so this is what says each one is kept
+/// where it stood. Commas are left out, as `fmt` drops one that closes a
+/// list.
+fn comments_in_place(src: &str) -> Vec<String> {
+    lex(src, FileId(0))
+        .expect("source lexes")
+        .iter()
+        .filter_map(|lexeme| match &lexeme.lexeme {
+            Lexeme::Trivia(Trivia::LineComment) => {
+                Some(src[lexeme.span.start..lexeme.span.end].trim_end().to_owned())
+            }
+            Lexeme::Token(Token::Comma) | Lexeme::Trivia(_) => None,
+            Lexeme::Token(_) => Some(src[lexeme.span.start..lexeme.span.end].to_owned()),
+        })
+        .collect()
 }
 
 /// The AST `src` parses to, as its `Debug` text without the spans.
