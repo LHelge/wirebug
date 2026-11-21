@@ -1,12 +1,13 @@
 ---
 id: g2e.xb
 title: "`wirebug init` scaffolds a project"
-status: open
+status: done
 priority: P2
 created: "2026-11-20T21:40:32.093921120Z"
-updated: "2026-11-20T21:40:32.093921120Z"
+updated: "2026-11-21T19:24:09.984578694Z"
 tags:
   - cli
+attempts: 1
 ---
 
 ## Summary
