@@ -188,6 +188,10 @@ cargo run -- check examples/wirebug.toml
 cargo run -- check --strict --format json examples
 cargo run -- check --strict examples      # what CI runs: any error or warning fails it
 
+# format a .wb project in place (--check: list what would change, write nothing)
+cargo run -- fmt examples
+cargo run -- fmt --check examples
+
 # render every view in a .wb project to SVG (one file per view, into --out)
 cargo run --release -- render examples --out out/
 cargo run --release -- render examples --out out/ --png    # rasterise to PNG
