@@ -92,7 +92,11 @@ Four CLI commands share it:
   view's title with the file's component types after it; inside a view,
   includes, `ports { }` and `enclosure { }` complete against the
   component its `for` names (`FileScope.top_level`, then
-  `FileScope.imported`), else the file's lone top-level one. An open
+  `FileScope.imported`), else the file's lone top-level one. A
+  component's splices complete where a bare endpoint goes (not in a
+  `shield`'s list) and as a harness include, `splice` is a member keyword,
+  and a splice body (`Block::Splice`, opened only where `splice` starts
+  the statement) offers its keys. An open
   `.wb` file its project never loads (not reachable from `main.wb` via
   `use` or `fragment`) gets one info-severity `unlinked_file` notice
   instead of silence — rust-analyzer's unlinked-file move; its contents
@@ -101,8 +105,10 @@ Four CLI commands share it:
   Go-to-definition (`lsp/definition.rs`) re-runs load/resolve per
   request (never stale; projects are small) and span-walks the registry:
   `use` names, `use` and `fragment` paths (to the top of the file),
-  instance type refs, connector type refs, wire endpoints, a view's `for`
-  subject, view includes/ports/enclosures, and `extend` → its root
+  instance type refs, connector type refs, wire endpoints (a bare name to
+  its splice, through `Resolved::splice`, else its own port), a view's
+  `for` subject, view includes/ports/enclosures (a harness include of a
+  splice to the splice), and `extend` → its root
   `component`, all
   merge-group aware. Hover/rename/semantic tokens/formatting are
   deliberately later.

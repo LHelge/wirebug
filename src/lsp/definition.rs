@@ -14,7 +14,7 @@ use std::path::Path;
 use lsp_types::{Location, Position, Range};
 
 use crate::dsl::ast::{self, Member};
-use crate::dsl::ir::{ConnectorName, InstanceName, PortName};
+use crate::dsl::ir::{ConnectorName, InstanceName, PortName, SpliceName};
 use crate::dsl::project::{self, Overlay};
 use crate::dsl::resolve::{self, DefId, Resolved};
 use crate::dsl::span::{FileId, Span};
@@ -157,7 +157,13 @@ fn find(resolved: &Resolved, file: FileId, offset: usize) -> Option<Span> {
                         return find_port(resolved, t, ep.port.node.as_str());
                     }
                 } else if hit(ep.port.span) {
-                    return find_port(resolved, d, ep.port.node.as_str());
+                    // A bare name is a splice when the component declares
+                    // one of that name, else an own port.
+                    let name = ep.port.node.as_str();
+                    if let Some(splice) = resolved.splice(d, &SpliceName::from(name)) {
+                        return Some(splice.name.span);
+                    }
+                    return find_port(resolved, d, name);
                 }
             }
         }
@@ -185,6 +191,11 @@ fn find(resolved: &Resolved, file: FileId, offset: usize) -> Option<Span> {
                 // A pinout include names a connector on the subject itself.
                 if view.kind.node.as_str() == "pinout" {
                     return find_connector(resolved, subject, inc.instance.node.as_str());
+                }
+                // A harness include may place one of the subject's splices.
+                let splice = SpliceName::from(inc.instance.node.as_str());
+                if let Some(splice) = resolved.splice(subject, &splice) {
+                    return Some(splice.name.span);
                 }
                 if let Some(inline) = find_inline(resolved, subject, inc.instance.node.as_str()) {
                     return Some(inline.ast.name.span);
@@ -441,6 +452,25 @@ mod tests {
             target_of(&[LEAF, main], "main.wb"),
             Some(("main.wb".into(), "own".into()))
         );
+    }
+
+    #[test]
+    fn a_splice_end_and_include_jump_to_the_splice() {
+        let main = |marked: &str| {
+            format!(
+                "use Leaf from \"leaf.wb\";\ncomponent Root {{\n    l: Leaf;\n    pub port own \"O\";\n    splice sp \"Joint\";\n    wire red 1 [l.b, {}];\n    wire red 1 [sp, own];\n}}\nview harness \"H\" {{\n    include l.j at (0, 0);\n    include {} at (10, 0);\n}}\n",
+                if marked == "end" { "s‸p" } else { "sp" },
+                if marked == "include" { "s‸p" } else { "sp" },
+            )
+        };
+        for marked in ["end", "include"] {
+            let main = main(marked);
+            assert_eq!(
+                target_of(&[LEAF, ("main.wb", &main)], "main.wb"),
+                Some(("main.wb".into(), "sp".into())),
+                "{marked}"
+            );
+        }
     }
 
     #[test]

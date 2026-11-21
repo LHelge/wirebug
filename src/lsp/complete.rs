@@ -76,6 +76,8 @@ struct ComponentEntry {
     /// Inline (mid-harness) connectors: addressable like instances in wire
     /// endpoints, included by housing half in harness views.
     inlines: Vec<InlineEntry>,
+    /// Splices: bare wire endpoints, like own ports, and harness includes.
+    splices: Vec<SpliceEntry>,
     /// Nested component types, visible only inside this component.
     nested: HashMap<String, ComponentKey>,
 }
@@ -91,6 +93,12 @@ struct InlineEntry {
     ports: Vec<PortEntry>,
     /// The declared housing halves (`male`/`female`), in source order.
     halves: Vec<String>,
+}
+
+struct SpliceEntry {
+    name: String,
+    /// The label, else `splice`, shown as the item's detail.
+    detail: String,
 }
 
 struct PortEntry {
@@ -146,6 +154,15 @@ pub(crate) fn build_index(project: &Project, resolved: &Resolved) -> CompletionI
                     .filter(|h| facts.declares(h))
                     .map(|h| h.to_string())
                     .collect(),
+            });
+        }
+        for (name, splice) in &def.splices {
+            entry.splices.push(SpliceEntry {
+                name: name.to_string(),
+                detail: splice
+                    .label
+                    .as_ref()
+                    .map_or_else(|| "splice".to_string(), |l| l.node.clone()),
             });
         }
         for &nested in &def.nested {
@@ -429,6 +446,18 @@ impl CompletionIndex {
             .unwrap_or_default()
     }
 
+    fn splices(&self, key: ComponentKey) -> Vec<CompletionItem> {
+        self.component(key)
+            .map(|entry| {
+                entry
+                    .splices
+                    .iter()
+                    .map(|s| item(&s.name, CompletionItemKind::VALUE, &s.detail))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     fn connectors(&self, key: ComponentKey) -> Vec<CompletionItem> {
         self.component(key)
             .map(|entry| {
@@ -491,6 +520,10 @@ impl CompletionIndex {
             let mut items = self.instances(component);
             items.extend(self.inlines(component));
             items.extend(self.ports(component, false));
+            // A conductor may end on a splice; a shield's drain may not.
+            if !in_shield_statement(&cursor.tokens) {
+                items.extend(self.splices(component));
+            }
             return items;
         }
 
@@ -555,6 +588,7 @@ impl CompletionIndex {
                         "port",
                         "wire",
                         "cable",
+                        "splice",
                         "connector",
                         "inline",
                         "component",
@@ -578,6 +612,12 @@ impl CompletionIndex {
             Some(Block::Twisted) => {
                 if cursor.at_statement_start() {
                     return keywords(&["wire", "shield"]);
+                }
+                Vec::new()
+            }
+            Some(Block::Splice) => {
+                if cursor.at_statement_start() {
+                    return properties(PropertyOwner::Splice);
                 }
                 Vec::new()
             }
@@ -613,6 +653,7 @@ impl CompletionIndex {
                         Some("harness") => {
                             let mut items = self.instances(subject);
                             items.extend(self.inlines(subject));
+                            items.extend(self.splices(subject));
                             items
                         }
                         _ => self.instances(subject),
@@ -840,7 +881,8 @@ fn property(key: &str, detail: &str) -> CompletionItem {
     }
 }
 
-/// The keys a cable, wire or component body takes, as validation knows them.
+/// The keys a cable, wire, component or splice body takes, as validation
+/// knows them.
 fn properties(owner: PropertyOwner) -> Vec<CompletionItem> {
     let detail = format!("{owner} property");
     owner
@@ -898,6 +940,8 @@ enum Block {
     Twisted,
     /// A wire's `{ key: value; }` body, after its endpoint list.
     Wire,
+    /// A splice's `{ key: value; }` body.
+    Splice,
     View {
         kind: Option<String>,
         /// The component named after `for`, when the header has one.
@@ -1075,6 +1119,17 @@ fn classify(before: &[Token]) -> Block {
             Token::RBracket if i + 1 == before.len() && in_wire_statement(&before[..i]) => {
                 return Block::Wire;
             }
+            // `splice <name> {` opens a splice body only where `splice`
+            // starts the statement; after a declaring keyword it is a name
+            // (`cable splice {`).
+            Token::Splice
+                if matches!(
+                    before.get(i.wrapping_sub(1)),
+                    None | Some(Token::LBrace | Token::RBrace | Token::Semicolon)
+                ) =>
+            {
+                return Block::Splice;
+            }
             Token::Cable => return Block::Cable,
             Token::Twisted => return Block::Twisted,
             Token::Connector => return Block::Connector,
@@ -1112,6 +1167,16 @@ fn in_wire_statement(before: &[Token]) -> bool {
         .take_while(|token| !matches!(token, Token::Semicolon | Token::LBrace | Token::RBrace))
         .last()
         == Some(&Token::Wire)
+}
+
+/// Whether the statement `before` ends inside starts with `shield`.
+fn in_shield_statement(before: &[Token]) -> bool {
+    before
+        .iter()
+        .rev()
+        .take_while(|token| !matches!(token, Token::Semicolon | Token::LBrace | Token::RBrace))
+        .last()
+        == Some(&Token::Shield)
 }
 
 /// The instance a `ports { }` block belongs to: the ident right after the
@@ -1351,7 +1416,15 @@ mod tests {
             &[LAMP, MAIN],
             "use Lamp from \"lamp.wb\";\ncomponent Root {\n    ‸\n}\n",
         );
-        for expected in ["pub", "port", "wire", "cable", "connector", "component"] {
+        for expected in [
+            "pub",
+            "port",
+            "wire",
+            "cable",
+            "splice",
+            "connector",
+            "component",
+        ] {
             assert!(
                 labels.contains(&expected.to_string()),
                 "{expected}: {labels:?}"
@@ -1875,6 +1948,61 @@ mod tests {
             "connector_type M2 \"M 2p\" { }\ncomponent Root {\n    inline ic {\n        male: M2;\n        port sig \"SIG\" pin 1;\n    }\n}\nview harness \"H\" {\n    include ic.‸\n}\n",
         );
         assert_eq!(labels, ["male"], "only the declared half: {labels:?}");
+    }
+
+    /// `Root` with a lamp `l`, an own port `feed` and a splice `sp`.
+    const SPLICED: (&str, &str) = (
+        "main.wb",
+        "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n    pub port feed \"F\";\n    splice sp \"Joint\";\n    wire red 1 [l.anode, sp];\n    wire red 1 [sp, feed];\n}\nview harness \"H\" {\n    include l.plug at (0, 0);\n}\n",
+    );
+
+    #[test]
+    fn a_bare_endpoint_offers_the_components_splices() {
+        let items = complete_items_in(
+            &[LAMP, SPLICED],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n    pub port feed \"F\";\n    splice sp \"Joint\";\n    wire red 1 [l.anode, ‸];\n}\n",
+        );
+        let splice = items.iter().find(|i| i.label == "sp").expect("the splice");
+        assert_eq!(splice.detail.as_deref(), Some("Joint"));
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert!(
+            labels.contains(&"feed") && labels.contains(&"l"),
+            "{labels:?}"
+        );
+
+        // A shield's drain lands on a pin, never a splice.
+        let labels = complete_in(
+            &[LAMP, SPLICED],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n    splice sp;\n    cable c {\n        wire red 1 [l.anode, l.cathode];\n        shield [‸];\n    }\n}\n",
+        );
+        assert!(!labels.contains(&"sp".to_string()), "{labels:?}");
+        assert!(labels.contains(&"feed".to_string()), "{labels:?}");
+    }
+
+    #[test]
+    fn a_harness_include_offers_the_subjects_splices() {
+        let live = "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n}\nview harness \"H\" {\n    include ‸\n}\n";
+        let labels = complete_in(&[LAMP, SPLICED], live);
+        assert!(labels.contains(&"sp".to_string()), "{labels:?}");
+        assert!(labels.contains(&"l".to_string()), "{labels:?}");
+        let schematic = live.replace("view harness", "view schematic");
+        let labels = complete_in(&[LAMP, SPLICED], &schematic);
+        assert!(!labels.contains(&"sp".to_string()), "{labels:?}");
+    }
+
+    #[test]
+    fn a_splice_body_offers_its_properties() {
+        let labels = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    splice sp \"Joint\" {\n        ‸\n    }\n}\n",
+        );
+        assert_eq!(labels, ["part", "description"]);
+        // A cable named `splice` opens a cable body.
+        let labels = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    cable splice {\n        ‸\n    }\n}\n",
+        );
+        assert!(labels.contains(&"twisted".to_string()), "{labels:?}");
     }
 
     #[test]
