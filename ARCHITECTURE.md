@@ -9,9 +9,13 @@ Keep this file true in the same change that alters what it describes.
 
 ## One pipeline
 
-The only input is the **`.wb` DSL** (spec: `.claude/skills/wirebug-dsl/`).
-Five CLI commands share it; a sixth, **`init` (`src/init.rs`)**, only writes
-one: `init::Scaffold` creates the directory (with parents) and writes a
+The only input is the **`.wb` DSL** (reference: `docs/`, one page per
+topic; `tests/docs.rs` parses every `wb` code block in it and in the agent
+skill, `.claude/skills/wirebug-dsl/SKILL.md`). Five CLI commands share
+it: `check`, `render`, `export`, `serve` and `lsp`. Of the other two,
+`manifest version` reads only `wirebug.toml` (see Project manifest), and
+**`init` (`src/init.rs`)** only writes a project: `init::Scaffold` creates
+the directory (with parents) and writes a
 `wirebug.toml` named after it (its file name with every run of characters
 other than letters, digits, `-` and `_` turned into one `-`; version
 `0.1.0`), `main.wb` from `templates/init/main.wb` (`include_str!`, so
@@ -1659,6 +1663,20 @@ language config (declarative highlighting, no server needed) and a thin
 `vscode-languageclient` in `src/extension.ts` that spawns `wirebug lsp`
 (`wirebug.server.path` setting → newest repo `target/` build → PATH).
 `npm run package` builds the installable `.vsix`; see its README.
+
+`docs/` is the language reference for a human reader: `README.md` (the
+index and a table of every statement), `syntax.md`, `projects.md`,
+`components.md`, `connectors.md`, `wires-and-cables.md` and `views.md`.
+The agent skill, `.claude/skills/wirebug-dsl/SKILL.md`, is a separate,
+self-contained reference (it ships to other repositories, so it never
+links to `docs/`). `tests/docs.rs` holds both to the parser: every fenced
+block must carry an info string, and every `wb` block must parse —
+` ```wb ` as a whole file, ` ```wb component ` wrapped in a component
+body, ` ```wb view ` in a schematic view's body — except one tagged
+`error`, which must fail to. Neither is in `Cargo.toml`'s `include`: the
+published crate needs neither, and the root files there are anchored
+(`/README.md`), since a bare `README.md` matches at any depth and would
+ship `docs/README.md` too.
 
 The `serve` module renders into memory only; `templates/index.html` (askama)
 is the shared index template for both `render` and `serve`;

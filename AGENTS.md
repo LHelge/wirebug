@@ -3,7 +3,8 @@
 Text-defined electrical schematics and wiring harnesses: a multi-file `.wb`
 DSL project, rooted at a `wirebug.toml` manifest, is checked and rendered to
 SVG/PNG/PDF. `README.md` is the user-facing intro; the language itself is
-specified in `.claude/skills/wirebug-dsl/`.
+specified in `docs/`, and summed up for agents in the
+`.claude/skills/wirebug-dsl/` skill.
 
 This file holds the rules for working on the codebase. **How the application
 works lives in `ARCHITECTURE.md`** — read the section for the area you are
