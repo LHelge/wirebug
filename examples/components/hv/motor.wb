@@ -21,7 +21,7 @@ component Motor {
     }
 }
 
-view pinout "Motor pinout" {
+view pinout "Motor pinout" for Motor {
     grid: 20;
 
     include inverter at (0, 0);

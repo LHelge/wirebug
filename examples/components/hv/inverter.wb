@@ -43,7 +43,7 @@ component Inverter {
     }
 }
 
-view pinout "Inverter pinouts" {
+view pinout "Inverter pinouts" for Inverter {
     grid: 20;
 
     include control at (0, 0);
