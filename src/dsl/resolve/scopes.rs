@@ -34,13 +34,15 @@ impl<'a> Resolver<'a> {
             let mut connector_type_scope: HashMap<String, ConnectorTypeId> = HashMap::new();
 
             for &id in &roots_by_file[fi] {
-                self.insert_type(
+                if let Some((into, extra)) = self.insert_type(
                     &mut scope,
                     self.defs[id].name,
                     id,
                     fid,
                     self.defs[id].ast.name.span,
-                );
+                ) {
+                    self.groups.link(into, extra);
+                }
             }
             for &id in &connector_types_by_file[fi] {
                 self.insert_connector_type(
@@ -52,6 +54,11 @@ impl<'a> Resolver<'a> {
                 );
             }
 
+            // The merges the file's `use` and `fragment` lines make, each at
+            // its line's start: made once the scope is complete, in source
+            // order across both spellings, so a group gathers its fragments
+            // in the order the file names them.
+            let mut merges: Vec<(usize, DefId, DefId)> = Vec::new();
             for use_decl in &file.ast.uses {
                 // A path that names no loaded file was reported by the loader
                 // (not found), or its file failed to load (its own errors).
@@ -69,7 +76,11 @@ impl<'a> Resolver<'a> {
                     .find(|&id| self.connector_types[id].name == wanted);
                 match (component, connector_type) {
                     (Some(id), _) => {
-                        self.insert_type(&mut scope, wanted, id, fid, use_decl.name.span)
+                        if let Some((into, extra)) =
+                            self.insert_type(&mut scope, wanted, id, fid, use_decl.name.span)
+                        {
+                            merges.push((use_decl.span.start, into, extra));
+                        }
                     }
                     (None, Some(id)) => self.insert_connector_type(
                         &mut connector_type_scope,
@@ -104,7 +115,16 @@ impl<'a> Resolver<'a> {
                     continue;
                 }
                 fragmented.insert(tfid, fragment.path.span);
-                self.merge_fragment(fragment, tfid, fid, &scope, &roots_by_file[tfid.0]);
+                self.merge_fragment(
+                    fragment,
+                    (tfid, &roots_by_file[tfid.0]),
+                    (fid, &scope),
+                    &mut merges,
+                );
+            }
+            merges.sort_by_key(|&(at, ..)| at);
+            for (_, into, extra) in merges {
+                self.groups.link(into, extra);
             }
 
             scopes.insert(fid, scope);
@@ -113,20 +133,19 @@ impl<'a> Resolver<'a> {
         (scopes, connector_type_scopes)
     }
 
-    /// Merge each top-level `extend` of file `target` (whose top-level
-    /// definitions are `target_roots`) into the component of its name in
-    /// `scope`: the scope of `file`, whose `fragment` names `target`. No
-    /// name enters the scope. A line naming its own file, or one that
-    /// merges nothing, naming a file with no view and no `fragment` of its
-    /// own (whose lines are judged in that file), is reported unused, with
-    /// the reason.
+    /// Record in `merges` (at the line's start) a merge of each top-level
+    /// `extend` of file `target` (whose top-level definitions are
+    /// `target_roots`) into the component of its name in `scope`: the scope
+    /// of `file`, whose `fragment` names `target`. No name enters the
+    /// scope. A line naming its own file, or one that merges nothing,
+    /// naming a file with no view and no `fragment` of its own (whose lines
+    /// are judged in that file), is reported unused, with the reason.
     fn merge_fragment(
         &mut self,
         fragment: &ast::Fragment,
-        target: FileId,
-        file: FileId,
-        scope: &ComponentScope,
-        target_roots: &[DefId],
+        (target, target_roots): (FileId, &[DefId]),
+        (file, scope): (FileId, &ComponentScope),
+        merges: &mut Vec<(usize, DefId, DefId)>,
     ) {
         let mut merged = false;
         let mut not_in_scope: Vec<String> = Vec::new();
@@ -138,7 +157,7 @@ impl<'a> Resolver<'a> {
             match scope.get(name) {
                 // A file that names itself finds its own `extend` here.
                 Some(&into) if into != id => {
-                    self.groups.link(into, id);
+                    merges.push((fragment.span.start, into, id));
                     merged = true;
                 }
                 Some(_) => {}
@@ -166,6 +185,10 @@ impl<'a> Resolver<'a> {
         });
     }
 
+    /// Put `id` in `scope` under `name`. A same-named entry already there
+    /// is a merge when either is an `extend`, returned for the caller to
+    /// make (`(entry, id)`), and otherwise a duplicate, reported.
+    #[must_use]
     fn insert_type(
         &mut self,
         scope: &mut HashMap<String, DefId>,
@@ -173,7 +196,7 @@ impl<'a> Resolver<'a> {
         id: DefId,
         file: FileId,
         at: Span,
-    ) {
+    ) -> Option<(DefId, DefId)> {
         if let Some(&first) = scope.get(name) {
             // A same-named collision is a merge — not an error — as soon as
             // either side is an `extend` fragment. Two plain `component`s stay
@@ -183,21 +206,21 @@ impl<'a> Resolver<'a> {
             let first_extend = self.defs[first].kind == ast::DefKind::Extend;
             let new_extend = self.defs[id].kind == ast::DefKind::Extend;
             if first_extend || new_extend {
-                self.groups.link(first, id);
                 if first_extend && !new_extend {
                     scope.insert(name.to_string(), id);
                 }
-            } else {
-                self.problems.push(Problem::DuplicateType {
-                    name: name.to_string(),
-                    src: self.project.source(file),
-                    at: at.into(),
-                    first: self.defs[first].ast.name.span.into(),
-                });
+                return Some((first, id));
             }
+            self.problems.push(Problem::DuplicateType {
+                name: name.to_string(),
+                src: self.project.source(file),
+                at: at.into(),
+                first: self.defs[first].ast.name.span.into(),
+            });
         } else {
             scope.insert(name.to_string(), id);
         }
+        None
     }
 
     fn insert_connector_type(
@@ -308,6 +331,49 @@ mod tests {
                     .position(|d| d.name == "vehicle" && d.kind == ast::DefKind::Component)
                     .expect("vehicle");
                 assert_eq!(r.fragments(vehicle).len(), 2, "the extend merged");
+            },
+        );
+    }
+
+    #[test]
+    fn use_and_fragment_lines_merge_in_source_order() {
+        // A file migrating line by line mixes the two spellings: the group
+        // still gathers the fragments in the order the lines name them.
+        with_resolved(
+            &[
+                (
+                    "main.wb",
+                    "fragment \"a.wb\";\nuse vehicle from \"b.wb\";\nfragment \"c.wb\";\n\
+                     component vehicle { }\n",
+                ),
+                ("a.wb", "extend vehicle { pub port x \"X\"; }\n"),
+                ("b.wb", "extend vehicle { pub port x \"X\"; }\n"),
+                ("c.wb", "extend vehicle { pub port c \"C\"; }\n"),
+            ],
+            |r| {
+                let files: Vec<String> = r
+                    .fragments(r.root.expect("root"))
+                    .into_iter()
+                    .map(|d| {
+                        let path = &r.project.file(r.defs[d].file).path;
+                        path.file_name().unwrap().to_string_lossy().into_owned()
+                    })
+                    .collect();
+                assert_eq!(files, ["main.wb", "a.wb", "b.wb", "c.wb"]);
+                // So the port declared twice is reported where it is
+                // declared second.
+                let reused: Vec<String> = r
+                    .problems
+                    .iter()
+                    .filter_map(|p| match p {
+                        crate::dsl::diagnostics::Problem::DuplicatePort { src, .. } => {
+                            Some(src.name().to_string())
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(reused.len(), 1, "{:?}", codes(&r.problems));
+                assert!(reused[0].ends_with("b.wb"), "{reused:?}");
             },
         );
     }
