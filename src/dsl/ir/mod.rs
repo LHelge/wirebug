@@ -364,9 +364,19 @@ impl Design {
     /// an inline is never a view subject. `None` when the design never
     /// instantiates the type.
     pub(crate) fn subject_of(&self, view: &View) -> Option<&Instance> {
+        self.placements_of(&view.subject).next()
+    }
+
+    /// Every placement of the component type `type_name`, in IR order. A
+    /// synthetic inline-connector instance is never one, for the reason
+    /// [`Design::subject_of`] gives.
+    pub(crate) fn placements_of<'a>(
+        &'a self,
+        type_name: &TypeName,
+    ) -> impl Iterator<Item = &'a Instance> {
         self.instances
             .values()
-            .find(|inst| inst.inline.is_none() && inst.type_name == view.subject)
+            .filter(move |inst| inst.inline.is_none() && &inst.type_name == type_name)
     }
 }
 

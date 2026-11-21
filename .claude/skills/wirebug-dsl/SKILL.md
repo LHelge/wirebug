@@ -753,7 +753,8 @@ view pinout "Inverter pinouts" {
   layout and pin bindings.
 - The drawing uses the harness-side convention described above, and each
   cavity face says so in a `Viewed from harness side` caption.
-- The table is headed by the component (its label, else its type) and the
+- The table is headed by the component (its label when it is placed once,
+  else its type, as the drawing serves every placement) and the
   designator, with the connector type's description and `part` beneath; its
   rows list the pins in numeric order, whatever order they are declared in.
   Cavities no port uses are drawn dashed and greyed; a cavity label too long

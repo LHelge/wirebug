@@ -30,6 +30,7 @@ const CAPTION_HEIGHT: f64 = 18.0;
 const CAVITY_LABEL_INSET: f64 = 3.0;
 const DEFAULT_GRID: f64 = 20.0;
 const HEADER_HEIGHT: f64 = 44.0;
+const HEADER_LINE_HEIGHT: f64 = 14.0;
 const ROW_HEIGHT: f64 = 22.0;
 const PIN_COL_WIDTH: f64 = 34.0;
 const PAD_X: f64 = 10.0;
@@ -72,7 +73,7 @@ impl PinoutRenderer {
         mode: SvgMode,
     ) -> ViewResult<String> {
         let step = GridFault::positive_step(view, DEFAULT_GRID)?;
-        let tables = Table::all(subject, view, step)?;
+        let tables = Table::all(design, subject, view, step)?;
 
         let has_title = mode.shows_title(view);
         let vb = viewbox(design, view, &tables, mode);
@@ -133,11 +134,11 @@ impl PinoutRenderer {
                     .get(&ConnectorName::from(inc.instance.as_str()))?;
                 Some(IncludeBox {
                     include,
-                    bounds: Table::new(connector, subject, inc, step).bounds(),
+                    bounds: Table::new(design, connector, subject, inc, step).bounds(),
                 })
             })
             .collect();
-        let canvas = Table::all(subject, view, step).ok().map(|tables| {
+        let canvas = Table::all(design, subject, view, step).ok().map(|tables| {
             let vb = viewbox(design, view, &tables, SvgMode::Standalone);
             Canvas::new(vb.width, vb.height)
         });
@@ -150,8 +151,7 @@ impl PinoutRenderer {
 }
 
 struct Table {
-    title: String,
-    subtitle: String,
+    header: Header,
     face: Option<Face>,
     rows: Vec<Row>,
     x: f64,
@@ -164,7 +164,7 @@ impl Table {
     /// One table per include of `view`, in include order, on a grid of
     /// `step` world units; fails on an include naming no connector of
     /// `subject`.
-    fn all(subject: &Instance, view: &View, step: f64) -> ViewResult<Vec<Self>> {
+    fn all(design: &Design, subject: &Instance, view: &View, step: f64) -> ViewResult<Vec<Self>> {
         view.includes
             .iter()
             .map(|inc| {
@@ -176,23 +176,23 @@ impl Table {
                         subject: subject.type_name.to_string(),
                         connector: name.to_string(),
                     })?;
-                Ok(Self::new(connector, subject, inc, step))
+                Ok(Self::new(design, connector, subject, inc, step))
             })
             .collect()
     }
 
     /// The table for `connector` of `subject`, centred where `inc` places
-    /// it on a grid of `step` world units: headed by the component (its
-    /// label, else its type) and the connector's designator, then the
-    /// housing's description and part, its rows in pin order.
-    fn new(connector: &Connector, subject: &Instance, inc: &Include, step: f64) -> Self {
+    /// it on a grid of `step` world units: under its [`Header`], its rows
+    /// in pin order.
+    fn new(
+        design: &Design,
+        connector: &Connector,
+        subject: &Instance,
+        inc: &Include,
+        step: f64,
+    ) -> Self {
         let (cx, cy) = (inc.x * step, inc.y * step);
-        let component = subject
-            .label
-            .clone()
-            .unwrap_or_else(|| subject.type_name.to_string());
-        let title = format!("{component} · {}", connector.name);
-        let subtitle = connector_subtitle(connector);
+        let header = Header::new(design, subject, connector);
         let mut rows = connector
             .pins
             .iter()
@@ -207,8 +207,7 @@ impl Table {
         rows.sort_by_key(|row| row.pin);
         let face = Face::from_connector(connector, subject);
 
-        let max_chars = std::iter::once(title.chars().count())
-            .chain(std::iter::once(subtitle.chars().count()))
+        let max_chars = std::iter::once(header.widest_chars())
             .chain(
                 rows.iter()
                     .map(|r| r.label.chars().count() + r.pin.to_string().chars().count()),
@@ -224,11 +223,10 @@ impl Table {
         let width = table_width.max(face_width);
         let row_count = rows.len().max(1);
         let face_height = face.as_ref().map_or(0.0, Face::band_height);
-        let height = HEADER_HEIGHT + face_height + row_count as f64 * ROW_HEIGHT;
+        let height = header.height() + face_height + row_count as f64 * ROW_HEIGHT;
 
         Self {
-            title,
-            subtitle,
+            header,
             face,
             rows,
             x: cx - width / 2.0,
@@ -534,16 +532,58 @@ struct ViewBox {
     height: f64,
 }
 
-fn connector_subtitle(connector: &Connector) -> String {
-    let part = match connector.properties.get("part") {
-        Some(crate::dsl::ir::ConnectorPropertyValue::Str(part)) => Some(part.as_str()),
-        _ => None,
-    };
-    match (connector.description.as_deref(), part) {
-        (Some(d), Some(p)) => format!("{d} · {p}"),
-        (Some(d), None) => d.to_string(),
-        (None, Some(p)) => p.to_string(),
-        (None, None) => String::new(),
+/// A table's header: a bold title naming the component and the connector,
+/// then a line for each further thing there is to say, none of them empty.
+/// [`HEADER_HEIGHT`] holds the title and one line; each line past the
+/// first adds [`HEADER_LINE_HEIGHT`].
+struct Header {
+    title: String,
+    lines: Vec<String>,
+}
+
+impl Header {
+    /// The header of `connector`'s table on `subject`: the component and
+    /// the designator, then the housing's description and part. A pinout
+    /// documents a component type, so its title names the subject by its
+    /// label only when the type is placed once in `design`; a label would
+    /// name one placement of several, so a type placed more than once (or
+    /// a placement with no label) is named by its type.
+    fn new(design: &Design, subject: &Instance, connector: &Connector) -> Self {
+        let placed_once = design.placements_of(&subject.type_name).nth(1).is_none();
+        let component = match &subject.label {
+            Some(label) if placed_once => label.clone(),
+            _ => subject.type_name.to_string(),
+        };
+        let part = match connector.properties.get("part") {
+            Some(crate::dsl::ir::ConnectorPropertyValue::Str(part)) => Some(part.as_str()),
+            _ => None,
+        };
+        let housing: Vec<&str> = connector
+            .description
+            .as_deref()
+            .into_iter()
+            .chain(part)
+            .collect();
+        Self {
+            title: format!("{component} · {}", connector.name),
+            lines: (!housing.is_empty())
+                .then(|| housing.join(" · "))
+                .into_iter()
+                .collect(),
+        }
+    }
+
+    fn height(&self) -> f64 {
+        HEADER_HEIGHT + self.lines.len().saturating_sub(1) as f64 * HEADER_LINE_HEIGHT
+    }
+
+    /// The character count of the header's longest text.
+    fn widest_chars(&self) -> usize {
+        std::iter::once(&self.title)
+            .chain(&self.lines)
+            .map(|text| text.chars().count())
+            .max()
+            .unwrap_or(0)
     }
 }
 
@@ -571,27 +611,31 @@ fn render_table(table: &Table) -> Group {
                 .set("x", table.x)
                 .set("y", table.y)
                 .set("width", table.width)
-                .set("height", HEADER_HEIGHT),
+                .set("height", table.header.height()),
         )
         .add(
-            Text::new(table.title.clone())
+            Text::new(table.header.title.clone())
                 .set("class", "pinout-title")
                 .set("x", table.x + table.width / 2.0)
                 .set("y", table.y + HEADER_HEIGHT * 0.42),
         );
-    if !table.subtitle.is_empty() {
+    for (i, line) in table.header.lines.iter().enumerate() {
         group = group.add(
-            Text::new(table.subtitle.clone())
+            Text::new(line.clone())
                 .set("class", "pinout-part")
                 .set("x", table.x + table.width / 2.0)
-                .set("y", table.y + HEADER_HEIGHT * 0.78),
+                .set(
+                    "y",
+                    table.y + HEADER_HEIGHT * 0.78 + i as f64 * HEADER_LINE_HEIGHT,
+                ),
         );
     }
 
-    let rows_top = table.y + HEADER_HEIGHT + table.face.as_ref().map_or(0.0, Face::band_height);
+    let body_top = table.y + table.header.height();
+    let rows_top = body_top + table.face.as_ref().map_or(0.0, Face::band_height);
 
     if let Some(face) = &table.face {
-        let face_top = table.y + HEADER_HEIGHT + FACE_PAD / 2.0;
+        let face_top = body_top + FACE_PAD / 2.0;
         group = group
             .add(render_face(
                 face,
@@ -859,7 +903,7 @@ component m {
     fn table_of(design: &Design) -> Table {
         let (subject, connector) = subject_x1(design);
         let view = pinout_view("m", &[("x1", 0.0, 0.0)]);
-        Table::new(connector, subject, &view.includes[0], DEFAULT_GRID)
+        Table::new(design, connector, subject, &view.includes[0], DEFAULT_GRID)
     }
 
     #[test]
@@ -896,14 +940,51 @@ component m {
             "inv: m \"Inverter\";",
         );
         let table = table_of(&design);
-        assert_eq!(table.title, "Inverter · x1");
-        assert_eq!(table.subtitle, "Box 2p · BX-2");
+        assert_eq!(table.header.title, "Inverter · x1");
+        assert_eq!(table.header.lines, ["Box 2p · BX-2"]);
+    }
+
+    #[test]
+    fn header_names_the_type_when_it_is_placed_more_than_once() {
+        // A pinout documents the type: the front unit's label would be
+        // wrong on the sheet the rear unit's harness is built from.
+        let design = placed_in_top(
+            r#"
+component m {
+    connector x1 "X" { pub port a "A" pin 1; }
+}
+"#,
+            "front: m \"BMS front\"; rear: m \"BMS rear\";",
+        );
+        let table = table_of(&design);
+        assert_eq!(table.header.title, "m · x1");
+        let svg = render(
+            &design,
+            &pinout_view("m", &[("x1", 0.0, 0.0)]),
+            SvgMode::Standalone,
+        );
+        assert!(!svg.contains("BMS front") && !svg.contains("BMS rear"));
+    }
+
+    #[test]
+    fn each_header_line_past_the_first_makes_the_header_taller() {
+        let header = |lines: &[&str]| Header {
+            title: "m · x1".to_string(),
+            lines: lines.iter().map(|l| l.to_string()).collect(),
+        };
+        assert_eq!(header(&[]).height(), HEADER_HEIGHT);
+        assert_eq!(header(&["Box"]).height(), HEADER_HEIGHT);
+        assert_eq!(
+            header(&["Box", "more"]).height(),
+            HEADER_HEIGHT + HEADER_LINE_HEIGHT
+        );
+        assert_eq!(header(&["a much longer line"]).widest_chars(), 18);
     }
 
     #[test]
     fn header_omits_what_is_missing_without_dangling_separators() {
         // A connector block with no description, on a component placed
-        // without a label: the component's type stands in for its label.
+        // once without a label: the component's type stands in for it.
         let design = placed_in_top(
             r#"
 component m {
@@ -913,8 +994,8 @@ component m {
             "inv: m;",
         );
         let table = table_of(&design);
-        assert_eq!(table.title, "m · x1");
-        assert_eq!(table.subtitle, "");
+        assert_eq!(table.header.title, "m · x1");
+        assert!(table.header.lines.is_empty());
         let svg = render(
             &design,
             &pinout_view("m", &[("x1", 0.0, 0.0)]),
@@ -1131,7 +1212,7 @@ component m {
             .expect("connector");
 
         let view = pinout_view("m", &[("x1", 0.0, 0.0)]);
-        let table = Table::new(connector, subject, &view.includes[0], DEFAULT_GRID);
+        let table = Table::new(&design, connector, subject, &view.includes[0], DEFAULT_GRID);
         let face = table.face.as_ref().expect("face");
 
         assert_eq!(table.width, face.width() + 2.0 * FACE_PAD);
