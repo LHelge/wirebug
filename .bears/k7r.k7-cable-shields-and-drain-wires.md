@@ -1,13 +1,14 @@
 ---
 id: k7r.k7
 title: Cable shields and drain wires
-status: open
+status: done
 priority: P3
 created: "2026-11-20T21:40:32.012812790Z"
-updated: "2026-11-21T01:36:29.874657649Z"
+updated: "2026-11-21T03:26:59.095864770Z"
 tags:
   - dsl
   - harness
+attempts: 1
 ---
 
 ## Summary
