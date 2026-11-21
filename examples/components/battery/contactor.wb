@@ -2,6 +2,11 @@
 // Normally-open relay with power terminals and coil drive
 
 component Contactor {
+    part:         "EV200AAANA";
+    manufacturer: "TE Connectivity";
+    description:  "HV main contactor, 12 V coil";
+    rating:       "500 A";
+
     pub port in     "IN";
     pub port out    "OUT";
     pub port coil_p "COIL+";
