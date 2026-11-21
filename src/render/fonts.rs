@@ -20,13 +20,17 @@ use resvg::usvg::fontdb::{Database, Source};
 /// The family name of every bundled face.
 pub(crate) const FAMILY: &str = "DejaVu Sans";
 
+/// The regular face.
+pub(super) const REGULAR: &[u8] = include_bytes!("../../assets/fonts/dejavu/DejaVuSans.ttf");
+/// The bold face.
+pub(super) const BOLD: &[u8] = include_bytes!("../../assets/fonts/dejavu/DejaVuSans-Bold.ttf");
+/// The oblique face, for italic text.
+pub(super) const OBLIQUE: &[u8] =
+    include_bytes!("../../assets/fonts/dejavu/DejaVuSans-Oblique.ttf");
+
 /// The bundled faces: the stylesheets draw regular, bold and italic text,
 /// never bold italic.
-const FACES: [&[u8]; 3] = [
-    include_bytes!("../../assets/fonts/dejavu/DejaVuSans.ttf"),
-    include_bytes!("../../assets/fonts/dejavu/DejaVuSans-Bold.ttf"),
-    include_bytes!("../../assets/fonts/dejavu/DejaVuSans-Oblique.ttf"),
-];
+const FACES: [&[u8]; 3] = [REGULAR, BOLD, OBLIQUE];
 
 /// A font database holding the bundled faces and nothing else, with every
 /// generic family mapped to [`FAMILY`]: our labels ask for `sans-serif`,

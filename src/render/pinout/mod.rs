@@ -72,9 +72,9 @@ const TITLE_GAP: f64 = 12.0;
 /// in: keep each in step with its rule in [`STYLE`].
 const TITLE_FONT: Font = Font::bold(13.0);
 const HEADER_LINE_FONT: Font = Font::regular(10.0);
-const CAPTION_FONT: Font = Font::regular(10.0);
+const CAPTION_FONT: Font = Font::italic(10.0);
 const LABEL_FONT: Font = Font::regular(11.0);
-const NOTE_FONT: Font = Font::regular(9.0);
+const NOTE_FONT: Font = Font::italic(9.0);
 const WIRE_FONT: Font = Font::regular(10.0);
 
 pub(super) const STYLE: &str = "\
