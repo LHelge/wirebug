@@ -46,6 +46,7 @@ struct Annotation {
     text: String,
     turn: i32,
     x: f64,
+    y: f64,
 }
 
 /// Every pin annotation of `svg`, in draw order.
@@ -68,6 +69,7 @@ fn annotations(svg: &str) -> Vec<Annotation> {
                     .and_then(|t| t.strip_prefix("rotate(")?.split(' ').next()?.parse().ok())
                     .unwrap_or(0),
                 x: attr(line, "x").and_then(|x| x.parse().ok()).expect("x"),
+                y: attr(line, "y").and_then(|y| y.parse().ok()).expect("y"),
             });
         }
     }
@@ -142,6 +144,24 @@ fn long_designators_fit_at_the_minimum_grid() {
     };
     assert_eq!(along("bms.can_l") - along("bms.can_h"), 15.0);
     assert_eq!(along("bms.fault") - along("bms.wake"), 15.0);
+
+    // The north pins sit under the box's centred title, so their texts
+    // move out past it: each ends, its number nearest the port, above the
+    // title's 13px glyphs rather than under them.
+    let title_baseline: f64 = svg
+        .lines()
+        .find(|line| attr(line, "class") == Some("component-label"))
+        .and_then(|line| attr(line, "y")?.parse().ok())
+        .expect("the BMS title");
+    for annotation in annotations(&svg)
+        .into_iter()
+        .filter(|a| a.port == "bms.can_h" || a.port == "bms.can_l")
+    {
+        assert!(
+            annotation.y < title_baseline - 13.0,
+            "{annotation:?} under the title at {title_baseline}"
+        );
+    }
 }
 
 #[test]
