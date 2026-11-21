@@ -1021,7 +1021,7 @@ pub enum PropertyKind {
 impl PropertyOwner {
     /// The keys this owner's body takes, with the kind of value each wants,
     /// in the order the help lists them.
-    pub fn keys(self) -> &'static [(&'static str, PropertyKind)] {
+    pub(crate) fn keys(self) -> &'static [(&'static str, PropertyKind)] {
         match self {
             PropertyOwner::Cable => &[
                 ("type", PropertyKind::Str),
@@ -1037,7 +1037,7 @@ impl PropertyOwner {
 
     /// The kind of value `key` takes here; `None` for a key this owner does
     /// not take.
-    pub fn expects(self, key: &str) -> Option<PropertyKind> {
+    pub(crate) fn expects(self, key: &str) -> Option<PropertyKind> {
         self.keys()
             .iter()
             .find(|(k, _)| *k == key)
