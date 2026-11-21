@@ -65,13 +65,35 @@ impl<'d> WireList<'d> {
     /// no length to add. Screens are not copper to cut: a screen comes
     /// with its cable.
     pub fn copper(&self) -> Copper {
-        self.conductors()
-            .fold(Copper::default(), |total, (row, _)| match row.length {
-                RowLength::Unset => Copper {
+        self.conductors().map(|(row, _)| row.length).collect()
+    }
+}
+
+/// What a set of rows' lengths add up to: a [`WireList`]'s conductors
+/// ([`WireList::copper`]), or the conductors or cables of one line of a
+/// [`Bom`](super::Bom).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Copper {
+    /// The summed length of every row that has one, each rail once; `None`
+    /// when none has.
+    pub length: Option<Length>,
+    /// The rows with no length ([`RowLength::Unset`]), so missing from
+    /// `length`: each segment of a rail without one counts.
+    pub unmeasured: usize,
+}
+
+/// The total of rows' lengths, each counted as [`RowLength::copper`] says,
+/// so a rail counts once; an unset length is counted as unmeasured.
+impl FromIterator<RowLength> for Copper {
+    fn from_iter<I: IntoIterator<Item = RowLength>>(lengths: I) -> Self {
+        lengths
+            .into_iter()
+            .fold(Self::default(), |total, length| match length {
+                RowLength::Unset => Self {
                     unmeasured: total.unmeasured + 1,
                     ..total
                 },
-                length => Copper {
+                length => Self {
                     length: match (total.length, length.copper()) {
                         (Some(sum), Some(more)) => Some(sum + more),
                         (sum, more) => sum.or(more),
@@ -80,17 +102,6 @@ impl<'d> WireList<'d> {
                 },
             })
     }
-}
-
-/// What a [`WireList`]'s conductors add up to ([`WireList::copper`]).
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct Copper {
-    /// The summed length of every conductor that has one, each rail once;
-    /// `None` when none has.
-    pub length: Option<Length>,
-    /// The conductors with no length ([`RowLength::Unset`]), so missing
-    /// from `length`: each segment of a rail without one counts.
-    pub unmeasured: usize,
 }
 
 impl<'a, 'd> IntoIterator for &'a WireList<'d> {

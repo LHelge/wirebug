@@ -508,6 +508,14 @@ impl<'a> FromIterator<&'a ast::Property> for PartMeta {
 }
 
 impl Instance {
+    /// Whether the instance is an assembly: it places other components and
+    /// has no port (so no connector) of its own, so nothing is wired to it
+    /// and what is bought is what it places. A component with a port of
+    /// its own may be a part or a sub-assembly; the model does not say.
+    pub fn is_assembly(&self) -> bool {
+        !self.children.is_empty() && self.ports.is_empty() && self.connectors.is_empty()
+    }
+
     /// The conductors ending on `splice`, in wire order: each a row of its
     /// own in a wire list, with the splice as one of its ends.
     pub fn splice_conductors<'a, 's>(
