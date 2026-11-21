@@ -1,8 +1,10 @@
 // Loose wires beside cables. Two cables and two loose wires run between
 // the same pair of connectors, the loose ones (one of them two-tone) on
 // the pins between the cables', so a pin-to-pin curve would run straight
-// behind a cable box. And a loose wire to a splice leaves from a pin
-// between a cable's two conductors.
+// behind a cable box. A loose wire to a splice leaves from a pin between a
+// cable's two conductors. A long-labelled loose wire runs between two
+// connectors close together, and a loose wire meets a cable box only once
+// the lanes of others have pushed the box onto it.
 
 use Ecu  from "components/ecu.wb";
 use Pump from "components/pump.wb";
@@ -36,6 +38,31 @@ component Vehicle {
     }
     wire blue 0.5 "SENSE" [ecu.sense, sp_sense];
     wire blue 0.5 "SENSE" [sp_sense, lamp.sense];
+
+    // Connectors close together, and a loose wire with a label far longer
+    // than the gap between them.
+    door:   Ecu  "Door ECU";
+    mirror: Pump "Mirror";
+
+    cable door_can "Door CAN" {
+        wire white/blue 0.5 "CAN H" [door.can_h, mirror.can_h];
+        wire white/red  0.5 "CAN L" [door.can_l, mirror.can_l];
+    }
+    wire white        0.5 "WAKE FROM THE BODY CONTROLLER VIA THE SEAT BELT INTERLOCK" [door.wake, mirror.wake];
+    wire green/yellow 0.5 "FAULT" [door.fault, mirror.fault];
+
+    // Lanes stacked onto the spine push cable B down onto the horn's loose
+    // wire, which only then needs a lane of its own.
+    bcm:   Ecu  "BCM";
+    fan:   Pump "Fan";
+    horn:  Lamp "Horn";
+    relay: Lamp "Relay";
+
+    cable a "A" { wire red 1 "A" [bcm.can_h, fan.can_h]; }
+    wire white 0.5 "W1" [bcm.can_l, fan.can_l];
+    wire white 0.5 "W2" [bcm.wake, fan.wake];
+    cable b "B" { wire black 1 "B" [bcm.fault, fan.fault]; }
+    wire blue 0.5 "HORN" [horn.pwr, relay.pwr];
 }
 
 view harness "Pump loom" {
@@ -47,4 +74,16 @@ view harness "Lamp loom" {
     include ecu.x1   at (0, 0);
     include lamp.x1  at (30, -4);
     include sp_sense at (36, 1);
+}
+
+view harness "Door loom" {
+    include door.x1   at (0, 0);
+    include mirror.x1 at (24, 0);
+}
+
+view harness "Horn loom" {
+    include bcm.x1   at (0, 0);
+    include fan.x1   at (30, 0);
+    include horn.x1  at (0, 8);
+    include relay.x1 at (30, 8);
 }

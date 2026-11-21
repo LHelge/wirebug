@@ -4,8 +4,9 @@
 //! authored `(x, y)`. The renderer derives a vertical **spine** midway
 //! between the connectors; each pin faces the connector its conductor
 //! reaches, declared cables stack along it as labelled boxes, and wires flex
-//! between them as cubic beziers
-//! (pin → cable → pin, or pin → pin for loose wires). This is the dual of the
+//! between them as cubic beziers (pin → cable → pin). A loose wire flexes
+//! pin → pin, or, where that curve would meet a cable box, through a lane of
+//! its own on the spine. This is the dual of the
 //! schematic renderer (`super::schematic`): same subject/first-instance lookup
 //! and the same chain-decomposition of wires, but keyed on connectors rather
 //! than authored port sides.
@@ -66,6 +67,10 @@ pub(super) const SPLICE_DOT_RADIUS: f64 = 7.0;
 pub(super) const SPLICE_LINE_HEIGHT: f64 = 13.0;
 /// Minimum vertical gap between two cable boxes stacked on the spine.
 pub(super) const CABLE_GAP: f64 = 24.0;
+/// The shortest a loose wire's lead into or out of its lane on the spine
+/// is kept, where the gap between its ends allows: a lane narrower than its
+/// annotation needs cuts the annotation short instead.
+pub(super) const LANE_MIN_LEAD: f64 = 4.0 * NODE_PAD;
 /// Nominal width of one half-twist in a braided (twisted-pair) box run.
 pub(super) const TWIST_PITCH: f64 = 28.0;
 /// Half-twists in the symbolic braid section — the drafting idiom is a few
@@ -166,13 +171,15 @@ impl HarnessRenderer {
         }
 
         // Wires and cable boxes under the nodes so attach dots and pin labels
-        // stay legible on top.
+        // stay legible on top. Loose wires go over the boxes: one that still
+        // meets a box (it stays on one side of the spine, so it has no lane)
+        // then crosses it visibly, its annotation never hidden by the box.
         let mut cables_group = Group::new().set("class", "cables");
-        for wire in &layout.loose {
-            cables_group = cables_group.add(draw::render_loose(wire));
-        }
         for cable_box in &layout.cable_boxes {
             cables_group = cables_group.add(draw::render_cable_box(cable_box));
+        }
+        for wire in &layout.loose {
+            cables_group = cables_group.add(draw::render_loose(wire));
         }
         doc = doc.add(cables_group);
 
@@ -1231,6 +1238,144 @@ component sys {
             .collect()
     }
 
+    /// The layout of the fixture view titled `title`.
+    fn loose_wire_layout(title: &str) -> HarnessLayout {
+        loose_wire_layouts()
+            .into_iter()
+            .find(|(t, _)| t == title)
+            .map(|(_, layout)| layout)
+            .unwrap_or_else(|| panic!("view {title:?}"))
+    }
+
+    /// The fixture view titled `title`, rendered standalone.
+    fn render_fixture_view(title: &str) -> String {
+        let main = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/loose_wires_project/main.wb");
+        let design = crate::check_project(Some(&main)).design.expect("a design");
+        let view = design
+            .views
+            .iter()
+            .find(|v| v.title == title)
+            .expect("view");
+        render(&design, view)
+    }
+
+    #[test]
+    fn a_view_with_no_cable_box_draws_every_loose_wire_as_one_curve() {
+        let design = two_connector_design();
+        let view = harness_view("sys", &[("a", "hv", 0.0, 0.0), ("b", "hv", 12.0, 0.0)]);
+        let layout = compute(&design, &view);
+        assert!(layout.cable_boxes.is_empty());
+        assert_eq!(layout.loose.len(), 2);
+        for wire in &layout.loose {
+            assert!(wire.lane.is_none());
+            assert_eq!(wire.curves().len(), 1);
+        }
+    }
+
+    /// A loose wire that crosses the spine well clear of every box keeps
+    /// its one curve, and is drawn over the boxes, so none could hide it.
+    #[test]
+    fn a_loose_wire_clear_of_every_box_keeps_its_one_curve() {
+        let design = design_from(
+            r#"
+component sys {
+    a: dev "A";
+    b: dev "B";
+    c: dev "C";
+    d: dev "D";
+    cable feed "Feed" { wire red 1 "FEED" [a.p, b.p]; }
+    wire blue 0.5 "SIG" [c.p, d.p];
+    component dev {
+        connector j "J 1p" { pub port p "P" pin 1; }
+    }
+}
+"#,
+        );
+        let view = harness_view(
+            "sys",
+            &[
+                ("a", "j", 0.0, 0.0),
+                ("b", "j", 30.0, 0.0),
+                ("c", "j", 0.0, 20.0),
+                ("d", "j", 30.0, 20.0),
+            ],
+        );
+        let layout = compute(&design, &view);
+        let [wire] = layout.loose.as_slice() else {
+            panic!("one loose wire");
+        };
+        assert!(wire.lane.is_none(), "nothing to clear: no lane");
+
+        let svg = render(&design, &view);
+        let cable_box = svg.find("class=\"connector cable-box\"").expect("box");
+        let loose = svg.find("SIG · 0.5mm² · BU").expect("annotation");
+        assert!(cable_box < loose, "loose wires draw over the boxes");
+    }
+
+    /// A lane stacked onto the spine pushes cable B down onto HORN's
+    /// direct line, which was clear of every box until then: the second
+    /// pass gives HORN a lane too.
+    #[test]
+    fn a_wire_a_pushed_box_lands_on_takes_a_lane_too() {
+        let horn_loom = loose_wire_layout("Horn loom");
+        let horn = horn_loom
+            .loose
+            .iter()
+            .find(|w| w.label.as_deref() == Some("HORN"))
+            .expect("HORN");
+        assert!(horn.lane.is_some(), "HORN runs in a lane");
+        let b = horn_loom
+            .cable_boxes
+            .iter()
+            .find(|c| c.title == "B")
+            .expect("cable B");
+        // Where B was pushed to, HORN's direct line runs through it.
+        assert_eq!(horn.from.y, horn.to.y);
+        assert!(b.origin.y < horn.from.y && horn.from.y < b.origin.y + b.height);
+    }
+
+    /// A loose wire whose annotation is wider than the gap between its
+    /// connectors keeps its lane inside the gap and cuts the annotation
+    /// short; the other lane between the same connectors keeps its own,
+    /// shorter span.
+    #[test]
+    fn a_long_annotation_is_cut_short_rather_than_the_lane_overrunning_the_gap() {
+        let door = loose_wire_layout("Door loom");
+        let widest = door.cable_boxes.iter().map(|b| b.width).fold(0.0, f64::max);
+        let lane_of = |label: &str| {
+            let wire = door
+                .loose
+                .iter()
+                .find(|w| w.label.as_deref().is_some_and(|l| l.starts_with(label)))
+                .expect("wire");
+            (wire, wire.lane.expect("lane"))
+        };
+        let (wake, lane) = lane_of("WAKE");
+        let (left, right) = (wake.from.x.min(wake.to.x), wake.from.x.max(wake.to.x));
+        assert!(lane.left >= left + LANE_MIN_LEAD - 1e-6, "{lane:?}");
+        assert!(lane.right <= right - LANE_MIN_LEAD + 1e-6, "{lane:?}");
+        let shown = wake.annotation();
+        assert!(shown.starts_with("WAKE FROM THE BODY"), "{shown}");
+        assert!(shown.ends_with('…'), "{shown}");
+        assert!(
+            shown.chars().count() as f64 * LABEL_CHAR_WIDTH <= lane.right - lane.left,
+            "the shortened annotation fits its run"
+        );
+
+        let (fault, lane) = lane_of("FAULT");
+        assert_eq!(fault.annotation(), fault.full_annotation());
+        let own =
+            fault.full_annotation().chars().count() as f64 * LABEL_CHAR_WIDTH + 2.0 * NODE_PAD;
+        assert_eq!(lane.right - lane.left, widest.max(own), "its own span");
+
+        let svg = render_fixture_view("Door loom");
+        assert!(
+            svg.contains(&format!("<title>{}</title>", wake.full_annotation())),
+            "the full annotation as a tooltip"
+        );
+    }
+
     /// Whether `p` lies strictly inside the cable box (its outline itself
     /// is not inside).
     fn inside(cable: &layout::CableBox, p: crate::render::geometry::Point) -> bool {
@@ -1248,23 +1393,29 @@ component sys {
     #[test]
     fn loose_wires_and_their_annotations_clear_every_cable_box() {
         let layouts = loose_wire_layouts();
-        assert_eq!(layouts.len(), 2);
+        assert_eq!(layouts.len(), 4);
         for (title, layout) in &layouts {
             assert!(!layout.cable_boxes.is_empty(), "{title} draws cables");
             assert!(!layout.loose.is_empty(), "{title} draws loose wires");
             for (w, wire) in layout.loose.iter().enumerate() {
-                let samples = wire
+                let samples: Vec<_> = wire
                     .curves()
                     .into_iter()
-                    .flat_map(|curve| (0..=64).map(move |i| curve.point_at(f64::from(i) / 64.0)));
-                for p in samples.chain([wire.annotation_at()]) {
-                    for cable in &layout.cable_boxes {
+                    .flat_map(|curve| (0..=64).map(move |i| curve.point_at(f64::from(i) / 64.0)))
+                    .collect();
+                for cable in &layout.cable_boxes {
+                    for &p in &samples {
                         assert!(
                             !inside(cable, p),
                             "{title}: loose wire {w} passes behind {:?} at {p:?}",
                             cable.title
                         );
                     }
+                    assert!(
+                        !wire.annotation_bounds().overlaps(&cable.bounds()),
+                        "{title}: loose wire {w}'s annotation is under {:?}",
+                        cable.title
+                    );
                 }
             }
             // What `check` counts as drawn is unchanged: one segment per
@@ -1289,12 +1440,12 @@ component sys {
         let [(Some("WAKE"), wake), (Some("FAULT"), fault)] = lanes.as_slice() else {
             panic!("WAKE and FAULT, in source order: {lanes:?}");
         };
-        // One slot, a row each, in pin order; both span the spine column,
-        // as wide as the widest cable box.
+        // One slot, a row each, in pin order; each at least as wide as the
+        // widest cable box, so its leads clear every box.
         assert_eq!(fault.y - wake.y, ROW_HEIGHT);
-        assert_eq!((wake.left, wake.right), (fault.left, fault.right));
         let widest = pump.cable_boxes.iter().map(|b| b.width).fold(0.0, f64::max);
         assert!(wake.right - wake.left >= widest);
+        assert!(fault.right - fault.left >= widest);
         // Each annotation sits over its own lane's run.
         for wire in &pump.loose {
             let lane = wire.lane.expect("lane");
