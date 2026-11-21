@@ -751,7 +751,14 @@ view pinout "Inverter pinouts" {
   `include inv.control`.
 - No `ports { }` block. The whole connector is drawn from the connector type's
   layout and pin bindings.
-- The drawing uses the harness-side convention described above.
+- The drawing uses the harness-side convention described above, and each
+  cavity face says so in a `Viewed from harness side` caption.
+- The table is headed by the component (its label, else its type) and the
+  designator, with the connector type's description and `part` beneath; its
+  rows list the pins in numeric order, whatever order they are declared in.
+  Cavities no port uses are drawn dashed and greyed; a cavity label too long
+  for its cavity shrinks, then is cut with an ellipsis (the table keeps it
+  whole), so keep labels short where cavities are small.
 
 Views live in the same file as the component they primarily document — like unit tests in Rust source. A view of the system overview belongs in `main.wb` where `Vehicle` is defined. A view of the battery pack detail belongs in the file where `BatteryPack` is defined. This keeps views close to the data they describe. In a file that defines several components, give each view a `for`.
 

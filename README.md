@@ -204,6 +204,8 @@ The view authors each port's side and order directly in its `ports` block, and t
 
 Pinout views document the physical connector face from the **harness side**. This is intentional: the drawing is meant to be used while building the harness. If the device datasheet gives a device-side view, mirror it before entering the layout.
 
+Each included connector is drawn as a table headed by the component and the connector (`Inverter · control`), with the housing's description and part number beneath. Its cavity face, when the connector type has a layout, is captioned *Viewed from harness side*; cavities no port uses are drawn dashed and greyed, and a label too long for its cavity is shrunk, or cut with an ellipsis (the full label is in the cavity's tooltip and in the table). The table lists the pins in numeric order, whatever order they are declared in.
+
 Reusable connector types keep verbose physical metadata out of component definitions:
 
 ```
