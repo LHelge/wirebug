@@ -396,6 +396,7 @@ pub struct Instance {
 pub struct PartMeta {
     /// The manufacturer part number, from `part:`.
     pub number: Option<String>,
+    /// Who makes the part, e.g. `"TE Connectivity"`.
     pub manufacturer: Option<String>,
     /// A human description of the part, e.g. `"Main contactor, 12 V coil"`.
     pub description: Option<String>,
