@@ -17,14 +17,16 @@
 //!
 //! Text is outlined to paths at conversion time (`embed_text: false`), so
 //! labels survive any PDF viewer without font embedding — but only if the
-//! font database is populated at *parse* time, exactly as in
-//! [`super::png::PngRasterizer`]; an empty fontdb drops text silently.
+//! font database is populated at *parse* time; an empty fontdb drops text
+//! silently. It holds the bundled font (`render::fonts`), the same one
+//! [`super::png::PngRasterizer`] draws with, and no system font.
 
 use std::collections::HashMap;
 use std::fmt;
 
 use pdf_writer::{Chunk, Content, Finish, Name, Pdf, Rect, Ref, Str, TextStr};
 
+use super::fonts;
 use super::stamp::stamp_text;
 use super::{RenderedView, ViewOutcome};
 use crate::dsl::manifest::Manifest;
@@ -188,47 +190,23 @@ const HEADER_SIZE: f32 = 12.0;
 /// the margin, so no glyph metrics are needed (Helvetica-Bold, built-in).
 const HEADER_GAP: f32 = 8.0;
 
-/// Exports rendered views into one multi-page PDF, holding a font database
-/// loaded once up front.
-///
-/// The fontdb setup mirrors [`super::png::PngRasterizer::new`]; it cannot
-/// be shared because svg2pdf's `usvg` is a different crate version than
-/// resvg's, so the two `Options` types are distinct.
+/// Exports rendered views into one multi-page PDF, drawing text with the
+/// bundled font.
 pub struct PdfExporter {
     options: svg2pdf::usvg::Options<'static>,
 }
 
 impl PdfExporter {
-    /// Build an exporter with the system fonts loaded.
+    /// Build an exporter whose font database holds the bundled faces only.
     #[must_use]
     pub fn new() -> Self {
-        use svg2pdf::usvg::fontdb::{Family, Query};
-
-        let mut options = svg2pdf::usvg::Options::default();
-        let db = options.fontdb_mut();
-        db.load_system_fonts();
-
-        // Same generic-family fallback as the PNG path: point `sans-serif`
-        // at a present face so labels survive on hosts without the default
-        // family name.
-        let resolves = db
-            .query(&Query {
-                families: &[Family::SansSerif],
-                ..Query::default()
-            })
-            .is_some();
-        if !resolves {
-            let fallback = db
-                .faces()
-                .next()
-                .and_then(|f| f.families.first())
-                .map(|(name, _)| name.clone());
-            if let Some(name) = fallback {
-                db.set_sans_serif_family(name);
-            }
+        Self {
+            options: svg2pdf::usvg::Options {
+                font_family: fonts::FAMILY.to_string(),
+                fontdb: fonts::database(),
+                ..svg2pdf::usvg::Options::default()
+            },
         }
-
-        Self { options }
     }
 
     /// Export `views` (as [`super::render_views`] returns them) into one
@@ -815,6 +793,39 @@ mod tests {
             labelled_pdf.len(),
             blank_pdf.len()
         );
+    }
+
+    #[test]
+    fn the_exporter_knows_only_the_bundled_faces() {
+        let exporter = PdfExporter::new();
+        assert_eq!(exporter.options.font_family, fonts::FAMILY);
+        let families: Vec<&str> = exporter
+            .options
+            .fontdb
+            .faces()
+            .flat_map(|face| face.families.iter().map(|(name, _)| name.as_str()))
+            .collect();
+        assert_eq!(families, [fonts::FAMILY; 3]);
+    }
+
+    #[test]
+    fn every_font_family_is_outlined_in_the_bundled_font() {
+        let exporter = PdfExporter::new();
+        let pdf = |family: &str| {
+            let svg = format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100"><text x="20" y="50" font-family="{family}" font-size="16">Battery Pack</text></svg>"#
+            );
+            exporter
+                .to_pdf(rendered([view(&svg)]), None, Paper::A4)
+                .bytes
+        };
+        let dejavu = pdf("DejaVu Sans");
+        for family in ["sans-serif", "serif", "No Such Font"] {
+            assert!(
+                pdf(family) == dejavu,
+                "{family:?} is outlined in DejaVu Sans"
+            );
+        }
     }
 
     #[test]

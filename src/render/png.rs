@@ -6,57 +6,35 @@
 //! runs in the CLI's `--png` mode, after `render_views` has produced SVGs.
 //!
 //! `usvg`'s default options ship an *empty* font database, so text simply
-//! vanishes from the raster. [`PngRasterizer`] loads the system fonts once
-//! (the load is slow, so it's amortised across every view) and resolves our
-//! `sans-serif` labels through fontdb's generic-family fallback.
+//! vanishes from the raster. [`PngRasterizer`] parses with the bundled
+//! font (`render::fonts`) and no system font, so a given SVG rasterises to
+//! the same pixels on every machine.
 
 use resvg::tiny_skia::{IntSize, Pixmap};
 use resvg::usvg::Tree;
 
-use super::Canvas;
+use super::{Canvas, fonts};
 use crate::error::{ViewErrorKind, ViewResult};
 
 /// How many pixels `render --png` draws per world unit.
 pub const PNG_SCALE: f32 = 2.0;
 
-/// Rasterises SVGs to PNG, holding a font database loaded once up front.
+/// Rasterises SVGs to PNG, drawing text with the bundled font.
 pub struct PngRasterizer {
     options: resvg::usvg::Options<'static>,
 }
 
 impl PngRasterizer {
-    /// Build a rasteriser with the system fonts loaded.
+    /// Build a rasteriser whose font database holds the bundled faces only.
     #[must_use]
     pub fn new() -> Self {
-        use resvg::usvg::fontdb::{Family, Query};
-
-        let mut options = resvg::usvg::Options::default();
-        let db = options.fontdb_mut();
-        db.load_system_fonts();
-
-        // Our labels ask for the generic `sans-serif`, which fontdb maps to a
-        // default family name (`Arial`). A minimal host — e.g. a CI runner —
-        // may have fonts but not that exact name, and usvg then drops the text
-        // entirely rather than substituting. Point the generic at a present
-        // face so labels survive anywhere a font exists.
-        let resolves = db
-            .query(&Query {
-                families: &[Family::SansSerif],
-                ..Query::default()
-            })
-            .is_some();
-        if !resolves {
-            let fallback = db
-                .faces()
-                .next()
-                .and_then(|f| f.families.first())
-                .map(|(name, _)| name.clone());
-            if let Some(name) = fallback {
-                db.set_sans_serif_family(name);
-            }
+        Self {
+            options: resvg::usvg::Options {
+                font_family: fonts::FAMILY.to_string(),
+                fontdb: fonts::database(),
+                ..resvg::usvg::Options::default()
+            },
         }
-
-        Self { options }
     }
 
     /// Rasterise `svg` to a PNG byte stream at `scale` × intrinsic size.
@@ -132,25 +110,77 @@ mod tests {
         assert!(png.len() > 50);
     }
 
+    /// A 200 × 60 canvas with one 20px label at (10, 40), its font given
+    /// by `style` (presentation attributes on the `<text>`).
+    fn label(style: &str) -> String {
+        format!(
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="60"><text x="10" y="40" font-size="20" {style}>Hello wirebug</text></svg>"#
+        )
+    }
+
+    /// The pixels at least half opaque in `png`, as `(x, y)`.
+    fn inked(png: &[u8]) -> Vec<(u32, u32)> {
+        let pixmap = Pixmap::decode_png(png).expect("decodes");
+        let width = pixmap.width();
+        pixmap
+            .pixels()
+            .iter()
+            .enumerate()
+            .filter(|(_, pixel)| pixel.alpha() >= 128)
+            .map(|(i, _)| (i as u32 % width, i as u32 / width))
+            .collect()
+    }
+
     #[test]
-    fn to_png_renders_text_labels() {
-        // An empty fontdb silently drops text; with system fonts loaded the
-        // glyphs paint pixels, so the rendered raster is materially larger
-        // than the same canvas with no text on it.
-        let canvas = r#"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="60">"#;
-        let blank = format!("{canvas}</svg>");
-        let labelled = format!(
-            r#"{canvas}<text x="10" y="40" font-family="sans-serif" font-size="20">Hello wirebug</text></svg>"#
-        );
-        let r = PngRasterizer::new();
-        let blank_png = r.to_png(&blank, 2.0).expect("blank renders");
-        let labelled_png = r.to_png(&labelled, 2.0).expect("labelled renders");
+    fn to_png_draws_a_label_where_its_text_is() {
+        // An empty fontdb silently drops text; the bundled font paints the
+        // glyphs, and only inside the label's box: from its x to well short
+        // of the canvas edge, between cap height and descender (at 2×).
+        let png = PngRasterizer::new()
+            .to_png(&label(r#"font-family="sans-serif""#), 2.0)
+            .expect("labelled renders");
+        let ink = inked(&png);
+        assert!(ink.len() > 500, "text paints pixels: {}", ink.len());
         assert!(
-            labelled_png.len() > blank_png.len(),
-            "text should add pixels: blank={} labelled={}",
-            blank_png.len(),
-            labelled_png.len()
+            ink.iter()
+                .all(|&(x, y)| (20..340).contains(&x) && (50..90).contains(&y)),
+            "every inked pixel lies in the label's box"
         );
+    }
+
+    #[test]
+    fn the_rasterizer_knows_only_the_bundled_faces() {
+        let r = PngRasterizer::new();
+        assert_eq!(r.options.font_family, fonts::FAMILY);
+        let families: Vec<&str> = r
+            .options
+            .fontdb
+            .faces()
+            .flat_map(|face| face.families.iter().map(|(name, _)| name.as_str()))
+            .collect();
+        assert_eq!(families, [fonts::FAMILY; 3]);
+    }
+
+    #[test]
+    fn every_font_family_draws_in_the_bundled_font() {
+        // A generic, the bundled family by name, a family no machine has,
+        // and no family at all draw the same pixels: nothing but the
+        // bundled font can be picked.
+        let r = PngRasterizer::new();
+        let png = |style| r.to_png(&label(style), 2.0).expect("renders");
+        let dejavu = png(r#"font-family="DejaVu Sans""#);
+        for style in [
+            r#"font-family="sans-serif""#,
+            r#"font-family="serif""#,
+            r#"font-family="No Such Font""#,
+            "",
+        ] {
+            assert!(png(style) == dejavu, "{style:?} draws in DejaVu Sans");
+        }
+        // Bold and italic have faces of their own, not the regular one.
+        let bold = png(r#"font-family="sans-serif" font-weight="bold""#);
+        let italic = png(r#"font-family="sans-serif" font-style="italic""#);
+        assert!(bold != dejavu && italic != dejavu && bold != italic);
     }
 
     #[test]
