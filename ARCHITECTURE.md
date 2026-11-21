@@ -375,8 +375,10 @@ adds no inference (`src/render/schematic/layout.rs`):
   (`[a,b,c]` → `a–b, b–c`), by `ir::Wire::segments` (see the IR). A pair
   is drawn only when both ends resolve to a placed port: a *listed* `WireEnd::Child` port of an *included* instance, or
   a `WireEnd::Own` port *listed in the enclosure* (below). Excluded instances,
-  unlisted ports, and own ports without an enclosure placement drop silently —
-  a listed port whose wire lands on such an end shows as a bare stub.
+  unlisted ports, and own ports without an enclosure placement draw no wire;
+  a listed port whose wire lands on such an end gets an **off-view
+  reference** instead (below). Being unplaced is the only reason a
+  segment is not drawn.
   A splice has no box and no port in a schematic (no schematic syntax
   names one): each `Instance::splice_nets()` net is drawn as what it is
   electrically, one rail between the far ends of its conductors — those
@@ -471,6 +473,61 @@ canvas (`Placement::viewbox`) keeps every annotation `PIN_CANVAS_PAD`
 inside it, applied after the margin so a view whose annotations the
 margin already holds keeps its canvas; `view_too_large` sees the same
 canvas.
+
+**Off-view references** (`render/schematic/off_view.rs`, always on, no
+syntax). `Placement::compute` records on each placed port
+(`PlacedPort.off_view`, an `Undrawn`) the ends its wires reach that the
+view does not place, as `FarEnd`s, in wire order then endpoint order. Along
+a wire, a placed port reaches the unplaced ends on either side of it up to
+the nearest placed one (`[a, x, y, b]` with `a` and `b` placed gives both
+`x, y`); a splice net is named once, beside the first port it places, as
+the splice that port's conductor lands on and the net's unplaced ends; an
+own end off the enclosure reads `out (leaves <Subject>)`, as in a pinout.
+A port all of whose wires are drawn, or that has none, gets nothing. The
+reference (`OffView`) is a stub in the colour of the port's first undrawn
+wire, drawn with a wire's layers (classes `wire-casing off-view-stub`,
+`wire off-view-stub`, `wire-tracer off-view-stub`, so a host's wire rules
+stroke it and embed mode carries `stroke`/`data-color`), and at its end a
+`.off-view-label` text, in a `<g class="off-view" data-component data-port>`
+whose `<title>` lists every far end in full. Its stub runs out the way the
+port's wire would leave (inward for an enclosure port), past the pin
+annotations beside it and, on a box's north side, past the box's title;
+the text continues on the stub's line, level on west and east (the arrow
+at the stub's end: `→ vcm.can2_h` east, `vcm.can2_h ←` west), turned to
+read outward on north (`rotate(-90)`) and south (`rotate(90)`). So the
+port label stays inside the box, the pin annotation beside the stub near
+the box, and the reference beyond both; neighbouring references are a
+pitch apart across the stub and the text is 10px high, so they clear at
+the minimum grid. Where a drawn wire also leaves the port, that wire turns
+at its routing stub's tip, so the reference's stub runs a step past it.
+The text is the most detailed of a ladder that fits: all far ends while
+they fit `MAX_CHARS` (32), then fewer with `+N more`, then `N more`, and
+last the arrow alone; a splice lists what it joins as far as room allows.
+A rung fits when its space is clear of other boxes' keepouts, titles and
+pin annotations, the text boxes, every port and routing stub, the
+enclosure's boundary, and the texts of references placed before it;
+with none fitting, the reference is *cramped*: it shows its arrow alone.
+The canvas (`Placement::viewbox`) keeps each reference's text inside it
+as it does a pin annotation.
+
+The router keeps wires off a reference only when one would run through
+it (`off_view::Settled::new`, which both `render` and `check`'s Layout
+phase call, so they see one routing). The wires are first routed with no
+reference; each reference a routed wire crosses (its stub and text, widened
+by the halo and a wire's casing) is *reserved* — an obstacle to
+`Router::build`, one grid-aligned rectangle from the port (from the stub's
+tip when a drawn wire leaves the port too) to past the text, whole grid
+steps either side of the stub's line — and the wires are routed again,
+until no wire crosses an unreserved reference. A reservation that would
+leave some connection without a path in the visibility graph
+(`Router::connects`) yields: the reference is tried at its arrow alone,
+and else stays unreserved. So reserving never takes a route away: a view
+`check` passes without references it passes with them (its Layout
+problems, `include_too_close` from `Router::blocked_stubs`, which sees only
+the boxes, and `unroutable_wire`, are unchanged), and a view whose wires
+miss its references routes exactly as before. A view that does not route
+reserves nothing. Reservations join the nudging walls too, so a nudged
+channel stays off them.
 
 ### Wire strokes (`render/wire_stroke.rs`)
 
@@ -1300,6 +1357,8 @@ src/
 │   │   ├── pin.rs       # PinAnnotation: a port's pin text (designator-
 │   │   │                #   qualified on multi-connector boxes), its
 │   │   │                #   orientation, anchor and extent
+│   │   ├── off_view.rs  # OffView: where a port's undrawn wires go (stub +
+│   │   │                #   text), and Settled: routing reserved round them
 │   │   └── route/       # orthogonal connector routing (paper §4–6)
 │   │       ├── mod.rs       # Router: build OVG once, route_all + nudge
 │   │       ├── geometry.rs  # Rect, Dir
@@ -1438,6 +1497,9 @@ map. Two choices settle the ties a symmetric layout produces:
   channels, and the separation constraints built from them, come in the
   order the routes (in connection order) first reach them; the solver
   breaks equal violations by constraint order.
+- **Off-view reservations** are tried in placement order (boxes in include
+  order, ports in side order, then the enclosure), each round of reserving
+  over the references the last routing crossed.
 
 `tests/fixtures/tied_routes_project` holds the mirror-image ties; a
 test renders it repeatedly in one process and a CLI test in several.
