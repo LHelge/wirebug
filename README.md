@@ -100,6 +100,7 @@ What works today:
 - `wirebug fmt` — format every `.wb` file of a project in place (`--check` to only list the files that would change).
 - `wirebug render` to disk (SVG, or `--png` rasterised, or `--pdf` for a single PDF with one view per page on A4, A3, Letter or Tabloid paper, or `--embed` for naked SVGs + a `manifest.json` sidecar).
 - `wirebug export` — the build tables as CSV or JSON: the wire list (cut list), the connector pin tables (crimp sheet) and the bill of materials.
+- `wirebug skill` — print the agent skill for the `.wb` language that matches the binary's version, or `--install claude` to write it where Claude Code finds it.
 - `wirebug serve` — a live-reloading dev server that re-renders on `.wb` or `wirebug.toml` saves.
 - A VSCode extension ([`editors/vscode/`](editors/vscode/)) — syntax highlighting plus live diagnostics, context-aware completion, go-to-definition, hover and formatting via `wirebug lsp`, a language server over stdio.
 
