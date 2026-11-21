@@ -201,4 +201,29 @@ mod tests {
         assert_eq!(chans[0].orientation, Orientation::Vertical);
         assert_eq!(chans[0].order, vec![1, 0]);
     }
+
+    #[test]
+    fn channels_come_in_the_order_the_routes_first_reach_them() {
+        // Four horizontal lines, y = 0, 10, 20, 30; a pair of routes shares
+        // each, the pairs listed bottom line first.
+        let pts: Vec<Point> = [0.0, 10.0, 20.0, 30.0]
+            .into_iter()
+            .flat_map(|y| [Point::new(0.0, y), Point::new(10.0, y)])
+            .collect();
+        let ovg = Ovg::build(&[] as &[Rect], &pts);
+        let id = |x: f64, y: f64| ovg.node_at(Point::new(x, y)).unwrap();
+        let routes: Vec<Vec<usize>> = [30.0, 20.0, 10.0, 0.0]
+            .into_iter()
+            .flat_map(|y| [vec![id(0.0, y), id(10.0, y)], vec![id(0.0, y), id(10.0, y)]])
+            .collect();
+
+        let lines: Vec<f64> = channels(&ovg, &routes)
+            .iter()
+            .map(|ch| {
+                let &(a, _) = ch.edges.iter().next().unwrap();
+                ovg.position(a).y
+            })
+            .collect();
+        assert_eq!(lines, [30.0, 20.0, 10.0, 0.0]);
+    }
 }
