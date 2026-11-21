@@ -1,12 +1,13 @@
 ---
 id: g2e.wj
 title: "`render --out` defaults to `out/`"
-status: open
+status: done
 priority: P1
 created: "2026-11-20T21:40:32.086188982Z"
-updated: "2026-11-20T21:40:32.086188982Z"
+updated: "2026-11-21T19:13:47.009319763Z"
 tags:
   - cli
+attempts: 1
 ---
 
 ## Summary
