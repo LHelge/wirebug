@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 
 use lsp_types::{CompletionItem, CompletionItemKind};
 
+use crate::dsl::diagnostics::PropertyOwner;
 use crate::dsl::ir::ColorName;
 use crate::dsl::lex::{Token, lex, significant};
 use crate::dsl::project::Project;
@@ -492,8 +493,7 @@ impl CompletionIndex {
             Some(Block::Cable) => {
                 if cursor.at_statement_start() {
                     let mut items = keywords(&["wire", "twisted"]);
-                    items.push(property("type", "cable property"));
-                    items.push(property("length", "cable property"));
+                    items.extend(properties(PropertyOwner::Cable));
                     return items;
                 }
                 Vec::new()
@@ -501,6 +501,12 @@ impl CompletionIndex {
             Some(Block::Twisted) => {
                 if cursor.at_statement_start() {
                     return keywords(&["wire"]);
+                }
+                Vec::new()
+            }
+            Some(Block::Wire) => {
+                if cursor.at_statement_start() {
+                    return properties(PropertyOwner::Wire);
                 }
                 Vec::new()
             }
@@ -710,6 +716,16 @@ fn property(key: &str, detail: &str) -> CompletionItem {
     }
 }
 
+/// The keys a cable or wire body takes, as validation knows them.
+fn properties(owner: PropertyOwner) -> Vec<CompletionItem> {
+    let detail = format!("{owner} property");
+    owner
+        .keys()
+        .iter()
+        .map(|(key, _)| property(key, &detail))
+        .collect()
+}
+
 /// `to` relative to `from_dir`, with forward slashes — the form a `use`
 /// path is written in. Both paths must be absolute (they come from the
 /// loader's canonicalization).
@@ -735,6 +751,8 @@ enum Block {
     Connector,
     Cable,
     Twisted,
+    /// A wire's `{ key: value; }` body, after its endpoint list.
+    Wire,
     View {
         kind: Option<String>,
     },
@@ -873,6 +891,11 @@ fn classify(before: &[Token]) -> Block {
             {
                 return Block::Enclosure;
             }
+            // A `{` right after `]` opens a wire's body: the `]` closes its
+            // endpoint list.
+            Token::RBracket if i + 1 == before.len() && in_wire_statement(&before[..i]) => {
+                return Block::Wire;
+            }
             Token::Cable => return Block::Cable,
             Token::Twisted => return Block::Twisted,
             Token::Connector => return Block::Connector,
@@ -900,6 +923,16 @@ fn classify(before: &[Token]) -> Block {
         }
     }
     Block::Other
+}
+
+/// Whether the statement `before` ends inside starts with `wire`.
+fn in_wire_statement(before: &[Token]) -> bool {
+    before
+        .iter()
+        .rev()
+        .take_while(|token| !matches!(token, Token::Semicolon | Token::LBrace | Token::RBrace))
+        .last()
+        == Some(&Token::Wire)
 }
 
 /// The instance a `ports { }` block belongs to: the ident right after the
@@ -1362,6 +1395,45 @@ mod tests {
             "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n    cable c \"C\" {\n        twisted {\n            wire white 0.5 [l.‸]\n        }\n    }\n}\n",
         );
         assert!(labels.contains(&"anode".to_string()), "{labels:?}");
+    }
+
+    #[test]
+    fn wire_body_offers_its_properties() {
+        let labels = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n    wire red 1 [l.anode, l.cathode] {\n        length: 1.2;\n        ‸\n    }\n}\n",
+        );
+        assert_eq!(labels, ["length", "type", "part"]);
+    }
+
+    #[test]
+    fn conductor_body_inside_a_twisted_pair_offers_wire_properties() {
+        let labels = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    cable c {\n        twisted {\n            wire white 0.5 [a, b] { ‸ }\n        }\n    }\n}\n",
+        );
+        assert_eq!(labels, ["length", "type", "part"]);
+    }
+
+    #[test]
+    fn after_a_wire_body_the_component_body_resumes() {
+        let labels = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    wire red 1 [a, b] { length: 1; }\n    ‸\n}\n",
+        );
+        assert!(labels.contains(&"cable".to_string()), "{labels:?}");
+        assert!(!labels.contains(&"part".to_string()), "{labels:?}");
+    }
+
+    #[test]
+    fn wire_property_completion_inserts_the_colon() {
+        let items = complete_items_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    wire red 1 [a, b] { ‸ }\n}\n",
+        );
+        let part = items.iter().find(|i| i.label == "part").expect("part");
+        assert_eq!(part.insert_text.as_deref(), Some("part: "));
+        assert_eq!(part.detail.as_deref(), Some("wire property"));
     }
 
     const INLINE_MAIN: (&str, &str) = (

@@ -80,7 +80,8 @@ Four CLI commands share it:
   Completion covers auto-import —
   `use ‸` offers every component/connector_type defined elsewhere,
   inserting the full `<Name> from "<relative path>";` remainder — plus
-  `extend` targets and the `connector_type`/`layout` bodies. An open
+  `extend` targets, the `connector_type`/`layout` bodies, and the keys of
+  a cable body and of a wire body (a `{` right after a wire's `]`). An open
   `.wb` file its project never loads (not reachable from `main.wb` via
   `use`) gets one info-severity `unlinked_file` notice instead of
   silence — rust-analyzer's unlinked-file move; its contents stay
