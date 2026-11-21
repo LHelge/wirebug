@@ -123,12 +123,13 @@ After a rebased task is integrated, run the checks on the epic's branch:
 
 ```sh
 cargo fmt --all -- --check && cargo clippy --all-targets -- -D warnings && cargo test
-cargo run -- check examples
+cargo run -- check --strict examples
 cargo run -- render examples --out <a directory in your scratchpad>
 ```
 
-The first line is what CI runs. The other two are not tests (nothing asserts on
-`examples/`), but that directory is the user's real vehicle project and must keep working.
+CI runs all three. The last two are not tests (nothing asserts on `examples/`), but that
+directory is the generic example project, and CI fails on any error or warning `check
+--strict` reports for it, or on a view that does not render.
 Send the output to a file in your scratchpad and read only the end of it. A failure goes
 to the implementer whose task it concerns.
 

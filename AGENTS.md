@@ -35,7 +35,8 @@ One pipeline, shared by every command (`check`, `render`, `export`, `serve`, `ls
 - `src/serve/` — live-reloading dev server (the only async code).
 - `src/lsp/` — language server over stdio; `editors/vscode/` is its client.
 - `tests/` — integration tests against the projects in `tests/fixtures/`.
-- `examples/` — the real vehicle project; must keep working, never tested against.
+- `examples/` — the generic example project; CI keeps it passing
+  `check --strict` and rendering, but no cargo test reads it.
 
 Where to look in `ARCHITECTURE.md`:
 
@@ -86,9 +87,10 @@ redesign each when it lands.
 - Every public feature has unit tests alongside the code
   (`#[cfg(test)] mod tests`); end-to-end pipeline and CLI tests run
   against the small fixture projects in `tests/fixtures/`.
-- **Never test against `examples/`** — it is the real, freely-changing
-  vehicle project. When a feature needs end-to-end coverage, extend a
-  fixture (or add one) instead.
+- **Never test against `examples/`** — it is the generic example, free
+  to change as the language grows; CI only checks that it passes
+  `check --strict` and renders. When a feature needs end-to-end coverage,
+  extend a fixture (or add one) instead.
 - Test names describe behavior, not implementation:
   `connection_to_missing_port_errors`, not `test_validate_returns_err`.
 - Snapshot tests with `insta` for stable text output: AST `Debug`,
@@ -184,6 +186,7 @@ cargo clippy -- -D warnings
 cargo run -- check examples               # or just `check` from inside the project
 cargo run -- check examples/wirebug.toml
 cargo run -- check --strict --format json examples
+cargo run -- check --strict examples      # what CI runs: any error or warning fails it
 
 # render every view in a .wb project to SVG (one file per view, into --out)
 cargo run --release -- render examples --out out/
