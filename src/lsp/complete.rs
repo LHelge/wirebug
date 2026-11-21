@@ -17,7 +17,7 @@ use lsp_types::{CompletionItem, CompletionItemKind, CompletionTextEdit, Range, T
 use super::line_index::LineIndex;
 use crate::dsl::diagnostics::{PropertyKind, PropertyOwner};
 use crate::dsl::ir::{ColorName, LengthUnit};
-use crate::dsl::lex::{Token, lex, significant};
+use crate::dsl::lex::{LexError, Token, lex, significant};
 use crate::dsl::project::Project;
 use crate::dsl::resolve::Resolved;
 use crate::dsl::span::FileId;
@@ -61,6 +61,9 @@ struct FileScope {
     /// it lacks what they declared (and, where a `;` was missing, the
     /// statement after).
     holes: bool,
+    /// The file holds a top-level `extend` or a view: what another file
+    /// would pull in with `fragment`.
+    fragment_target: bool,
 }
 
 #[derive(Default)]
@@ -160,6 +163,7 @@ pub(crate) fn build_index(project: &Project, resolved: &Resolved) -> CompletionI
     for (fi, file) in project.files.iter().enumerate() {
         let mut scope = FileScope {
             holes: file.holes,
+            fragment_target: file.ast.is_fragment_target(),
             ..FileScope::default()
         };
         let mut top_level_here = Vec::new();
@@ -188,7 +192,7 @@ pub(crate) fn build_index(project: &Project, resolved: &Resolved) -> CompletionI
                 scope.connector_types.push(name.to_string());
             } else {
                 scope.component_types.push(name.to_string());
-                if let Some(key) = imported_component(project, resolved, file, import) {
+                if let Some(key) = imported_component(project, resolved, FileId(fi), import) {
                     scope.imported.insert(name.to_string(), key);
                 }
             }
@@ -238,7 +242,10 @@ impl CompletionIndex {
     /// window in which the author is wiring a fresh fragment into the
     /// project. Only names are indexed; the file's contents stay unchecked.
     pub(crate) fn add_unlinked(&mut self, path: PathBuf, ast: &crate::dsl::ast::File) {
-        let mut scope = FileScope::default();
+        let mut scope = FileScope {
+            fragment_target: ast.is_fragment_target(),
+            ..FileScope::default()
+        };
         for item in &ast.items {
             match item {
                 crate::dsl::ast::Item::Definition(def) => {
@@ -497,6 +504,12 @@ impl CompletionIndex {
                 if let [.., Token::Use] = cursor.tail() {
                     return self.auto_imports(doc);
                 }
+                // The items insert the quotes, so not once one is typed.
+                if let [.., Token::Fragment] = cursor.tail()
+                    && !cursor.in_string
+                {
+                    return self.fragment_paths(doc);
+                }
                 if let [.., Token::Extend] = cursor.tail() {
                     return self.extend_targets();
                 }
@@ -515,7 +528,14 @@ impl CompletionIndex {
                         .collect();
                 }
                 if cursor.at_statement_start() {
-                    return keywords(&["use", "component", "extend", "connector_type", "view"]);
+                    return keywords(&[
+                        "use",
+                        "fragment",
+                        "component",
+                        "extend",
+                        "connector_type",
+                        "view",
+                    ]);
                 }
                 Vec::new()
             }
@@ -719,6 +739,28 @@ impl CompletionIndex {
         items
     }
 
+    /// Path items for `fragment ‸`: every other file holding an `extend` or
+    /// a view, inserting the `"<relative path>";` rest of the statement.
+    fn fragment_paths(&self, doc: &Path) -> Vec<CompletionItem> {
+        let Some(doc_dir) = doc.parent() else {
+            return Vec::new();
+        };
+        let mut items: Vec<CompletionItem> = self
+            .files
+            .iter()
+            .filter(|(path, scope)| *path != doc && scope.fragment_target)
+            .map(|(path, _)| {
+                let rel = relative_path(doc_dir, path);
+                CompletionItem {
+                    insert_text: Some(format!("\"{rel}\";")),
+                    ..item(&rel, CompletionItemKind::FILE, "fragment")
+                }
+            })
+            .collect();
+        items.sort_by(|a, b| a.label.cmp(&b.label));
+        items
+    }
+
     /// The connector designators of a named instance's type — what a
     /// harness `include inst.<connector>` refers to. For an inline
     /// connector the dot selects a housing half instead.
@@ -748,16 +790,10 @@ impl CompletionIndex {
 fn imported_component(
     project: &Project,
     resolved: &Resolved,
-    file: &crate::dsl::project::LoadedFile,
+    file: FileId,
     import: &crate::dsl::ast::Use,
 ) -> Option<ComponentKey> {
-    let target = file
-        .path
-        .parent()?
-        .join(&import.path.node)
-        .canonicalize()
-        .ok()?;
-    let tf = FileId(project.files.iter().position(|f| f.path == target)?);
+    let tf = project.import_target(file, &import.path.node)?;
     let name = import.name.node.as_str();
     let id = resolved
         .defs
@@ -836,8 +872,8 @@ fn length_units(cursor: &Cursor, owner: PropertyOwner) -> Option<Vec<CompletionI
 }
 
 /// `to` relative to `from_dir`, with forward slashes — the form a `use`
-/// path is written in. Both paths must be absolute (they come from the
-/// loader's canonicalization).
+/// or `fragment` path is written in. Both paths must be absolute (they
+/// come from the loader's canonicalization).
 fn relative_path(from_dir: &Path, to: &Path) -> String {
     let from: Vec<_> = from_dir.components().collect();
     let to: Vec<_> = to.components().collect();
@@ -884,6 +920,9 @@ struct Cursor {
     blocks: Vec<Block>,
     in_list: bool,
     in_at_parens: bool,
+    /// The cursor sits inside a string, typed with or without its closing
+    /// quote.
+    in_string: bool,
     tokens: Vec<Token>,
     /// Where a number touching the cursor has its unit, typed or not yet
     /// (`150‸`, `150m‸`): from the end of its digits to the cursor.
@@ -913,14 +952,25 @@ impl Cursor {
 /// [`Cursor`]. A lexically broken buffer degrades to its valid prefix —
 /// the cursor usually sits past the text that still lexes.
 fn scan(text: &str, offset: usize) -> Cursor {
-    let lexemes = match lex(text, FileId(0)) {
-        Ok(lexemes) => lexemes,
+    // Where a string the lexer found no end for opens, if it does.
+    let (lexemes, open_string) = match lex(text, FileId(0)) {
+        Ok(lexemes) => (lexemes, None),
         Err(err) => {
             let cut = err.span().start.min(text.len());
-            lex(&text[..cut], FileId(0)).unwrap_or_default()
+            let open = matches!(
+                err,
+                LexError::UnterminatedString { .. } | LexError::NewlineInString { .. }
+            );
+            let prefix = lex(&text[..cut], FileId(0)).unwrap_or_default();
+            (prefix, open.then_some(cut))
         }
     };
-    let mut tokens: Vec<(Token, crate::dsl::span::Span)> = significant(&lexemes)
+    let significant = significant(&lexemes);
+    let in_string = open_string.is_some_and(|start| start < offset)
+        || significant.iter().any(|(token, span)| {
+            matches!(token, Token::Str(_)) && span.start < offset && offset < span.end
+        });
+    let mut tokens: Vec<(Token, crate::dsl::span::Span)> = significant
         .into_iter()
         .filter(|(_, span)| span.end <= offset)
         .collect();
@@ -947,6 +997,7 @@ fn scan(text: &str, offset: usize) -> Cursor {
         blocks: Vec::new(),
         in_list: false,
         in_at_parens: false,
+        in_string,
         tokens: Vec::new(),
         unit,
     };
@@ -1184,6 +1235,59 @@ mod tests {
         assert_eq!(can.insert_text.as_deref(), Some("Can4p from \"types.wb\";"));
         // The doc's own definitions are not import candidates.
         assert!(!items.iter().any(|i| i.label == "Root"), "{items:?}");
+    }
+
+    #[test]
+    fn top_level_statement_start_offers_the_file_keywords() {
+        let labels = complete_in(&[LAMP, MAIN], "component A { }\n‸\n");
+        assert_eq!(
+            labels,
+            [
+                "use",
+                "fragment",
+                "component",
+                "extend",
+                "connector_type",
+                "view"
+            ]
+        );
+    }
+
+    #[test]
+    fn fragment_offers_the_files_holding_an_extend_or_a_view() {
+        let traction = ("systems/traction.wb", "extend Root { }\n");
+        let lamps = (
+            "docs/lamps.wb",
+            "use Lamp from \"../lamp.wb\";\nview schematic \"Lamp\" for Lamp { }\n",
+        );
+        let main = (
+            "main.wb",
+            "use Lamp from \"lamp.wb\";\nfragment \"systems/traction.wb\";\nfragment \"docs/lamps.wb\";\ncomponent Root { l: Lamp; }\n",
+        );
+        let items = complete_items_in(&[LAMP, traction, lamps, main], "fragment ‸\n");
+        let offered: Vec<(&str, Option<&str>)> = items
+            .iter()
+            .map(|i| (i.label.as_str(), i.insert_text.as_deref()))
+            .collect();
+        // `lamp.wb` holds only a component, and main.wb is the doc itself.
+        assert_eq!(
+            offered,
+            [
+                ("docs/lamps.wb", Some("\"docs/lamps.wb\";")),
+                ("systems/traction.wb", Some("\"systems/traction.wb\";")),
+            ]
+        );
+    }
+
+    #[test]
+    fn fragment_offers_no_path_once_its_string_is_open() {
+        let traction = ("systems/traction.wb", "extend Root { }\n");
+        let main = (
+            "main.wb",
+            "fragment \"systems/traction.wb\";\ncomponent Root { }\n",
+        );
+        assert!(complete_in(&[traction, main], "fragment \"sys‸\n").is_empty());
+        assert!(complete_in(&[traction, main], "fragment \"sys‸tems.wb\";\n").is_empty());
     }
 
     #[test]

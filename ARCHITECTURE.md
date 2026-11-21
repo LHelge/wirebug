@@ -79,7 +79,10 @@ Four CLI commands share it:
   A buffer with several broken statements gets a squiggle for each.
   Completion covers auto-import —
   `use ‸` offers every component/connector_type defined elsewhere,
-  inserting the full `<Name> from "<relative path>";` remainder — plus
+  inserting the full `<Name> from "<relative path>";` remainder; `fragment
+  ‸` offers every other file holding a top-level `extend` or a view
+  (`ast::File::is_fragment_target`), inserting `"<relative path>";`, and
+  nothing once the cursor is inside a string (`Cursor.in_string`) — plus
   `extend` targets, the `connector_type`/`layout` bodies, and the keys of
   a cable body, of a wire body (a `{` right after a wire's `]`) and of a
   component's part data (beside the member keywords), the length units
@@ -91,12 +94,13 @@ Four CLI commands share it:
   component its `for` names (`FileScope.top_level`, then
   `FileScope.imported`), else the file's lone top-level one. An open
   `.wb` file its project never loads (not reachable from `main.wb` via
-  `use`) gets one info-severity `unlinked_file` notice instead of
-  silence — rust-analyzer's unlinked-file move; its contents stay
-  unchecked, but its top-level names are parsed into the index so
-  auto-import can wire the fresh fragment in. Go-to-definition
-  (`lsp/definition.rs`) re-runs load/resolve per request (never stale;
-  projects are small) and span-walks the registry: use names/paths,
+  `use` or `fragment`) gets one info-severity `unlinked_file` notice
+  instead of silence — rust-analyzer's unlinked-file move; its contents
+  stay unchecked, but its top-level names are parsed into the index so
+  auto-import (and `fragment ‸`) can wire the fresh fragment in.
+  Go-to-definition (`lsp/definition.rs`) re-runs load/resolve per
+  request (never stale; projects are small) and span-walks the registry:
+  `use` names, `use` and `fragment` paths (to the top of the file),
   instance type refs, connector type refs, wire endpoints, a view's `for`
   subject, view includes/ports/enclosures, and `extend` → its root
   `component`, all

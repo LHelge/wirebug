@@ -56,28 +56,26 @@ pub(crate) fn goto_definition(
 fn find(resolved: &Resolved, file: FileId, offset: usize) -> Option<Span> {
     let hit = |span: Span| span.file == file && span.start <= offset && offset <= span.end;
 
-    // `use` names and paths.
-    for use_decl in &resolved.project.files[file.0].ast.uses {
-        if !hit(use_decl.name.span) && !hit(use_decl.path.span) {
-            continue;
-        }
-        let dir = resolved.project.files[file.0].path.parent()?;
-        let target = dir.join(use_decl.path.node.as_str()).canonicalize().ok()?;
-        let tf = FileId(
-            resolved
-                .project
-                .files
-                .iter()
-                .position(|f| f.path == target)?,
-        );
-        if hit(use_decl.path.span) {
-            // The path string itself: jump to the top of the file.
+    // `use` and `fragment` paths: the path string jumps to the top of the
+    // file it names.
+    let project = resolved.project;
+    for import in project.files[file.0].ast.imports() {
+        if hit(import.path().span) {
+            let target = project.import_target(file, &import.path().node)?;
             return Some(Span {
-                file: tf,
+                file: target,
                 start: 0,
                 end: 0,
             });
         }
+    }
+
+    // `use` names: the definition they import.
+    for use_decl in &project.files[file.0].ast.uses {
+        if !hit(use_decl.name.span) {
+            continue;
+        }
+        let tf = project.import_target(file, &use_decl.path.node)?;
         let name = use_decl.name.node.as_str();
         if let Some(d) = resolved
             .defs
@@ -359,6 +357,29 @@ mod tests {
             target_of(&[LEAF, main], "main.wb"),
             Some(("leaf.wb".into(), "".into()))
         );
+    }
+
+    #[test]
+    fn fragment_path_jumps_to_the_file() {
+        let frag = (
+            "systems/frag.wb",
+            "extend Root {\n    pub port x \"X\";\n}\n",
+        );
+        let main = (
+            "main.wb",
+            "fragment \"systems/fr‸ag.wb\";\ncomponent Root { }\n",
+        );
+        assert_eq!(
+            target_of(&[frag, main], "main.wb"),
+            Some(("frag.wb".into(), "".into()))
+        );
+    }
+
+    #[test]
+    fn fragment_keyword_resolves_to_nothing() {
+        let frag = ("frag.wb", "extend Root { }\n");
+        let main = ("main.wb", "frag‸ment \"frag.wb\";\ncomponent Root { }\n");
+        assert_eq!(target_of(&[frag, main], "main.wb"), None);
     }
 
     #[test]
