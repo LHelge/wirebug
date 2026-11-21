@@ -25,6 +25,7 @@ pub mod pinout;
 pub mod png;
 pub mod schematic;
 pub(crate) mod stamp;
+pub(crate) mod wire_stroke;
 
 /// How a rendered SVG carries its presentation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

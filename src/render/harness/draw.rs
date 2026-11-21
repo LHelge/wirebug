@@ -13,36 +13,22 @@ use super::{
 };
 use crate::dsl::ir::WireColor;
 use crate::render::geometry::{Point, Side};
+use crate::render::wire_stroke::WireLayers;
 
-/// A `cable-wire` path with the given SVG path data, stroked in the
-/// color's base. The full authored color rides along as `data-color`, so a
-/// host stylesheet can theme strands by color in embed mode (where the
-/// stroke default is gone).
-fn wire_path(d: String, color: &WireColor) -> Path {
-    Path::new()
-        .set("class", "cable-wire")
-        .set("stroke", color.css())
-        .set("data-color", color.to_string())
-        .set("d", d)
-}
+/// The classes a harness strand's layers carry: the core is `cable-wire`,
+/// stroked in the base colour over a wider black `cable-wire-casing` (so any
+/// core colour, white included, reads on any background — WireViz's trick),
+/// with a dashed `cable-wire-tracer` for a two-tone wire.
+const WIRE_LAYERS: WireLayers = WireLayers {
+    casing: "cable-wire-casing",
+    core: "cable-wire",
+    tracer: "cable-wire-tracer",
+};
 
-/// The tracer stripe of a two-tone wire: the same path as the core,
-/// stroked in the tracer color with a dash pattern (set in the style
-/// block), so the strand reads as base-with-stripe, WireViz-style.
-fn tracer_path(d: String, color: &WireColor, tracer: &str) -> Path {
-    Path::new()
-        .set("class", "cable-wire-tracer")
-        .set("stroke", tracer)
-        .set("data-color", color.to_string())
-        .set("d", d)
-}
-
-/// The black casing drawn under a strand — the same path, stroked wider —
-/// so any core color, white included, reads against any background
-/// (WireViz's trick). Every casing of a strand is emitted before its cores,
-/// or a later casing would overdraw the core at the segment joins.
-fn casing_path(d: String) -> Path {
-    Path::new().set("class", "cable-wire-casing").set("d", d)
+/// A strand's path with the given SVG path data, bare: [`WIRE_LAYERS`]
+/// dresses it as one layer.
+fn strand_path(d: String) -> Path {
+    Path::new().set("d", d)
 }
 
 /// A connector as a titled pin table: header (instance + connector), then
@@ -310,18 +296,20 @@ pub(super) fn render_cable_box(cb: &CableBox) -> Group {
             None => format!("M{},{} L{},{}", entry.x, entry.y, exit.x, exit.y),
         };
         let lead_out = flex(exit, strand.right_attach, FLEX).path_d();
-        group = group
-            .add(casing_path(lead_in.clone()))
-            .add(casing_path(run.clone()))
-            .add(casing_path(lead_out.clone()))
-            .add(wire_path(lead_in.clone(), &strand.color))
-            .add(wire_path(run.clone(), &strand.color))
-            .add(wire_path(lead_out.clone(), &strand.color));
-        if let Some(tracer) = strand.color.tracer() {
-            group = group
-                .add(tracer_path(lead_in, &strand.color, tracer))
-                .add(tracer_path(run, &strand.color, tracer))
-                .add(tracer_path(lead_out, &strand.color, tracer));
+        // Every casing of a strand is emitted before its cores, or a later
+        // casing would overdraw the core at the segment joins.
+        let stroke = WIRE_LAYERS.stroke(&strand.color);
+        let pieces = [lead_in, run, lead_out];
+        for d in &pieces {
+            group = group.add(stroke.casing(strand_path(d.clone())));
+        }
+        for d in &pieces {
+            group = group.add(stroke.core(strand_path(d.clone())));
+        }
+        for d in pieces {
+            if let Some(tracer) = stroke.tracer(strand_path(d)) {
+                group = group.add(tracer);
+            }
         }
 
         // A braided run only sits on its own row over the straight ends, so
@@ -431,12 +419,12 @@ fn render_drain(cb: &CableBox, drain: &DrainRow) -> Group {
 pub(super) fn render_loose(wire: &LooseWire) -> Group {
     let curve = flex(wire.from, wire.to, FLEX);
     let mid = curve.point_at(0.5);
-    let mut group = Group::new()
-        .set("class", "cable")
-        .add(casing_path(curve.path_d()))
-        .add(wire_path(curve.path_d(), &wire.color));
-    if let Some(tracer) = wire.color.tracer() {
-        group = group.add(tracer_path(curve.path_d(), &wire.color, tracer));
+    let mut group = Group::new().set("class", "cable");
+    for layer in WIRE_LAYERS
+        .stroke(&wire.color)
+        .layers(strand_path(curve.path_d()))
+    {
+        group = group.add(layer);
     }
     group.add(
         Text::new(wire_annotation(
@@ -452,7 +440,7 @@ pub(super) fn render_loose(wire: &LooseWire) -> Group {
 
 /// The text shown along a wire: `<label> · <gauge>mm² · <color code>`,
 /// dropping the label part when the wire is unlabelled. The color code is
-/// IEC 60757 where known (`render/color.rs`), so the strand stays
+/// IEC 60757 where known (`ir::WireColor::code`), so the strand stays
 /// identifiable in grayscale print where the stroke color doesn't help.
 /// `f64`'s shortest-round-trip formatting already drops a trailing `.0`
 /// (`50.0` → `50`, `0.25` stays `0.25`).
