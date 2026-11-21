@@ -61,7 +61,7 @@
 {% when Ok(view) %}
       <section>
         <h2>{{ view.title }}</h2>
-        <a href="#lb-{{ view.filename }}"><img src="{{ view.filename }}" alt="{{ view.title }}"></a>
+        <a href="#lb-{{ view.filename }}"><img src="{{ view.filename }}" alt="{{ view.title }}" width="{{ view.canvas.display_width() }}" height="{{ view.canvas.display_height() }}"></a>
       </section>
       <a href="#" class="lightbox" id="lb-{{ view.filename }}"><img src="{{ view.filename }}" alt="{{ view.title }}"></a>
 {% when Err(failure) %}
