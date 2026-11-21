@@ -97,8 +97,8 @@
       }
     },
     "property-key": {
-      "comment": "`key: value;` in a cable body, a wire body, or a connector_type: `length`, `type` and `part` are property keys, not keywords. After #instance-name, so `part: Plug;` stays an instance.",
-      "match": "\\b(length|type|part)\\s*(:)",
+      "comment": "`key: value;` in a cable body, a wire body, a connector_type, or a component body (part data): `length`, `type`, `part`, `manufacturer`, `description` and `rating` are property keys, not keywords. After #instance-name, so `part: Plug;` stays an instance, as in the parser: a type name after the colon is an instance, a string or number a property.",
+      "match": "\\b(length|type|part|manufacturer|description|rating)\\s*(:)",
       "captures": {
         "1": { "name": "support.type.property-name.wirebug" },
         "2": { "name": "punctuation.separator.key-value.wirebug" }
