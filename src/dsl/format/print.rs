@@ -203,16 +203,21 @@ impl Printer {
             };
             self.comments_before(last, line_depth, pen);
             self.text(last, line_depth, pen);
-            if let Some(comma) = comma {
-                self.comments_before(comma, item_depth, pen);
-                if pen.fresh {
-                    self.indent(item_depth);
-                }
-            }
+            // The comma goes right after the item, then the comments around
+            // it in source order: the item's own, those on lines before the
+            // comma, the comma's.
             self.out.push(',');
-            let mut comments = [last.trailing, comma.and_then(|comma| comma.trailing)]
+            let before_comma = comma.into_iter().flat_map(|comma| {
+                comma.leading.iter().filter_map(|item| match item {
+                    Leading::Comment(comment) => Some(*comment),
+                    Leading::BlankLine => None,
+                })
+            });
+            let mut comments = last
+                .trailing
                 .into_iter()
-                .flatten();
+                .chain(before_comma)
+                .chain(comma.and_then(|comma| comma.trailing));
             self.trailing(comments.next());
             self.out.push('\n');
             for comment in comments {

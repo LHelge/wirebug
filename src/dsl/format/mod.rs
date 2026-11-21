@@ -314,6 +314,22 @@ mod tests {
     }
 
     #[test]
+    fn comments_around_a_split_list_comma_keep_their_order() {
+        // `fmt` checks idempotence; the expected text checks the order.
+        let src = "component A {\nwire red 1 [a // c1\n// c2\n, b];\n}\n";
+        assert_eq!(
+            fmt(src),
+            "component A {\n\
+             \x20   wire red 1 [\n\
+             \x20       a, // c1\n\
+             \x20       // c2\n\
+             \x20       b,\n\
+             \x20   ];\n\
+             }\n"
+        );
+    }
+
+    #[test]
     fn a_list_split_over_lines_takes_an_item_a_line() {
         let src = "component A {\n\
                    wire black 6.0 [\n\
