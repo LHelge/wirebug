@@ -46,8 +46,8 @@ agent is working in parallel).
    `cargo run -- check --strict examples` and `cargo run -- render examples --out <a
    temporary directory outside the repository>`: `examples/` is the generic example
    project, and CI fails on any error or warning it reports. If your change makes it
-   fail or warn, update the example where the task intends that (a syntax change, a lint that found a real mistake); otherwise leave it
-   and report the output. Add dependencies with `cargo add`, at the newest version, with
+   fail or warn, update the example where the task intends that (a syntax change, a lint
+   that found a real mistake); otherwise leave it and report the output. Add dependencies with `cargo add`, at the newest version, with
    one line of justification in the commit message. A check that fails is fixed, not
    skipped or weakened; if a check fails for a reason outside your task, say so in the
    report with the output.
