@@ -26,6 +26,7 @@ pub enum Token {
     Cable,
     Twisted,
     View,
+    For,
     Include,
     Text,
     At,
@@ -67,7 +68,7 @@ pub enum Token {
 
 /// Every keyword with its surface text: the lexer's lookup table and the
 /// keywords' [`Display`](fmt::Display) form, so the two cannot drift.
-pub(super) static KEYWORDS: [(&str, Token); 28] = [
+pub(super) static KEYWORDS: [(&str, Token); 29] = [
     ("use", Token::Use),
     ("from", Token::From),
     ("component", Token::Component),
@@ -83,6 +84,7 @@ pub(super) static KEYWORDS: [(&str, Token); 28] = [
     ("cable", Token::Cable),
     ("twisted", Token::Twisted),
     ("view", Token::View),
+    ("for", Token::For),
     ("include", Token::Include),
     ("text", Token::Text),
     ("at", Token::At),
@@ -117,7 +119,8 @@ impl Token {
     }
 
     /// A contextual keyword: one that means something only inside a view,
-    /// a `connector_type` layout, a cavity line, or after `use <Name>`.
+    /// a `connector_type` layout, a cavity line, after `use <Name>`, or
+    /// after a view's title (`for <Component>`).
     /// Where the grammar expects a name, it is an ordinary name
     /// (`pub port size "SIZE";`), so the word stays free for users.
     ///
@@ -128,6 +131,7 @@ impl Token {
         matches!(
             self,
             Token::From
+                | Token::For
                 | Token::Include
                 | Token::Text
                 | Token::At

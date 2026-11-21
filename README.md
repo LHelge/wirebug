@@ -156,7 +156,7 @@ version.)
 
 **Wire** — a colour, a gauge (mm²), and two or more endpoints (`instance.port`, or a bare `port` for the enclosing component's own port). Multi-endpoint wires model shared rails and T-junctions. A wire may end in a property body instead of its `;` — `wire red 0.5 "12V" [fuses.ecu, ecu.b_pos] { length: 1.2; type: "FLRY-B"; part: "..."; }` — giving its length in metres, insulation type and part number. Point-to-point wires that travel together can be grouped into a `cable` with its own `type` and `length`; a conductor's own `length` overrides the cable's.
 
-**View** — a rendering target that documents a component: a kind (`schematic`, `harness`, or `pinout`), a grid, and what to place where. A `schematic` include lists the ports to show on each side; a `harness` include names a child instance's connector and draws its whole pin table; a `pinout` include names one of the subject component's own connectors and draws its cavity face. Wires are derived from the model, never listed in views — a wire draws only between ports/connectors both views include. A view is drawn against an instance of the component it documents, so that component must be instantiated somewhere in the design (`uninstantiated_view_subject` otherwise).
+**View** — a rendering target that documents a component: a kind (`schematic`, `harness`, or `pinout`), a grid, and what to place where. A `schematic` include lists the ports to show on each side; a `harness` include names a child instance's connector and draws its whole pin table; a `pinout` include names one of the subject component's own connectors and draws its cavity face. Wires are derived from the model, never listed in views — a wire draws only between ports/connectors both views include. A view documents its file's single top-level component unless it names one after its title — `view pinout "Sensor pinout" for Sensor { … }` — so a file defining several components gives each of its views a `for` (`view_subject` otherwise); `for` takes a component the file defines or imports. A view is drawn against an instance of the component it documents, so that component must be instantiated somewhere in the design (`uninstantiated_view_subject` otherwise).
 
 **Project** — a directory rooted at `wirebug.toml`, with `main.wb` beside it as the entry file. The CLI intentionally feels Cargo-like: from inside a project, commands walk up parent directories until they find the manifest; you can also point commands at the project root or at `wirebug.toml` explicitly. Logical hierarchy comes only from `use` imports and DSL nesting, never from directory layout.
 
@@ -219,7 +219,7 @@ component Controller {
     }
 }
 
-view pinout "Controller pinouts" {
+view pinout "Controller pinouts" for Controller {
     grid: 20;
     include x1 at (0, 0);
 }

@@ -285,17 +285,34 @@ pub enum Problem {
         at: SourceSpan,
     },
 
-    /// A view can't be bound to a single documented component (the file
-    /// has zero or several top-level components).
+    /// A view without `for` can't be bound to a single documented
+    /// component (the file has zero or several top-level components).
     #[error("cannot tell which component this view documents")]
     #[diagnostic(
         code(wirebug::view_subject),
-        help("a view documents the file's single top-level component")
+        help(
+            "name the component after the title: `view <kind> \"<title>\" for <Component> {{ … }}`; \
+             without `for`, a view documents the file's single top-level component"
+        )
     )]
     ViewSubject {
         #[source_code]
         src: NamedSource<String>,
         #[label("this view")]
+        at: SourceSpan,
+    },
+
+    /// A view's `for` names a connector type: a view documents a component.
+    #[error("`{name}` is a connector type, not a component")]
+    #[diagnostic(
+        code(wirebug::view_subject_not_component),
+        help("a view documents a component: name one after `for`")
+    )]
+    ViewSubjectNotComponent {
+        name: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("a connector type")]
         at: SourceSpan,
     },
 
@@ -1169,6 +1186,7 @@ impl Problem {
             | Problem::PrivatePort { .. }
             | Problem::UnknownInclude { .. }
             | Problem::ViewSubject { .. }
+            | Problem::ViewSubjectNotComponent { .. }
             | Problem::UndeclaredInlineHalf { .. }
             | Problem::EmptyCable { .. }
             | Problem::UnknownConnector { .. }

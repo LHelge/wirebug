@@ -376,12 +376,17 @@ impl PropertyValue {
     }
 }
 
-/// `view <kind> "<title>" { <item>* }` where each item is a `grid N;`, an
-/// `enclosure { ... }` block, an `include`, or a `text` box, in any order.
+/// `view <kind> "<title>" [for <Component>] { <item>* }` where each item is
+/// a `grid N;`, an `enclosure { ... }` block, an `include`, or a `text` box,
+/// in any order.
 #[derive(Debug, Clone)]
 pub struct View {
     pub kind: Spanned<Ident>,
     pub title: Spanned<String>,
+    /// The component named after `for`: the view's explicit subject. `None`
+    /// when `for` is left out, and the view documents the file's single
+    /// top-level component.
+    pub subject: Option<Spanned<Ident>>,
     pub grid: Option<Spanned<f64>>,
     /// Whether an `enclosure { }` block was authored. Kept separate from the
     /// port list so an empty block still draws a boundary.

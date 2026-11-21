@@ -519,7 +519,26 @@ A cable's wires are still ordinary connections: they show in schematic views lik
 
 A view declares a rendering target — what to render, at what positions, with what grid scale. There are three kinds: **`schematic`** (component boxes with ports on authored sides), **`harness`** (WireViz-style connector pin tables with cable bundles), and **`pinout`** (physical connector faces plus pin tables). They differ in what an `include` selects.
 
-A view documents its file's single top-level component, and is drawn against an instance of it: a view of a component the design never instantiates (say, in a library file used only for its connector types) is the `uninstantiated_view_subject` error.
+Every view documents one component, its **subject**: includes, `ports { }` placements and `enclosure { }` ports all resolve against it. By default the subject is the file's single top-level component. Name it explicitly with `for` after the title:
+
+```
+component Sensor { connector x1 "Sensor 2p" { pub port sig "SIG" pin 1; } }
+component Lamp   { connector x2 "Lamp 2p"   { pub port feed "FEED" pin 1; } }
+
+view pinout "Sensor pinout" for Sensor {
+    include x1 at (0, 0);
+}
+
+view pinout "Lamp pinout" for Lamp {
+    include x2 at (0, 0);
+}
+```
+
+- `for <Component>` names a component the file defines at its top level or imports with `use` (a view naming an import counts as using it). In an `extend` fragment it may name the extended component. A nested component cannot be a subject.
+- Without `for`, a file with no or several top-level components cannot tell which one a view documents (`view_subject`, an error); with `for`, one file can hold views of several components. Naming the file's only component is allowed, just optional.
+- A name that is not in scope is `undefined_type`; a `connector_type` is `view_subject_not_component`.
+
+The view is drawn against an instance of its subject: a view of a component the design never instantiates (say, in a library file used only for its connector types) is the `uninstantiated_view_subject` error.
 
 ### Schematic views
 
@@ -545,7 +564,7 @@ view schematic "System Overview" {
 
 Format:
 
-- `view <kind> "<title>" { ... }` — `kind` is `schematic`, `harness`, or `pinout`. Titles are unique across the project: a repeated title (in any file) is the `duplicate_view_title` warning; the repeat still renders, to a `_2`-suffixed file.
+- `view <kind> "<title>" [for <Component>] { ... }` — `kind` is `schematic`, `harness`, or `pinout`; `for` names the subject (see above). Titles are unique across the project: a repeated title (in any file) is the `duplicate_view_title` warning; the repeat still renders, to a `_2`-suffixed file.
 - `grid: <n>;` — pixels per grid cell. Optional; a sensible default applies. It must be positive (`invalid_grid`), and in a `schematic` at least 7.5: ports sit two steps apart and the pitch must clear a port label, so `check` rejects a finer grid (`grid_too_fine`, naming the minimum). Harness and pinout views take any positive grid.
 - `include <name> at (x, y);` or `include <name> at (x, y) ports { ... }` — place a component by its instance name in the surrounding scope, at grid-cell coordinates (negative is fine). A bare include is a statement and ends with `;`; an include with a `ports { }` block ends at the closing brace, with **no** trailing `;` (like any other brace block).
 - `ports { <side>: <port>, <port>; ... }` — optional. Each line lists the ports on one `side` (`north`, `east`, `south`, `west`), in the order they should appear on that edge. A `west: a, b;` line puts `a` above `b` on the west edge. List the same side more than once and the lines concatenate.
@@ -605,7 +624,7 @@ view pinout "Inverter pinouts" {
   layout and pin bindings.
 - The drawing uses the harness-side convention described above.
 
-Views live in the same file as the component they primarily document — like unit tests in Rust source. A view of the system overview belongs in `main.wb` where `Vehicle` is defined. A view of the battery pack detail belongs in the file where `BatteryPack` is defined. This keeps views close to the data they describe.
+Views live in the same file as the component they primarily document — like unit tests in Rust source. A view of the system overview belongs in `main.wb` where `Vehicle` is defined. A view of the battery pack detail belongs in the file where `BatteryPack` is defined. This keeps views close to the data they describe. In a file that defines several components, give each view a `for`.
 
 ## Naming conventions
 
@@ -619,7 +638,7 @@ Views live in the same file as the component they primarily document — like un
 Keywords come in two kinds. Words are case-sensitive, so `Layout` or `Wire` is never a keyword.
 
 - **Reserved** — the words that declare the design: `use`, `component`, `extend`, `connector_type`, `connector`, `inline`, `port`, `pub`, `pin`, `pins`, `wire`, `cable`, `twisted`, `view`. They can never name anything; `pub port wire "W";` is an error, `'wire' is a reserved word`. Pick another name (`wire_1`, `w`).
-- **Contextual** — words that mean something only inside a view, a `connector_type` layout, a cavity line or a `use` line: `from`, `include`, `text`, `at`, `grid`, `enclosure`, `ports`, `layout`, `face`, `cavity`, `rows`, `cols`, `numbering`, `size`. Anywhere a name belongs they are ordinary names, so `pub port size "SIZE";`, an instance `grid: Sensor;`, `connector layout: Plug { … }`, `cable text { … }` and `include at at (1, 2);` are all valid.
+- **Contextual** — words that mean something only inside a view (or after its title), a `connector_type` layout, a cavity line or a `use` line: `from`, `for`, `include`, `text`, `at`, `grid`, `enclosure`, `ports`, `layout`, `face`, `cavity`, `rows`, `cols`, `numbering`, `size`. Anywhere a name belongs they are ordinary names, so `pub port size "SIZE";`, `pub port for "FOR";`, an instance `grid: Sensor;`, `connector layout: Plug { … }`, `cable text { … }` and `include at at (1, 2);` are all valid.
 
 Other words the grammar reads in one place only (`schematic`, `harness`, `pinout`, `type`, `length`, `part`, `manufacturer`, `description`, `rating`, `male`, `female`, `north`, `east`, `south`, `west`, the wire colors, the numbering modes, `large`) are not keywords at all.
 

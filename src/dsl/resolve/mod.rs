@@ -197,7 +197,7 @@ pub fn resolve(project: &Project) -> Resolved<'_> {
     r.resolve_inline_halves(&connector_type_scope);
     r.apply_connector_types();
     r.resolve_endpoints();
-    let views = r.resolve_views(&roots_by_file);
+    let views = r.resolve_views(&roots_by_file, &file_scope, &connector_type_scope);
 
     let root = match roots_by_file[project.root.0].as_slice() {
         [only] => Some(r.groups.canonical(*only)),

@@ -1,0 +1,32 @@
+// Views that name their subject with `for`: the parts library documents
+// both of its components, the root's schematic names `Vehicle` though it
+// need not, and the harness leaves `for` out and documents `Vehicle` too.
+
+use Sensor from "parts.wb";
+use Lamp   from "parts.wb";
+
+component Vehicle {
+    sensor: Sensor "Sensor";
+    lamp:   Lamp   "Lamp";
+
+    wire red 1   [sensor.sig, lamp.feed];
+    wire black 1 [sensor.gnd, lamp.ret];
+}
+
+view schematic "Overview" for Vehicle {
+    grid: 20;
+
+    include sensor at (0, 0) ports {
+        east: sig, gnd;
+    }
+    include lamp at (16, 0) ports {
+        west: feed, ret;
+    }
+}
+
+view harness "Loom" {
+    grid: 20;
+
+    include sensor.x1 at (0, 0);
+    include lamp.x2   at (20, 0);
+}
