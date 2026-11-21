@@ -311,8 +311,8 @@ Distinct from clap's `--version`, which prints the wirebug app version.
   written (`[a, b, c]` → `a–b`, `b–c`): `Wire::segments()` yields those
   runs (`ir::WireSegment`: its `index` along the wire and its two ends),
   and it is the only place the decomposition is written — the schematic
-  layout and the harness layout (`HarnessConductor::all`) both take their
-  segments from it.
+  layout, the harness layout (`HarnessConductor::all`) and the wire list
+  (`export::WireList`) all take their segments from it.
 - **Inline connectors (`inline`)** — a mated plug/receptacle pair
   mid-harness (a loom's branch point): one shared port set, two optional
   `male:`/`female:` housing halves, each a `connector_type` ref. Inlines
@@ -515,6 +515,44 @@ on a connector the view leaves out is not drawn; a shield on no pin
 has no row, only its outline. A shield alone never puts a cable
 box in a view. Reusing the orthogonal router is a noted future
 refinement.
+
+## Build tables (`export/`)
+
+The tables a harness is cut, crimped and ordered from are typed models
+built from `ir::Design` alone: no layout, no view, so they list what the
+design holds whether or not a drawing shows it. They borrow the design
+(`'d`) rather than copy it. Writing them out (CSV, JSON) is the CLI's
+job; the models carry no serialisation.
+
+- **Wire list (`export::WireList`, `From<&Design>`)** — the cut list.
+  One `export::Row` per physical conductor: each `Wire::segments()` run
+  of each wire, so a rail of four ends is three rows and two wires into
+  one cavity (a double crimp) are two. A cable screen is a row too, of
+  the other `RowKind`: `RowKind::Conductor(Conductor)` (the `Wire`, its
+  `WireSegment` and two resolved ends) or `RowKind::Shield(ShieldRun)`
+  (what it screens, the `ir::Shield`, and its `Drain` — `NoPin`, `Single`
+  or `Both`, the shape of `ShieldTermination`) — so a drain lands on a pin
+  like a conductor does and a pin table built from the list sees it.
+  Every row has its `owner` (the instance whose body declares it), its
+  `Cable` (designator and `CableMeta`) when it runs in one, and the
+  length that applies (`Instance::effective_length` for a conductor, the
+  cable's for a screen; each segment of a rail carries its wire's).
+  An `export::End` is typed: `Port` (a port of an instance placed in the
+  owner, inline connectors included), `Boundary` (the owner's own port,
+  where the conductor leaves it), `Splice` (one of the owner's), or
+  `Unresolved` (only in a design with errors, so no row is ever dropped).
+  A port end (`PortEnd`: instance and `ir::Port`) says where it is
+  crimped through `PortEnd::contact()`: `Contact::Connector { designator,
+  pins }` (several pins for a ganged port; an inline connector's
+  designator is its name, and the IR does not say which half a conductor
+  is crimped into) or `Contact::Connectorless`, which keeps its row. Ends
+  are named relative to the owner in the segment (`WireEnd`, as
+  authored), and an `End` displays as the full path of what it lands on
+  (`Vehicle.loom.lamp.pwr`). The list covers every instance in IR order,
+  so a type placed twice lists its rows twice with distinct owner paths;
+  within an instance its wires come in declaration order, then its
+  cables' screens in cable order (overall before a pair's). Nothing in it
+  iterates a hash map, so the order is the source's.
 
 ## DSL validation (`check`)
 
@@ -886,6 +924,11 @@ src/
 ├── lib.rs           # re-exports; check_project + render::render_views
 ├── pipeline.rs      # check_loaded: dsl::check_loaded, then render::lint
 │                    #   (the layout checks) — shared by check_project and lsp
+│
+│  # ── build tables derived from ir::Design (no rendering) ──
+├── export/
+│   ├── mod.rs       # re-exports the table models
+│   └── wires.rs     # WireList: one Row per conductor segment and per screen
 │
 │  # ── DSL parse-and-check pipeline (the only input: .wb) ──
 ├── dsl/

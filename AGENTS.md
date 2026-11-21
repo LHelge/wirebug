@@ -26,6 +26,8 @@ One pipeline, shared by every command (`check`, `render`, `serve`, `lsp`):
   `src/render/lint.rs`, which ask the renderers' layout code and so sit in
   `render`; `dsl` never depends on `render`). `check_project` and the LSP
   both go through it; a new stage goes there.
+- `src/export/` — build tables derived from `ir::Design` (the wire list),
+  typed models with no rendering involved.
 - `src/render/` — consumes `ir::Design` only; one renderer per view kind
   (`schematic/`, `harness/`, `pinout/`) plus `png.rs`, `pdf.rs`, embed output.
 - `src/serve/` — live-reloading dev server (the only async code).
@@ -42,6 +44,7 @@ Where to look in `ARCHITECTURE.md`:
 | AST, registry, `extend` merge groups, IR, cables, inline connectors | DSL mental model |
 | Schematic layout, routing, enclosures | Render mental model; Connector routing |
 | Harness views | Harness views |
+| Wire list and other build tables (`src/export/`) | Build tables |
 | A new or changed diagnostic, and which phase it belongs in | DSL validation; Render-time errors |
 | Finding a file | Source tree |
 | Why a crate is there | Dependencies |
