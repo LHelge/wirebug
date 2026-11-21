@@ -69,8 +69,8 @@ Four CLI commands share it:
   and serves context-aware completion: an owned snapshot of `Resolved`
   (per-file scopes + merged components) consulted by a token-stack scan
   of the live buffer — lex-only, so completion survives parse breakage,
-  and a file that fails to load keeps its last-good scope
-  (`CompletionIndex::update_with`).
+  and a file that fails to load, or loads without statements the parser
+  skipped, keeps its last-good scope (`CompletionIndex::update_with`).
   A buffer with several broken statements gets a squiggle for each.
   Completion covers auto-import —
   `use ‸` offers every component/connector_type defined elsewhere,
