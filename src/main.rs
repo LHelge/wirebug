@@ -176,16 +176,20 @@ fn fmt_command(target: Option<&Path>, check: bool) -> Result<ExitCode> {
     }
     print_stdout(&listed).context("writing the file list to stdout")?;
     let total = run.files.len();
-    if check {
-        eprintln!("{changed} of {total} file(s) would be reformatted");
+    let errors = run.problems.len();
+    if total == 0 && errors > 0 {
+        // No project, or none of its files parse: there is no file count
+        // to give.
+        eprintln!("{errors} error(s) — nothing formatted");
     } else {
-        eprintln!("{changed} of {total} file(s) reformatted");
-    }
-    if !run.problems.is_empty() {
-        eprintln!(
-            "{} error(s) — the files they are in were left as they are",
-            run.problems.len()
-        );
+        if check {
+            eprintln!("{changed} of {total} file(s) would be reformatted");
+        } else {
+            eprintln!("{changed} of {total} file(s) reformatted");
+        }
+        if errors > 0 {
+            eprintln!("{errors} error(s) — the files they are in were left as they are");
+        }
     }
     Ok(if run.problems.is_empty() && !(check && changed > 0) {
         ExitCode::SUCCESS
