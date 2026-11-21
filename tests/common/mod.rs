@@ -50,9 +50,11 @@ fn comments_in_place(src: &str) -> Vec<String> {
         .expect("source lexes")
         .iter()
         .filter_map(|lexeme| match &lexeme.lexeme {
-            Lexeme::Trivia(Trivia::LineComment) => {
-                Some(src[lexeme.span.start..lexeme.span.end].trim_end().to_owned())
-            }
+            Lexeme::Trivia(Trivia::LineComment) => Some(
+                src[lexeme.span.start..lexeme.span.end]
+                    .trim_end()
+                    .to_owned(),
+            ),
             Lexeme::Token(Token::Comma) | Lexeme::Trivia(_) => None,
             Lexeme::Token(_) => Some(src[lexeme.span.start..lexeme.span.end].to_owned()),
         })
