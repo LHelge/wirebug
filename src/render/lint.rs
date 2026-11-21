@@ -8,6 +8,7 @@
 //! `Problem` diagnostics pointing at the includes in the source.
 //! `pipeline::check_project` runs them after the DSL stages.
 
+use std::cell::OnceCell;
 use std::collections::HashSet;
 use std::fmt;
 
@@ -19,6 +20,7 @@ use crate::dsl::ir::{
     TypeName, View, ViewKind, Wire, WireEnd,
 };
 use crate::dsl::project::Project;
+use crate::export::PinTables;
 use crate::render::geometry::Bounds;
 use crate::render::harness::HarnessRenderer;
 use crate::render::pinout::PinoutRenderer;
@@ -285,6 +287,7 @@ impl Conductor<'_> {
 pub(crate) fn layout_problems(design: &Design, project: &Project) -> Vec<Problem> {
     let mut problems = Vec::new();
     let mut coverage = HarnessCoverage::default();
+    let pin_tables = OnceCell::new();
     for view in &design.views {
         let Ok(subject) = super::subject_instance(design, view) else {
             continue;
@@ -292,7 +295,10 @@ pub(crate) fn layout_problems(design: &Design, project: &Project) -> Vec<Problem
         let layout = match &view.kind {
             ViewKind::Schematic => SchematicRenderer.layout(design, subject, view),
             ViewKind::Harness => HarnessRenderer.layout(design, subject, view),
-            ViewKind::Pinout => PinoutRenderer.layout(design, subject, view),
+            ViewKind::Pinout => {
+                let tables = pin_tables.get_or_init(|| PinTables::from(design));
+                PinoutRenderer.layout(design, tables, subject, view)
+            }
             ViewKind::Other(_) => continue,
         };
         problems.extend(layout.problems(view, project));
@@ -1261,7 +1267,7 @@ view pinout "V" {{
                 let edge = (MAX_CANVAS / f64::from(grid)) as i64;
                 for axis in ["x", "y"] {
                     let mut outcomes = Vec::new();
-                    for along in edge - 19..=edge - 7 {
+                    for along in edge - 25..=edge - 7 {
                         let at = if axis == "x" { (along, 0) } else { (0, along) };
                         let (project, design) = load(&spread(kind, grid, at));
                         let too_large = layout_problems(&design, &project)

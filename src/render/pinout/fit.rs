@@ -1,4 +1,5 @@
-//! Fitting a cavity label into its cavity.
+//! Fitting text into the width it is given: a cavity label into its
+//! cavity, a table cell's text into its column.
 //!
 //! SVG text has no clipping and no layout: a label is as wide as its font
 //! makes it, and the font is whatever `sans-serif` resolves to on the
@@ -16,6 +17,56 @@ pub(super) const MIN_LABEL_SIZE: f64 = 6.0;
 /// rather than one per label.
 const SIZE_STEP: f64 = 0.5;
 const ELLIPSIS: char = '…';
+/// How much wider a bold face sets than its regular one, rounded up from
+/// DejaVu Sans Bold's widest classes (capitals, `m`/`w`).
+const BOLD_WIDENING: f64 = 1.15;
+
+/// The font a piece of table text is set in, as the stylesheet gives it:
+/// its size in px, and whether it is bold. Italic sets as wide as regular.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct Font {
+    size: f64,
+    bold: bool,
+}
+
+impl Font {
+    pub(super) const fn regular(size: f64) -> Self {
+        Self { size, bold: false }
+    }
+
+    pub(super) const fn bold(size: f64) -> Self {
+        Self { size, bold: true }
+    }
+
+    /// `text`'s estimated drawn width in this font, in px.
+    pub(super) fn width(&self, text: &str) -> f64 {
+        em_width(text) * self.ems_to_px()
+    }
+
+    /// `text` as it is drawn in `width` px in this font: whole when it
+    /// fits, else as much of its start as fits before an ellipsis. The
+    /// size never changes: a table column is sized to its content, and
+    /// only text past the column's cap is cut.
+    pub(super) fn fit(&self, text: &str, width: f64) -> FittedLabel {
+        let text = if self.width(text) <= width {
+            text.to_string()
+        } else {
+            cut(text, width / self.ems_to_px())
+        };
+        FittedLabel {
+            text,
+            size: self.size,
+        }
+    }
+
+    fn ems_to_px(&self) -> f64 {
+        if self.bold {
+            self.size * BOLD_WIDENING
+        } else {
+            self.size
+        }
+    }
+}
 
 /// A label as it is drawn in a given width: at `size` px, its text cut
 /// short with an ellipsis when even [`MIN_LABEL_SIZE`] is too wide.
@@ -41,17 +92,8 @@ impl FittedLabel {
                 size,
             };
         }
-        let budget = width / MIN_LABEL_SIZE - char_ems(ELLIPSIS);
-        let mut used = 0.0;
-        let kept: String = label
-            .chars()
-            .take_while(|&c| {
-                used += char_ems(c);
-                used <= budget
-            })
-            .collect();
         Self {
-            text: format!("{}{ELLIPSIS}", kept.trim_end()),
+            text: cut(label, width / MIN_LABEL_SIZE),
             size: MIN_LABEL_SIZE,
         }
     }
@@ -67,6 +109,21 @@ impl FittedLabel {
     }
 }
 
+/// As much of `text`'s start as fits in `ems` together with an ellipsis,
+/// then the ellipsis; no space is left before it.
+fn cut(text: &str, ems: f64) -> String {
+    let budget = ems - char_ems(ELLIPSIS);
+    let mut used = 0.0;
+    let kept: String = text
+        .chars()
+        .take_while(|&c| {
+            used += char_ems(c);
+            used <= budget
+        })
+        .collect();
+    format!("{}{ELLIPSIS}", kept.trim_end())
+}
+
 /// `text`'s estimated advance, in ems.
 fn em_width(text: &str) -> f64 {
     text.chars().map(char_ems).sum()
@@ -74,11 +131,12 @@ fn em_width(text: &str) -> f64 {
 
 /// One character's advance in ems: the widest of its class in DejaVu Sans,
 /// rounded up. Anything outside ASCII letters, digits and common
-/// punctuation counts a full em.
+/// punctuation (and the `·` the tables separate names with) counts a full
+/// em.
 fn char_ems(c: char) -> f64 {
     match c {
         'i' | 'j' | 'l' | 'f' | 't' | 'r' | 'I' | 'J' | ' ' | '.' | ',' | ':' | ';' | '\''
-        | '!' | '|' | '-' | '(' | ')' | '[' | ']' | '/' | '\\' => 0.42,
+        | '!' | '|' | '-' | '(' | ')' | '[' | ']' | '/' | '\\' | '·' => 0.42,
         'M' | 'W' | 'm' | 'w' | '@' | '%' | '+' | '=' | '<' | '>' | '~' | '&' => 1.0,
         'a'..='z' | '0'..='9' | 'E' | 'F' | 'L' | 'P' | 'S' | 'T' | 'Y' | '_' => 0.64,
         'A' | 'B' | 'C' | 'K' | 'R' | 'V' | 'X' | 'Z' => 0.7,
@@ -140,6 +198,32 @@ mod tests {
     fn no_room_at_all_leaves_only_the_ellipsis() {
         let fitted = FittedLabel::new("WWW", 4.0);
         assert_eq!(fitted.text, "…");
+    }
+
+    #[test]
+    fn table_text_that_fits_its_column_is_kept_whole_at_its_size() {
+        let font = Font::regular(10.0);
+        let fitted = font.fit("→ Vehicle.ecu.pwr", 200.0);
+        assert_eq!(fitted.text, "→ Vehicle.ecu.pwr");
+        assert_eq!(fitted.size, 10.0);
+        assert!(!fitted.is_cut());
+    }
+
+    #[test]
+    fn table_text_past_its_column_is_cut_never_shrunk() {
+        let font = Font::regular(10.0);
+        let fitted = font.fit("→ Vehicle.front_sensor.sig (x1:1)", 100.0);
+        assert!(fitted.is_cut(), "{}", fitted.text);
+        assert_eq!(fitted.size, 10.0);
+        assert!(fitted.width() <= 100.0, "{} is too wide", fitted.text);
+        assert!(fitted.text.starts_with("→ Vehicle"));
+    }
+
+    #[test]
+    fn bold_text_counts_wider_than_regular() {
+        let text = "Inverter · control";
+        assert!(Font::bold(13.0).width(text) > Font::regular(13.0).width(text));
+        assert_eq!(Font::regular(10.0).width(text), em_width(text) * 10.0);
     }
 
     #[test]
