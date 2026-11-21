@@ -225,6 +225,47 @@ impl Connection<'_> {
         };
         [end(self.owners[0], self.a), end(self.owners[1], self.b)]
     }
+
+    /// `connections` grouped into the electrical nets they draw: two
+    /// connections are in one net when they share a placed port, directly
+    /// or through other members — the segments of a multi-endpoint wire, a
+    /// splice net's segments, two wires crimped into one port. Each net
+    /// lists its members' indices in source order, and the nets come in the
+    /// order of their first member.
+    pub(super) fn nets(connections: &[Self]) -> Vec<Vec<usize>> {
+        // Union-find over connection indices, joined through the first
+        // connection seen at each port. The map is only looked up, never
+        // iterated, so its order cannot leak into the result.
+        fn root(parent: &mut [usize], mut i: usize) -> usize {
+            while parent[i] != i {
+                parent[i] = parent[parent[i]];
+                i = parent[i];
+            }
+            i
+        }
+        let mut parent: Vec<usize> = (0..connections.len()).collect();
+        let mut first_at: HashMap<WireEnd, usize> = HashMap::new();
+        for (i, connection) in connections.iter().enumerate() {
+            for end in connection.ends() {
+                let other = *first_at.entry(end).or_insert(i);
+                let (a, b) = (root(&mut parent, i), root(&mut parent, other));
+                parent[a.max(b)] = a.min(b);
+            }
+        }
+        let mut net_of_root: Vec<Option<usize>> = vec![None; connections.len()];
+        let mut nets: Vec<Vec<usize>> = Vec::new();
+        for i in 0..connections.len() {
+            let r = root(&mut parent, i);
+            match net_of_root[r] {
+                Some(net) => nets[net].push(i),
+                None => {
+                    net_of_root[r] = Some(nets.len());
+                    nets.push(vec![i]);
+                }
+            }
+        }
+        nets
+    }
 }
 
 pub(super) struct ViewBox {
@@ -897,6 +938,46 @@ component sys {
         let subject = design.get(&design.root).unwrap();
         let placement = Placement::compute(&design, subject, &view, Grid::new(20.0)).unwrap();
         assert_eq!(placement.connections().len(), 2);
+    }
+
+    #[test]
+    fn connections_sharing_a_port_form_one_net_in_source_order() {
+        // `a`–`b`–`c` is one rail; `d`–`e` is a net of its own; `f`'s wire
+        // is crimped into `c.p` beside the rail's end, joining the rail.
+        let design = design_from(
+            r#"
+component sys {
+    a: blk;
+    b: blk;
+    c: blk;
+    d: blk;
+    e: blk;
+    f: blk;
+    wire red 1 [a.p, b.p, c.p];
+    wire blue 1 [d.p, e.p];
+    wire white 1 [f.p, c.p];
+    component blk {
+        pub port p "P";
+    }
+}
+"#,
+        );
+        let view = view_of(
+            "sys",
+            &[
+                ("a", 0.0, 0.0, &[("p", Side::East)]),
+                ("b", 10.0, 0.0, &[("p", Side::East)]),
+                ("c", 20.0, 0.0, &[("p", Side::West)]),
+                ("d", 0.0, 10.0, &[("p", Side::East)]),
+                ("e", 20.0, 10.0, &[("p", Side::West)]),
+                ("f", 0.0, 20.0, &[("p", Side::East)]),
+            ],
+        );
+        let subject = design.get(&design.root).unwrap();
+        let placement = Placement::compute(&design, subject, &view, Grid::new(20.0)).unwrap();
+        let connections = placement.connections();
+        assert_eq!(connections.len(), 4);
+        assert_eq!(Connection::nets(&connections), [vec![0, 1, 3], vec![2]]);
     }
 
     /// `a`, `b`, `c` and `d` each run a conductor to splice `sp` or, for

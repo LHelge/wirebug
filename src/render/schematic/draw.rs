@@ -7,7 +7,7 @@ use super::layout::{PlacedComponent, PlacedPort, PlacedText};
 use super::{COMPONENT_TITLE_GAP, LABEL_INSET, PORT_RADIUS};
 use crate::dsl::ir::{InstanceName, WireColor};
 use crate::render::geometry::{Point, Side};
-use crate::render::wire_stroke::WireLayers;
+use crate::render::wire_stroke::{WireLayers, WireStroke};
 
 pub(super) fn render_component(cid: &InstanceName, pc: &PlacedComponent) -> Group {
     let rect = Rectangle::new()
@@ -195,22 +195,48 @@ const WIRE_LAYERS: WireLayers = WireLayers {
     tracer: "wire-tracer",
 };
 
-/// Emit a routed connector as `<polyline>`s, in draw order: the casing,
-/// the core in the wire's base colour, and a two-tone wire's tracer. `path`
-/// is the ordered list of points produced by [`super::route::Router::route`].
+/// A routed connector, ready to draw as `<polyline>` layers: the casing,
+/// the core in the wire's base colour, and a two-tone wire's tracer. The
+/// layers come out one at a time so a whole net's casings can go down
+/// before any of its cores (see [`super::layout::Connection::nets`]).
 /// Each layer carries `fill="none"` itself: an embed host's stylesheet
 /// written before the casing and tracer existed has no rule for them, and
 /// an unfilled polyline with no stroke of its own draws nothing, where a
 /// filled one would blot the area its bends enclose.
-pub(super) fn render_wire(path: &[Point], color: &WireColor) -> impl Iterator<Item = Polyline> {
-    let points = path
-        .iter()
-        .map(|p| format!("{},{}", p.x, p.y))
-        .collect::<Vec<_>>()
-        .join(" ");
-    WIRE_LAYERS
-        .stroke(color)
-        .layers(Polyline::new().set("fill", "none").set("points", points))
+pub(super) struct WireDrawing<'a> {
+    shape: Polyline,
+    stroke: WireStroke<'a>,
+}
+
+impl<'a> WireDrawing<'a> {
+    /// `path` is the ordered list of points produced by
+    /// [`super::route::Router::route`].
+    pub(super) fn new(path: &[Point], color: &'a WireColor) -> Self {
+        let points = path
+            .iter()
+            .map(|p| format!("{},{}", p.x, p.y))
+            .collect::<Vec<_>>()
+            .join(" ");
+        Self {
+            shape: Polyline::new().set("fill", "none").set("points", points),
+            stroke: WIRE_LAYERS.stroke(color),
+        }
+    }
+
+    /// The dark casing under the core.
+    pub(super) fn casing(&self) -> Polyline {
+        self.stroke.casing(Clone::clone(&self.shape))
+    }
+
+    /// The core, in the wire's base colour.
+    pub(super) fn core(&self) -> Polyline {
+        self.stroke.core(Clone::clone(&self.shape))
+    }
+
+    /// The tracer stripe over the core, for a two-tone wire.
+    pub(super) fn tracer(&self) -> Option<Polyline> {
+        self.stroke.tracer(Clone::clone(&self.shape))
+    }
 }
 
 /// Along-track clearance a code keeps from a crossing wire, so its halo

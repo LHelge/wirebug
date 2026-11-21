@@ -161,25 +161,50 @@ impl SchematicRenderer {
 
         // Codes dodge wire crossings (the halo would visually cut the
         // crossed wire) and each other (parallel wires in a channel would
-        // stack their codes); placed anchors become obstacles for the rest.
-        // Each wire is drawn whole, casing to tracer, before the next, so
-        // at a crossing the later wire's casing cuts the earlier one's core
-        // and the two read as passing over each other, in source order.
-        let mut wires_group = Group::new().set("class", "wires");
+        // stack their codes); placed anchors become obstacles for the rest,
+        // in source order.
         let crossings = draw::wire_crossings(&wires);
         let mut placed: Vec<Point> = Vec::new();
-        for ((polyline, connection), crossings) in wires.iter().zip(&connections).zip(&crossings) {
-            for layer in draw::render_wire(polyline, connection.color) {
-                wires_group = wires_group.add(layer);
-            }
-            let obstacles: Vec<_> = crossings
+        let anchors: Vec<_> = wires
+            .iter()
+            .zip(&crossings)
+            .map(|(polyline, crossings)| {
+                let obstacles: Vec<_> = crossings
+                    .iter()
+                    .map(|&p| draw::CodeObstacle::crossing(p))
+                    .chain(placed.iter().map(|&p| draw::CodeObstacle::code(p)))
+                    .collect();
+                let anchor = draw::wire_code_anchor(polyline, &obstacles);
+                placed.extend(anchor.as_ref().map(|a| a.at));
+                anchor
+            })
+            .collect();
+
+        // One net at a time, in source order: all its casings, then its
+        // cores, its tracers and its codes. Within a net no casing lies over
+        // a core, so where its wires meet they read as joined; the next
+        // net's casing cuts an earlier net's core where they cross, so the
+        // two read as passing over each other.
+        let mut wires_group = Group::new().set("class", "wires");
+        for net in Connection::nets(&connections) {
+            let drawn: Vec<_> = net
                 .iter()
-                .map(|&p| draw::CodeObstacle::crossing(p))
-                .chain(placed.iter().map(|&p| draw::CodeObstacle::code(p)))
+                .map(|&i| draw::WireDrawing::new(&wires[i], connections[i].color))
                 .collect();
-            if let Some(anchor) = draw::wire_code_anchor(polyline, &obstacles) {
-                wires_group = wires_group.add(draw::render_wire_code(&anchor, connection.color));
-                placed.push(anchor.at);
+            for wire in &drawn {
+                wires_group = wires_group.add(wire.casing());
+            }
+            for wire in &drawn {
+                wires_group = wires_group.add(wire.core());
+            }
+            for tracer in drawn.iter().filter_map(draw::WireDrawing::tracer) {
+                wires_group = wires_group.add(tracer);
+            }
+            for &i in &net {
+                if let Some(anchor) = &anchors[i] {
+                    wires_group =
+                        wires_group.add(draw::render_wire_code(anchor, connections[i].color));
+                }
             }
         }
         doc = doc.add(wires_group);
@@ -536,11 +561,11 @@ component sys {{
     }
 
     #[test]
-    fn each_wire_is_drawn_whole_before_the_next() {
-        // Two wires that must cross between the columns: `a`–`b` runs down
-        // and `c`–`d` up. The later wire's casing lies over the earlier
-        // one's core where they cross, so the two read as passing over
-        // each other.
+    fn crossing_nets_are_drawn_one_after_the_other() {
+        // Two wires of different nets that must cross between the columns:
+        // `a`–`b` runs down and `c`–`d` up. The later net's casing lies over
+        // the earlier one's core where they cross, so the two read as
+        // passing over each other.
         let design = design_from(
             r#"
 component sys {
@@ -593,16 +618,8 @@ component sys {
             !draw::wire_crossings(&cores)[0].is_empty(),
             "the wires cross: {cores:?}"
         );
-        let classes: Vec<&str> = svg
-            .lines()
-            .filter_map(|line| {
-                ["wire-casing", "wire", "wire-tracer", "wire-code"]
-                    .into_iter()
-                    .find(|class| line.contains(&format!("class=\"{class}\"")))
-            })
-            .collect();
         assert_eq!(
-            classes,
+            drawn_classes(&svg),
             [
                 "wire-casing",
                 "wire",
@@ -613,6 +630,75 @@ component sys {
                 "wire-code"
             ]
         );
+    }
+
+    /// The wire layer and code classes of `svg`, in draw order.
+    fn drawn_classes(svg: &str) -> Vec<&'static str> {
+        svg.lines()
+            .filter_map(|line| {
+                ["wire-casing", "wire", "wire-tracer", "wire-code"]
+                    .into_iter()
+                    .find(|class| line.contains(&format!("class=\"{class}\"")))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn wires_meeting_at_a_port_lay_every_casing_before_any_core() {
+        // One net three ways: a rail `a`–`b`–`c`, and a two-tone wire of
+        // another colour crimped into `b.p` beside it. Its wires all leave
+        // `b.p` through the same stub; a casing drawn over a core there
+        // would cut the joint like a crossing.
+        let design = design_from(
+            r#"
+component sys {
+    a: alpha;
+    b: beta;
+    c: alpha;
+    d: alpha;
+    wire red 1 [a.p, b.p, c.p];
+    wire white/blue 1 [d.p, b.p];
+    component alpha {
+        pub port p "Out" pin 1;
+    }
+    component beta {
+        pub port p "In" pin 1;
+    }
+}
+"#,
+        );
+        let view = view_of(
+            "sys",
+            &[
+                ("a", 0.0, 0.0, &[("p", Side::East)]),
+                ("b", 16.0, 8.0, &[("p", Side::West)]),
+                ("c", 0.0, 8.0, &[("p", Side::East)]),
+                ("d", 0.0, 16.0, &[("p", Side::East)]),
+            ],
+        );
+        let svg = render(&design, &view).expect("renders");
+        assert_eq!(
+            drawn_classes(&svg),
+            [
+                "wire-casing",
+                "wire-casing",
+                "wire-casing",
+                "wire",
+                "wire",
+                "wire",
+                "wire-tracer",
+                "wire-code",
+                "wire-code",
+                "wire-code"
+            ]
+        );
+        // Cores stay in source order: the crimped wire's lies on top.
+        let cores: Vec<_> = wire_layers(&svg)
+            .into_iter()
+            .filter(|layer| layer.class == "wire")
+            .filter_map(|layer| layer.stroke)
+            .collect();
+        assert_eq!(cores, ["red", "red", "white"]);
     }
 
     #[test]
