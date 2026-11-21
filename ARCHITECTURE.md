@@ -328,8 +328,9 @@ Distinct from clap's `--version`, which prints the wirebug app version.
   that loom; auto-scoping drops the other loom's conductors. Both halves
   in one view is a `duplicate_view_include`; schematic includes of
   inlines are `wrong_include_form`; `pub` on inline ports warns
-  (`inline_pub_port`). Per-half pinout faces and a one-sided-pin lint are
-  future work.
+  (`inline_pub_port`). The pin-table export reads which half a conductor
+  is crimped into off the harness views (see Build tables). Per-half
+  pinout faces and a one-sided-pin lint are future work.
 
 ## Render mental model (IR → SVG)
 
@@ -527,8 +528,9 @@ refinement.
 ## Build tables (`export/`)
 
 The tables a harness is cut, crimped and ordered from are typed models
-built from `ir::Design` alone: no layout, no view, so they list what the
-design holds whether or not a drawing shows it. They borrow the design
+built from `ir::Design` alone: no layout, so they list what the design
+holds whether or not a drawing shows it (the pin tables read the harness
+views only to tell an inline connector's halves apart). They borrow the design
 (`'d`) rather than copy it. Writing them out (CSV, JSON) is the CLI's
 job; the models carry no serialisation.
 
@@ -561,6 +563,39 @@ job; the models carry no serialisation.
   within an instance its wires come in declaration order, then its
   cables' screens in cable order (overall before a pair's). Nothing in it
   iterates a hash map, so the order is the source's.
+- **Pin tables (`export::PinTables`, `From<&Design>`)** — the crimp
+  sheet, built from the wire list: every conductor end and drain end the
+  list lands on a connector pin is entered in that pin's cavity. One
+  `export::PinTable` per connector of each instance (the root's and every
+  placement's, so a type placed twice has its tables twice; a
+  connectorless port has none), in IR then connector order; an inline
+  connector has one table per half it declares (`PinTable.half`, male
+  first; one table with `None` when it declares none). A table's
+  `export::Cavity` rows are sorted by `ir::Pin`'s `Ord` (numeric; pins are
+  whole numbers in the DSL), one per pin a port is bound to plus one per
+  cavity of the connector's `layout` (an inline half's own layout) that no
+  port uses (`Cavity.port: None`), so an unused cavity is listed empty. A
+  ganged port (`pins [2, 3]`) is entered in each of its cavities, marked
+  by `Cavity::is_ganged` and `Cavity::ganged_with` (the other pins), since
+  the model does not say which cavity takes which conductor. A cavity's
+  `entries` are in wire-list order (two for a double crimp), each an
+  `export::CavityEntry`: `Conductor(CavityConductor)` (owner, `Cable`, the
+  wire list's `Conductor` and its `FarEnd`) or `Drain(CavityDrain)` (the
+  screen's `ShieldRun` and, grounded at both ends, the drain's other end),
+  never a conductor with an invented colour. A `FarEnd` is the end across
+  the conductor: `Port` (its `contact()` says pin or connectorless),
+  `Boundary`, `Unresolved`, or `Splice(FarSplice)` — the splice and, as
+  `SplicedEnd`s (end and wire), every other end its `Instance::splice_net`
+  joins, linked splices followed and the conductor's own end left out.
+  Each entry carries an `export::HalfFit`. The IR does not record which
+  half of an inline connector a conductor is crimped into; the harness
+  views say it, by `ir::HarnessScope`, the scoping rule the harness
+  renderer draws by: an end on an inline that declares both halves goes
+  to the half the harness views of its owner's component draw it into
+  (`Assigned`) when they draw it into exactly one; when none draws it, or
+  views draw it into each half, it is listed under both halves as
+  `Undetermined`, never guessed or dropped. A drain is placed the same
+  way (`HarnessScope::draws_drain`). Elsewhere an entry is `Assigned`.
 
 ## DSL validation (`check`)
 
@@ -936,7 +971,9 @@ src/
 │  # ── build tables derived from ir::Design (no rendering) ──
 ├── export/
 │   ├── mod.rs       # re-exports the table models
-│   └── wires.rs     # WireList: one Row per conductor segment and per screen
+│   ├── wires.rs     # WireList: one Row per conductor segment and per screen
+│   └── pins.rs      # PinTables: one PinTable per connector (per inline half),
+│                    #   one Cavity per pin, built from the WireList
 │
 │  # ── DSL parse-and-check pipeline (the only input: .wb) ──
 ├── dsl/
