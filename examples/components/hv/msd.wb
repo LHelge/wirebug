@@ -3,6 +3,9 @@
 
 component Msd {
     component Fuse250a {
+        description: "MSD fuse";
+        rating:      "250 A";
+
         pub port in  "IN";
         pub port out "OUT";
     }
