@@ -229,6 +229,7 @@ impl<'d> Cable<'d> {
 /// What a [`Row`] is: a conductor to cut, or a cable screen.
 #[derive(Debug, Clone, Copy)]
 pub enum RowKind<'d> {
+    /// A conductor: one segment of a wire.
     Conductor(Conductor<'d>),
     /// A screen is not a conductor (no colour, no gauge), but it is cut
     /// with its cable and its drain lands on pins, so it has a row.
@@ -255,7 +256,9 @@ pub struct Conductor<'d> {
 pub struct ShieldRun<'d> {
     /// The cable's overall screen, or one twisted pair's own.
     pub screened: Screened,
+    /// The screen as the design holds it: its label and authored span.
     pub shield: &'d Shield,
+    /// The pins its drain is terminated on, resolved.
     pub drain: Drain<'d>,
 }
 
@@ -265,7 +268,9 @@ pub struct ShieldRun<'d> {
 pub enum Drain<'d> {
     /// On no pin: cut back, or bonded at a gland or housing.
     NoPin,
+    /// On one pin: grounded at one end, the usual termination.
     Single(End<'d>),
+    /// On two pins, in source order: grounded at both ends.
     Both([End<'d>; 2]),
 }
 
@@ -363,7 +368,10 @@ impl fmt::Display for End<'_> {
 /// and the port, with its name and label.
 #[derive(Debug, Clone, Copy)]
 pub struct PortEnd<'d> {
+    /// The instance the port is on: a placed component, an inline
+    /// connector, or the owner itself for a [`End::Boundary`].
     pub instance: &'d Instance,
+    /// The port: its name, label, connector and pins.
     pub port: &'d Port,
 }
 
@@ -394,7 +402,9 @@ pub enum Contact<'d> {
     /// the connector assigns it no pin. An inline connector's designator is
     /// its name.
     Connector {
+        /// The connector's designator.
         designator: &'d ConnectorName,
+        /// The pins the port occupies, in source order.
         pins: &'d [Pin],
     },
     /// The port is on no connector: the row is kept, with no connector or
@@ -405,7 +415,9 @@ pub enum Contact<'d> {
 /// An end on a splice: the instance that declares it, and the splice.
 #[derive(Debug, Clone, Copy)]
 pub struct SpliceEnd<'d> {
+    /// The instance whose body declares the splice: the row's owner.
     pub owner: &'d Instance,
+    /// The splice: its name, label and part.
     pub splice: &'d Splice,
 }
 
