@@ -15,10 +15,12 @@ Found while implementing jkx.7u (coloured schematic wires), which makes both mor
 
 1. Two different wires can share a run. With boxes a(0,0), b(16,8), c(0,8), d(16,0) and wires a.p–b.p and c.p–d.p (east-facing a.p and c.p, west-facing b.p and d.p), both route along y=120 for x 105..135 and nudging does not separate them, possibly because port-touching segments are pinned. With colour the later wire hides the earlier one there.
 2. Component titles are not router obstacles: in the example's "Charging control" view the vertical blue DC SW → DCDC EN wire runs through the "VCM" title.
+3. Pin annotations and wires collide (found while implementing jkx.ch, which lengthens annotations to `<designator>:<pin>`): the router does not see annotations, so a channel wire can run straight through one (under the batteries in the example's HV overview, the orange wire crosses `bms_signals:6`), and a level west/east annotation can be crossed by its own wire's first bend. The `wire-code` placement does not treat annotations as obstacles either, and north-side annotations run into the centred component title.
 
 ## Acceptance Criteria
 - [ ] A fixture reproduces the shared run; after the fix the two wires are separated (or the layout lints report that they cannot be)
 - [ ] Decide whether a component's title is an obstacle, a keep-out the nudger respects, or stays as is
+- [ ] Pin annotations stay readable: a clear lane for the text, the side of the stub away from the wire's own bend, or annotations as obstacles for the router and for `wire-code` placement (making them obstacles for `wire-code` alone moved codes in single-connector views, so decide it together)
 - [ ] `check`'s layout lints and `render` still agree; output stays deterministic
 
 ## Testing
