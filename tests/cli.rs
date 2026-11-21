@@ -1956,20 +1956,25 @@ fn export_bom_prints_a_row_per_thing_to_buy_with_its_quantity() {
         lines.next(),
         Some(
             "kind,specified,part,type,label,description,manufacturer,rating,\
-             color,color_code,gauge_mm2,quantity,total_length_m,unmeasured,where"
+             color,color_code,gauge_mm2,quantity,total_length_m,unmeasured,boundary,where"
         )
     );
     let rows: Vec<&str> = lines.collect();
-    assert_eq!(rows.len(), 17, "{stdout}");
+    assert_eq!(rows.len(), 22, "{stdout}");
     for expected in [
-        // Six lamps' housings and the inline's male half.
-        "housing,true,DT04-2P,Dt04_2p,,Deutsch DT04-2P,,,,,,7,,,",
+        // Seven lamps' housings and two inlines' male halves.
+        "housing,true,DT04-2P,Dt04_2p,,Deutsch DT04-2P,,,,,,9,,,,",
+        // An inline that declares no half is still two housings, listed
+        // under its label.
+        "housing,false,,,,Spare,,,,,,2,,,,Vehicle.ic_spare.male;Vehicle.ic_spare.female",
         // Two cables of one type: the one with a length in the total, the
         // other counted as unmeasured.
-        "cable,true,,2x0.5 TP,,,,,,,,2,3,1,Vehicle.can1;Vehicle.can2",
-        "wire,false,,,,,,,red,RD,1,7,5.5,1,",
-        "component,false,,Switch,,,,,,,,1,,,Vehicle.sw",
-        "splice,true,D-436,,,Solder sleeve,,,,,,3,,,Vehicle.sp_gnd;Vehicle.front.sp_bar;Vehicle.rear.sp_bar",
+        "cable,true,,2x0.5 TP,,,,,,,,2,3,1,,Vehicle.can1;Vehicle.can2",
+        // One of the nine conductors continues the vehicle's wire at the
+        // pod's connectorless boundary port.
+        "wire,false,,,,,,,red,RD,1,9,6.5,2,1,",
+        "component,false,,Switch,,,,,,,,1,,,,Vehicle.sw",
+        "splice,true,D-436,,,Solder sleeve,,,,,,3,,,,Vehicle.sp_gnd;Vehicle.front.sp_bar;Vehicle.rear.sp_bar",
     ] {
         assert!(
             rows.iter().any(|row| row.starts_with(expected)),
@@ -1984,23 +1989,27 @@ fn export_bom_as_json_flags_the_unspecified_and_lists_the_placements() {
     assert!(ok, "{stderr}");
     let document: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
     let lines = document["lines"].as_array().expect("lines");
-    assert_eq!(lines.len(), 17);
+    assert_eq!(lines.len(), 22);
     let lamps = lines
         .iter()
         .find(|line| line["part"] == "LMP-1")
         .expect("the lamps' line");
     assert_eq!(lamps["kind"], "component");
     assert_eq!(lamps["specified"], true);
-    assert_eq!(lamps["quantity"], 6);
-    assert_eq!(lamps["where"].as_array().map(Vec::len), Some(6));
+    assert_eq!(lamps["quantity"], 7);
+    assert_eq!(lamps["where"].as_array().map(Vec::len), Some(7));
+    // A connector block that names no type is grouped by its description.
     let untyped = &lines[1];
     assert_eq!(untyped["kind"], "housing");
     assert_eq!(untyped["specified"], false);
     assert!(untyped["part"].is_null() && untyped["type"].is_null());
-    assert_eq!(
-        untyped["where"],
-        serde_json::json!(["Vehicle.relay.x1", "Vehicle.sw.x1"])
-    );
+    assert_eq!(untyped["description"], "Relay 2p");
+    assert_eq!(untyped["where"], serde_json::json!(["Vehicle.relay.x1"]));
+    let red = lines
+        .iter()
+        .find(|line| line["kind"] == "wire" && line["color_code"] == "RD")
+        .expect("the red wire's line");
+    assert_eq!(red["boundary"], 1);
 }
 
 #[test]
@@ -2012,7 +2021,7 @@ fn export_bom_out_summarises_the_rows_written() {
     assert!(stdout.is_empty(), "{stdout}");
     assert_eq!(
         stderr.trim_end(),
-        format!("exported 17 BOM row(s) as csv to {}", path.display())
+        format!("exported 22 BOM row(s) as csv to {}", path.display())
     );
 }
 
