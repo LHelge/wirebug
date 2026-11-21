@@ -120,7 +120,7 @@ pub struct RenderedView {
     pub filename: String,
     pub kind: ViewKind,
     pub svg: String,
-    pub canvas: Canvas,
+    pub(crate) canvas: Canvas,
 }
 
 impl RenderedView {
@@ -500,15 +500,14 @@ pub(crate) const MAX_CANVAS: f64 = 8192.0;
 
 /// A view's canvas: its viewBox's width and height, in world units.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Canvas {
+pub(crate) struct Canvas {
     width: f64,
     height: f64,
 }
 
 impl Canvas {
     /// A `width` × `height` canvas.
-    #[must_use]
-    pub fn new(width: f64, height: f64) -> Self {
+    pub(crate) fn new(width: f64, height: f64) -> Self {
         Self { width, height }
     }
 
@@ -539,14 +538,12 @@ impl Canvas {
     }
 
     /// The canvas's width, in world units.
-    #[must_use]
-    pub fn width(&self) -> f64 {
+    pub(crate) fn width(&self) -> f64 {
         self.width
     }
 
     /// The canvas's height, in world units.
-    #[must_use]
-    pub fn height(&self) -> f64 {
+    pub(crate) fn height(&self) -> f64 {
         self.height
     }
 }
