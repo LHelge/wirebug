@@ -107,6 +107,52 @@ mod tests {
         assert!(!SOURCE.contains("\nmetadata:"));
     }
 
+    /// Whether `value` reads in YAML as the one-line string it shows: a
+    /// double-quoted scalar with nothing to escape, or a plain scalar
+    /// without the `: ` or ` #` that would end it early and without a
+    /// leading indicator character.
+    fn is_safe_yaml_string(value: &str) -> bool {
+        if let Some(inner) = value.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
+            return !inner.contains(['"', '\\']);
+        }
+        !value.is_empty()
+            && !value.contains(": ")
+            && !value.contains(" #")
+            && !value.starts_with([
+                '-', '?', ':', ',', '[', ']', '{', '}', '#', '&', '*', '!', '|', '>', '\'', '"',
+                '%', '@', '`',
+            ])
+    }
+
+    #[test]
+    fn every_frontmatter_value_of_the_source_is_a_yaml_string() {
+        // Other harnesses parse the frontmatter with a strict YAML parser;
+        // an unquoted `: ` inside the description is a syntax error there.
+        let front = SOURCE
+            .strip_prefix("---\n")
+            .and_then(|rest| rest.split_once("\n---\n"))
+            .map(|(front, _)| front)
+            .expect("the source opens with frontmatter");
+        for line in front.lines() {
+            let (key, value) = line.split_once(": ").expect("a `key: value` line");
+            assert!(
+                key.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'),
+                "unexpected frontmatter key in `{line}`"
+            );
+            assert!(
+                is_safe_yaml_string(value),
+                "quote the frontmatter value of `{key}`"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unquoted_value_with_a_colon_is_not_a_safe_yaml_string() {
+        assert!(!is_safe_yaml_string("harnesses: components"));
+        assert!(is_safe_yaml_string("\"harnesses: components\""));
+        assert!(is_safe_yaml_string("wirebug-dsl"));
+    }
+
     #[test]
     fn a_source_without_frontmatter_is_emitted_unchanged() {
         assert_eq!(Skill::stamped("# Body\n", "1.2.3").as_str(), "# Body\n");
