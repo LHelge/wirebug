@@ -1,13 +1,14 @@
 ---
 id: g2e.6x
 title: Remove Aphid EV naming from examples and docs
-status: open
+status: done
 priority: P2
 created: "2026-11-20T21:50:43.111102249Z"
-updated: "2026-11-20T21:50:43.111102249Z"
+updated: "2026-11-21T19:17:44.747651036Z"
 tags:
   - docs
   - examples
+attempts: 1
 ---
 
 ## Summary
