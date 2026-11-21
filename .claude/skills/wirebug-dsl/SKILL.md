@@ -567,11 +567,11 @@ cable can2 "CAN2" {
 ```
 shield ["<label>"] [<endpoint>, <endpoint>];   // grounded at both ends
 shield ["<label>"] [<endpoint>];               // grounded at one end (the usual)
-shield ["<label>"];                            // terminated nowhere: cut back at both ends
+shield ["<label>"];                            // lands on no pin: cut back, or bonded at a gland or housing
 ```
 
 - A shield is **not a conductor**: no color, no gauge, and it does not count toward a pair's two wires or a cable's conductors (a cable holding only a shield still warns `empty_cable`).
-- The bracketed list names the pins its **drain** is terminated on, written like wire endpoints (`instance.port` or an own `port`) and resolved the same way (unknown or private ports are errors). Zero, one or two ends: a screen runs from one end of the cable to the other, so more than two is an error (`shield_arity`). An empty `[]` is a syntax error — write `shield;`.
+- The bracketed list names the pins its **drain** is terminated on, written like wire endpoints (`instance.port` or an own `port`) and resolved the same way (unknown or private ports are errors). Zero, one or two ends: a screen runs from one end of the cable to the other, so more than two is an error (`shield_arity`). An empty `[]` is a syntax error — write `shield;`, which says only that the screen lands on no pin: it may be cut back (floating) or bonded all round at a cable gland or housing, and the model does not record which (say so in a comment).
 - **At most one shield** in a cable body and at most one in each `twisted { }` group; a second is an error naming both (`duplicate_shield`). A cable's overall screen and its pairs' own screens are separate, so both may be present.
 - An end listed twice is `duplicate_endpoint`. A drain sharing a pin with a wire (a drain crimped alongside a ground wire) is fine.
 - The optional label names the drain in a harness drawing; the drawing calls an unlabelled one `Shield` (or `Pair shield`).

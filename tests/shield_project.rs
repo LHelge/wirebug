@@ -1,7 +1,7 @@
 //! End-to-end check of the `shield_project` fixture: a cable whose overall
 //! screen is grounded at one end, and a cable with an individually screened
-//! pair grounded at both ends, a pair whose screen is cut back, and an
-//! overall screen terminated nowhere — elaborated into the IR and drawn in
+//! pair grounded at both ends, a pair whose screen lands on no pin, and an
+//! overall screen on no pin either — elaborated into the IR and drawn in
 //! two harness views.
 //!
 //! Tests never target `examples/` — that is the real, freely-changing

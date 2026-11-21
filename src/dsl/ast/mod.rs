@@ -436,13 +436,13 @@ pub struct TwistedGroup {
 
 /// `shield ["<label>"] [<end>, …];`, or `shield ["<label>"];` — the screen
 /// of a cable or of a twisted pair, and the pins its drain is terminated
-/// on: none (a screen cut back at both ends), one (the usual single-ended
-/// termination) or two. It has no color and no gauge. Kept faithful: the
+/// on: none (the screen lands on no pin: cut back, or bonded at a gland or
+/// housing), one (the usual single-ended termination) or two. It has no color and no gauge. Kept faithful: the
 /// number of ends is checked in validate.
 #[derive(Debug, Clone)]
 pub struct Shield {
     pub label: Option<Spanned<String>>,
-    /// Empty for a shield terminated nowhere.
+    /// Empty for a shield that lands on no pin.
     pub ends: Vec<Endpoint>,
     pub span: Span,
 }

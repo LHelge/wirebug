@@ -1188,7 +1188,7 @@ component Root {
             r#type: Some("CAN".into()),
             shield: Some(Shield {
                 label: None,
-                termination: crate::dsl::ir::ShieldTermination::Unterminated,
+                termination: crate::dsl::ir::ShieldTermination::NoPin,
                 span: crate::dsl::span::Span::new(crate::dsl::span::FileId(0), 0, 0),
             }),
             ..bare_meta()
