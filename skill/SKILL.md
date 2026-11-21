@@ -1,6 +1,6 @@
 ---
 name: wirebug-dsl
-description: Use whenever editing, creating, reviewing, or discussing wirebug DSL files (.wb) — a text-defined language for electrical schematics and wiring harnesses: components, ports, connectors, wires, cables, splices, imports, views and grid layout. Trigger whenever the user mentions wirebug, .wb files, schematics, harnesses or wiring, designs an electrical system in text, or a .wb file is open, edited or referenced.
+description: "Use whenever editing, creating, reviewing, or discussing wirebug DSL files (.wb) — a text-defined language for electrical schematics and wiring harnesses: components, ports, connectors, wires, cables, splices, imports, views and grid layout. Trigger whenever the user mentions wirebug, .wb files, schematics, harnesses or wiring, designs an electrical system in text, or a .wb file is open, edited or referenced."
 ---
 
 # wirebug DSL
