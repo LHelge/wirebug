@@ -471,8 +471,47 @@ fn render_sizes_every_view_one_world_unit_to_the_px() {
     // The index shows them as images at that natural size, a wider one
     // shrunk to the page.
     let index = std::fs::read_to_string(out.join("index.html")).expect("index written");
-    assert!(index.contains("<img src=\"system_overview.svg\""));
+    let svg = std::fs::read_to_string(out.join("system_overview.svg")).expect("view rendered");
+    assert!(
+        index.contains(&index_image("system_overview.svg", "System Overview", &svg)),
+        "{index}"
+    );
     assert!(index.contains("img { max-width: 100%; height: auto; }"));
+}
+
+/// The `<img>` the HTML index shows `file` with, given the standalone
+/// `svg` it was drawn as: sized to the viewBox in whole CSS px.
+fn index_image(file: &str, title: &str, svg: &str) -> String {
+    let (width, height) = viewbox_size(svg);
+    let px = |side: &str| side.parse::<f64>().expect("a number").round();
+    format!(
+        "<img src=\"{file}\" alt=\"{title}\" width=\"{}\" height=\"{}\">",
+        px(width),
+        px(height)
+    )
+}
+
+#[test]
+fn render_png_index_shows_each_view_one_world_unit_to_the_px() {
+    let tmp = tempdir().expect("tempdir");
+    let (svg_out, png_out) = (tmp.path().join("svg"), tmp.path().join("png"));
+    for (out, flags) in [(&svg_out, &[][..]), (&png_out, &["--png"][..])] {
+        Command::cargo_bin("wirebug")
+            .expect("binary present")
+            .args(["render", FIXTURE_ROOT, "--out", out.to_str().unwrap()])
+            .args(flags)
+            .assert()
+            .success();
+    }
+
+    // A PNG has two pixels a world unit, but the index shows it at the
+    // size of its SVG, not at its pixel size.
+    let svg = std::fs::read_to_string(svg_out.join("inverter_pinout.svg")).expect("svg");
+    let index = std::fs::read_to_string(png_out.join("index.html")).expect("index written");
+    assert!(
+        index.contains(&index_image("inverter_pinout.png", "Inverter Pinout", &svg)),
+        "{index}"
+    );
 }
 
 #[test]

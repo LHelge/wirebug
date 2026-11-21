@@ -189,11 +189,18 @@ rendered by `render::index_html(views, manifest, live_reload)` — shared by
 `render` (static, `false`) and `serve` (`true`, injects the reload script).
 It takes `render_views`' per-view results, so a failed view keeps its
 place in its kind's tab and shows its error instead of a drawing. Each
-drawing is an `<img>` of its SVG, under `img { max-width: 100%; height:
-auto; }`: the standalone root's intrinsic size makes it show at its
-natural size, a wider view shrinks to the page keeping its aspect, and a
-small one is never blown up (only the click-to-zoom lightbox stretches a
-drawing to the window's width).
+drawing is an `<img>` of its file — the SVG, or with `--png` the PNG —
+carrying the view's canvas as `width`/`height`, one world unit to the CSS
+px (`Canvas::display_width`/`display_height`, rounded to whole px, since
+HTML's attributes take integers). The attributes, not the file, set the
+size, so a PNG (`png::PNG_SCALE` pixels a unit) shows at the size of its
+SVG. Under `img { max-width: 100%; height: auto; }` the drawing shows at
+that natural size, a wider view shrinks to the page keeping the image's
+own aspect (`height: auto` overrides the attribute), and a small one is
+never blown up (only the click-to-zoom lightbox, whose `<img>` carries no
+size, stretches a drawing to the window's width). The standalone SVG
+root carries the same size itself, for a browser opening the file
+directly.
 
 ## Project manifest
 

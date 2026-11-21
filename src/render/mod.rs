@@ -546,6 +546,25 @@ impl Canvas {
     pub(crate) fn height(&self) -> f64 {
         self.height
     }
+
+    /// The width the HTML index shows the drawing at, one world unit to
+    /// the CSS px whatever the file's own pixel size (a `--png` view has
+    /// [`png::PNG_SCALE`] pixels a unit): rounded, since an `<img>`'s
+    /// `width` takes a whole number, and never 0.
+    pub(crate) fn display_width(&self) -> u32 {
+        Self::css_px(self.width)
+    }
+
+    /// The height the HTML index shows the drawing at, as
+    /// [`Self::display_width`].
+    pub(crate) fn display_height(&self) -> u32 {
+        Self::css_px(self.height)
+    }
+
+    fn css_px(units: f64) -> u32 {
+        // `as` saturates, and `check` holds a canvas to `MAX_CANVAS`.
+        units.round().max(1.0) as u32
+    }
 }
 
 impl From<GridFault> for ViewErrorKind {
@@ -862,20 +881,53 @@ pub(crate) mod tests {
         ];
         let html = index_html(&views, None, false).unwrap();
         assert!(html.contains("<h2>HV Overview</h2>"));
-        assert!(html.contains("<img src=\"hv_overview.svg\" alt=\"HV Overview\">"));
-        assert!(html.contains("<img src=\"pack_detail.svg\" alt=\"Pack Detail\">"));
+        assert!(html.contains(
+            "<img src=\"hv_overview.svg\" alt=\"HV Overview\" width=\"400\" height=\"300\">"
+        ));
+        assert!(html.contains(
+            "<img src=\"pack_detail.svg\" alt=\"Pack Detail\" width=\"400\" height=\"300\">"
+        ));
     }
 
-    /// The index shows each drawing as an `<img>`, which a standalone
-    /// SVG's intrinsic size gives a natural size: the `img` rule lets it
-    /// show at that size, shrinks a wider one to the container keeping its
-    /// aspect, and no rule outside the zoomed lightbox stretches it.
+    /// The index shows each drawing as an `<img>` sized to its canvas, one
+    /// world unit to the CSS px, an SVG and a PNG (drawn at two pixels a
+    /// unit) alike: the `img` rule lets it show at that size, shrinks a
+    /// wider one to the container keeping its aspect (`height: auto` wins
+    /// over the attribute), and no rule outside the zoomed lightbox
+    /// stretches it.
     #[test]
     fn index_shows_each_drawing_at_its_natural_size_capped_at_the_container() {
-        let views = vec![Ok(view("Overview", "overview.svg", "schematic"))];
+        let sized = |view: RenderedView, width, height| RenderedView {
+            canvas: Canvas::new(width, height),
+            ..view
+        };
+        let views = vec![
+            Ok(sized(
+                view("Overview", "overview.svg", "schematic"),
+                721.0,
+                438.0,
+            )),
+            Ok(sized(
+                view("Brake Loom", "brake_loom.png", "harness"),
+                1542.5,
+                429.625,
+            )),
+        ];
         let html = index_html(&views, None, false).unwrap();
         assert!(html.contains("<section>"));
-        assert!(html.contains("<a href=\"#lb-overview.svg\"><img src=\"overview.svg\""));
+        assert!(html.contains(
+            "<a href=\"#lb-overview.svg\"><img src=\"overview.svg\" alt=\"Overview\" \
+             width=\"721\" height=\"438\"></a>"
+        ));
+        // A fractional canvas rounds to whole px.
+        assert!(html.contains(
+            "<a href=\"#lb-brake_loom.png\"><img src=\"brake_loom.png\" alt=\"Brake Loom\" \
+             width=\"1543\" height=\"430\"></a>"
+        ));
+        // The zoomed lightbox keeps filling the window.
+        assert!(
+            html.contains("id=\"lb-overview.svg\"><img src=\"overview.svg\" alt=\"Overview\"></a>")
+        );
         assert!(html.contains("\n    img { max-width: 100%; height: auto; }\n"));
         let stretching = html
             .lines()
