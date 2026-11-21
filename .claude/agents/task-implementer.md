@@ -47,10 +47,10 @@ agent is working in parallel).
    temporary directory outside the repository>`: `examples/` is the generic example
    project, and CI fails on any error or warning it reports. If your change makes it
    fail or warn, update the example where the task intends that (a syntax change, a lint
-   that found a real mistake); otherwise leave it and report the output. Add dependencies with `cargo add`, at the newest version, with
-   one line of justification in the commit message. A check that fails is fixed, not
-   skipped or weakened; if a check fails for a reason outside your task, say so in the
-   report with the output.
+   that found a real mistake); otherwise leave it and report the output. Add
+   dependencies with `cargo add`, at the newest version, with one line of justification
+   in the commit message. A check that fails is fixed, not skipped or weakened; if a
+   check fails for a reason outside your task, say so in the report with the output.
 8. Keep the documentation true in the same change. `ARCHITECTURE.md` for the pipeline,
    the mental models, the list of checks, the source tree and the dependencies;
    `AGENTS.md` for the working rules; the `wirebug-dsl` skill
