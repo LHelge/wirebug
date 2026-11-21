@@ -1,15 +1,16 @@
 ---
 id: g2e.h6
 title: "`wirebug skill` prints or installs the agent skill"
-status: open
+status: done
 priority: P2
 created: "2026-11-20T22:44:45.099268939Z"
-updated: "2026-11-20T22:44:45.099268939Z"
+updated: "2026-11-21T20:48:51.082542953Z"
 tags:
   - cli
   - skill
 depends_on:
   - g2e.xn
+attempts: 1
 ---
 
 ## Summary
