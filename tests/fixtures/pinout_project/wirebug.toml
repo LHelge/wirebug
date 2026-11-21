@@ -1,0 +1,5 @@
+[project]
+name = "pinout-project"
+version = "0.1.0"
+description = "Pinout fixture: pins out of order, a long label, unused cavities, a face and a grid layout"
+revision = "fixture"

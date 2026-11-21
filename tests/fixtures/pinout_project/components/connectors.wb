@@ -1,0 +1,30 @@
+// Two housings: an explicit face with ganged power cavities, and a
+// two-row grid. Each leaves cavities no port uses.
+
+connector_type Control "Control 6+4p" {
+    part: "CT-10";
+
+    layout face {
+        cavity 47 at (0, 0) size large;
+        cavity 46 at (2, 0) size large;
+        cavity 49 at (0, 2) size large;
+        cavity 48 at (2, 2) size large;
+
+        cavity 45 at (4, 0);
+        cavity 44 at (5, 0);
+        cavity 43 at (6, 0);
+        cavity 42 at (4, 1);
+        cavity 41 at (5, 1);
+        cavity 40 at (6, 1);
+    }
+}
+
+connector_type Signal "Signal 2x3" {
+    part: "SG-6";
+
+    layout grid {
+        rows: 2;
+        cols: 3;
+        numbering: odd_even;
+    }
+}
