@@ -367,8 +367,21 @@ so one run reports many. Errors fail the run; warnings fail only under
   words go with it: the parser rewinds out of the failed attempt, and the
   `TruncateState` notes rewind with it, so no note points into a skipped
   region and the notes of the statements around it all stand.
-  A file with a syntax error is left out of the load, as it was before
-  the parse could recover: only the syntax errors are reported for it.
+  A file with skipped statements (`Completeness::Holes`,
+  `LoadedFile.holes`) loads without them and feeds the later phases, so
+  its other definitions resolve for the files that use them. What a
+  skipped statement declared is missing there, so while the project has a
+  syntax error (`Project.parsed_whole` is false: a hole, a misnested file,
+  or a lex error) the problems that report an absence
+  (`Problem::reports_an_absence`: unknown or undefined names, unresolved
+  or unused imports, no root, a view of nothing, an empty cable, a port
+  without `pub` — a `;` too early parts `pub ; port a "A";` into a skipped
+  `pub` and a private port) are dropped (`Project::drop_parse_cascades`,
+  in `dsl::check_loaded` and the LSP), and come back once the syntax is
+  fixed. The problems that report something present and wrong (a bad
+  gauge, a duplicate, an unknown color) are still reported: skipping a
+  statement cannot cause them. Such a project yields no design
+  (`check_loaded` drops it), so it never renders.
 - **Resolve** — undefined type, unresolved import, duplicate
   type/instance/port, unknown instance/port in a wire endpoint,
   private-port access (a non-`pub` port referenced from outside), unknown

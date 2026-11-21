@@ -1,0 +1,16 @@
+// `lamp.anode` is declared on a broken line of lamp.wb, so wiring it is no
+// error of its own; a gauge of zero is wrong whatever the broken lines say.
+use Lamp from "lamp.wb";
+
+component Panel {
+    lamp: Lamp "Lamp";
+    pub port feed "FEED";
+
+    wire red 1.5 [feed, lamp.anode];
+    wire black 0 [feed, lamp.cathode];
+    wire green [feed, lamp.cathode];
+}
+
+view schematic "Panel" {
+    include lamp at (4 2);
+}

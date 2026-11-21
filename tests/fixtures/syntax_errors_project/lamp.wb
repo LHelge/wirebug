@@ -1,0 +1,7 @@
+// Two broken statements: each is reported, and the rest of `Lamp` still
+// loads, so `main.wb` can use it.
+component Lamp {
+    pub port anode   "A" pin;
+    pub port cathode "K";
+    pub port test    "T" pins [1,;
+}

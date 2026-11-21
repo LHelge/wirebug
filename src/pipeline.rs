@@ -105,6 +105,52 @@ mod tests {
         assert_eq!(codes(&report), ["wirebug::undefined_type"]);
     }
 
+    fn project_of(files: &[(&str, &str)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            dir.path().join("wirebug.toml"),
+            "[project]\nname = \"pipeline\"\nversion = \"0.1.0\"\n",
+        )
+        .expect("write wirebug.toml");
+        for (name, body) in files {
+            std::fs::write(dir.path().join(name), body).expect("write");
+        }
+        dir
+    }
+
+    #[test]
+    fn a_broken_statement_hides_what_its_absence_causes_and_nothing_else() {
+        // Port `b` and instance `o` are in statements that do not parse:
+        // `l.b` is not an unknown port and `Other` is not an unused import.
+        // A port's `pub` may be what a skipped statement held, so `secret`
+        // is not reported private either. The zero gauge and the duplicate
+        // port are wrong whatever the skipped statements said.
+        let dir = project_of(&[
+            (
+                "lamp.wb",
+                "component Lamp { pub port a \"A\"; pub port b \"B\" pin; port secret \"S\"; port secret \"S\"; }\ncomponent Other { }\n",
+            ),
+            (
+                "main.wb",
+                "use Lamp from \"lamp.wb\";\nuse Other from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n    m: Lamp;\n    o: Other \"O\" extra;\n    wire red 1 [l.a, l.b];\n    wire red 1 [m.secret, l.a];\n    wire red 0 [l.a, m.a];\n}\n",
+            ),
+        ]);
+        let report = check_project(Some(dir.path()));
+        assert_eq!(
+            codes(&report),
+            [
+                "wirebug::parse",
+                "wirebug::parse",
+                "wirebug::duplicate_port",
+                "wirebug::invalid_gauge",
+            ]
+        );
+        assert!(
+            report.design.is_none(),
+            "a partial design is never handed out"
+        );
+    }
+
     #[test]
     fn layout_checks_run_alongside_warnings() {
         // A non-IEC wire color only warns, so the overlap is still reported.

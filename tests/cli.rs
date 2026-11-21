@@ -1070,3 +1070,73 @@ fn check_text_output_explains_the_reserved_word() {
         .stderr(predicate::str::contains("'wire' is a reserved word"))
         .stderr(predicate::str::contains("help:"));
 }
+
+/// Two broken statements in `lamp.wb` and two in `main.wb`, plus a wire of
+/// gauge zero in `main.wb`.
+const SYNTAX_ERRORS_ROOT: &str = "tests/fixtures/syntax_errors_project";
+
+#[test]
+fn check_reports_every_syntax_error_and_what_else_is_wrong() {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--format", "json", SYNTAX_ERRORS_ROOT])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+
+    // Each problem as (file, code, the text under its label, its line).
+    let found: Vec<(String, String, String, usize)> = problems
+        .iter()
+        .map(|p| {
+            let path = p["filename"].as_str().expect("filename");
+            let src = std::fs::read_to_string(path).expect("fixture file");
+            let span = &p["labels"][0]["span"];
+            let offset = span["offset"].as_u64().expect("offset") as usize;
+            let length = span["length"].as_u64().expect("length") as usize;
+            let file = std::path::Path::new(path)
+                .file_name()
+                .expect("file name")
+                .to_string_lossy()
+                .into_owned();
+            (
+                file,
+                p["code"].as_str().expect("code").to_string(),
+                src[offset..offset + length].to_string(),
+                src[..offset].lines().count(),
+            )
+        })
+        .collect();
+    let at = |file: &str, code: &str, text: &str, line: usize| {
+        (file.to_string(), code.to_string(), text.to_string(), line)
+    };
+    // No `unknown_port` for `lamp.anode`, whose declaration is the broken
+    // line 4 of lamp.wb, and no `unknown_include` cascade either.
+    assert_eq!(
+        found,
+        [
+            at("main.wb", "wirebug::parse", "[", 11),
+            at("main.wb", "wirebug::parse", "2", 15),
+            at("lamp.wb", "wirebug::parse", ";", 4),
+            at("lamp.wb", "wirebug::parse", ";", 6),
+            at("main.wb", "wirebug::invalid_gauge", "0", 10),
+        ]
+    );
+}
+
+#[test]
+fn render_refuses_a_project_with_syntax_errors() {
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("svg");
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["render", SYNTAX_ERRORS_ROOT, "--out", out.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("not rendering"));
+    let drawn = std::fs::read_dir(&out).map_or(0, |entries| entries.count());
+    assert_eq!(drawn, 0, "nothing is drawn");
+}
