@@ -322,6 +322,55 @@ fn render_embed_writes_manifest_and_no_index() {
     );
 }
 
+/// The value of `name` on `svg`'s root `<svg>` element, as written.
+fn root_attribute<'s>(svg: &'s str, name: &str) -> Option<&'s str> {
+    let start = svg.find("<svg ")?;
+    let tag = &svg[start..start + svg[start..].find('>')?];
+    let key = format!(" {name}=\"");
+    let value = &tag[tag.find(&key)? + key.len()..];
+    Some(&value[..value.find('"')?])
+}
+
+/// The width and height `svg`'s root viewBox spans, as written.
+fn viewbox_size(svg: &str) -> (&str, &str) {
+    let viewbox: Vec<&str> = root_attribute(svg, "viewBox")
+        .expect("a viewBox")
+        .split(' ')
+        .collect();
+    (viewbox[2], viewbox[3])
+}
+
+#[test]
+fn render_sizes_every_view_one_world_unit_to_the_px() {
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("svg");
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["render", FIXTURE_ROOT, "--out", out.to_str().unwrap()])
+        .assert()
+        .success();
+
+    // Each kind of view carries its viewBox's size as its own, so a
+    // browser shows every view at the same text size.
+    for file in [
+        "system_overview.svg",
+        "main_harness.svg",
+        "inverter_pinout.svg",
+    ] {
+        let svg = std::fs::read_to_string(out.join(file)).expect("view rendered");
+        let (width, height) = viewbox_size(&svg);
+        assert_eq!(root_attribute(&svg, "width"), Some(width), "{file}");
+        assert_eq!(root_attribute(&svg, "height"), Some(height), "{file}");
+    }
+
+    // The index shows them as images at that natural size, a wider one
+    // shrunk to the page.
+    let index = std::fs::read_to_string(out.join("index.html")).expect("index written");
+    assert!(index.contains("<img src=\"system_overview.svg\""));
+    assert!(index.contains("img { max-width: 100%; height: auto; }"));
+}
+
 const TIED_ROUTES_ROOT: &str = "tests/fixtures/tied_routes_project";
 
 /// Each process seeds its hash maps afresh, so this catches any output

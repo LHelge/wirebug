@@ -551,6 +551,8 @@ mod tests {
             filename: "test.svg".to_string(),
             kind: ViewKind::Schematic,
             svg: svg.to_string(),
+            // The export reads the size from the SVG, never from here.
+            canvas: crate::render::Canvas::new(0.0, 0.0),
         }
     }
 
