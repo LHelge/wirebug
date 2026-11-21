@@ -46,8 +46,8 @@ code --install-extension wirebug-<version>.vsix
 ```
 
 Or, in VSCode: **Extensions** panel → **⋯** menu → **Install from VSIX…**. The
-extension provides syntax highlighting plus live diagnostics and completion via
-`wirebug lsp`, so it needs the `wirebug` binary on your `PATH` (any install
+extension provides syntax highlighting plus live diagnostics, completion,
+go-to-definition and hover via `wirebug lsp`, so it needs the `wirebug` binary on your `PATH` (any install
 method above) or a path set in the `wirebug.server.path` setting.
 
 ## Getting started
@@ -89,7 +89,7 @@ What works today:
 - `wirebug render` to disk (SVG, or `--png` rasterised, or `--pdf` for a single PDF with one view per page on A4, A3, Letter or Tabloid paper, or `--embed` for naked SVGs + a `manifest.json` sidecar).
 - `wirebug export` — the build tables as CSV or JSON: the wire list (cut list), the connector pin tables (crimp sheet) and the bill of materials.
 - `wirebug serve` — a live-reloading dev server that re-renders on `.wb` or `wirebug.toml` saves.
-- A VSCode extension ([`editors/vscode/`](editors/vscode/)) — syntax highlighting plus live diagnostics and context-aware completion via `wirebug lsp`, a language server over stdio.
+- A VSCode extension ([`editors/vscode/`](editors/vscode/)) — syntax highlighting plus live diagnostics, context-aware completion, go-to-definition and hover via `wirebug lsp`, a language server over stdio.
 
 In transition / not yet:
 

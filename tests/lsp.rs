@@ -1,5 +1,5 @@
-//! Black-box handshake test for `wirebug lsp`: initialize over stdio,
-//! assert the advertised capabilities, shut down cleanly.
+//! Black-box tests for `wirebug lsp` over stdio: the initialize handshake
+//! and its advertised capabilities, published diagnostics, and hover.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -61,6 +61,7 @@ fn initialize_shutdown_round_trip() {
         .expect("trigger characters");
     assert!(triggers.iter().any(|t| t == "."), "dot trigger: {caps}");
     assert!(triggers.iter().any(|t| t == ":"), "colon trigger: {caps}");
+    assert_eq!(caps["hoverProvider"], true, "hover: {caps}");
 
     send(
         &mut stdin,
@@ -208,6 +209,92 @@ fn reserved_word_diagnostic_points_at_the_word() {
     loop {
         let message = read_message(&mut stdout);
         if message["id"] == 2 {
+            break;
+        }
+    }
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","method":"exit","params":null}"#,
+    );
+    assert!(child.wait().expect("server exits").success());
+}
+
+/// Hovering a reference in an opened fixture file describes what it names:
+/// an inline connector's port with its label, pin and declaring line, and
+/// an instance with its label and type.
+#[test]
+fn hover_describes_the_reference_under_the_cursor() {
+    let main = std::path::Path::new("tests/fixtures/inline_project/main.wb")
+        .canonicalize()
+        .expect("fixture path");
+    let text = std::fs::read_to_string(&main).expect("read fixture");
+    let uri = format!("file://{}", main.display());
+
+    let (mut child, mut stdin, mut stdout) = spawn_server();
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"capabilities":{}}}"#,
+    );
+    read_message(&mut stdout);
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#,
+    );
+    let open = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "textDocument/didOpen",
+        "params": {"textDocument": {
+            "uri": uri, "languageId": "wirebug", "version": 1, "text": text,
+        }},
+    });
+    send(&mut stdin, &open.to_string());
+
+    // The position `column` characters into the first line holding `needle`.
+    let position = |needle: &str, column: usize| {
+        let (line, src) = text
+            .lines()
+            .enumerate()
+            .find(|(_, src)| src.contains(needle))
+            .expect("needle in fixture");
+        let character = src.find(needle).expect("needle") + column;
+        serde_json::json!({"line": line, "character": character})
+    };
+    let mut hover = |id: u32, position: serde_json::Value| {
+        let request = serde_json::json!({
+            "jsonrpc": "2.0", "id": id, "method": "textDocument/hover",
+            "params": {"textDocument": {"uri": uri}, "position": position},
+        });
+        send(&mut stdin, &request.to_string());
+        // Diagnostics for the opened file may arrive first.
+        loop {
+            let message = read_message(&mut stdout);
+            if message["id"] == id {
+                return message["result"]["contents"].clone();
+            }
+        }
+    };
+
+    let port = hover(2, position("[ecu.a, ic_pedal.apps1]", 18));
+    assert_eq!(port["kind"], "markdown", "{port}");
+    let value = port["value"].as_str().expect("markdown value");
+    assert!(value.starts_with("**port** `ic_pedal.apps1`"), "{value}");
+    assert!(value.contains("- label: \"APPS1\""), "{value}");
+    assert!(value.contains("- pin: 1"), "{value}");
+    assert!(value.contains("- defined in `main.wb`, line 29"), "{value}");
+
+    let instance = hover(3, position("[ecu.a, ic_pedal.apps1]", 2));
+    let value = instance["value"].as_str().expect("markdown value");
+    assert!(value.starts_with("**instance** `ecu`"), "{value}");
+    assert!(value.contains("- label: \"ECU\""), "{value}");
+    assert!(value.contains("- type: `Device`"), "{value}");
+
+    send(
+        &mut stdin,
+        r#"{"jsonrpc":"2.0","id":4,"method":"shutdown","params":null}"#,
+    );
+    loop {
+        let message = read_message(&mut stdout);
+        if message["id"] == 4 {
             break;
         }
     }

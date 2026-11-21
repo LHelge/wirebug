@@ -1,8 +1,11 @@
 # Wirebug for Visual Studio Code
 
 Language support for the [wirebug](https://github.com/LHelge/wirebug) `.wb`
-DSL: syntax highlighting, live diagnostics, and context-aware code
-completion via the `wirebug lsp` language server.
+DSL: syntax highlighting, live diagnostics, context-aware code
+completion, go-to-definition, and hover via the `wirebug lsp` language
+server. Hovering a reference shows what it names: its kind and name, its
+label, its type (for an instance or connector), its pins (for a port), and
+the file and line it is declared on.
 
 ## Requirements
 
@@ -15,7 +18,7 @@ cargo install --path .          # from a checkout of the wirebug repo
 
 See the [wirebug repository](https://github.com/LHelge/wirebug) for build
 and install instructions. Syntax highlighting works without the binary;
-diagnostics and completion need it.
+diagnostics, completion, go-to-definition and hover need it.
 
 The server binary is resolved in this order:
 

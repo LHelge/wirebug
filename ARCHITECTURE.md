@@ -218,8 +218,14 @@ summary (each file, then the `check`/`render` commands to run next).
   `for` subject, view includes/ports/enclosures (a harness include of a
   splice to the splice), and `extend` → its root
   `component`, all
-  merge-group aware. Hover/rename/semantic tokens/formatting are
-  deliberately later.
+  merge-group aware. The walk (`definition::find`) returns a `Target` —
+  the declaration a reference names — whose name span is the jump; hover
+  (`lsp/hover.rs`) describes the same `Target` as Markdown, so it answers
+  on exactly the references go-to-definition does: kind and name, label,
+  type (an instance's component, a typed connector's or an inline half's
+  `connector_type`), pins and connector (a port), and the declaring file
+  (relative to `main.wb`'s directory) and line. A `use`/`fragment` path
+  has no hover. Rename/semantic tokens/formatting are deliberately later.
 
 The `index.html` is an [`askama`] compile-time template (`templates/`),
 rendered by `render::index_html(views, manifest, live_reload)` — shared by
@@ -1640,7 +1646,8 @@ src/
 │   ├── diagnostics.rs# check cycle → Problem → LSP diagnostics, publish/clear
 │   ├── complete.rs   # CompletionIndex (owned Resolved snapshot, per-file
 │   │                 #   last-good) + token-stack cursor contexts + auto-import
-│   └── definition.rs # go-to-definition: fresh resolve per request, span walk
+│   ├── definition.rs # go-to-definition: fresh resolve per request, span walk → Target
+│   └── hover.rs      # hover: the same Target, described as Markdown
 └── error.rs         # thiserror types (render path): ViewError per view, Error for IO/index
 ```
 
