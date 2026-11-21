@@ -43,8 +43,7 @@ impl Output {
     /// How the views' SVGs carry their presentation in this output: plain
     /// for the PDF (its page furniture carries the title and identity at a
     /// fixed size), naked for embedding, self-contained otherwise.
-    #[must_use]
-    pub fn svg_mode(self) -> SvgMode {
+    fn svg_mode(self) -> SvgMode {
         match self {
             Self::Pdf => SvgMode::Plain,
             Self::Views { embed: true, .. } => SvgMode::Embed,
