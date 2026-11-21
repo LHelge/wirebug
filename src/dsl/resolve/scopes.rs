@@ -18,8 +18,9 @@ use super::{ComponentScope, ConnectorTypeId, ConnectorTypeScope, DefId, Resolver
 impl<'a> Resolver<'a> {
     /// Build each file's type-name scope: its own top-level definitions
     /// plus the names brought in by `use`; then merge in the `extend`s of
-    /// the files its `fragment`s pull in. Last, report the `fragment` lines
-    /// that repeat a line or add nothing.
+    /// the files its `fragment`s pull in. The `fragment` lines come back
+    /// too, judged once the merge groups are final
+    /// ([`Self::report_fragment_lines`]).
     pub(super) fn build_scopes(
         &mut self,
         roots_by_file: &[Vec<DefId>],
@@ -27,6 +28,7 @@ impl<'a> Resolver<'a> {
     ) -> (
         HashMap<FileId, ComponentScope>,
         HashMap<FileId, ConnectorTypeScope>,
+        FragmentLines<'a>,
     ) {
         let mut scopes: HashMap<FileId, HashMap<String, DefId>> = HashMap::new();
         let mut connector_type_scopes: HashMap<FileId, HashMap<String, ConnectorTypeId>> =
@@ -141,10 +143,28 @@ impl<'a> Resolver<'a> {
             scopes.insert(fid, scope);
             connector_type_scopes.insert(fid, connector_type_scope);
         }
+        (
+            scopes,
+            connector_type_scopes,
+            FragmentLines { graph, lines },
+        )
+    }
+
+    /// Report the `fragment` lines that repeat a line or add nothing. Run
+    /// once the merge groups are final, since a file whose `extend`
+    /// merged into nothing contributes nothing by its views.
+    pub(super) fn report_fragment_lines(
+        &mut self,
+        FragmentLines { mut graph, lines }: FragmentLines<'a>,
+    ) {
+        for d in 0..self.defs.len() {
+            if self.is_orphan(d) {
+                graph.orphaned[self.defs[d].file.0] = true;
+            }
+        }
         for (file, line) in lines {
             self.report_fragment_line(file, line, &graph);
         }
-        (scopes, connector_type_scopes)
     }
 
     /// Record in `merges` (at the line's start) a merge of each top-level
@@ -346,6 +366,13 @@ struct FragmentMerge {
     imported: Vec<String>,
 }
 
+/// Every `fragment` line of the project, in file and line order, and the
+/// graph they are judged against.
+pub(super) struct FragmentLines<'a> {
+    graph: FragmentGraph<'a>,
+    lines: Vec<(FileId, FragmentLine<'a>)>,
+}
+
 /// The files the `fragment` lines name, and the files that contribute to
 /// the design on their own, for judging whether a line adds anything.
 struct FragmentGraph<'a> {
@@ -355,6 +382,10 @@ struct FragmentGraph<'a> {
     /// By file: whether its scope made a merge (from a `use` collision or
     /// a `fragment` line).
     merges_in_scope: Vec<bool>,
+    /// By file: whether it holds a top-level `extend` that merged into no
+    /// component, so that its views document a component that is not
+    /// there.
+    orphaned: Vec<bool>,
 }
 
 impl<'a> FragmentGraph<'a> {
@@ -363,12 +394,15 @@ impl<'a> FragmentGraph<'a> {
             project,
             targets: vec![Vec::new(); project.files.len()],
             merges_in_scope: vec![false; project.files.len()],
+            orphaned: vec![false; project.files.len()],
         }
     }
 
     /// Whether `target`, named by a `fragment` line of `from`, contributes
-    /// something: a view, a merge its own scope makes, or a `fragment` line
-    /// naming a file that contributes. The files already loaded on the way
+    /// something: a merge its own scope makes, a view (unless an `extend`
+    /// of the file merged into nothing, so the views document a component
+    /// that is not there), or a `fragment` line naming a file that
+    /// contributes. The files already loaded on the way
     /// (the entry file, `from`, and those followed to get here) contribute
     /// nothing again, so a cycle adds nothing of itself.
     fn contributes(&self, target: FileId, from: FileId) -> bool {
@@ -378,7 +412,9 @@ impl<'a> FragmentGraph<'a> {
             if !seen.insert(file) {
                 continue;
             }
-            if self.merges_in_scope[file.0] || self.project.file(file).ast.has_views() {
+            if self.merges_in_scope[file.0]
+                || (!self.orphaned[file.0] && self.project.file(file).ast.has_views())
+            {
                 return true;
             }
             todo.extend(&self.targets[file.0]);
@@ -590,7 +626,7 @@ mod tests {
             [
                 (
                     "main.wb".to_string(),
-                    "`all.wb` has no view and no `extend`, and its own `fragment` lines add nothing either: each names a file already loaded on the way here, or one that adds nothing through it; remove the line".to_string()
+                    "`all.wb` has no view and no `extend`, and its own `fragment` lines add nothing either: each names a file already loaded on the way here, or one that adds nothing through it; fix those lines, or remove this one".to_string()
                 ),
                 (
                     "all.wb".to_string(),
@@ -642,6 +678,46 @@ mod tests {
                 assert_eq!(r.fragments(r.root.expect("root")).len(), 2);
             },
         );
+    }
+
+    #[test]
+    fn views_of_a_file_whose_extend_merged_nowhere_contribute_nothing() {
+        // all.wb lacks `use vehicle from "../main.wb";`: a.wb's `extend`
+        // merges nowhere, so its view documents nothing that is there.
+        let p = problems(&[
+            (
+                "main.wb",
+                "fragment \"systems/all.wb\";\ncomponent vehicle { }\n",
+            ),
+            ("systems/all.wb", "fragment \"a.wb\";\n"),
+            (
+                "systems/a.wb",
+                "extend vehicle { pub port x \"X\"; }\nview schematic \"A\" { }\n",
+            ),
+        ]);
+        let helps = unused_fragment_helps(&p);
+        let files: Vec<&str> = helps.iter().map(|(file, _)| file.as_str()).collect();
+        assert_eq!(files, ["main.wb", "all.wb"], "{helps:?}");
+        assert_eq!(
+            helps[1].1,
+            "`a.wb` extends `vehicle`, which is not in scope here, and a `fragment` merges an `extend` only into a component in scope where the line is written: `use` it in this file, or write the line in a file that has it in scope, such as the one that defines it"
+        );
+    }
+
+    #[test]
+    fn views_of_a_file_whose_extend_merged_contribute() {
+        // a.wb's `extend` merges through its own `use`, so a line naming it
+        // from a file without the component in scope still adds its views.
+        let p = problems(&[
+            ("main.wb", "fragment \"all.wb\";\ncomponent vehicle { }\n"),
+            ("all.wb", "fragment \"a.wb\";\n"),
+            (
+                "a.wb",
+                "use vehicle from \"main.wb\";\nextend vehicle { pub port x \"X\"; }\n\
+                 view schematic \"A\" { }\n",
+            ),
+        ]);
+        assert!(p.is_empty(), "{:?}", codes(&p));
     }
 
     #[test]
@@ -724,7 +800,7 @@ mod tests {
             [
                 (
                     "main.wb".to_string(),
-                    "`systems/all.wb` has no view and no `extend`, and its own `fragment` lines add nothing either: each names a file already loaded on the way here, or one that adds nothing through it; remove the line".to_string()
+                    "`systems/all.wb` has no view and no `extend`, and its own `fragment` lines add nothing either: each names a file already loaded on the way here, or one that adds nothing through it; fix those lines, or remove this one".to_string()
                 ),
                 (
                     "all.wb".to_string(),

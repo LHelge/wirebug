@@ -242,7 +242,10 @@ Distinct from clap's `--version`, which prints the wirebug app version.
   view includes/enclosures (`resolve/views.rs`), splices, and elaboration all consult
   the union across fragments, so a wire or view in one file freely references
   an instance/port declared in another. `extend` is top-level only; a fragment
-  with no root `component` is an `orphan_fragment`.
+  with no root `component` is an `orphan_fragment` (`Resolver::is_orphan`),
+  and its wires and the includes of views documenting it are not checked:
+  they reach members of the component it never joined, so they would only
+  echo the error.
 - **IR (`ir::Design`)** — the elaboration: a flat
   `IndexMap<InstancePath, Instance>` (hierarchical semantics, no recursive
   ownership; the tree lives in `children` links). One node per placement,
@@ -588,8 +591,15 @@ so one run reports many. Errors fail the run; warnings fail only under
   naming a splice (`shield_on_splice`). An unknown bare conductor endpoint
   is the usual `unknown_port`, its help saying a bare name is an own port
   or a splice. `extend` fragments add: a fragment nested inside a
-  component (`nested_extend`); an `extend` with no root `component` of that
-  name (`orphan_fragment`); an instance/port name declared in two fragments of
+  component (`nested_extend`); an `extend` whose merge group has no root
+  `component` (`orphan_fragment`), its `diagnostics::OrphanFragmentCause`
+  telling `Undefined` (no `component` of the name anywhere) from a
+  component that exists but is not in scope where the file is pulled in:
+  `PulledInWithoutIt` when one file defines it and one file's line (a
+  `fragment`, or a `use` of the name) merges the `extend`'s file, the help
+  naming the `use` to add there with its path (`Project::import_path`),
+  else `NotInScope`, naming the defining file when there is one; an
+  instance/port name declared in two fragments of
   one merged component (the ordinary `duplicate_instance`/`duplicate_port`,
   reported once across the group). A cable's wire endpoints resolve exactly
   like a loose wire's. A view kind no renderer implements is
@@ -615,10 +625,16 @@ so one run reports many. Errors fail the run; warnings fail only under
   when it merges one of its target's top-level `extend`s, or when the
   target contributes something: a view, a merge its own scope makes (a
   `use` collision or one of its `fragment` lines), or a `fragment` line
-  naming a file that contributes. Files already loaded on the way — the
+  naming a file that contributes. A file's views count only when none of
+  its `extend`s is orphaned: views of a component the file never joined
+  document nothing that is there, so a line naming a loom file whose
+  `extend` is not in scope is reported even though the file has a harness
+  view. Files already loaded on the way — the
   entry file, the file the line is written in, the files followed to get
   there — contribute nothing again (`FragmentGraph::contributes`, a search
-  with a visited set, run once every scope is built), so two files that
+  with a visited set; `build_scopes` returns the lines and
+  `Resolver::report_fragment_lines` judges them once the merge groups are
+  final, after `report_orphan_fragments`), so two files that
   only name each other are both reported, and an aggregating file of
   `fragment` lines that `use`s their component is not. A line naming its
   own file is always reported. The variant carries why

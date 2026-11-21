@@ -214,7 +214,9 @@ impl<'a> Resolver<'a> {
 
     pub(super) fn resolve_endpoints(&mut self) {
         let mut problems = Vec::new();
-        for d in 0..self.defs.len() {
+        // An orphaned `extend`'s wires reach members its missing component
+        // would have held, so they would only echo the `orphan_fragment`.
+        for d in (0..self.defs.len()).filter(|&d| !self.is_orphan(d)) {
             let ast = self.defs[d].ast;
             for member in &ast.members {
                 // A cable's shields name their drain pins like its

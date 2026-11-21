@@ -173,17 +173,13 @@ pub enum Problem {
         first: SourceSpan,
     },
 
-    /// `extend <name>` was written for a component that no reachable file
-    /// introduces with `component <name>`.
-    #[error("`extend {name}` has no `component {name}` to extend")]
-    #[diagnostic(
-        code(wirebug::orphan_fragment),
-        help(
-            "introduce the component once with `component {name} {{ … }}`; other files add to it with `extend {name}`"
-        )
-    )]
+    /// `extend <name>` merged into no `component <name>`: none is
+    /// defined, or none is in scope where the file is pulled in (`cause`).
+    #[error("{}", cause.message(name))]
+    #[diagnostic(code(wirebug::orphan_fragment), help("{}", cause.help(name)))]
     OrphanFragment {
         name: String,
+        cause: OrphanFragmentCause,
         #[source_code]
         src: NamedSource<String>,
         #[label("nothing to extend")]
@@ -1308,6 +1304,65 @@ pub enum PropertyOwner {
     Splice,
 }
 
+/// Why an `extend` merged into no component ([`Problem::OrphanFragment`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OrphanFragmentCause {
+    /// No reachable file defines a top-level `component` of the name.
+    Undefined,
+    /// One file defines the component, and the one line that merges this
+    /// file's `extend`s (a `fragment`, or a `use` of the name) is written
+    /// in a file that does not have it in scope. `defined_in` and
+    /// `pulled_in_by` are paths from the project's directory; `use_path`
+    /// names the defining file as a `use` in `pulled_in_by` writes it.
+    PulledInWithoutIt {
+        defined_in: String,
+        pulled_in_by: String,
+        use_path: String,
+    },
+    /// The component is defined, in `defined_in` when that is one file, but
+    /// not in scope in any file whose line merges this file's `extend`s, or
+    /// no such line names this file.
+    NotInScope { defined_in: Option<String> },
+}
+
+impl OrphanFragmentCause {
+    fn message(&self, name: &str) -> String {
+        match self {
+            OrphanFragmentCause::Undefined => {
+                format!("`extend {name}` has no `component {name}` to extend")
+            }
+            OrphanFragmentCause::PulledInWithoutIt { .. }
+            | OrphanFragmentCause::NotInScope { .. } => {
+                format!("`extend {name}` merges into no `component {name}`")
+            }
+        }
+    }
+
+    fn help(&self, name: &str) -> String {
+        match self {
+            OrphanFragmentCause::Undefined => format!(
+                "introduce the component once with `component {name} {{ … }}`; other files add to it with `extend {name}`"
+            ),
+            OrphanFragmentCause::PulledInWithoutIt {
+                defined_in,
+                pulled_in_by,
+                use_path,
+            } => format!(
+                "`component {name}` is defined in `{defined_in}`, but `{pulled_in_by}`, whose line pulls this file in, does not have it in scope, and an `extend` merges only into a component in scope where that line is written: add `use {name} from \"{use_path}\";` to `{pulled_in_by}`, or pull this file in from a file that has `{name}` in scope, such as `{defined_in}`"
+            ),
+            OrphanFragmentCause::NotInScope { defined_in } => {
+                let defined = match defined_in {
+                    Some(file) => format!("`component {name}` is defined in `{file}`"),
+                    None => format!("`component {name}` is defined"),
+                };
+                format!(
+                    "{defined}, but not in scope where this file is pulled in, and an `extend` merges only into a component in scope where the `fragment` line naming its file is written: `use {name}` in the file that holds that line, or in this file"
+                )
+            }
+        }
+    }
+}
+
 /// Why a `fragment` line adds nothing ([`Problem::UnusedFragment`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UnusedFragmentReason {
@@ -1342,7 +1397,7 @@ impl UnusedFragmentReason {
                 "`{target}` has no view and no `extend`, so pulling it in adds nothing; remove the line, or `use` a component it defines by name"
             ),
             UnusedFragmentReason::ItsFragmentsAddNothing => format!(
-                "`{target}` has no view and no `extend`, and its own `fragment` lines add nothing either: each names a file already loaded on the way here, or one that adds nothing through it; remove the line"
+                "`{target}` has no view and no `extend`, and its own `fragment` lines add nothing either: each names a file already loaded on the way here, or one that adds nothing through it; fix those lines, or remove this one"
             ),
             UnusedFragmentReason::NotInScope(components) => {
                 let (names, plural) = Self::quoted(components);

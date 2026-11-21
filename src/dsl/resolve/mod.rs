@@ -215,10 +215,11 @@ pub fn resolve(project: &Project) -> Resolved<'_> {
     // merge groups are finalized before any reference pass so that endpoint
     // and view lookups see the flat merged namespace, and instance-type
     // scopes resolve to canonical ids.
-    let (mut file_scope, connector_type_scope) =
+    let (mut file_scope, connector_type_scope, fragment_lines) =
         r.build_scopes(&roots_by_file, &connector_types_by_file);
     r.finalize_groups();
     r.report_orphan_fragments();
+    r.report_fragment_lines(fragment_lines);
     r.validate_merge_groups();
     r.check_splice_names();
     r.canonicalize_scopes(&mut file_scope);
