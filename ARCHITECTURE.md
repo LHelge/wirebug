@@ -430,6 +430,36 @@ room: a wired port needs two steps clear in front of it, and boxes closer
 than two steps to each other close the corridor between them. `check`'s
 Layout phase finds both, from the same `Placement` and router geometry.
 
+**Pin annotations** (`render/schematic/pin.rs`, `PinAnnotation`, class
+`port-pin`) sit outside the box beside each port that has pins: the pins
+(`ir::Pin::display_list`, `2,3` for a ganged port), after
+`<designator>:` (`ir::ConnectorRef.name`) when the owning instance has more
+than one connector (`Instance.connectors`, every connector of its
+component, listed in the view or not, so a bare number always means the
+only connector). A port on no connector (`bare_port_pin`) keeps its bare
+pins. The enclosure's ports follow the same rule with the subject as owner;
+an inline-connector instance has one connector and is never a schematic
+box anyway. `Placement` fixes each text and its `PinOrientation`, so draw
+and the canvas agree. A west or east text is level, above the stub,
+running outward along it; only its height (10px) faces the next port, so
+`MIN_PORT_PITCH` holds at any length. A north or south text is level, to
+the right of the stub, while every text on that side ends clear of the
+next port's stub (`PIN_INSET + width ≤ spacing − PIN_NEIGHBOUR_GAP`, with
+`PIN_CHAR_WIDTH` per character; the spacing is the pitch, an enclosure
+edge's closest pair, or none for a lone port); otherwise the whole side
+turns (`rotate(-90)`, reading upward) to run along the stubs, right of a
+north stub and left of a south one, so again only its height faces a
+neighbour and the two texts of a short wire from a south port to a north
+port sit either side of it. The minimum grid is therefore unchanged by
+long designators. What a long text can still meet is what lies beyond the
+stub's first grid step: the wire's own first bend, wires in the channel in
+front of the box, a `wire-code`, and the component title above a north
+side (the router and the code placement do not see annotations). The
+canvas (`Placement::viewbox`) keeps every annotation `PIN_CANVAS_PAD`
+inside it, applied after the margin so a view whose annotations the
+margin already holds keeps its canvas; `view_too_large` sees the same
+canvas.
+
 ### Wire strokes (`render/wire_stroke.rs`)
 
 The schematic and the harness draw a wire the same way, through one type:
@@ -1202,6 +1232,9 @@ src/
 │   │   ├── layout.rs    # Placement: derive sides + boxes/ports in world coords
 │   │   ├── draw.rs      # SVG emission (named `draw`, not `svg`, to
 │   │   │                #   avoid clashing with the `svg` crate)
+│   │   ├── pin.rs       # PinAnnotation: a port's pin text (designator-
+│   │   │                #   qualified on multi-connector boxes), its
+│   │   │                #   orientation, anchor and extent
 │   │   └── route/       # orthogonal connector routing (paper §4–6)
 │   │       ├── mod.rs       # Router: build OVG once, route_all + nudge
 │   │       ├── geometry.rs  # Rect, Dir
