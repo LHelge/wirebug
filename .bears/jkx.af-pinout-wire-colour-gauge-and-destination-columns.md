@@ -1,16 +1,17 @@
 ---
 id: jkx.af
 title: "Pinout: wire colour, gauge and destination columns"
-status: open
+status: done
 priority: P2
 created: "2026-11-20T21:40:32.060438068Z"
-updated: "2026-11-20T21:40:32.060438068Z"
+updated: "2026-11-21T12:32:21.960478816Z"
 tags:
   - render
   - pinout
 depends_on:
   - 96q.st
   - jkx.r7
+attempts: 1
 ---
 
 ## Summary
