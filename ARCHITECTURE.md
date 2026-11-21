@@ -79,9 +79,12 @@ Five CLI commands share it:
   viewBox's, `usvg::Tree::size` — what `--png` sizes its pixmap by and
   `--pdf` fits to the page and judges legibility by — is unchanged, and so
   are the PNG and PDF bytes. An embed root keeps the viewBox alone, so a
-  host that sizes embeds with its own CSS lays them out as before. The
+  host that sizes embeds with its own CSS lays them out as before; each
+  `manifest.json` view entry carries the view's natural size instead, as
+  `width` and `height` (numbers, the embed viewBox's, after `title`,
+  `filename` and `kind`), for a host that wants one unit to the px. The
   renderers hand the canvas up as `render::Drawing`, and `RenderedView`
-  keeps it (`RenderedView.canvas`).
+  keeps it (`RenderedView.canvas`) for the manifest.
   Each view renders or fails on its own (see Render-time errors): `render`
   writes every view that rendered, prints each failure naming its view,
   and exits non-zero.
