@@ -1,13 +1,14 @@
 ---
 id: jkx.cp
 title: Schematic rendering is not deterministic
-status: open
+status: done
 priority: P1
 created: "2026-11-21T04:05:53.694934639Z"
-updated: "2026-11-21T04:05:53.694934639Z"
+updated: "2026-11-21T12:02:31.347678669Z"
 tags:
   - render
   - schematic
+attempts: 1
 ---
 
 ## Summary
