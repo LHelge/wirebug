@@ -1,14 +1,15 @@
 ---
 id: k7r.49
 title: Unit suffixes on lengths
-status: open
+status: done
 priority: P3
 created: "2026-11-20T21:40:31.998603567Z"
-updated: "2026-11-20T21:40:31.998603567Z"
+updated: "2026-11-21T02:38:22.851029544Z"
 tags:
   - dsl
 depends_on:
   - k7r.qd
+attempts: 1
 ---
 
 ## Summary
