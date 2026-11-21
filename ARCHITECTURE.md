@@ -358,9 +358,13 @@ so one run reports many. Errors fail the run; warnings fail only under
   fixed-shape bodies (`twisted { }`, `layout grid { }`, `layout face { }`)
   stay one statement: a mistake inside skips the whole of it. Two guards
   against one mistake reporting twice: a statement that fails right after
-  one that failed on its own `;` is that statement's tail (`pub port ;
-  a "A";`) and is not reported, unless it starts with a reserved keyword;
-  and a file whose braces do not balance (`parse::Completeness::
+  one that failed on its own `;` is that statement's tail, and is not
+  reported, when it goes on where the `;` cut it — on the same line
+  (`pub port ; a "A";`) or inside a `[`/`(` the cut statement left open (a
+  `;` at a line end in a wire's endpoint list) — unless it starts with a
+  reserved keyword (`parse::TokenLayout::continues`); on the next line,
+  outside brackets, it is the next statement and reports its own error
+  (`pub port a "A" pin;` then `l Lamp;` reports both); and a file whose braces do not balance (`parse::Completeness::
   Misnested`: every statement after the stray or missing `}` lands in
   another block) reports its first syntax error alone and is left out of
   the load, as if it had not parsed. The skipped statement's reserved
