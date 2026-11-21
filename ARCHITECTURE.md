@@ -1676,9 +1676,10 @@ block must carry an info string, and every `wb` block must parse —
 ` ```wb ` as a whole file, ` ```wb component ` wrapped in a component
 body, ` ```wb view ` in a schematic view's body — except one tagged
 `error`, which must fail to. It also holds both to the lexer: each lists
-the keywords as paragraphs of nothing but backticked words, one paragraph
-per kind (reserved, contextual), and those lists must name exactly
-`Token::keywords()`, each word once and in a paragraph of its own kind.
+the keywords as paragraphs of nothing but backticked words, each after a
+paragraph bolding its kind (`**reserved**` or `**contextual**`), and those
+lists must name exactly `Token::keywords()`, each word once and under the
+label of its own kind.
 Neither is in `Cargo.toml`'s `include`: the
 published crate needs neither, and the root files there are anchored
 (`/README.md`), since a bare `README.md` matches at any depth and would
