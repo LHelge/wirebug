@@ -1342,6 +1342,93 @@ fn check_strict_rejects_two_files_that_only_fragment_each_other() {
     );
 }
 
+/// A project whose `systems/all.wb` pulls in two loom files with `fragment`
+/// but lacks `use Vehicle from "../main.wb";`, so their `extend`s merge into
+/// nothing; each loom file has a harness view when `views` is set. The
+/// problem codes `check --format json` reports, and the help of its first
+/// `orphan_fragment`.
+fn check_aggregator_without_the_component(views: bool) -> (Vec<String>, String) {
+    let tmp = tempdir().expect("tempdir");
+    let write = |path: &str, src: &str| {
+        let path = tmp.path().join(path);
+        std::fs::create_dir_all(path.parent().expect("a parent")).expect("mkdir");
+        std::fs::write(path, src).expect("write");
+    };
+    write(
+        "wirebug.toml",
+        "[project]\nname = \"t\"\nversion = \"0.0.0\"\n",
+    );
+    write(
+        "components/leaf.wb",
+        "component Leaf { connector c \"C 1p\" { pub port a \"A\" pin 1; } }\n",
+    );
+    write(
+        "main.wb",
+        "use Leaf from \"components/leaf.wb\";\nfragment \"systems/all.wb\";\n\
+         component Vehicle { pack: Leaf \"Pack\"; }\nview schematic \"V\" { }\n",
+    );
+    write("systems/all.wb", "fragment \"a.wb\";\nfragment \"b.wb\";\n");
+    for (file, device) in [("a", "inv"), ("b", "dcdc")] {
+        let view = if views {
+            format!(
+                "view harness \"{file} loom\" {{ include pack.c at (2, 2); include {device}.c at (10, 2); }}\n"
+            )
+        } else {
+            String::new()
+        };
+        write(
+            &format!("systems/{file}.wb"),
+            &format!(
+                "use Leaf from \"../components/leaf.wb\";\n\
+                 extend Vehicle {{ {device}: Leaf \"D\"; wire red 1 [pack.a, {device}.a]; }}\n{view}"
+            ),
+        );
+    }
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--format", "json", tmp.path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+    let codes = problems
+        .iter()
+        .map(|p| p["code"].as_str().expect("code").to_string())
+        .collect();
+    let help = problems
+        .iter()
+        .find(|p| p["code"] == "wirebug::orphan_fragment")
+        .and_then(|p| p["help"].as_str())
+        .expect("an orphan_fragment with a help")
+        .to_string();
+    (codes, help)
+}
+
+#[test]
+fn check_says_where_to_use_the_component_an_aggregator_lacks() {
+    for views in [false, true] {
+        let (codes, help) = check_aggregator_without_the_component(views);
+        assert_eq!(
+            codes,
+            [
+                "wirebug::orphan_fragment",
+                "wirebug::orphan_fragment",
+                "wirebug::unused_fragment",
+                "wirebug::unused_fragment",
+                "wirebug::unused_fragment",
+            ],
+            "views: {views}"
+        );
+        assert!(
+            help.contains("add `use Vehicle from \"../main.wb\";` to `systems/all.wb`"),
+            "{help}"
+        );
+    }
+}
+
 #[test]
 fn check_rejects_an_undeclared_inline_half() {
     let tmp = tempdir().expect("tempdir");

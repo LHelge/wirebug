@@ -571,7 +571,10 @@ impl<'a> Resolver<'a> {
                     &connector_type_scope[&FileId(fi)],
                     &mut problems,
                 );
-                if let Some(s) = subject {
+                // The members of a component whose `extend`s merged into
+                // nothing are missing, so checking the includes against them
+                // would only echo the `orphan_fragment`.
+                if let Some(s) = subject.filter(|&s| !self.is_orphan(s)) {
                     self.check_enclosure(view, s, FileId(fi), &mut problems);
                     self.check_duplicate_includes(view, s, FileId(fi), &mut problems);
                     let is_harness = view_kind.is_harness();
