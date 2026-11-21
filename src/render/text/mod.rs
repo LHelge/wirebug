@@ -7,15 +7,31 @@
 //! makes it. PNG and PDF draw it in the bundled DejaVu Sans
 //! ([`super::fonts`]); an SVG viewer draws it in whatever `sans-serif`
 //! resolves to on its machine. So the width is an upper bound, per
-//! character class, on DejaVu Sans's own advances in the face the text is
-//! set in (a test holds every class to the bundled faces), and DejaVu Sans
-//! is the widest of the common sans-serif faces (wider than Arial,
-//! Liberation Sans and Helvetica), so the bound holds for those viewers
-//! too. A character outside the classes counts a full em, wider than any
-//! Latin glyph and than the box DejaVu Sans draws for a character it has
-//! no glyph for, and as wide as a fallback face's CJK glyph. An estimate
-//! that errs wide shrinks a label a little early or widens a box; one
-//! that errs narrow lets text cross a border.
+//! character, on how wide the bundled face the text is set in draws it,
+//! shaping included; DejaVu Sans is the widest of the common sans-serif
+//! faces (wider than Arial, Liberation Sans and Helvetica), so the bound
+//! holds for those viewers too.
+//!
+//! The tests prove the bound from the faces themselves, for every
+//! character any of them has a glyph for: each character's estimate is
+//! at least the widest glyph its face draws for it, after the default
+//! substitutions (Arabic positional forms, localised forms); no default
+//! ligature is wider than its parts; and the slack the estimates leave
+//! covers every pair the faces' kerning moves apart, but for the few pairs
+//! in [`KERNED_APART`], which add an allowance of their own. ASCII and
+//! `·` fall in hand-made classes; a wider character in [`wide::WIDE`],
+//! a table the tests derive from the faces; anything else counts a full
+//! em, which no other glyph of the faces exceeds, which is wider than the
+//! box PNG and PDF draw for a character they have no glyph for, and as
+//! wide as a viewer's fallback CJK glyph. An estimate that errs wide
+//! shrinks a label a little early or widens a box; one that errs narrow
+//! lets text cross a border.
+
+#[cfg(test)]
+mod bound;
+mod wide;
+
+use wide::WideRun;
 
 /// The cavity label's size when it fits, in px (the `.cavity-label` font).
 pub(super) const LABEL_SIZE: f64 = 8.0;
@@ -29,6 +45,22 @@ const ELLIPSIS: char = '…';
 /// How much wider a bold face sets than its regular one, rounded up from
 /// DejaVu Sans Bold's widest classes (capitals, `m`/`w`).
 const BOLD_WIDENING: f64 = 1.15;
+/// What a character outside the classes and [`wide::WIDE`] counts, in
+/// ems.
+const FALLBACK_EMS: f64 = 1.0;
+/// The pairs a face's kerning moves further apart than the slack their two
+/// characters' estimates leave. Derived from the faces by the tests: each
+/// character's slack goes first to the kerning into it, then to the
+/// kerning out of it, and these are the pairs left short.
+const KERNED_APART: [(Face, char, char); 3] = [
+    (Face::Regular, '-', 'Q'),
+    (Face::Regular, 'A', 'A'),
+    (Face::Oblique, 'C', 'S'),
+];
+/// What a pair in [`KERNED_APART`] adds to the estimate, in ems (before a
+/// bold face's widening): rounded up from the most one is left short,
+/// `AA`'s 0.0119 em.
+const KERN_ALLOWANCE: f64 = 0.02;
 
 /// Which of the bundled faces text is set in. The stylesheets set
 /// regular, bold and italic text, never bold italic; DejaVu Sans Oblique
@@ -51,10 +83,22 @@ impl Face {
         }
     }
 
+    /// What kerning the pair `(a, b)` beyond the slack of their
+    /// estimates adds, in ems, before a bold face's widening.
+    fn kerned_apart(self, (a, b): (char, char)) -> Option<f64> {
+        KERNED_APART
+            .contains(&(self, a, b))
+            .then_some(KERN_ALLOWANCE)
+    }
+
     /// `text`'s advance in ems in this face, before a bold face's
     /// widening.
     fn ems(self, text: &str) -> f64 {
-        text.chars().map(|c| self.char_ems(c)).sum()
+        let advances: f64 = text.chars().map(|c| self.char_ems(c)).sum();
+        text.chars()
+            .zip(text.chars().skip(1))
+            .filter_map(|pair| self.kerned_apart(pair))
+            .fold(advances, |ems, allowance| ems + allowance)
     }
 }
 
@@ -165,30 +209,45 @@ impl FittedLabel {
 fn cut(text: &str, ems: f64, face: Face) -> String {
     let budget = ems - face.char_ems(ELLIPSIS);
     let mut used = 0.0;
+    let mut previous = None;
     let kept: String = text
         .chars()
         .take_while(|&c| {
             used += face.char_ems(c);
-            used <= budget
+            if let Some(allowance) = previous.and_then(|p| face.kerned_apart((p, c))) {
+                used += allowance;
+            }
+            previous = Some(c);
+            match face.kerned_apart((c, ELLIPSIS)) {
+                Some(allowance) => used + allowance <= budget,
+                None => used <= budget,
+            }
         })
         .collect();
     format!("{}{ELLIPSIS}", kept.trim_end_matches([' ', '·']))
 }
 
-/// One character's advance in ems: the widest of its class in DejaVu Sans,
-/// rounded up. Anything outside ASCII letters, digits and common
-/// punctuation (and the `·` the tables separate names with) counts a full
-/// em.
+/// One character's advance in ems in the regular face: its class's, a
+/// wide character's from [`wide::WIDE`], else [`FALLBACK_EMS`].
 fn char_ems(c: char) -> f64 {
-    match c {
+    class_ems(c)
+        .or_else(|| WideRun::ems_of(c))
+        .unwrap_or(FALLBACK_EMS)
+}
+
+/// The advance of `c`'s class in ems, when it is in one: the widest of the
+/// class in DejaVu Sans, rounded up. The classes hold the ASCII letters,
+/// digits and punctuation, and the `·` the tables separate names with.
+fn class_ems(c: char) -> Option<f64> {
+    Some(match c {
         'i' | 'j' | 'l' | 'f' | 't' | 'r' | 'I' | 'J' | ' ' | '.' | ',' | ':' | ';' | '\''
         | '!' | '|' | '-' | '(' | ')' | '[' | ']' | '/' | '\\' | '·' => 0.42,
         'M' | 'W' | 'm' | 'w' | '@' | '%' | '+' | '=' | '<' | '>' | '~' | '&' | '#' => 1.0,
         'a'..='z' | '0'..='9' | 'E' | 'F' | 'L' | 'P' | 'S' | 'T' | 'Y' | '_' => 0.64,
         'A' | 'B' | 'C' | 'K' | 'R' | 'V' | 'X' | 'Z' => 0.7,
         'A'..='Z' | '$' | '*' | '?' | '"' => 0.79,
-        _ => 1.0,
-    }
+        _ => return None,
+    })
 }
 
 #[cfg(test)]
@@ -198,7 +257,7 @@ mod tests {
 
     impl Face {
         /// The bundled face this face's text is drawn in.
-        fn bytes(self) -> &'static [u8] {
+        pub(super) fn bytes(self) -> &'static [u8] {
             match self {
                 Self::Regular => fonts::REGULAR,
                 Self::Bold => fonts::BOLD,
@@ -214,10 +273,10 @@ mod tests {
     }
 
     impl Font {
-        /// How wide PNG and PDF draw `text` in this font, in px: the sum of
-        /// the bundled face's advances, its `.notdef` box's for a character
-        /// it has no glyph for. Unkerned: DejaVu Sans's kerning only pulls
-        /// pairs closer.
+        /// How wide `text`'s glyphs are in this font's bundled face, in px:
+        /// the sum of their advances, its `.notdef` box's for a character
+        /// it has no glyph for. Unshaped: what substitutions and kerning do
+        /// on top is bounded by the estimate as `bound` proves.
         pub(in crate::render) fn dejavu_width(&self, text: &str) -> f64 {
             let face =
                 ttf_parser::Face::parse(self.face.bytes(), 0).expect("a bundled face parses");
@@ -237,22 +296,37 @@ mod tests {
 
     const FACES: [Face; 3] = [Face::Regular, Face::Bold, Face::Oblique];
 
+    /// Wide glyphs: long arrows, a per-mille sign, `Œ`, Cyrillic capitals
+    /// that set wider than an em in bold. Each was once counted an em and
+    /// ran past its box.
     #[test]
-    fn every_character_class_bounds_dejavu_sans_in_each_face() {
-        let chars = (' '..='~').chain("·…²→×µΩ°±".chars());
-        for c in chars {
+    fn wide_characters_measure_at_least_as_wide_as_they_draw() {
+        for text in ["S⟶E⟶T⟶S⟶E⟶T⟶S⟶E", "5‰ ‱ ₧ ℃ №", "Œuvre œ", "ЖШЩЮЉ"]
+        {
             for face in FACES {
-                let font = Font { size: 100.0, face };
-                let (estimate, drawn) = (
-                    font.width(&c.to_string()),
-                    font.dejavu_width(&c.to_string()),
-                );
+                let font = Font { size: 11.0, face };
                 assert!(
-                    estimate >= drawn,
-                    "{c:?} in {face:?}: estimated {estimate}, drawn {drawn}"
+                    font.width(text) >= font.dejavu_width(text),
+                    "{text:?} in {face:?}: estimated {}, drawn {}",
+                    font.width(text),
+                    font.dejavu_width(text)
                 );
             }
         }
+    }
+
+    /// A pair a face kerns apart further than its characters' estimates
+    /// leave room for counts an allowance on top, and only that pair.
+    #[test]
+    fn a_pair_kerned_apart_counts_its_allowance() {
+        let added = |font: Font, a: &str, b: &str| {
+            font.width(&format!("{a}{b}")) - font.width(a) - font.width(b)
+        };
+        let (regular, italic) = (Font::regular(10.0), Font::italic(10.0));
+        assert!((added(regular, "A", "A") - KERN_ALLOWANCE * 10.0).abs() < 1e-9);
+        assert!(added(regular, "A", "B").abs() < 1e-9);
+        assert!((added(italic, "C", "S") - KERN_ALLOWANCE * 10.0).abs() < 1e-9);
+        assert!(added(regular, "C", "S").abs() < 1e-9);
     }
 
     #[test]
