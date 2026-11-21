@@ -153,6 +153,13 @@ fn a_schematic_draws_the_ports_a_splice_joins_as_one_net() {
     assert_eq!(grounds.matches("data-color=\"black\"").count(), 2);
     assert_eq!(grounds.matches("data-color=\"brown\"").count(), 1);
     assert_eq!(grounds.matches("data-color=\"red\"").count(), 1);
+    // Each segment is stroked in that colour, over a casing of its own, so
+    // the rail shows which conductor brings each port in.
+    assert_eq!(grounds.matches("class=\"wire-casing\"").count(), 4);
+    for (color, segments) in [("black", 2), ("brown", 1), ("red", 1)] {
+        let stroked = format!("stroke=\"{color}\"");
+        assert_eq!(grounds.matches(&stroked).count(), segments, "{color}");
+    }
     // No splice appears as a box or a dot in a schematic.
     assert!(!grounds.contains("sp_gnd") && !grounds.contains("class=\"splice"));
 }

@@ -1,0 +1,5 @@
+[project]
+name = "wire-colors-project"
+version = "0.1.0"
+description = "Wire colour fixture: light, two-tone and dark wires drawn in a schematic and a harness"
+revision = "fixture"

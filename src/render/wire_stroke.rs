@@ -13,6 +13,7 @@ use svg::Node;
 use crate::dsl::ir::WireColor;
 
 /// The classes one renderer tags the three layers of a wire with.
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct WireLayers {
     /// The wider dark stroke under the core, so a light core reads on any
     /// background.
@@ -25,7 +26,7 @@ pub(crate) struct WireLayers {
 
 impl WireLayers {
     /// How a wire of `color` is stroked under these classes.
-    pub(crate) fn stroke<'a>(&'a self, color: &'a WireColor) -> WireStroke<'a> {
+    pub(crate) fn stroke(self, color: &WireColor) -> WireStroke<'_> {
         WireStroke {
             color,
             layers: self,
@@ -38,7 +39,7 @@ impl WireLayers {
 /// returns it dressed as that layer.
 pub(crate) struct WireStroke<'a> {
     color: &'a WireColor,
-    layers: &'a WireLayers,
+    layers: WireLayers,
 }
 
 impl WireStroke<'_> {
@@ -86,7 +87,7 @@ impl WireStroke<'_> {
 
     /// Every layer of a wire drawn as one shape, in draw order: casing,
     /// core, then the tracer when the wire has one.
-    pub(crate) fn layers<T: Node + Clone>(&self, shape: T) -> impl Iterator<Item = T> {
+    pub(crate) fn layers<T: Node + Clone>(&self, shape: T) -> impl Iterator<Item = T> + use<T> {
         // `Node` brings its own boxing `clone`; this is the element's.
         let tracer = self.tracer(Clone::clone(&shape));
         [self.casing(Clone::clone(&shape)), self.core(shape)]

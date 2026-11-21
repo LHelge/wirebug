@@ -53,7 +53,9 @@ pub(super) const STYLE: &str = "\
 .port circle { fill: black; }
 .port-label { font: 11px sans-serif; paint-order: stroke; stroke: white; stroke-width: 3px; stroke-linejoin: round; }
 .port-pin { font: italic 10px sans-serif; fill: #555; }
-.wire { fill: none; stroke: black; stroke-width: 1.25; }
+.wire-casing { fill: none; stroke: black; stroke-width: 4; stroke-linecap: butt; }
+.wire { fill: none; stroke-width: 2; }
+.wire-tracer { fill: none; stroke-width: 2; stroke-dasharray: 4 4; }
 .wire-code { font: italic 9px sans-serif; fill: #555; text-anchor: middle; paint-order: stroke; stroke: white; stroke-width: 3px; stroke-linejoin: round; }
 .enclosure rect { fill: none; stroke: #888; stroke-width: 1.5; stroke-dasharray: 6 4; }
 .enclosure-label { font: bold 13px sans-serif; text-anchor: middle; fill: #555; }
@@ -143,11 +145,16 @@ impl SchematicRenderer {
         // Codes dodge wire crossings (the halo would visually cut the
         // crossed wire) and each other (parallel wires in a channel would
         // stack their codes); placed anchors become obstacles for the rest.
+        // Each wire is drawn whole, casing to tracer, before the next, so
+        // at a crossing the later wire's casing cuts the earlier one's core
+        // and the two read as passing over each other, in source order.
         let mut wires_group = Group::new().set("class", "wires");
         let crossings = draw::wire_crossings(&wires);
         let mut placed: Vec<Point> = Vec::new();
         for ((polyline, connection), crossings) in wires.iter().zip(&connections).zip(&crossings) {
-            wires_group = wires_group.add(draw::render_wire(polyline, connection.color));
+            for layer in draw::render_wire(polyline, connection.color) {
+                wires_group = wires_group.add(layer);
+            }
             let obstacles: Vec<_> = crossings
                 .iter()
                 .map(|&p| draw::CodeObstacle::crossing(p))
@@ -400,6 +407,214 @@ component sys {
         assert!(svg.contains("data-color=\"red\""));
     }
 
+    /// One drawn layer of a wire: a `<polyline>` in the `wires` group.
+    #[derive(Debug)]
+    struct Layer {
+        class: String,
+        stroke: Option<String>,
+        data_color: Option<String>,
+        fill: Option<String>,
+        points: String,
+    }
+
+    /// Every wire layer (casing, core, tracer) of `svg`, in draw order.
+    fn wire_layers(svg: &str) -> Vec<Layer> {
+        let attr = |element: &str, name: &str| {
+            element
+                .split(&format!(" {name}=\""))
+                .nth(1)
+                .and_then(|rest| rest.split('"').next())
+                .map(str::to_string)
+        };
+        svg.lines()
+            .filter(|line| line.starts_with("<polyline"))
+            .map(|line| Layer {
+                class: attr(line, "class").expect("a class"),
+                stroke: attr(line, "stroke"),
+                data_color: attr(line, "data-color"),
+                fill: attr(line, "fill"),
+                points: attr(line, "points").expect("points"),
+            })
+            .collect()
+    }
+
+    fn one_wire_design(color: &str) -> Design {
+        design_from(&format!(
+            r#"
+component sys {{
+    a: alpha;
+    b: beta;
+    wire {color} 1 [a.p, b.p];
+    component alpha {{
+        pub port p "Out" pin 1;
+    }}
+    component beta {{
+        pub port p "In" pin 1;
+    }}
+}}
+"#
+        ))
+    }
+
+    fn one_wire_view() -> View {
+        view_of(
+            "sys",
+            &[
+                ("a", 0.0, 0.0, &[("p", Side::East)]),
+                ("b", 16.0, 0.0, &[("p", Side::West)]),
+            ],
+        )
+    }
+
+    #[test]
+    fn wire_is_stroked_in_its_colour_over_a_casing() {
+        let svg = render(&one_wire_design("red"), &one_wire_view()).expect("renders");
+        let layers = wire_layers(&svg);
+        let classes: Vec<&str> = layers.iter().map(|l| l.class.as_str()).collect();
+        assert_eq!(classes, ["wire-casing", "wire"]);
+        let (casing, core) = (&layers[0], &layers[1]);
+        // The casing runs under the whole core and takes its paint from
+        // the stylesheet; the core is painted in the wire's colour.
+        assert_eq!(casing.points, core.points);
+        assert_eq!(casing.stroke, None);
+        assert_eq!(core.stroke.as_deref(), Some("red"));
+        assert_eq!(core.data_color.as_deref(), Some("red"));
+    }
+
+    #[test]
+    fn light_wire_is_cased() {
+        for color in ["white", "yellow"] {
+            let svg = render(&one_wire_design(color), &one_wire_view()).expect("renders");
+            let layers = wire_layers(&svg);
+            assert_eq!(layers[0].class, "wire-casing", "{color}");
+            assert_eq!(layers[1].stroke.as_deref(), Some(color));
+        }
+        // The casing is drawn dark and wider than the core.
+        assert!(STYLE.contains(".wire-casing { fill: none; stroke: black; stroke-width: 4;"));
+        assert!(STYLE.contains(".wire { fill: none; stroke-width: 2; }"));
+    }
+
+    #[test]
+    fn stylesheet_leaves_the_wire_paint_to_the_wire() {
+        // A `stroke` in the `.wire` rule would override every wire's
+        // colour: a presentation attribute loses to any stylesheet rule.
+        let rule = STYLE
+            .lines()
+            .find(|rule| rule.starts_with(".wire {"))
+            .expect("a .wire rule");
+        assert!(!rule.contains("stroke:"), "{rule}");
+    }
+
+    #[test]
+    fn two_tone_wire_draws_its_tracer_over_the_core() {
+        let svg = render(&one_wire_design("green/yellow"), &one_wire_view()).expect("renders");
+        let layers = wire_layers(&svg);
+        let classes: Vec<&str> = layers.iter().map(|l| l.class.as_str()).collect();
+        assert_eq!(classes, ["wire-casing", "wire", "wire-tracer"]);
+        assert_eq!(layers[1].stroke.as_deref(), Some("green"));
+        assert_eq!(layers[2].stroke.as_deref(), Some("yellow"));
+        assert_eq!(layers[2].data_color.as_deref(), Some("green/yellow"));
+        assert_eq!(layers[2].points, layers[1].points);
+        assert!(svg.contains(">\nGN/YE\n</text>"));
+    }
+
+    #[test]
+    fn each_wire_is_drawn_whole_before_the_next() {
+        // Two wires that must cross between the columns: `a`–`b` runs down
+        // and `c`–`d` up. The later wire's casing lies over the earlier
+        // one's core where they cross, so the two read as passing over
+        // each other.
+        let design = design_from(
+            r#"
+component sys {
+    a: alpha;
+    b: beta;
+    c: gamma;
+    d: delta;
+    wire red 1 [a.p, b.p];
+    wire white/blue 1 [c.p, d.p];
+    component alpha {
+        pub port p "Out" pin 1;
+    }
+    component beta {
+        pub port p "In" pin 1;
+    }
+    component gamma {
+        pub port p "Out" pin 1;
+    }
+    component delta {
+        pub port p "In" pin 1;
+    }
+}
+"#,
+        );
+        let view = view_of(
+            "sys",
+            &[
+                ("a", 0.0, 0.0, &[("p", Side::East)]),
+                ("b", 16.0, 12.0, &[("p", Side::West)]),
+                ("c", 0.0, 8.0, &[("p", Side::East)]),
+                ("d", 16.0, 4.0, &[("p", Side::West)]),
+            ],
+        );
+        let svg = render(&design, &view).expect("renders");
+        let cores: Vec<Vec<Point>> = wire_layers(&svg)
+            .iter()
+            .filter(|layer| layer.class == "wire")
+            .map(|layer| {
+                layer
+                    .points
+                    .split(' ')
+                    .map(|pair| {
+                        let (x, y) = pair.split_once(',').expect("an x,y pair");
+                        Point::new(x.parse().expect("x"), y.parse().expect("y"))
+                    })
+                    .collect()
+            })
+            .collect();
+        assert!(
+            !draw::wire_crossings(&cores)[0].is_empty(),
+            "the wires cross: {cores:?}"
+        );
+        let classes: Vec<&str> = svg
+            .lines()
+            .filter_map(|line| {
+                ["wire-casing", "wire", "wire-tracer", "wire-code"]
+                    .into_iter()
+                    .find(|class| line.contains(&format!("class=\"{class}\"")))
+            })
+            .collect();
+        assert_eq!(
+            classes,
+            [
+                "wire-casing",
+                "wire",
+                "wire-code",
+                "wire-casing",
+                "wire",
+                "wire-tracer",
+                "wire-code"
+            ]
+        );
+    }
+
+    #[test]
+    fn embed_mode_carries_the_colour_on_the_wire() {
+        let svg =
+            render_embed(&one_wire_design("green/yellow"), &one_wire_view()).expect("renders");
+        // The paint is a presentation attribute, not a `style`: a host
+        // stylesheet rule on `.wire` still wins over it. Every layer is
+        // unfilled by itself, so a host stylesheet without rules for the
+        // casing and the tracer never blots the area a bend encloses.
+        assert!(!svg.contains("style="));
+        let layers = wire_layers(&svg);
+        assert_eq!(layers.len(), 3);
+        assert!(layers.iter().all(|l| l.fill.as_deref() == Some("none")));
+        assert_eq!(layers[1].stroke.as_deref(), Some("green"));
+        assert_eq!(layers[1].data_color.as_deref(), Some("green/yellow"));
+        assert_eq!(layers[2].stroke.as_deref(), Some("yellow"));
+    }
+
     #[test]
     fn two_tone_wire_annotates_with_combined_code() {
         let design = design_from(
@@ -455,6 +670,8 @@ component sys {
         );
         let svg = render(&design, &view).expect("renders");
         assert!(svg.contains(">\nchartreuse\n</text>"));
+        // Painted verbatim, as the harness paints it.
+        assert_eq!(wire_layers(&svg)[1].stroke.as_deref(), Some("chartreuse"));
     }
 
     #[test]
