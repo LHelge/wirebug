@@ -12,6 +12,10 @@ use crate::dsl::ast;
 use crate::dsl::manifest::Manifest;
 use crate::dsl::span::Span;
 
+mod harness;
+
+pub(crate) use harness::{HarnessNode, HarnessScope};
+
 macro_rules! name_newtype {
     ($name:ident, $doc:literal) => {
         #[doc = $doc]
@@ -305,7 +309,9 @@ impl fmt::Display for ViewKind {
     }
 }
 
-/// A physical connector pin (a positive integer in the DSL).
+/// A physical connector pin (a positive integer in the DSL). Pins order
+/// numerically (`1, 2, 10`): the order a connector's pin table lists its
+/// cavities in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Pin(pub u32);
 
@@ -502,6 +508,14 @@ impl<'a> FromIterator<&'a ast::Property> for PartMeta {
 }
 
 impl Instance {
+    /// Whether the instance is an assembly: it places other components and
+    /// has no port (so no connector) of its own, so nothing is wired to it
+    /// and what is bought is what it places. A component with a port of
+    /// its own may be a part or a sub-assembly; the model does not say.
+    pub fn is_assembly(&self) -> bool {
+        !self.children.is_empty() && self.ports.is_empty() && self.connectors.is_empty()
+    }
+
     /// The conductors ending on `splice`, in wire order: each a row of its
     /// own in a wire list, with the splice as one of its ends.
     pub fn splice_conductors<'a, 's>(
@@ -711,6 +725,19 @@ impl Length {
     /// The length in metres, the unit the IR normalises to.
     pub fn metres(self) -> f64 {
         self.micrometres as f64 / Self::MICROMETRES_PER_METRE as f64
+    }
+}
+
+/// Lengths add exactly, to the micrometre, so a total of authored lengths
+/// prints as written (`0.15 m + 0.8 m` is `0.95 m`), never with float
+/// noise. Saturates rather than wraps; no wiring total comes near.
+impl std::ops::Add for Length {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        Self {
+            micrometres: self.micrometres.saturating_add(other.micrometres),
+        }
     }
 }
 
@@ -987,6 +1014,34 @@ impl Wire {
             _ => None,
         }
     }
+
+    /// The wire's two-ended runs, chain-decomposed in the order its ends are
+    /// written: `[a, b, c]` is `a–b`, then `b–c`. A two-ended wire is one
+    /// segment. This is the one decomposition of a multi-endpoint rail:
+    /// both renderers draw these segments and a wire list counts them, so
+    /// each is one physical conductor everywhere.
+    pub fn segments(&self) -> impl Iterator<Item = WireSegment<'_>> {
+        self.endpoints
+            .windows(2)
+            .enumerate()
+            .filter_map(|(index, pair)| match pair {
+                [from, to] => Some(WireSegment {
+                    index,
+                    ends: [from, to],
+                }),
+                _ => None,
+            })
+    }
+}
+
+/// One two-ended run of a [`Wire`], from [`Wire::segments`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WireSegment<'a> {
+    /// Which run of its wire this is: the ends `endpoints[index]` and
+    /// `endpoints[index + 1]`.
+    pub index: usize,
+    /// The run's two ends, in the order the wire lists them.
+    pub ends: [&'a WireEnd; 2],
 }
 
 /// A resolved wire endpoint. Which an authored bare name is, an own port
@@ -1209,6 +1264,50 @@ mod tests {
         assert!(ShieldTermination::NoPin.ends().is_empty());
     }
 
+    fn wire_between(ends: &[&str]) -> Wire {
+        Wire {
+            color: WireColor::from("red"),
+            gauge: 0.5,
+            label: None,
+            endpoints: ends
+                .iter()
+                .map(|p| WireEnd::Own(PortName::from(*p)))
+                .collect(),
+            cable: None,
+            twisted_group: None,
+            length: None,
+            r#type: None,
+            part: None,
+            span: Span::new(crate::dsl::span::FileId(0), 0, 0),
+        }
+    }
+
+    #[test]
+    fn a_rail_decomposes_into_consecutive_segments_in_written_order() {
+        let rail = wire_between(&["a", "b", "c", "d"]);
+        let segments: Vec<(usize, String, String)> = rail
+            .segments()
+            .map(|s| (s.index, s.ends[0].to_string(), s.ends[1].to_string()))
+            .collect();
+        assert_eq!(
+            segments,
+            [
+                (0, "a".to_string(), "b".to_string()),
+                (1, "b".to_string(), "c".to_string()),
+                (2, "c".to_string(), "d".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_two_ended_wire_is_one_segment_and_a_lone_end_none() {
+        let wire = wire_between(&["a", "b"]);
+        let segments: Vec<WireSegment> = wire.segments().collect();
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].ends, [&wire.endpoints[0], &wire.endpoints[1]]);
+        assert_eq!(wire_between(&["a"]).segments().count(), 0);
+    }
+
     #[test]
     fn lengths_in_every_unit_normalise_to_metres() {
         assert_eq!(length(2.0, "m").metres(), 2.0);
@@ -1241,6 +1340,13 @@ mod tests {
             assert_eq!(Length::new(value, unit), None, "{value}{unit}");
         }
         assert_eq!(length(0.0005, "mm").to_string(), "0.000001 m");
+    }
+
+    #[test]
+    fn lengths_add_exactly_whatever_their_unit() {
+        let total = length(150.0, "mm") + length(80.0, "cm") + length(0.1, "m");
+        assert_eq!(total, length(1.05, "m"));
+        assert_eq!(total.to_string(), "1.05 m");
     }
 
     #[test]

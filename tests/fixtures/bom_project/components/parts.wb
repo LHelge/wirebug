@@ -1,0 +1,86 @@
+// The parts the vehicle is built from: a component with every part-data
+// key, one placed seven times, one with part data but no number, one with
+// none; housings of a type with a part, of a type without one, and of
+// connector blocks that name no type, with a description and without.
+
+connector_type Dt04_2p "Deutsch DT04-2P" {
+    part: "DT04-2P";
+}
+
+connector_type Dt06_2s "Deutsch DT06-2S" {
+    part: "DT06-2S";
+}
+
+connector_type Hdr4 "Header 4p" { }
+
+component Ecu {
+    part:         "ECU-100";
+    manufacturer: "Wirebug Controls";
+    description:  "Body controller";
+    rating:       "10 A";
+
+    connector x1: Hdr4 {
+        pub port pwr   "12V"   pin 1;
+        pub port gnd   "GND"   pin 2;
+        pub port can_h "CAN H" pin 3;
+        pub port can_l "CAN L" pin 4;
+    }
+}
+
+component Lamp {
+    part:        "LMP-1";
+    description: "Marker lamp";
+
+    connector x1: Dt04_2p {
+        pub port a "A" pin 1;
+        pub port b "B" pin 2;
+    }
+}
+
+component Relay {
+    manufacturer: "Generic";
+    description:  "Changeover relay";
+
+    connector x1 "Relay 2p" {
+        pub port coil "COIL" pin 1;
+        pub port gnd  "GND"  pin 2;
+    }
+}
+
+component Switch {
+    connector x1 {
+        pub port a "A" pin 1;
+        pub port b "B" pin 2;
+    }
+}
+
+// An assembly: it places three lamps and has no port of its own. Its rail
+// has a length, the whole rail's; its splice shares the vehicle's part.
+component LampBar {
+    left:  Lamp;
+    mid:   Lamp;
+    right: Lamp;
+
+    splice sp_bar "Lamp ground" {
+        part: "D-436";
+    }
+
+    wire red 1 "TAIL" [left.a, mid.a, right.a] { length: 2m; }
+    wire black 0.5 [left.b, sp_bar];
+    wire black 0.5 [mid.b, sp_bar];
+    wire black 0.5 [right.b, sp_bar];
+}
+
+// A sub-loom with a port of its own on no connector: its wire to the lamp
+// continues the vehicle's wire to `feed`, a boundary continuation. Its
+// `out` is on its own connector, a real termination.
+component Pod {
+    pub port feed "FEED";
+    connector x9 "Pod 1p" {
+        pub port out "OUT" pin 1;
+    }
+    lamp: Lamp;
+
+    wire red 1 "FEED" [feed, lamp.a];
+    wire black 0.5 [out, lamp.b];
+}

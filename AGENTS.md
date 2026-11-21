@@ -11,7 +11,7 @@ about to change before changing it, and update it in the same change.
 
 ## Orientation
 
-One pipeline, shared by every command (`check`, `render`, `serve`, `lsp`):
+One pipeline, shared by every command (`check`, `render`, `export`, `serve`, `lsp`):
 
 ```
 .wb files → lex → parse (AST) → load project → resolve (registry)
@@ -26,6 +26,9 @@ One pipeline, shared by every command (`check`, `render`, `serve`, `lsp`):
   `src/render/lint.rs`, which ask the renderers' layout code and so sit in
   `render`; `dsl` never depends on `render`). `check_project` and the LSP
   both go through it; a new stage goes there.
+- `src/export/` — build tables derived from `ir::Design` (the wire list,
+  the pin tables, the bill of materials), typed models with no rendering involved, and their
+  CSV/JSON wire format (`wirebug export`).
 - `src/render/` — consumes `ir::Design` only; one renderer per view kind
   (`schematic/`, `harness/`, `pinout/`) plus `png.rs`, `pdf.rs`, embed output.
 - `src/serve/` — live-reloading dev server (the only async code).
@@ -37,11 +40,12 @@ Where to look in `ARCHITECTURE.md`:
 
 | Working on | Section |
 |---|---|
-| CLI commands, output modes, `serve`, `lsp` | One pipeline |
+| CLI commands, output modes, `export`, `serve`, `lsp` | One pipeline |
 | `wirebug.toml`, the identity stamp | Project manifest |
 | AST, registry, `extend` merge groups, IR, cables, inline connectors | DSL mental model |
 | Schematic layout, routing, enclosures | Render mental model; Connector routing |
 | Harness views | Harness views |
+| Wire list, pin tables, BOM and their CSV/JSON format (`src/export/`) | Build tables |
 | A new or changed diagnostic, and which phase it belongs in | DSL validation; Render-time errors |
 | Finding a file | Source tree |
 | Why a crate is there | Dependencies |
@@ -51,8 +55,10 @@ Where to look in `ARCHITECTURE.md`:
 These land later, one at a time. Don't pre-bake hooks for them; we'll
 redesign each when it lands.
 
-- Graphviz/object-avoiding harness routing, BOM views, manifest emission
-  (a basic SVG harness renderer has landed; see `render/harness/`)
+- Graphviz/object-avoiding harness routing, a rendered BOM view (a
+  basic SVG harness renderer has landed, see `render/harness/`; and the
+  build tables — wire list, pin tables and BOM — are exported as CSV/JSON,
+  see `src/export/`, but no view draws a BOM)
 - View composition / `extends`
 - Theming, colour
 - Auto-layout
@@ -68,7 +74,8 @@ redesign each when it lands.
 - Port re-export aliases (`pub port x "X" = inner.port;` — a pure boundary
   mapping with no wire). Decided against for now (2026-06): the wire-through
   pattern stays; revisit when a BOM view makes invented color/gauge on
-  zero-length boundary wires actually hurt.
+  zero-length boundary wires actually hurt — the BOM export now counts
+  these wires and flags them (its `boundary` column).
 
 ## Coding practices
 
@@ -181,6 +188,11 @@ cargo run --release -- render examples --out out/
 cargo run --release -- render examples --out out/ --png    # rasterise to PNG
 cargo run --release -- render examples --out out/ --pdf    # single A4 PDF, one view per page
 cargo run --release -- render examples --out out/ --embed  # naked SVGs + manifest.json
+
+# export a build table (CSV on stdout; --format json, --out <file>)
+cargo run -- export wires examples
+cargo run -- export connectors examples --format json --out out/connectors.json
+cargo run -- export bom examples
 
 # serve a project with live reload (re-renders on every .wb save)
 cargo run -- serve examples --port 3000   # then open http://localhost:3000

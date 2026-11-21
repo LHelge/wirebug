@@ -1,0 +1,13 @@
+// A sub-loom placed twice, with a connector of its own: its own wire is
+// crimped into that connector from the inside.
+
+use Sensor from "ecu.wb";
+
+component Loom {
+    connector x9 "Loom 1p" {
+        pub port feed "FEED" pin 1;
+    }
+    lamp: Sensor "Lamp";
+
+    wire orange 1 "FEED" [feed, lamp.sig];
+}

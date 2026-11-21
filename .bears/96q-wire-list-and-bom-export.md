@@ -1,11 +1,11 @@
 ---
-id: "96q"
+id: 96q
 title: Wire list and BOM export
 type: epic
-status: open
+status: done
 priority: P1
 created: "2026-11-20T21:40:32.025648377Z"
-updated: "2026-11-20T21:40:32.025648377Z"
+updated: "2026-11-21T11:47:24.539793694Z"
 ---
 
 ## Scope

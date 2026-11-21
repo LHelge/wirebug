@@ -294,8 +294,9 @@ impl Placement {
         // placement drop silently.
         let mut connections: Vec<Segment> = Vec::new();
         for wire in &subject.wires {
-            for pair in wire.endpoints.windows(2) {
-                let (Some(a), Some(b)) = (endpoint_key(&pair[0]), endpoint_key(&pair[1])) else {
+            for segment in wire.segments() {
+                let [from, to] = segment.ends;
+                let (Some(a), Some(b)) = (endpoint_key(from), endpoint_key(to)) else {
                     continue;
                 };
                 if side_of.contains_key(&a) && side_of.contains_key(&b) {

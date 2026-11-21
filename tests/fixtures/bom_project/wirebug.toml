@@ -1,0 +1,5 @@
+[project]
+name = "bom-project"
+version = "0.1.0"
+description = "BOM fixture: housings, cables, loose wire, components and splices counted per placement"
+revision = "fixture"

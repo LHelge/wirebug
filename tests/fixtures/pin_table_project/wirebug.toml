@@ -1,0 +1,5 @@
+[project]
+name = "pin-table-project"
+version = "0.1.0"
+description = "Pin-table fixture: every kind of cavity a crimp sheet has to list"
+revision = "fixture"

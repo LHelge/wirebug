@@ -73,13 +73,14 @@ What works today:
   - a **harness** renderer (WireViz-style pin tables, a central spine, and bezier cable bundles);
   - a **pinout** renderer (connector cavity faces plus pin tables, authored from the harness side).
 - `wirebug render` to disk (SVG, or `--png` rasterised, or `--pdf` for a single A4 PDF with one view per page, or `--embed` for naked SVGs + a `manifest.json` sidecar).
+- `wirebug export` — the build tables as CSV or JSON: the wire list (cut list), the connector pin tables (crimp sheet) and the bill of materials.
 - `wirebug serve` — a live-reloading dev server that re-renders on `.wb` or `wirebug.toml` saves.
 - A VSCode extension ([`editors/vscode/`](editors/vscode/)) — syntax highlighting plus live diagnostics and context-aware completion via `wirebug lsp`, a language server over stdio.
 
 In transition / not yet:
 
 - Object-avoiding harness routing (the harness renderer flexes beziers, no obstacle avoidance yet)
-- BOM views
+- A rendered BOM view (the BOM is an export table, not a drawing)
 - View composition / `extends`
 - Unconnected-port linting, theming, auto-layout
 
@@ -154,7 +155,7 @@ version.)
 
 **Instance** — a placement of a component type, with a name (used in wires) and an optional label (shown in diagrams).
 
-**Wire** — a colour, a gauge (mm²), and two or more endpoints (`instance.port`, or a bare name: the enclosing component's own port, or one of its splices). Multi-endpoint wires model shared rails and T-junctions. A wire may end in a property body instead of its `;` — `wire red 0.5 "12V" [fuses.ecu, ecu.b_pos] { length: 1.2; type: "FLRY-B"; part: "..."; }` — giving its length, insulation type and part number. A length is in metres when bare, or takes a unit written directly after the number: `2m`, `15cm`, `150mm`. Point-to-point wires that travel together can be grouped into a `cable` with its own `type` and `length`; a conductor's own `length` overrides the cable's. A cable, or one of its `twisted { }` pairs, may be screened: `shield "SHLD" [ecu.shield_gnd];` names the pins its drain is terminated on — one (grounded at one end), two (both ends), or none (`shield;`, a screen that lands on no pin: cut back, or bonded at a gland or housing). A harness drawing marks a screened cable's box (a dashed outline, `shielded` in its subtitle) and a screened pair (a dashed outline round the pair), and draws each drain as a thin dashed line to the pins of the connectors it includes.
+**Wire** — a colour, a gauge (mm²), and two or more endpoints (`instance.port`, or a bare name: the enclosing component's own port, or one of its splices). Multi-endpoint wires model shared rails and T-junctions. A wire may end in a property body instead of its `;` — `wire red 0.5 "12V" [fuses.ecu, ecu.b_pos] { length: 1.2; type: "FLRY-B"; part: "..."; }` — giving its length, insulation type and part number (on a multi-endpoint rail, `length` is the whole rail's; give each leg its own length with a splice and one wire per leg). A length is in metres when bare, or takes a unit written directly after the number: `2m`, `15cm`, `150mm`. Point-to-point wires that travel together can be grouped into a `cable` with its own `type` and `length`; a conductor's own `length` overrides the cable's. A cable, or one of its `twisted { }` pairs, may be screened: `shield "SHLD" [ecu.shield_gnd];` names the pins its drain is terminated on — one (grounded at one end), two (both ends), or none (`shield;`, a screen that lands on no pin: cut back, or bonded at a gland or housing). A harness drawing marks a screened cable's box (a dashed outline, `shielded` in its subtitle) and a screened pair (a dashed outline round the pair), and draws each drain as a thin dashed line to the pins of the connectors it includes.
 
 **Splice** — a joint inside a component that conductors end on: a crimp or solder splice in a loom. `splice sp_gnd "Ground splice" { part: "D-436-36"; }` declares it (label and body optional), and each conductor to it is an ordinary two-ended wire naming it like an own port: `wire black 0.5 [lamp.gnd, sp_gnd];`. All conductors on one splice are joined, each keeping its own colour, gauge and length — which a multi-endpoint rail cannot say. A cable's conductor may end on a splice, and a wire may join two splices; a wire to a splice has exactly two ends (`splice_wire_arity`), a splice fewer than two conductors end on warns (`splice_joins_nothing`), and its name may not repeat a port, instance, connector, cable or other splice of its component (`duplicate_splice_name`). A shared rail without a splice stays a loose multi-endpoint wire. A schematic draws no splice: the ports its conductors join show connected, like a rail.
 
@@ -183,7 +184,7 @@ date        = "2026-05-28"    # optional; ISO date
 
 **Revision from git.** If `revision` is omitted, wirebug shells out to `git rev-parse --short HEAD` in the project directory and uses the result, suffixed `-dirty` when the working tree has uncommitted changes. An explicit `revision = "..."` in the manifest always wins. If `git` isn't on `PATH`, or the directory isn't a git repo, the field stays empty and the stamp simply omits it — no error.
 
-**Embedding into another document.** Pass `--embed` to `wirebug render` to emit SVGs intended for inclusion in another page, report, or static site. Embed-mode SVGs drop the built-in `<style>` block (the host stylesheet owns the look), suppress the bottom-right project-identity stamp, and class-tag the root `<svg>` with `wirebug wirebug-schematic` (or `wirebug-harness`) so host CSS can scope rules under `.wirebug`. The HTML index is replaced by a `manifest.json` sidecar listing every rendered view (title, filename, kind) plus the project's identity and a `generator` field (`wirebug v<x.y.z>`, since embed SVGs carry no in-drawing stamp), so a downstream build can enumerate and embed views without parsing each SVG. A `wirebug.css` starter stylesheet lands beside the manifest (and is referenced by its `stylesheet` field): the built-in styles re-scoped under `.wirebug-schematic` / `.wirebug-harness` / `.wirebug-pinout`, so linking it reproduces the standalone look — copy it into your own assets and edit the copy to theme. (The previous `--no-stamp` flag is removed: embedding was its only use case, and `--embed` now expresses it directly.)
+**Embedding into another document.** Pass `--embed` to `wirebug render` to emit SVGs intended for inclusion in another page, report, or static site. Embed-mode SVGs drop the built-in `<style>` block (the host stylesheet owns the look), suppress the bottom-right project-identity stamp, and class-tag the root `<svg>` with `wirebug wirebug-schematic` (or `wirebug-harness`) so host CSS can scope rules under `.wirebug`. The HTML index is replaced by a `manifest.json` sidecar listing every rendered view (title, filename, kind) plus the project's identity and a `generator` field (`wirebug v<x.y.z>`, since embed SVGs carry no in-drawing stamp), so a downstream build can enumerate and embed views without parsing each SVG. The build tables land beside it too, as `wires.json`, `connectors.json` and `bom.json` — the same documents `wirebug export … --format json` prints (see [Exporting build tables](#exporting-build-tables)) — and the manifest names them in its last field, `"exports": { "wires": "wires.json", "connectors": "connectors.json", "bom": "bom.json" }`; the fields before it are unchanged, so a host that ignores unknown fields is unaffected. A `wirebug.css` starter stylesheet lands beside the manifest (and is referenced by its `stylesheet` field): the built-in styles re-scoped under `.wirebug-schematic` / `.wirebug-harness` / `.wirebug-pinout`, so linking it reproduces the standalone look — copy it into your own assets and edit the copy to theme. (The previous `--no-stamp` flag is removed: embedding was its only use case, and `--embed` now expresses it directly.)
 
 ## Rendering
 
@@ -271,6 +272,113 @@ wirebug render examples --out out/                  # one SVG per view, into out
 wirebug render examples --out out/ --pdf            # one A4 PDF, one view per page
 wirebug render examples/wirebug.toml --out out/ --embed  # naked SVGs + manifest.json
 ```
+
+## Exporting build tables
+
+`wirebug export` writes the tables a harness is cut, crimped and ordered from, built from the model rather than from any drawing — so they list every conductor, whether or not a view draws it:
+
+```sh
+wirebug export wires                                  # the wire list, as CSV on stdout
+wirebug export connectors examples --out pins.csv     # the pin tables, into a file
+wirebug export bom examples                           # the bill of materials
+wirebug export wires examples --format json           # the same data as JSON, for tooling
+```
+
+Each table is a subcommand and takes the project like `check` and `render` do (a manifest, a project directory or a `.wb` file; by default the project around the current directory). `export` checks the project first and, like `render`, refuses one with errors (or, under `--strict`, warnings), exiting non-zero with nothing on stdout. Diagnostics always go to stderr, so stdout holds the table alone; with `--out <file>` the table goes to the file (its directory created if need be) and stderr gets a one-line summary (`exported 19 wire-list row(s) as csv to wires.csv`).
+
+**CSV** (`--format csv`, the default) follows RFC 4180: a header row, one row per record, a field quoted only when it holds a comma, a quote or a line break (a quote doubled inside it), `\n` line endings, UTF-8 without a byte-order mark. Numbers use `.` as the decimal point whatever the locale; lengths are in metres and gauges in mm², as the column names say. An empty field means the value does not apply or is not set. A list inside one field (the pins of a ganged port, the ends beyond a splice) is separated by `;`. Twisted pairs are numbered from 1 within their cable, in source order. Instances are named by their full path (`Vehicle.front.lamp`) and ends by the full path of what they land on (`Vehicle.ecu.pwr`, `Vehicle.sp_gnd`).
+
+Values are written as they are — no byte-order mark, no escaping of text that looks like a formula — so a table's CSV holds exactly what its JSON holds. Opened by double-click, Excel misreads three things: it decodes the text in the local codepage instead of UTF-8 (so `Ω`, `µ` and `å` come out garbled), it turns a part number such as `0430250400` into a number without its leading zeros, and it takes a label such as `+12V`, `=GND` or `-BATT` for a formula (`#NAME?`). Import the file instead, through **Data › From Text/CSV**, choosing UTF-8 (65001) as the file origin and the Text type for the columns that hold names, labels and part numbers.
+
+An end, in either table, is eight columns after its prefix (`from`, `to`, `far`):
+
+| Column | Holds |
+|---|---|
+| `from` | the full path of what the end lands on |
+| `from_kind` | `port` (a port of a placed component, inline connectors included), `boundary` (the owner's own port, where the conductor leaves its component), `splice`, or `unresolved` (never in a project that checks) |
+| `from_instance` | the instance the port is on, or the splice's owner |
+| `from_connector` | the connector designator (an inline connector's name); empty for a connectorless port |
+| `from_pins` | the pins the port occupies (`2;3` for a ganged port); empty when it has no pin |
+| `from_port`, `from_port_label` | the port's name and label |
+| `from_splice` | the splice's name |
+
+**`wirebug export wires`** — one row per physical conductor (each segment of a multi-endpoint wire: a rail of four ends is three rows) and one per cable screen, in source order:
+
+| Column | Holds |
+|---|---|
+| `kind` | `conductor` or `shield` |
+| `owner` | the instance whose component body declares the wire |
+| `cable`, `cable_label`, `cable_type`, `cable_length_m` | the cable it runs in, empty for a loose wire; repeated on each conductor and screen row of the cable, so summing `cable_length_m` counts a cable once per row; the BOM counts each cable once |
+| `twisted_pair` | the twisted pair it is in (for a screen, the pair it screens) |
+| `screens` | for a screen: `cable` (the overall screen) or `pair` |
+| `label` | the wire's label (a screen's own label) |
+| `color`, `color_code` | the colour name (`green/yellow`) and its IEC 60757 code (`GN/YE`) |
+| `gauge_mm2` | the cross-section |
+| `type`, `part` | the wire's insulation type and part number |
+| `from…`, `to…` | its two ends, as above; for a screen, the pins its drain lands on (none, one or two) |
+| `length_m` | the length this row adds to a total: its own (or its cable's), or a rail's whole length on the rail's first segment only; empty on a screen, which is cut with its cable |
+| `rail_length_m`, `rail_segment` | on each segment of a wire with more than two ends: the whole rail's length, and the segment's place in it, from 1 |
+
+A `length` on a wire with more than two ends is the length of the whole rail, so summing `length_m` gives the copper to cut, each rail counted once.
+
+**`wirebug export connectors`** — one table per connector of each placed instance, and two per inline connector, its male and female half (a half it does not declare is a table too, with no `housing_type`, described by the inline's label, as the BOM lists it); within it, one row per conductor or drain crimped into each cavity (two for a double crimp), a cavity in pin order with nothing in it as one row of entry `empty` (so unused pins are listed), and then each port of the connector that has no pin assigned yet, with an empty `pin`; a connector with no cavity and no port at all is one `empty` row with no `pin` and no `port`, so every table the JSON lists is in the CSV too:
+
+| Column | Holds |
+|---|---|
+| `instance`, `connector` | the instance and the connector designator |
+| `half` | `male` or `female` on a half of an inline connector |
+| `housing_type`, `housing_description`, `housing_part` | the connector type the housing is bought as (an inline half's own; empty for a half the inline does not declare, whose description is the inline's label) |
+| `pin` | the cavity; empty for a port with no pin assigned |
+| `ganged_with` | the other cavities of a ganged port (a ganged port's conductor is listed in each of its cavities) |
+| `port`, `port_label` | the port on the pin |
+| `entry` | `conductor`, `drain` (a cable screen's), or `empty` |
+| `half_fit` | on an inline half: `assigned` when the conductor is known to be in this half, `undetermined` when it is not, so it is listed under both halves. The harness views decide: `assigned` when they place the conductor in this half alone (it is then not listed under the other), `undetermined` when they place it in neither or both. An inline is a mated pair, so this holds whether it declares one half, both or none: a half it does not declare cannot be included in a view, so a conductor is never `assigned` to it, and one no view places in the declared half is `undetermined` |
+| `owner` | the instance whose body declares the conductor |
+| `cable`, `twisted_pair`, `screens` | its cable and pair; for a drain, what the screen screens |
+| `label`, `color`, `color_code`, `gauge_mm2` | the conductor's (a drain's: its screen's label only) |
+| `far…` | the end across the conductor, as above (a drain's other end, when it is grounded at both) |
+| `beyond` | when `far` is a splice: every other end the splice joins, through linked splices, as full paths |
+
+**`wirebug export bom`** — the bill of materials: one row per thing to buy, with how many of it the design uses. Quantities are **per placement**: a component type placed six times counts six, and its connectors, cables and wires count six times over. Rows come by kind — housings, cables, loose wire, components, splices — and within a kind in the order the design first uses each. An item without a part number is never dropped: it is a row with `specified` `false`, counted like any other.
+
+| `kind` | One row per | `quantity` counts | `specified` when |
+|---|---|---|---|
+| `housing` | connector-type part number (its `part:`); housings without one, per connector type; connector blocks that name no type, per description (an inline connector's half it does not declare, per the inline's label); with no description either, all in one row | housings: each connector of each placed instance, and **two** per inline connector, its male and female half — a half it does not declare is still a housing to buy, listed unspecified | it has a `part` |
+| `cable` | cable `type`; cables without one, in one row | cables | it has a `type` (a cable body takes no `part`) |
+| `wire` | loose wire — conductors in no cable — of one colour and gauge, and one `type` and one `part` where the wires set them, so two part numbers of one colour and gauge are two rows | conductors, each segment of a multi-endpoint wire one | it has a `part` |
+| `component` | part number (`part:`); each type without one is a row of its own, its other part data still shown | placements | it has a `part` |
+| `splice` | part (`part:`); splices without one, per label (their name when unlabelled) | splices | it has a `part` |
+
+| Column | Holds |
+|---|---|
+| `kind` | `housing`, `cable`, `wire`, `component` or `splice` |
+| `specified` | `true` when the row names what to buy, `false` when that is still to be chosen |
+| `part` | the part number |
+| `type` | a housing's connector type, a cable's or a wire's `type`, a component's type |
+| `label` | on a splice row without a part: the label (or name) the row groups its splices by |
+| `description`, `manufacturer`, `rating` | the part data: a housing's connector-type description (a connector block's own, or an undeclared inline half's inline label, when it names no type), a component's part data, a splice's description (the first item's, where items of one part number differ) |
+| `color`, `color_code`, `gauge_mm2` | a wire row's colour and cross-section |
+| `quantity` | how many, as above |
+| `total_length_m` | on a cable or wire row: the summed length of those that have one — a cable row the cables' own `length`, not their conductors'; a wire row each rail's length once — empty when none has |
+| `unmeasured` | on a cable or wire row: how many of `quantity` have no length, so are not in `total_length_m`; the total is complete only when this is `0` |
+| `boundary` | on a wire row: how many of `quantity` end on the owning component's own port that is on no connector. Such a conductor continues a wire the enclosing component declares to that port (the wire-through pattern), so it is not a second piece of wire to order; it is still counted in `quantity`. A design whose components have connectors on their boundaries has none |
+| `where` | the placements `quantity` counts, as full paths: `Vehicle.ecu.x1`, `Vehicle.ic.male` (an inline connector's half, declared or not), `Vehicle.can`, `Vehicle.front.lamp`, `Vehicle.sp_gnd`; empty on a wire row, whose conductors are the wire list's rows |
+
+What it does not count: connector contacts, terminals and seals (the model does not hold them); a cable's screen, which is part of the cable; a cable's conductors as wire (they come with the cable; their own `type` and `part` are in the wire list). The root component is the design itself and is not a row, and neither are inline connectors (their halves are housings) nor **assemblies** without a part number — a component that places others and has no port of its own — whose parts are listed instead. An assembly **with** a part number is listed, and so are its parts: the BOM cannot know whether a numbered assembly is bought complete, so when it is, its parts are not to be ordered again. A component that places others but has ports of its own may be a part or a sub-assembly; the model cannot tell, so it is listed, and so are the wires in its body. A connector is one housing: the model holds one connector per mating, of the type it names.
+
+**JSON** (`--format json`) carries the same data, structured: ends as objects with a `pins` array, a splice's `beyond` as an array of ends, the pin tables nested as `connectors`, each with its `housing`, its `cavities` (each with its `entries`) and its `unpinned` ports, and the bill of materials as `lines`, each with every column as a field (`null` where the CSV is empty, `specified` a boolean, `where` an array). Every document has the same top level:
+
+```json
+{
+  "table": "wires",
+  "format_version": 1,
+  "project": { "name": "…", "version": "…", "revision": "…", "…": "…" },
+  "generator": "wirebug v0.1.0",
+  "rows": [ … ]
+}
+```
+
+(`"connectors": [ … ]` for the pin tables, `"lines": [ … ]` for the bill of materials.) `format_version` is raised when a column or field changes name, place or meaning; new ones may be added without raising it.
 
 ## Design principles
 

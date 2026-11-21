@@ -10,7 +10,7 @@ Keep this file true in the same change that alters what it describes.
 ## One pipeline
 
 The only input is the **`.wb` DSL** (spec: `.claude/skills/wirebug-dsl/`).
-Four CLI commands share it:
+Five CLI commands share it:
 
 - **`check` (`src/dsl/`, then `src/render/lint.rs`)** — lex → parse →
   load project → resolve → elaborate → validate, then the **layout
@@ -46,12 +46,29 @@ Four CLI commands share it:
   plus a `manifest.json` sidecar in place of the HTML index (see below)
   and a `wirebug.css` starter stylesheet (`render::embed_stylesheet` —
   the built-in styles re-scoped under `.wirebug-{kind}`, referenced from
-  the manifest's `stylesheet` field; hosts copy and theme it).
+  the manifest's `stylesheet` field; hosts copy and theme it), and the
+  build tables as `wires.json`, `connectors.json` and `bom.json` (see
+  `export` below), which the manifest names in its last field, `exports`
+  (`render::EmbedExports`) — added after the fields hosts already read,
+  so they keep their names and places.
   Each view renders or fails on its own (see Render-time errors): `render`
   writes every view that rendered, prints each failure naming its view,
   and exits non-zero.
   The legacy YAML model/view loader has been removed; `ir::Design` is the
   only thing the renderer consumes.
+- **`export` (`src/export/`)** — runs `check_project` like `render`,
+  refuses a project with errors (or, under `--strict`, warnings) with the
+  same message (`— not exporting`), then writes one build table:
+  `export wires` (the wire list), `export connectors` (the pin tables)
+  or `export bom` (the bill of materials), one subcommand per `export::Table` (`cli::ExportCommand`, each taking
+  `cli::ExportArgs`: the target, `--format csv|json` — its own
+  `ExportFormat`, not `check`'s `--format` — `--out <file>` and
+  `--strict`). `export::Export::new(design, table, format)` builds the
+  text; `main` prints it to stdout, or `Export::write` saves it (creating
+  its directory, as `render` creates `--out`) and `main`
+  prints the returned `Exported` (its `Display` is the one-line summary)
+  to stderr. Diagnostics go to stderr only, so stdout is the table alone.
+  See Build tables for the wire format.
 - **`serve` (`src/serve/`)** — a live-reloading dev server. Renders the
   project into memory (the same `render_views` + `index_html` pipeline,
   `live_reload` on), serves it over axum, and watches the project tree for
@@ -280,7 +297,7 @@ Distinct from clap's `--version`, which prints the wirebug app version.
   one), built by `Length::new(value, LengthUnit)` from the AST's
   `ast::Quantity` (the number and the unit written after it, `150mm`;
   `Quantity::length`, a bare number in metres), so lengths in any unit
-  compare (`Ord`) and print exactly: `Length::metres()` normalises,
+  compare (`Ord`), add (`+`) and print exactly: `Length::metres()` normalises,
   `Display` prints metres with only the decimals the length has
   (`0.15 m`). The closed `LengthUnit` set (`m`, `cm`, `mm`) is
   `LengthUnit::ALL`. A length that does not convert (an unknown unit, not
@@ -306,7 +323,13 @@ Distinct from clap's `--version`, which prints the wirebug app version.
   it. So the schematic renderer ignores cables
   for free, and only the harness renderer reads the tags. Cable
   conductors are 2-endpoint by rule, and so is any wire to a splice;
-  shared rails without a splice stay loose multi-endpoint wires.
+  shared rails without a splice stay loose multi-endpoint wires. A rail
+  is one physical conductor per pair of consecutive ends, in the order
+  written (`[a, b, c]` → `a–b`, `b–c`): `Wire::segments()` yields those
+  runs (`ir::WireSegment`: its `index` along the wire and its two ends),
+  and it is the only place the decomposition is written — the schematic
+  layout, the harness layout (`HarnessConductor::all`) and the wire list
+  (`export::WireList`) all take their segments from it.
 - **Inline connectors (`inline`)** — a mated plug/receptacle pair
   mid-harness (a loom's branch point): one shared port set, two optional
   `male:`/`female:` housing halves, each a `connector_type` ref. Inlines
@@ -322,8 +345,9 @@ Distinct from clap's `--version`, which prints the wirebug app version.
   that loom; auto-scoping drops the other loom's conductors. Both halves
   in one view is a `duplicate_view_include`; schematic includes of
   inlines are `wrong_include_form`; `pub` on inline ports warns
-  (`inline_pub_port`). Per-half pinout faces and a one-sided-pin lint are
-  future work.
+  (`inline_pub_port`). The pin-table export reads which half a conductor
+  is crimped into off the harness views (see Build tables). Per-half
+  pinout faces and a one-sided-pin lint are future work.
 
 ## Render mental model (IR → SVG)
 
@@ -348,8 +372,8 @@ adds no inference (`src/render/schematic/layout.rs`):
   mechanism — explicit, not derived from wires.)
 - **Connections** — each subject wire (a multi-endpoint net) is
   **chain-decomposed** into consecutive pairs in the order written
-  (`[a,b,c]` → `a–b, b–c`). A pair is drawn only when both ends resolve to a
-  placed port: a *listed* `WireEnd::Child` port of an *included* instance, or
+  (`[a,b,c]` → `a–b, b–c`), by `ir::Wire::segments` (see the IR). A pair
+  is drawn only when both ends resolve to a placed port: a *listed* `WireEnd::Child` port of an *included* instance, or
   a `WireEnd::Own` port *listed in the enclosure* (below). Excluded instances,
   unlisted ports, and own ports without an enclosure placement drop silently —
   a listed port whose wire lands on such an end shows as a bare stub.
@@ -424,14 +448,24 @@ subject's `layout::HarnessConductor`s (`HarnessConductor::all`: each chain
 segment between connectors of two *different* children — one within a
 single connector is a jumper, never drawn — and each wire with an end on a
 splice of the subject; an end is a `layout::HarnessEnd`, `Connector` or
-`Splice`, keyed by a `NodeKey` of the same two kinds);
+`Splice`, keyed by an `ir::HarnessNode` of the same two kinds);
 `HarnessLayout::compute` keeps those whose two ends' connectors or splices
 are included and records them as `HarnessLayout.drawn` (`lint::Segment`,
 wire and pair index), which is what `check`'s `undrawn_conductor` reads.
+That scoping rule is written once, in the IR (`ir::HarnessScope`,
+crate-internal, built from a harness view and the instance it is drawn
+against, over `ir::HarnessNode`, what an end or an include lands on —
+`HarnessNode::of_end` is the one lookup from a wire end to its connector,
+and the layout's `HarnessEnd`s are built from it): `draws` (both ends'
+nodes included, and distinct — `HarnessNode::between`, which also bounds
+`HarnessConductor::all`), `draws_screen` and `draws_drain` (below), and
+`half` (the half an inline is included through). The layout asks it,
+and so does the pin-table export, which reads off it which housing half
+of an inline connector a conductor is drawn into.
 
 A **splice** include (`include sp`, an `ir::Include` with no connector
-naming one of the subject's `Instance.splices`; `NodeKey::of`) draws as a
-`SpliceNode`: a solid dot at the authored point (`splice-dot`, haloed in
+naming one of the subject's `Instance.splices`;
+`HarnessNode::of_include`) draws as a `SpliceNode`: a solid dot at the authored point (`splice-dot`, haloed in
 white so each conductor's end reads against it) with the name
 (`splice-name`, bold), label (`splice-label`) and part (`splice-part`)
 centred beneath, in a `<g class="splice">` drawn over the connectors — no
@@ -509,6 +543,162 @@ on a connector the view leaves out is not drawn; a shield on no pin
 has no row, only its outline. A shield alone never puts a cable
 box in a view. Reusing the orthogonal router is a noted future
 refinement.
+
+## Build tables (`export/`)
+
+The tables a harness is cut, crimped and ordered from are typed models
+built from `ir::Design` alone: no layout, so they list what the design
+holds whether or not a drawing shows it (the pin tables read the harness
+views only to tell an inline connector's halves apart). They borrow the design
+(`'d`) rather than copy it, and carry no serialisation: writing them out
+is `export::records` (below), and the IR is not a wire format.
+
+- **Wire list (`export::WireList`, `From<&Design>`)** — the cut list.
+  One `export::Row` per physical conductor: each `Wire::segments()` run
+  of each wire, so a rail of four ends is three rows and two wires into
+  one cavity (a double crimp) are two. A cable screen is a row too, of
+  the other `RowKind`: `RowKind::Conductor(Conductor)` (the `Wire`, its
+  `WireSegment` and two resolved ends) or `RowKind::Shield(ShieldRun)`
+  (what it screens, the `ir::Shield`, and its `Drain` — `NoPin`, `Single`
+  or `Both`, the shape of `ShieldTermination`) — so a drain lands on a pin
+  like a conductor does and a pin table built from the list sees it.
+  Every row has its `owner` (the instance whose body declares it), its
+  `Cable` (designator and `CableMeta`) when it runs in one, and the
+  length it stands for, an `export::RowLength`: `Own(Length)` for a
+  two-ended conductor (`Instance::effective_length`) or a screen (its
+  cable's), `Unset`, or `Rail { total, first }` on each segment of a
+  wire with more than two ends — a rail's `length` is the whole rail's,
+  not each leg's (a cable conductor is two-ended, so a cable's length
+  never meets a rail). `RowLength::copper()` gives what a row adds to a
+  total (a rail's on its first segment only), and `WireList::copper()`
+  sums the conductors so each rail counts once, as an `export::Copper`
+  (the summed `Length`, which adds exactly, and how many conductors have
+  none); screens are not counted.
+  An `export::End` is typed: `Port` (a port of an instance placed in the
+  owner, inline connectors included), `Boundary` (the owner's own port,
+  where the conductor leaves it), `Splice` (one of the owner's), or
+  `Unresolved` (only in a design with errors, so no row is ever dropped).
+  A port end (`PortEnd`: instance and `ir::Port`) says where it is
+  crimped through `PortEnd::contact()`: `Contact::Connector { designator,
+  pins }` (several pins for a ganged port; an inline connector's
+  designator is its name, and the IR does not say which half a conductor
+  is crimped into) or `Contact::Connectorless`, which keeps its row. Ends
+  are named relative to the owner in the segment (`WireEnd`, as
+  authored), and an `End` displays as the full path of what it lands on
+  (`Vehicle.loom.lamp.pwr`). The list covers every instance in IR order,
+  so a type placed twice lists its rows twice with distinct owner paths;
+  within an instance its wires come in declaration order, then its
+  cables' screens in cable order (overall before a pair's). Nothing in it
+  iterates a hash map, so the order is the source's.
+- **Pin tables (`export::PinTables`, `From<&Design>`)** — the crimp
+  sheet, built from the wire list: every conductor end and drain end the
+  list lands on a connector pin is entered in that pin's cavity. One
+  `export::PinTable` per connector of each instance (the root's and every
+  placement's, so a type placed twice has its tables twice; a
+  connectorless port has none), in IR then connector order; an inline
+  connector is a mated pair, so it has a table for each of its two halves
+  (`PinTable.half`, male first), whether it declares that half or not
+  (`PinTable::is_declared`: an undeclared half has no layout, so its
+  cavities are the inline's pins). A table's
+  `export::Cavity` rows are sorted by `ir::Pin`'s `Ord` (numeric; pins are
+  whole numbers in the DSL), one per pin a port is bound to plus one per
+  cavity of the connector's `layout` (an inline half's own layout) that no
+  port uses (`Cavity.port: None`), so an unused cavity is listed empty. A
+  port of the connector with no pin (the DSL lets a connector port leave
+  its pin out while the pin-out is unknown) is not a cavity: it is an
+  `export::UnpinnedPort` (port and entries) in `PinTable.unpinned`, in
+  source order, so a conductor into it is listed rather than dropped and
+  code that sorts or counts cavities never meets a missing pin.
+  `PinTable::housing()` is what the table's housing is bought as, an
+  `export::Housing` (connector type, description, `part()`): an inline
+  half's connector type, whose metadata is not on the synthetic
+  connector (for an undeclared half, a housing of no type described by
+  the inline's label), else the connector's own. A
+  ganged port (`pins [2, 3]`) is entered in each of its cavities, marked
+  by `Cavity::is_ganged` and `Cavity::ganged_with` (the other pins), since
+  the model does not say which cavity takes which conductor. A cavity's
+  `entries` are in wire-list order (two for a double crimp), each an
+  `export::CavityEntry`: `Conductor(CavityConductor)` (owner, `Cable`, the
+  wire list's `Conductor` and its `FarEnd`) or `Drain(CavityDrain)` (the
+  screen's `ShieldRun` and, grounded at both ends, the drain's other end),
+  never a conductor with an invented colour. A `FarEnd` is the end across
+  the conductor: `Port` (its `contact()` says pin or connectorless),
+  `Boundary`, `Unresolved`, or `Splice(FarSplice)` — the splice and, as
+  `SplicedEnd`s (end and wire), every other end its `Instance::splice_net`
+  joins, linked splices followed and the conductor's own end left out.
+  Each entry carries an `export::HalfFit`. The IR does not record which
+  half of an inline connector a conductor is crimped into; the harness
+  views say it, by `ir::HarnessScope`, the scoping rule the harness
+  renderer draws by: an end on an inline goes to the half the harness
+  views of its owner's component draw it into (`Assigned`, and absent
+  from the other half's table) when they draw it into exactly one; when
+  none draws it, or views draw it into each half, it is listed under both
+  halves as `Undetermined`, never guessed or dropped. The rule is the
+  same whatever the inline declares: a view can include only a declared
+  half, so an undeclared half is never assigned anything, and a conductor
+  no view draws into the declared half is undetermined, not assumed to be
+  in it. A drain is placed the same way (`HarnessScope::draws_drain`).
+  Elsewhere an entry is `Assigned`.
+- **Bill of materials (`export::Bom`, `From<&Design>`)** — what is
+  bought: one `export::Line` per thing to buy, a closed enum whose
+  variant is its kind (`Line::kind()`, an `export::LineKind`, whose order
+  is the BOM's: housings, cables, loose wire, components, splices) and
+  holds the line's placements, so `Line::quantity()` is their count — per
+  placement, since every source it reads is (a type placed six times
+  counts six). Lines within a kind are grouped by an `IndexMap` key (a
+  private `Groups` collector), so they come in order of first use and no
+  hash order reaches the output. `HousingLine` reads `PinTables`, one
+  housing per table (`PinTable::housing()`), so an inline connector is
+  always two housings, as it is two tables: a half it does not declare is
+  an `export::Housing` of no type described by the inline's label.
+  Housings are keyed by part, else
+  connector type, else description (a connector block naming no type),
+  else nothing (one line). `CableLine` reads every
+  instance's `cables`, keyed by `CableMeta.type`; its `length()` sums the
+  cables' own `length`, not their conductors'. `WireLine` reads the
+  `WireList`'s conductor rows in no cable, keyed by colour, gauge (its
+  bits), `type` and `part`; its `length()` collects the rows'
+  `RowLength`s into an `export::Copper` (`FromIterator<RowLength>`, which
+  `WireList::copper` uses too), so a rail counts once; its `boundary()`
+  counts the rows with an `End::Boundary` end on a `Contact::Connectorless`
+  port — a wire-through continuation of the parent's conductor, kept in
+  the quantity but flagged (a boundary port on the owner's own connector
+  is a real termination). `ComponentLine`
+  reads the instances, keyed by `PartMeta.number`, else by type; the
+  root, inline instances and, without a part number, assemblies
+  (`Instance::is_assembly`: children and no port or connector of its own)
+  are left out. `SpliceLine` reads every instance's `splices`, keyed by
+  part, else by label (else name). `Line::is_specified()` says whether a
+  line names what to buy (a cable's `type`, which a cable body has in
+  place of a part); `Line::length()` is the `Copper` of a cable or wire
+  line, whose `unmeasured` says what its total leaves out. Contacts,
+  terminals and seals are not in the model, so not in the BOM; a screen
+  is part of its cable.
+- **Wire format (`export/records/`)** — what `wirebug export` prints and
+  `render --embed` writes. Each table becomes record types private to the
+  module, built from the models (`WireSheet` from a `WireList`,
+  `ConnectorSheet` from `PinTables`, `BomSheet` from a `Bom` — one flat
+  `LineRecord` per line, every kind under the same fields, so its JSON
+  and CSV are the same table; `EndRecord` for an end in either,
+  `From<&End>` / `From<&FarEnd>`), owned strings and numbers with serde
+  derives: the JSON nests them, and the CSV is their flattening
+  (`Sheet::csv_rows`, one row per wire-list row or per cavity entry, under
+  `Sheet::HEADER`), so the two formats carry the same data by
+  construction. The JSON document wraps a sheet's fields (`rows`,
+  `connectors` or `lines`) in `table`, `format_version` (`export::FORMAT_VERSION`),
+  `project` and `generator` (`crate::GENERATOR`, the embed manifest's).
+  CSV goes through the `csv` crate (RFC 4180 quoting, `\n` endings, and a
+  row of the wrong length is refused). The rail rule is explicit:
+  `length_m` is `RowLength::copper()` (a rail's length on its first
+  segment only, nothing on a screen), and `rail_length_m` /
+  `rail_segment` carry the whole rail on each of its segments, so summing
+  `length_m` is `WireList::copper()`. Twisted pairs are numbered from 1
+  (the IR's `twisted_group` + 1). The columns are a public interface and
+  are listed in README's "Exporting build tables"; a change to one's
+  name, place or meaning raises `FORMAT_VERSION` once the table has been
+  released; a new table does not (adding the BOM left it at 1), and nor
+  did the BOM's `boundary` column, added before the table was released. A new table is a new `Table` variant, a
+  `Sheet` impl and an `EmbedExports` field.
 
 ## DSL validation (`check`)
 
@@ -677,7 +867,7 @@ so one run reports many. Errors fail the run; warnings fail only under
   `diagnostics::PropertyOwner`, whose `keys()` say what each body takes: a
   cable `type` and `length`, a wire `length`, `type` and `part`, a
   component `part`, `manufacturer`, `description` and `rating`, a splice
-  `part` and `description`, a closed set a later bill of materials reads) — an unknown key, a key set twice, a
+  `part` and `description`, a closed set the bill of materials reads) — an unknown key, a key set twice, a
   value of the wrong kind (strings for `type`/`part` and the component
   keys, a number for `length`). A component split with `extend` sets each
   key once across its fragments (`validate_fragment_properties`): a
@@ -843,7 +1033,10 @@ phases above). Render adds only geometry/dispatch errors, in `src/error.rs`
   - our own SVG failing to parse or convert for `--png` / `--pdf`.
 - **`error::Error`** — what stops the whole render: file IO when writing
   output (`Write`), the HTML index template (`Template`) and serializing
-  the `--embed` manifest (`EmbedManifest`).
+  the `--embed` manifest (`EmbedManifest`); and what stops an export (or
+  `--embed`'s tables): writing a table's CSV (`ExportCsv`) or JSON
+  (`ExportJson`), each naming the `export::Table`, and `Write` for its
+  file.
 
 `render_views` returns one `Result<RenderedView, ViewError>` per view, in
 declaration order; a failure never stops the others, and file names are
@@ -856,8 +1049,9 @@ each output mode does with a failure:
 - **SVG / `--png`** — the views that rendered (and rasterised) are written;
   `index.html` shows each failure, titled, where its drawing would be.
 - **`--embed`** — the views that rendered are written, and `manifest.json`
-  lists only those (its schema is unchanged: a host never sees a view whose
-  file is missing). The failures are on stderr only.
+  lists only those (a host never sees a view whose file is missing). The
+  build tables are written before the manifest, so it never names a
+  missing table either. The failures are on stderr only.
 - **`--pdf`** — `PdfExporter::to_pdf` takes `render_views`' results and
   makes one page per view that rendered and converted, numbered
   `n / total` among themselves; `PdfExport::failures` names the rest, in
@@ -876,10 +1070,24 @@ has errors (or, under `--strict`, warnings).
 
 ```
 src/
-├── main.rs          # clap CLI: `check`, `render`, `serve`, `lsp`, `manifest version` (all over the .wb DSL)
+├── main.rs          # clap CLI: `check`, `render`, `export`, `serve`, `lsp`, `manifest version` (all over the .wb DSL)
 ├── lib.rs           # re-exports; check_project + render::render_views
 ├── pipeline.rs      # check_loaded: dsl::check_loaded, then render::lint
 │                    #   (the layout checks) — shared by check_project and lsp
+│
+│  # ── build tables derived from ir::Design (no rendering) ──
+├── export/
+│   ├── mod.rs       # re-exports the table models and Export
+│   ├── wires.rs     # WireList: one Row per conductor segment and per screen
+│   ├── pins.rs      # PinTables: one PinTable per connector (per inline half),
+│   │                #   one Cavity per pin + unpinned ports, built from the WireList
+│   ├── bom.rs       # Bom: one Line per thing to buy, per placement, grouped by part
+│   └── records/     # the wire format: Export (Table × Format → text), Exported
+│       ├── mod.rs       # Table, Format, Export, the JSON Document, CSV writing
+│       ├── ends.rs      # EndRecord: an end as both tables write it
+│       ├── wires.rs     # WireSheet: the wire list's records and columns
+│       ├── connectors.rs# ConnectorSheet: the pin tables' records and columns
+│       └── bom.rs       # BomSheet: the bill of materials' records and columns
 │
 │  # ── DSL parse-and-check pipeline (the only input: .wb) ──
 ├── dsl/
@@ -902,7 +1110,10 @@ src/
 │   │   │                #   endpoint reference binding
 │   │   └── views.rs     # view subject binding + include/enclosure checks
 │   ├── elaborate/mod.rs # AST/registry → ir::Design; containment-cycle guard
-│   ├── ir/mod.rs        # id newtypes + elaborated Design/Instance/Port/Wire/View
+│   ├── ir/
+│   │   ├── mod.rs       # id newtypes + elaborated Design/Instance/Port/Wire/View
+│   │   └── harness.rs   # HarnessScope: what a harness view draws, through which
+│   │                    #   inline half (shared by render/harness and export)
 │   ├── validate/mod.rs  # wire arity, cable/wire properties, pin/gauge/length values (errors) + --strict warnings
 │   └── diagnostics/mod.rs # miette `Problem` enum (one variant per failure class)
 │
@@ -1066,7 +1277,11 @@ Runtime:
 - [`pdf-writer`] — assembles the multi-page A4 document around `svg2pdf`'s
   chunks. Pinned to the version `svg2pdf`'s API exposes (its `to_chunk`
   returns this crate's types) — bump the two together.
-- [`serde_json`] — serialises the `--embed` `manifest.json` sidecar.
+- [`serde_json`] — serialises the `--embed` `manifest.json` sidecar and
+  the exported tables' JSON.
+- [`csv`] — RFC 4180 writing of the exported tables (`export/records/`):
+  quoting of labels with commas, quotes and line breaks, and a check that
+  every row has a field per column.
 - [`pathfinding`] — A* over the orthogonal visibility graph for
   object-avoiding connector routing (render path), and the breadth-first
   reachability test `check` uses to find wires the router cannot route.
@@ -1102,6 +1317,7 @@ Dev / test:
 [`svg2pdf`]: https://docs.rs/svg2pdf
 [`pdf-writer`]: https://docs.rs/pdf-writer
 [`serde_json`]: https://docs.rs/serde_json
+[`csv`]: https://docs.rs/csv
 [`tempfile`]: https://docs.rs/tempfile
 [`pathfinding`]: https://docs.rs/pathfinding
 [`askama`]: https://docs.rs/askama

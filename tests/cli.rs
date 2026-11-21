@@ -1781,3 +1781,315 @@ fn render_refuses_a_project_with_syntax_errors() {
     let drawn = std::fs::read_dir(&out).map_or(0, |entries| entries.count());
     assert_eq!(drawn, 0, "nothing is drawn");
 }
+
+const WIRE_LIST_ROOT: &str = "tests/fixtures/wire_list_project";
+const PIN_TABLE_ROOT: &str = "tests/fixtures/pin_table_project";
+const BOM_ROOT: &str = "tests/fixtures/bom_project";
+
+/// Run `wirebug export <args>`, returning (success, stdout, stderr).
+fn export(args: &[&str]) -> (bool, String, String) {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .arg("export")
+        .args(args)
+        .output()
+        .expect("runs");
+    (
+        output.status.success(),
+        String::from_utf8(output.stdout).expect("utf-8 stdout"),
+        String::from_utf8(output.stderr).expect("utf-8 stderr"),
+    )
+}
+
+#[test]
+fn export_wires_prints_the_wire_list_as_csv_on_stdout() {
+    let (ok, stdout, stderr) = export(&["wires", WIRE_LIST_ROOT]);
+    assert!(ok, "{stderr}");
+    let mut lines = stdout.lines();
+    let header = lines.next().expect("a header");
+    assert!(header.starts_with("kind,owner,cable,"), "{header}");
+    assert!(header.ends_with(",length_m,rail_length_m,rail_segment"));
+    // 16 conductors (a rail of four ends is three), two screens, and the
+    // sub-loom's wire once per placement.
+    let rows: Vec<&str> = lines.collect();
+    assert_eq!(rows.len(), 19, "{stdout}");
+    assert_eq!(rows.iter().filter(|r| r.starts_with("shield,")).count(), 2);
+    // Nothing but the table on stdout; a clean project says nothing.
+    assert!(stderr.is_empty(), "{stderr}");
+}
+
+#[test]
+fn export_connectors_prints_a_row_per_cavity_entry() {
+    let (ok, stdout, stderr) = export(&["connectors", PIN_TABLE_ROOT]);
+    assert!(ok, "{stderr}");
+    let mut lines = stdout.lines();
+    let header = lines.next().expect("a header");
+    assert!(header.starts_with("instance,connector,half,"), "{header}");
+    let rows: Vec<&str> = lines.collect();
+    assert_eq!(rows.len(), 43, "{stdout}");
+    // A conductor into a port with no pin is listed, its pin empty.
+    assert!(
+        rows.iter()
+            .any(|r| r.starts_with("Vehicle.ecu,x1,,Ecu12,ECU 12p,ECU-12,,,aux,AUX,conductor,")),
+        "{stdout}"
+    );
+    // An unused cavity is a row of its own.
+    assert!(
+        rows.iter()
+            .any(|r| r.starts_with("Vehicle.ecu,x1,,Ecu12,ECU 12p,ECU-12,7,,,,empty,"))
+    );
+}
+
+#[test]
+fn export_json_carries_the_format_version_and_the_project() {
+    for (table, root, data) in [
+        ("wires", WIRE_LIST_ROOT, "rows"),
+        ("connectors", PIN_TABLE_ROOT, "connectors"),
+        ("bom", BOM_ROOT, "lines"),
+    ] {
+        let (ok, stdout, stderr) = export(&[table, root, "--format", "json"]);
+        assert!(ok, "{stderr}");
+        let document: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+        assert_eq!(document["table"], table);
+        assert_eq!(document["format_version"], 1);
+        assert!(document["project"]["name"].is_string());
+        assert_eq!(
+            document["generator"],
+            concat!("wirebug v", env!("CARGO_PKG_VERSION"))
+        );
+        assert!(document[data].is_array(), "{table}: {stdout}");
+    }
+}
+
+#[test]
+fn export_out_writes_the_file_and_prints_a_summary_instead() {
+    let tmp = tempdir().expect("tempdir");
+    let path = tmp.path().join("wires.csv");
+    let (ok, stdout, stderr) = export(&["wires", WIRE_LIST_ROOT, "--out", path.to_str().unwrap()]);
+    assert!(ok, "{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert_eq!(
+        stderr.trim_end(),
+        format!("exported 19 wire-list row(s) as csv to {}", path.display())
+    );
+    let written = std::fs::read_to_string(&path).expect("written");
+    let (_, printed, _) = export(&["wires", WIRE_LIST_ROOT]);
+    assert_eq!(written, printed);
+}
+
+#[test]
+fn export_refuses_a_project_with_errors_and_prints_no_table() {
+    let (ok, stdout, stderr) = export(&["wires", SYNTAX_ERRORS_ROOT]);
+    assert!(!ok);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(stderr.contains("not exporting"), "{stderr}");
+}
+
+#[test]
+fn export_strict_refuses_a_project_with_warnings() {
+    let (ok, stdout, stderr) = export(&["connectors", UNDRAWN_CONDUCTORS_ROOT]);
+    assert!(ok, "warnings do not block: {stderr}");
+    assert!(stdout.starts_with("instance,"));
+    assert!(
+        stderr.contains("undrawn"),
+        "the warnings go to stderr: {stderr}"
+    );
+
+    let (ok, stdout, stderr) = export(&["connectors", UNDRAWN_CONDUCTORS_ROOT, "--strict"]);
+    assert!(!ok);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(stderr.contains("— not exporting"), "{stderr}");
+}
+
+#[test]
+fn render_embed_writes_the_build_tables_the_manifest_names() {
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("embed");
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args([
+            "render",
+            PIN_TABLE_ROOT,
+            "--out",
+            out.to_str().unwrap(),
+            "--embed",
+        ])
+        .assert()
+        .success();
+    let manifest: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(out.join("manifest.json")).expect("manifest written"),
+    )
+    .expect("valid JSON");
+    for table in ["wires", "connectors", "bom"] {
+        let filename = manifest["exports"][table].as_str().expect("named");
+        assert_eq!(filename, format!("{table}.json"));
+        let written = std::fs::read_to_string(out.join(filename)).expect("table written");
+        // The same document `export --format json` prints.
+        let (_, printed, _) = export(&[table, PIN_TABLE_ROOT, "--format", "json"]);
+        assert_eq!(written, printed, "{table}");
+    }
+}
+
+#[test]
+fn export_help_lists_its_tables_and_flags() {
+    let help = |args: &[&str]| {
+        let output = Command::cargo_bin("wirebug")
+            .expect("binary present")
+            .args(args)
+            .output()
+            .expect("runs");
+        assert!(output.status.success());
+        String::from_utf8(output.stdout).expect("utf-8")
+    };
+    insta::assert_snapshot!("export_help", help(&["export", "--help"]));
+    insta::assert_snapshot!("export_wires_help", help(&["export", "wires", "--help"]));
+    insta::assert_snapshot!("export_bom_help", help(&["export", "bom", "--help"]));
+}
+
+#[test]
+fn export_bom_prints_a_row_per_thing_to_buy_with_its_quantity() {
+    let (ok, stdout, stderr) = export(&["bom", BOM_ROOT]);
+    assert!(ok, "{stderr}");
+    assert!(stderr.is_empty(), "{stderr}");
+    let mut lines = stdout.lines();
+    assert_eq!(
+        lines.next(),
+        Some(
+            "kind,specified,part,type,label,description,manufacturer,rating,\
+             color,color_code,gauge_mm2,quantity,total_length_m,unmeasured,boundary,where"
+        )
+    );
+    let rows: Vec<&str> = lines.collect();
+    assert_eq!(rows.len(), 22, "{stdout}");
+    for expected in [
+        // Seven lamps' housings and two inlines' male halves.
+        "housing,true,DT04-2P,Dt04_2p,,Deutsch DT04-2P,,,,,,9,,,,",
+        // An inline that declares no half is still two housings, listed
+        // under its label.
+        "housing,false,,,,Spare,,,,,,2,,,,Vehicle.ic_spare.male;Vehicle.ic_spare.female",
+        // Two cables of one type: the one with a length in the total, the
+        // other counted as unmeasured.
+        "cable,true,,2x0.5 TP,,,,,,,,2,3,1,,Vehicle.can1;Vehicle.can2",
+        // One of the nine conductors continues the vehicle's wire at the
+        // pod's connectorless boundary port.
+        "wire,false,,,,,,,red,RD,1,9,6.5,2,1,",
+        "component,false,,Switch,,,,,,,,1,,,,Vehicle.sw",
+        "splice,true,D-436,,,Solder sleeve,,,,,,3,,,,Vehicle.sp_gnd;Vehicle.front.sp_bar;Vehicle.rear.sp_bar",
+    ] {
+        assert!(
+            rows.iter().any(|row| row.starts_with(expected)),
+            "{expected}: {stdout}"
+        );
+    }
+}
+
+#[test]
+fn export_bom_as_json_flags_the_unspecified_and_lists_the_placements() {
+    let (ok, stdout, stderr) = export(&["bom", BOM_ROOT, "--format", "json"]);
+    assert!(ok, "{stderr}");
+    let document: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    let lines = document["lines"].as_array().expect("lines");
+    assert_eq!(lines.len(), 22);
+    let lamps = lines
+        .iter()
+        .find(|line| line["part"] == "LMP-1")
+        .expect("the lamps' line");
+    assert_eq!(lamps["kind"], "component");
+    assert_eq!(lamps["specified"], true);
+    assert_eq!(lamps["quantity"], 7);
+    assert_eq!(lamps["where"].as_array().map(Vec::len), Some(7));
+    // A connector block that names no type is grouped by its description.
+    let untyped = &lines[1];
+    assert_eq!(untyped["kind"], "housing");
+    assert_eq!(untyped["specified"], false);
+    assert!(untyped["part"].is_null() && untyped["type"].is_null());
+    assert_eq!(untyped["description"], "Relay 2p");
+    assert_eq!(untyped["where"], serde_json::json!(["Vehicle.relay.x1"]));
+    let red = lines
+        .iter()
+        .find(|line| line["kind"] == "wire" && line["color_code"] == "RD")
+        .expect("the red wire's line");
+    assert_eq!(red["boundary"], 1);
+}
+
+#[test]
+fn export_bom_out_summarises_the_rows_written() {
+    let tmp = tempdir().expect("tempdir");
+    let path = tmp.path().join("bom.csv");
+    let (ok, stdout, stderr) = export(&["bom", BOM_ROOT, "--out", path.to_str().unwrap()]);
+    assert!(ok, "{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert_eq!(
+        stderr.trim_end(),
+        format!("exported 22 BOM row(s) as csv to {}", path.display())
+    );
+}
+
+#[test]
+fn render_embed_writes_the_bom_beside_the_manifest() {
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("embed");
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args([
+            "render",
+            BOM_ROOT,
+            "--out",
+            out.to_str().unwrap(),
+            "--embed",
+        ])
+        .assert()
+        .success();
+    let manifest: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(out.join("manifest.json")).expect("manifest written"),
+    )
+    .expect("valid JSON");
+    assert_eq!(manifest["exports"]["bom"], "bom.json");
+    let written = std::fs::read_to_string(out.join("bom.json")).expect("bom written");
+    let (_, printed, _) = export(&["bom", BOM_ROOT, "--format", "json"]);
+    assert_eq!(written, printed);
+}
+
+/// Run `wirebug <args>` with its stdout a pipe whose reader is gone before
+/// anything is written, as when the output is piped into `head` and `head`
+/// has stopped reading; return (success, stderr).
+fn run_into_closed_pipe(args: &[&str]) -> (bool, String) {
+    use assert_cmd::cargo::CommandCargoExt;
+    use std::io::Read;
+    use std::process::Stdio;
+
+    let mut child = std::process::Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawns");
+    // Closing the read end now makes the command's first write to stdout
+    // fail with a broken pipe: it checks the project before it writes.
+    drop(child.stdout.take());
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .expect("stderr piped")
+        .read_to_string(&mut stderr)
+        .expect("utf-8 stderr");
+    (child.wait().expect("exits").success(), stderr)
+}
+
+#[test]
+fn a_reader_that_stops_early_is_not_an_error() {
+    for table in ["wires", "connectors", "bom"] {
+        for format in ["csv", "json"] {
+            let (ok, stderr) =
+                run_into_closed_pipe(&["export", table, PIN_TABLE_ROOT, "--format", format]);
+            assert!(ok, "export {table} --format {format}: {stderr}");
+            assert!(!stderr.contains("error"), "{stderr}");
+        }
+    }
+    let (ok, stderr) =
+        run_into_closed_pipe(&["check", "--format", "json", UNDRAWN_CONDUCTORS_ROOT]);
+    assert!(ok, "check --format json: {stderr}");
+    assert!(!stderr.contains("panicked"), "{stderr}");
+}
