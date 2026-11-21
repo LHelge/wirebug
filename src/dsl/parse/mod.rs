@@ -5,14 +5,21 @@
 //! are chumsky `Rich` values carrying a span and an expected-set; we copy
 //! them into owned [`ParseError`]s so no parser lifetime escapes.
 //!
-//! Every name goes through one production, `ident`: an identifier, or a
+//! Names go through two productions, `ident` (a name after a keyword) and
+//! `leading_name` (a name that starts a statement): an identifier, or a
 //! contextual keyword ([`Token::is_contextual`]) read as a name. A reserved
 //! keyword in name position is read as the name too, so the parse carries
-//! on, and recorded in the parser state for a reserved-word error.
+//! on, and recorded in the parser state: every occurrence gets its own
+//! reserved-word error.
 
+use chumsky::error::RichPattern;
 use chumsky::input::{Input, MapExtra, Stream, ValueInput};
 use chumsky::inspector::TruncateState;
-use chumsky::prelude::{IterParser, Parser, Rich, choice, end, extra, just, recursive, select};
+use chumsky::label::LabelError;
+use chumsky::prelude::{
+    IterParser, Parser, Rich, any, choice, end, extra, just, recursive, select,
+};
+use chumsky::util::MaybeRef;
 
 use crate::dsl::ast::*;
 use crate::dsl::lex::Token;
@@ -151,32 +158,74 @@ pub fn parse_file(tokens: Vec<(Token, Span)>, file: FileId, src_len: usize) -> P
     Parsed { file, errors }
 }
 
+/// Read the reserved keyword `word` as a name, recording it for the
+/// reserved-word error.
+fn reserved_as_name<'tok, I>(
+    word: Token,
+    e: &mut MapExtra<'tok, '_, I, Extra<'tok>>,
+) -> Spanned<Ident>
+where
+    I: ValueInput<'tok, Token = Token, Span = Span>,
+{
+    let span = e.span();
+    let name = Ident(word.to_string());
+    e.state().push(Spanned::new(word, span));
+    Spanned::new(name, span)
+}
+
 fn parser<'tok, I>() -> impl Parser<'tok, I, File, Extra<'tok>>
 where
     I: ValueInput<'tok, Token = Token, Span = Span>,
 {
     // --- Leaves ---
 
-    // A name. A reserved keyword is accepted too, so one misused word is
-    // one targeted error instead of a parse that stops there.
-    let ident = select! {
-        Token::Ident(name) => Ok(name),
-        token if token.is_contextual() => Ok(token.to_string()),
-        token if token.is_reserved() => Err(token),
+    // An identifier, or a contextual keyword read as a name.
+    let plain_name = select! {
+        Token::Ident(name) => name,
+        token if token.is_contextual() => token.to_string(),
     }
-    .map_with(|name, e: &mut MapExtra<'tok, '_, I, Extra<'tok>>| {
-        let span = e.span();
-        let name = match name {
-            Ok(name) => name,
-            Err(reserved) => {
-                let name = reserved.to_string();
-                e.state().push(Spanned::new(reserved, span));
-                name
-            }
-        };
-        Spanned::new(Ident(name), span)
-    })
+    .map_with(|name, e| Spanned::new(Ident(name), e.span()));
+
+    let reserved_word = select! { token if Token::is_reserved(&token) => token };
+
+    // A name after a keyword (`port <name>`, `include <name>`, `[<name>.…`).
+    // A reserved word there is still read as the name, and recorded so
+    // each occurrence gets a reserved-word error; the parse goes on past it.
+    let ident = choice((
+        plain_name,
+        reserved_word.map_with(|word, e| reserved_as_name(word, e)),
+    ))
     .boxed();
+
+    // A name that starts a statement: `<name>: Type;`, `<key>: value;`,
+    // `<side>: ports;`, `<port> at (…);`. Here a reserved word is the name
+    // only when `separator` follows it. Otherwise the branch fails on the
+    // keyword itself without consuming it, so a misplaced keyword (`view`
+    // inside a component) gets the error of the statements that could
+    // start there, on the keyword, and not "expected ':'" one token on.
+    let leading_name = |separator: Token| {
+        choice((
+            plain_name,
+            reserved_word
+                .then(any().rewind().or_not())
+                .try_map_with(move |(word, next), e| {
+                    if next.as_ref() == Some(&separator) {
+                        Ok(reserved_as_name(word, e))
+                    } else {
+                        // Expecting nothing itself, this error leaves the
+                        // other statements' expected set as it was.
+                        Err(
+                            LabelError::<'tok, I, RichPattern<'tok, Token>>::expected_found(
+                                [],
+                                Some(MaybeRef::Val(word)),
+                                e.span(),
+                            ),
+                        )
+                    }
+                }),
+        ))
+        .boxed()
+    };
 
     let string = select! { Token::Str(s) => s }.map_with(|s, e| Spanned::new(s, e.span()));
 
@@ -192,8 +241,7 @@ where
             .map_err(|_| Rich::custom(span, format!("pin must be a whole number, got `{n}`")))
     });
 
-    let connector_property = ident
-        .clone()
+    let connector_property = leading_name(Token::Colon)
         .then_ignore(just(Token::Colon))
         .then(choice((
             string.map(ConnectorPropertyValue::Str),
@@ -380,8 +428,7 @@ where
     // A `<key>: <Type>;` housing-half line. The key is any identifier here
     // (`male`/`female` are validated in resolve, not the grammar) so a typo
     // gets a targeted diagnostic instead of a generic parse error.
-    let inline_half = ident
-        .clone()
+    let inline_half = leading_name(Token::Colon)
         .then_ignore(just(Token::Colon))
         .then(ident.clone())
         .then_ignore(just(Token::Semicolon))
@@ -428,8 +475,7 @@ where
 
     // --- Instances ---
 
-    let instance = ident
-        .clone()
+    let instance = leading_name(Token::Colon)
         .then_ignore(just(Token::Colon))
         .then(ident.clone())
         .then(string.or_not())
@@ -487,8 +533,7 @@ where
 
     // --- Cables ---
 
-    let cable_property = ident
-        .clone()
+    let cable_property = leading_name(Token::Colon)
         .then_ignore(just(Token::Colon))
         .then(choice((
             string.map(CablePropertyValue::Str),
@@ -566,8 +611,7 @@ where
 
     // A `<side>: <port>, <port>;` line, flattened to one placement per port
     // (all sharing the line's side and span).
-    let port_line = ident
-        .clone()
+    let port_line = leading_name(Token::Colon)
         .then_ignore(just(Token::Colon))
         .then(
             ident
@@ -604,8 +648,7 @@ where
     let anchor = choice((number.map(Anchor::Coord), ident.clone().map(Anchor::Edge)));
 
     // `<port> at (<x>, <y>);` — a subject port placed on the enclosure edge.
-    let enclosure_port = ident
-        .clone()
+    let enclosure_port = leading_name(Token::At)
         .then_ignore(just(Token::At))
         .then(
             anchor
@@ -1550,6 +1593,78 @@ component b { }
             })
             .collect();
         assert_eq!(words, ["cable"]);
+    }
+
+    /// Each error of `src` as `<the text under its span>: <message>`.
+    fn errors_at(src: &str) -> Vec<String> {
+        parse_str(src)
+            .errors
+            .iter()
+            .map(|e| {
+                let span = e.span();
+                let message = match e {
+                    ParseError::Syntax { message, .. } => message.clone(),
+                    ParseError::ReservedWord { word, .. } => format!("reserved word `{word}`"),
+                };
+                format!("{}: {message}", &src[span.start..span.end])
+            })
+            .collect()
+    }
+
+    #[test]
+    fn misplaced_keyword_at_a_statement_start_fails_on_the_keyword() {
+        // A reserved word may lead a `<name>:` statement only when the `:`
+        // follows; anywhere else the error is the one the statements that
+        // could start there give, on the keyword itself.
+        let cases = [
+            r#"component C { view schematic "V" { } }"#,
+            r#"component C { use X from "x.wb"; }"#,
+            r#"component C { connector_type T "t" { } }"#,
+            "component C { twisted { } }",
+            "component C { pin 1; }",
+            r#"component C { cable k { port a "A"; } }"#,
+            r#"connector_type T "t" { wire "x"; }"#,
+            "component C { inline ic { cable Plug; } }",
+            r#"view schematic "V" { include a at (0, 0) ports { view west: a; } }"#,
+            r#"view schematic "V" { enclosure { wire (west, 1); } }"#,
+        ];
+        let report: Vec<String> = cases.iter().flat_map(|src| errors_at(src)).collect();
+        insta::assert_snapshot!(report.join("\n"), @r"
+        view: found 'view' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'component', 'extend', something else, or '}'
+        use: found 'use' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'component', 'extend', something else, or '}'
+        connector_type: found 'connector_type' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'component', 'extend', something else, or '}'
+        twisted: found 'twisted' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'component', 'extend', something else, or '}'
+        pin: found 'pin' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'component', 'extend', something else, or '}'
+        port: found 'port' expected something else, 'twisted', 'wire', or '}'
+        wire: found 'wire' expected 'layout', something else, or '}'
+        cable: found 'cable' expected something else, 'pub', 'port', or '}'
+        view: found 'view' expected something else, or '}'
+        wire: found 'wire' expected something else, or '}'
+        ");
+    }
+
+    #[test]
+    fn reserved_word_leading_a_name_statement_is_a_reserved_word_error() {
+        let cases = [
+            "component C { pin: Plug; }",
+            r#"connector_type T "t" { port: "x"; }"#,
+            "component C { inline ic { wire: Plug; } }",
+            r#"component C { cable k { view: "x"; } }"#,
+            r#"view schematic "V" { include a at (0, 0) ports { wire: a; } }"#,
+            r#"view schematic "V" { enclosure { wire at (west, 1); } }"#,
+        ];
+        let report: Vec<String> = cases.iter().flat_map(|src| errors_at(src)).collect();
+        assert_eq!(
+            report,
+            [
+                "pin: reserved word `pin`",
+                "port: reserved word `port`",
+                "wire: reserved word `wire`",
+                "view: reserved word `view`",
+                "wire: reserved word `wire`",
+                "wire: reserved word `wire`",
+            ]
+        );
     }
 
     #[test]
