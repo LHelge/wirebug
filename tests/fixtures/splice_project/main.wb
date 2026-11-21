@@ -1,8 +1,8 @@
 // Splices: three devices' grounds join at one joint in the loom, each on a
 // conductor of its own gauge and color, and the joint runs on to the
-// battery minus on one heavy conductor. A second splice is a butt splice
-// inside a cable: the lamp feed changes gauge on its way. A loose rail
-// stays a rail.
+// battery minus on one heavy conductor. A second splice is a butt splice:
+// the lamp feed's cable conductor ends on it, and a thinner loose wire
+// runs on to the lamp. A loose rail stays a rail.
 
 use Ecu     from "components/ecu.wb";
 use Lamp    from "components/lamp.wb";
@@ -29,8 +29,8 @@ component Vehicle {
     cable feed "Lamp feed" {
         length: 1.2;
         wire red 1.5 "12V" [bat.pos, sp_feed];
-        wire red 0.5 "12V" [sp_feed, lamp.pos];
     }
+    wire red 0.5 "12V" [sp_feed, lamp.pos];
 
     wire white 0.5 "WAKE" [ecu.wake, lamp.wake, pump.wake];
 }
@@ -45,8 +45,8 @@ view harness "Ground loom" {
 
 view harness "Lamp feed" {
     include bat.x1  at (0, 0);
-    include sp_feed at (20, 0);
-    include lamp.x1 at (40, 0);
+    include sp_feed at (30, 0);
+    include lamp.x1 at (44, 0);
 }
 
 view harness "Wake" {

@@ -405,10 +405,31 @@ via `ir::ConnectorRef.name`, so a connectorless / excluded / `Own` end drops
 silently (like an unlisted port in a schematic). The candidates are the
 subject's `layout::HarnessConductor`s (`HarnessConductor::all`: each chain
 segment between connectors of two *different* children — one within a
-single connector is a jumper, never drawn); `HarnessLayout::compute` keeps
-those whose two connectors are included and records them as
-`HarnessLayout.drawn` (`lint::Segment`, wire and pair index), which is what
-`check`'s `undrawn_conductor` reads.
+single connector is a jumper, never drawn — and each wire with an end on a
+splice of the subject; an end is a `layout::HarnessEnd`, `Connector` or
+`Splice`, keyed by a `NodeKey` of the same two kinds);
+`HarnessLayout::compute` keeps those whose two ends' connectors or splices
+are included and records them as `HarnessLayout.drawn` (`lint::Segment`,
+wire and pair index), which is what `check`'s `undrawn_conductor` reads.
+
+A **splice** include (`include sp`, an `ir::Include` with no connector
+naming one of the subject's `Instance.splices`; `NodeKey::of`) draws as a
+`SpliceNode`: a solid dot at the authored point (`splice-dot`, haloed in
+white so each conductor's end reads against it) with the name
+(`splice-name`, bold), label (`splice-label`) and part (`splice-part`)
+centred beneath, in a `<g class="splice">` drawn over the connectors — no
+table and no outline, so it reads as a joint, not a connector. Every
+conductor to it attaches at the dot's centre (`layout::Anchor::Splice`; a
+pin's is `Anchor::Pin`), so they visibly converge there, and a pin wired
+to a splice faces it as it faces a connector. A conductor to a splice
+draws by the same rule as any other: a cable's through its cable box on
+the spine, a loose wire as one bezier. The splice's box (dot and text) is
+`SpliceNode.bounds`, counted in the spine (`spine_x` takes every node's
+and splice's bounds) and the viewBox, and reported as an `IncludeBox`, so
+the overlap and canvas checks see it. One cable box per cable on one
+spine still holds, so a splice placed between a cable's two ends draws
+its strands doubling back; author the halves as two cables, or a cable
+and a loose wire.
 
 Kept conductors split by `Wire.cable`. A **declared cable** draws as a
 **cable box** (`CableBox`/`render_cable_box`) on the spine: a titled table
@@ -711,13 +732,16 @@ splice fewer than two conductors of its merged component end on
   with at least one harness view that none of those views draws
   (`undrawn_conductor`, labelled on the conductor's `ir::Wire.span`, which
   may sit in another file than the views; the help names the includes that
-  would draw it, as `lint::EndTarget`s — an inline connector only through
+  would draw it, as `lint::EndTarget`s — a splice as itself
+  (`IncludeTarget::Splice`), the help then saying a view must include what
+  both ends land on, connector or splice; an inline connector only through
   the halves it declares, and one that declares none is told to declare a
   half first, since an include of an undeclared half is an error). Each harness view's `ViewLayout.drawn` is the
   `HarnessLayout.drawn` it renders; `lint::HarnessCoverage` unions them per
   subject type, and every `HarnessRenderer::conductors` entry (the same
   `HarnessConductor::all` candidates) outside the union is reported. So a
-  multi-endpoint rail is judged per chain segment, an inline connector is
+  multi-endpoint rail is judged per chain segment, a conductor to a splice
+  is drawn when a view includes both its ends, an inline connector is
   covered through either half (an include of either normalizes to the
   designator), a double crimp is two conductors and never a problem, and
   a component with no harness view is not built from drawings yet, so is
@@ -870,7 +894,7 @@ src/
 │   │           └── vpsc.rs      # separation-constraint solver
 │   ├── harness/     # WireViz-style trunk-and-bezier renderer (kind: harness)
 │   │   ├── mod.rs       # HarnessRenderer; render orchestration + STYLE
-│   │   ├── layout.rs    # conductors (HarnessConductor), pin-table nodes,
+│   │   ├── layout.rs    # conductors (HarnessConductor), pin-table nodes, splices,
 │   │   │                #   spine + facing, cable boxes (centroid placement
 │   │   │                #   + de-overlap), loose wires
 │   │   ├── bezier.rs    # horizontally-flexed cubic bezier math (FLEX)

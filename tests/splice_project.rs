@@ -1,6 +1,7 @@
 //! End-to-end check of the `splice_project` fixture: a ground splice three
 //! devices' grounds join at, run on to the battery on one heavy conductor,
-//! and a butt splice inside a cable — elaborated into the IR.
+//! and a butt splice a cable conductor ends on — elaborated into the IR and
+//! drawn in harness views.
 //!
 //! Tests never target `examples/` — that is the real, freely-changing
 //! vehicle project.
@@ -9,6 +10,7 @@ use std::path::Path;
 
 use wirebug::check_project;
 use wirebug::dsl::ir::{CableName, Design, InstanceName, PortName, SpliceName, WireEnd};
+use wirebug::render::{RenderedView, SvgMode, embed_stylesheet, render_views};
 
 fn design() -> Design {
     let main = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/splice_project/main.wb");
@@ -73,13 +75,70 @@ fn each_conductor_to_a_splice_is_a_wire_of_its_own() {
         ]
     );
 
-    // A cable's conductors may end on a splice too: the feed changes gauge
-    // at its butt splice.
+    // A cable's conductor may end on a splice too: the feed changes gauge
+    // at its butt splice, on to a loose wire.
     let feed = SpliceName::from("sp_feed");
     let cabled: Vec<(Option<&CableName>, f64)> = root
         .splice_conductors(&feed)
         .map(|wire| (wire.cable.as_ref(), wire.gauge))
         .collect();
-    let cable = CableName::from("feed");
-    assert_eq!(cabled, [(Some(&cable), 1.5), (Some(&cable), 0.5)]);
+    assert_eq!(cabled, [(Some(&CableName::from("feed")), 1.5), (None, 0.5)]);
+}
+
+fn views() -> Vec<RenderedView> {
+    render_views(&design(), SvgMode::Standalone)
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("renders")
+}
+
+fn view(views: &[RenderedView], title: &str) -> String {
+    views
+        .iter()
+        .find(|v| v.title == title)
+        .unwrap_or_else(|| panic!("view {title:?}"))
+        .svg
+        .clone()
+}
+
+#[test]
+fn a_harness_view_draws_a_splice_as_a_labelled_joint() {
+    let views = views();
+    let ground = view(&views, "Ground loom");
+    assert_eq!(ground.matches("class=\"splice-dot\"").count(), 1);
+    for text in ["sp_gnd", "Ground splice", "D-436-36"] {
+        assert!(ground.contains(&format!(">\n{text}\n</text>")), "{text}");
+    }
+    // Each conductor to it is drawn on its own, with its own gauge and
+    // color.
+    for annotation in [
+        "GND · 1mm² · BK",
+        "GND · 0.5mm² · BK",
+        "GND · 0.5mm² · BN",
+        "GND · 2.5mm² · BK",
+    ] {
+        assert!(ground.contains(annotation), "{annotation}");
+    }
+
+    // The feed's cable conductor runs through its cable box to the butt
+    // splice, and a loose wire on from it.
+    let feed = view(&views, "Lamp feed");
+    assert_eq!(feed.matches("class=\"connector cable-box\"").count(), 1);
+    assert!(feed.contains(">\nsp_feed\n</text>"));
+    assert!(feed.contains("12V · 1.5mm² · RD") && feed.contains("12V · 0.5mm² · RD"));
+
+    // A view without a splice draws none.
+    assert!(!view(&views, "Wake").contains("class=\"splice\""));
+}
+
+#[test]
+fn the_embed_stylesheet_styles_the_splice_classes() {
+    let css = embed_stylesheet();
+    for class in ["splice-dot", "splice-name", "splice-label", "splice-part"] {
+        assert!(
+            css.lines()
+                .any(|rule| rule.starts_with(".wirebug-harness") && rule.contains(class)),
+            "{class}"
+        );
+    }
 }
