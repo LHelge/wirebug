@@ -1,7 +1,7 @@
 //! SVG emission for harness drawings: connector pin tables, cable boxes on
 //! the spine, and the bezier wires that flex between them.
 
-use svg::node::element::{Circle, Group, Line, Path, Rectangle, Text};
+use svg::node::element::{Circle, Group, Line, Path, Rectangle, Text, Title};
 
 use super::bezier::{Cubic, FLEX, flex};
 use super::layout::{
@@ -422,20 +422,32 @@ fn render_drain(cb: &CableBox, drain: &DrainRow) -> Group {
 /// A loose wire (no cable), along its [`LooseWire::curves`] — through its
 /// lane on the spine (flexed in, a straight run, flexed out) or one flexed
 /// bezier pin-to-pin — as one path per layer, so a host picks the wire out
-/// as one element; annotated where [`LooseWire::annotation_at`] says.
+/// as one element; annotated where [`LooseWire::annotation_at`] says, the
+/// full text in a `<title>` when its lane cut it short.
 pub(super) fn render_loose(wire: &LooseWire) -> Group {
     let d = Cubic::chain_d(&wire.curves());
     let at = wire.annotation_at();
-    add_strand(Group::new().set("class", "cable"), &wire.color, &[d]).add(
-        Text::new(wire_annotation(
-            wire.label.as_deref(),
-            wire.gauge,
-            &wire.color,
-        ))
+    let (shown, full) = (wire.annotation(), wire.full_annotation());
+    let mut annotation = Text::new(shown.clone())
         .set("class", "cable-label")
         .set("x", at.x)
-        .set("y", at.y),
-    )
+        .set("y", at.y);
+    // A shortened annotation keeps the full text as its tooltip.
+    if shown != full {
+        annotation = annotation.add(Title::new(full));
+    }
+    add_strand(Group::new().set("class", "cable"), &wire.color, &[d]).add(annotation)
+}
+
+/// `text` cut to at most `max_chars` characters, ending in an ellipsis when
+/// anything was cut: the label first, then the gauge, then the colour code
+/// survive. A trailing separator before the ellipsis is dropped.
+pub(super) fn shorten(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        return text.to_string();
+    }
+    let kept: String = text.chars().take(max_chars.saturating_sub(1)).collect();
+    format!("{}…", kept.trim_end_matches([' ', '·']))
 }
 
 /// The text shown along a wire: `<label> · <gauge>mm² · <color code>`,
@@ -483,6 +495,17 @@ mod tests {
         let d = braid_d(Point::new(0.0, 10.0), 30.0, 30.0, 0.0, 30.0);
         assert_eq!(d.matches(" C").count(), 2);
         assert!(d.ends_with("30,10"), "{d}");
+    }
+
+    #[test]
+    fn a_shortened_annotation_keeps_its_start_and_ends_in_an_ellipsis() {
+        let text = "WAKE · 0.5mm² · WH";
+        assert_eq!(shorten(text, 40), text, "room enough: unchanged");
+        assert_eq!(shorten(text, text.chars().count()), text);
+        assert_eq!(shorten(text, 13), "WAKE · 0.5mm…");
+        // The separator before the cut is dropped, not left dangling.
+        assert_eq!(shorten(text, 8), "WAKE…");
+        assert_eq!(shorten(text, 1), "…");
     }
 
     #[test]
