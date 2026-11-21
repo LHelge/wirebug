@@ -7,8 +7,8 @@ use indexmap::IndexMap;
 use super::WireList;
 use super::wires::{Cable, Conductor, Contact, End, PortEnd, RowKind, ShieldRun, SpliceEnd};
 use crate::dsl::ir::{
-    Connector, ConnectorLayout, ConnectorName, Design, Half, HarnessScope, Instance, InstancePath,
-    Pin, Port, Wire, WireEnd,
+    Connector, ConnectorLayout, ConnectorName, ConnectorPropertyValue, ConnectorTypeName, Design,
+    Half, HarnessScope, Instance, InstancePath, Pin, Port, Wire, WireEnd,
 };
 
 /// A design's pin tables: one [`PinTable`] per connector of each instance,
@@ -20,7 +20,8 @@ use crate::dsl::ir::{
 /// Connectorless ports have no table. Order is stable and follows the
 /// source: instances in IR order, the root among them, then each
 /// instance's connectors in declaration order — an inline connector's
-/// halves male first — and within a table its cavities by pin.
+/// halves male first — and within a table its cavities by pin, then its
+/// ports without a pin in source order.
 #[derive(Debug, Clone)]
 #[must_use]
 pub struct PinTables<'d> {
@@ -74,20 +75,24 @@ impl<'a, 'd> IntoIterator for &'a PinTables<'d> {
 }
 
 /// One connector's pin table: one [`Cavity`] per pin, sorted by pin
-/// ([`Pin`]'s order, numeric).
+/// ([`Pin`]'s order, numeric), and the connector's ports that have no pin.
 #[derive(Debug, Clone)]
 pub struct PinTable<'d> {
     /// The instance the connector is on; its `path` is the full one.
     pub instance: &'d Instance,
     /// The connector: designator, description, type and layout. An inline
     /// connector's is the one its synthetic instance carries, named after
-    /// it.
+    /// it; its housings are its halves' ([`PinTable::housing`]).
     pub connector: &'d Connector,
     /// For an inline connector, the housing half this table is of: each
     /// half it declares has a table of its own. `None` for an ordinary
     /// connector, and for an inline that declares no half (one table).
     pub half: Option<Half>,
     pub cavities: Vec<Cavity<'d>>,
+    /// The connector's ports that are assigned no pin (the pin-out is not
+    /// known yet), in source order, with what is crimped into them: a
+    /// conductor to one of them is listed here rather than dropped.
+    pub unpinned: Vec<UnpinnedPort<'d>>,
 }
 
 impl<'d> PinTable<'d> {
@@ -107,9 +112,31 @@ impl<'d> PinTable<'d> {
                     connector,
                     half,
                     cavities: Cavity::all_of(instance, connector, layout),
+                    unpinned: UnpinnedPort::all_of(instance, connector),
                 }
             })
         })
+    }
+
+    /// The housing this table is of: an inline connector's half's (its
+    /// connector type's), else the connector's own.
+    pub fn housing(&self) -> Housing<'d> {
+        let half = self
+            .half
+            .zip(self.instance.inline.as_ref())
+            .and_then(|(half, inline)| inline.half(half));
+        match half {
+            Some(half) => Housing {
+                type_name: Some(&half.type_name),
+                description: Some(&half.description),
+                properties: &half.properties,
+            },
+            None => Housing {
+                type_name: self.connector.type_name.as_ref(),
+                description: self.connector.description.as_deref(),
+                properties: &self.connector.properties,
+            },
+        }
     }
 
     /// The halves `instance`'s connector has a table for: each half an
@@ -158,6 +185,64 @@ impl<'d> PinTable<'d> {
                 cavity.entries.push(landing.entry.with_half(half));
             }
         }
+        for unpinned in &mut self.unpinned {
+            if &unpinned.port.name == port {
+                unpinned.entries.push(landing.entry.with_half(half));
+            }
+        }
+    }
+}
+
+/// The housing a [`PinTable`] is of, as it is bought: its connector type
+/// and that type's metadata. A connector block in a component that names no
+/// type has no `type_name`, and only the metadata it writes itself.
+#[derive(Debug, Clone, Copy)]
+pub struct Housing<'d> {
+    /// The connector type, `None` for a connector block without one.
+    pub type_name: Option<&'d ConnectorTypeName>,
+    /// The housing's description: its type's, or the connector block's.
+    pub description: Option<&'d str>,
+    /// The type's free-form metadata, `part` among it.
+    pub properties: &'d IndexMap<String, ConnectorPropertyValue>,
+}
+
+impl<'d> Housing<'d> {
+    /// The housing's part number, from its `part:`.
+    pub fn part(&self) -> Option<&'d str> {
+        match self.properties.get("part") {
+            Some(ConnectorPropertyValue::Str(part)) => Some(part),
+            _ => None,
+        }
+    }
+}
+
+/// A port of a connector that is assigned no pin, and what is crimped into
+/// it: a cavity whose pin is not known yet.
+#[derive(Debug, Clone)]
+pub struct UnpinnedPort<'d> {
+    pub port: &'d Port,
+    /// The conductors and drains landing on the port, in wire-list order.
+    pub entries: Vec<CavityEntry<'d>>,
+}
+
+impl<'d> UnpinnedPort<'d> {
+    /// `connector`'s ports on `instance` that have no pin, in source order.
+    fn all_of(instance: &'d Instance, connector: &'d Connector) -> Vec<Self> {
+        instance
+            .ports
+            .values()
+            .filter(|port| {
+                port.pins.is_empty()
+                    && port
+                        .connector
+                        .as_ref()
+                        .is_some_and(|c| c.name == connector.name)
+            })
+            .map(|port| Self {
+                port,
+                entries: Vec::new(),
+            })
+            .collect()
     }
 }
 
@@ -498,6 +583,14 @@ component Ecu {
         pub port en  "EN"  pin 1;
     }
     pub port sense "SENSE";
+}
+
+component Dev {
+    connector x1 "X" {
+        pub port a "A";
+        pub port b "B" pin 2;
+        pub port c "C";
+    }
 }
 
 component Loom {
@@ -891,6 +984,83 @@ component Loom {
         };
         assert_eq!(drains(Half::Female), [HalfFit::Assigned]);
         assert_eq!(drains(Half::Male), []);
+    }
+
+    #[test]
+    fn a_conductor_into_a_port_without_a_pin_is_listed_under_the_unpinned_ports() {
+        let design = design(
+            "use Dev from \"lib.wb\";\n\
+             component Car { ecu: Dev; lamp: Dev; wire red 0.5 [ecu.a, lamp.a]; }\n",
+        );
+        let tables = PinTables::from(&design);
+        for (instance, other) in [("Car.ecu", "Car.lamp"), ("Car.lamp", "Car.ecu")] {
+            let x1 = table(&tables, instance, "x1", None);
+            let cavities: Vec<(u32, usize)> = x1
+                .cavities
+                .iter()
+                .map(|c| (c.pin.0, c.entries.len()))
+                .collect();
+            assert_eq!(cavities, [(2, 0)]);
+            let unpinned: Vec<(&str, Vec<String>)> = x1
+                .unpinned
+                .iter()
+                .map(|u| {
+                    let fars = u
+                        .entries
+                        .iter()
+                        .map(|entry| match entry {
+                            CavityEntry::Conductor(c) => far(&c.far),
+                            CavityEntry::Drain(_) => "drain".to_string(),
+                        })
+                        .collect();
+                    (u.port.label.as_str(), fars)
+                })
+                .collect();
+            // Every pinless port is listed, in source order, used or not.
+            assert_eq!(
+                unpinned,
+                [("A", vec![format!("port:{other}.a")]), ("C", Vec::new()),]
+            );
+        }
+    }
+
+    #[test]
+    fn a_tables_housing_is_its_connector_type_or_its_inline_halfs() {
+        let design = design(&format!(
+            "{USES}{INLINE}connector_type Box \"Box 2p\" {{ part: \"BX-2\"; }}\n\
+             component Car {{ ecu: Ecu; pedal: Ecu;\n\
+               connector j1: Box {{ port a \"A\" pin 1; }}\n\
+               inline ic \"Branch\" {{ male: M2; female: F2; port sig \"SIG\" pin 1; }}\n\
+               wire green 0.5 [ecu.pwr, ic.sig];\n\
+               wire green 0.5 [ic.sig, pedal.pwr];\n\
+             }}\n"
+        ));
+        let tables = PinTables::from(&design);
+        let housing = |instance: &str, connector: &str, half| {
+            let housing = table(&tables, instance, connector, half).housing();
+            (
+                housing.type_name.map(|t| t.as_str().to_string()),
+                housing.description.map(str::to_string),
+                housing.part().map(str::to_string),
+            )
+        };
+        let some = |s: &str| Some(s.to_string());
+        assert_eq!(
+            housing("Car", "j1", None),
+            (some("Box"), some("Box 2p"), some("BX-2"))
+        );
+        assert_eq!(
+            housing("Car.ecu", "x1", None),
+            (None, some("ECU 10p"), None)
+        );
+        assert_eq!(
+            housing("Car.ic", "ic", Some(Half::Male)),
+            (some("M2"), some("M 3p"), None)
+        );
+        assert_eq!(
+            housing("Car.ic", "ic", Some(Half::Female)),
+            (some("F2"), some("F 3p"), None)
+        );
     }
 
     #[test]
