@@ -26,9 +26,10 @@ use svg::node::element::{Group, Style, Text};
 
 use crate::dsl::ir::{Design, Instance, View};
 use crate::error::ViewResult;
+use crate::render::geometry::Point;
 use crate::render::lint::{Conductor, IncludeBox, ViewLayout};
 use crate::render::stamp::{STAMP_HEIGHT, STAMP_INSET, stamp_element};
-use crate::render::{Canvas, GridFault, SvgMode};
+use crate::render::{Canvas, Drawing, GridFault, SvgMode};
 
 use layout::{HarnessConductor, HarnessLayout, ViewBox};
 
@@ -120,7 +121,7 @@ pub struct HarnessRenderer;
 
 impl HarnessRenderer {
     /// Render `view` (documenting `subject`) against `design` to an SVG
-    /// string.
+    /// drawing.
     ///
     /// `mode` picks the presentation: [`SvgMode::Embed`] drops the
     /// built-in `<style>` (the host owns the look), suppresses the
@@ -134,7 +135,7 @@ impl HarnessRenderer {
         subject: &Instance,
         view: &View,
         mode: SvgMode,
-    ) -> ViewResult<String> {
+    ) -> ViewResult<Drawing> {
         let step = GridFault::positive_step(view, DEFAULT_GRID)?;
         let layout = HarnessLayout::compute(design, subject, view, step);
 
@@ -148,10 +149,8 @@ impl HarnessRenderer {
         let has_title = mode.shows_title(view);
         let vb = viewbox(design, view, &layout, mode);
         let manifest = mode.stamp(design);
-        doc = doc.set(
-            "viewBox",
-            format!("{} {} {} {}", vb.x, vb.y, vb.width, vb.height),
-        );
+        let canvas = Canvas::new(vb.width, vb.height);
+        doc = mode.frame(doc, Point::new(vb.x, vb.y), canvas);
 
         if has_title {
             doc = doc.add(
@@ -198,7 +197,7 @@ impl HarnessRenderer {
             doc = doc.add(splices_group);
         }
 
-        Ok(doc.to_string())
+        Ok(Drawing::new(doc, canvas))
     }
 
     /// Each include's box (a connector's pin table, a splice's joint), the
@@ -276,6 +275,7 @@ mod tests {
     use crate::dsl::ir::{ConnectorName, Include, InstanceName, TypeName, ViewKind};
     use crate::dsl::span::{FileId, Span};
     use crate::render::schematic::tests::design_from;
+    use crate::render::tests::{assert_sized_by_its_viewbox, assert_unsized};
 
     /// A harness view over `subject`, including `(instance, connector, x, y)`.
     fn harness_view(subject: &str, includes: &[(&str, &str, f64, f64)]) -> View {
@@ -312,6 +312,7 @@ mod tests {
         HarnessRenderer
             .render(design, subject, view, SvgMode::Standalone)
             .expect("renders")
+            .svg
     }
 
     /// Two boxes, each exposing a 2-pin connector, wired pos↔pos and neg↔neg.
@@ -657,6 +658,7 @@ component sys {
         HarnessRenderer
             .render(design, subject, view, SvgMode::Embed)
             .expect("renders")
+            .svg
     }
 
     #[test]
@@ -667,6 +669,28 @@ component sys {
 
         assert!(!svg.contains("<style>"));
         assert!(!svg.contains(".connector rect"));
+    }
+
+    /// Standalone and plain roots carry their canvas as their intrinsic
+    /// size; an embed root leaves its size to the host.
+    #[test]
+    fn only_an_embed_root_has_no_intrinsic_size() {
+        let design = two_connector_design();
+        let view = harness_view("sys", &[("a", "hv", 0.0, 0.0), ("b", "hv", 12.0, 0.0)]);
+        let subject = design
+            .instances
+            .values()
+            .find(|i| i.type_name == view.subject)
+            .expect("subject instance");
+        let svg = |mode| {
+            HarnessRenderer
+                .render(&design, subject, &view, mode)
+                .expect("renders")
+                .svg
+        };
+        assert_sized_by_its_viewbox(&svg(SvgMode::Standalone));
+        assert_sized_by_its_viewbox(&svg(SvgMode::Plain));
+        assert_unsized(&svg(SvgMode::Embed));
     }
 
     #[test]

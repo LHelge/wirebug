@@ -24,7 +24,7 @@ use crate::error::{ViewErrorKind, ViewResult};
 use crate::render::geometry::Point;
 use crate::render::lint::{CrowdedPort, IncludeBox, UnroutableWire, ViewLayout, WireEndAt};
 use crate::render::stamp::{STAMP_HEIGHT, STAMP_INSET, stamp_element};
-use crate::render::{Canvas, SvgMode};
+use crate::render::{Canvas, Drawing, SvgMode};
 
 use layout::{Connection, Grid, PlacedPort, Placement, ViewBox};
 use off_view::{OffView, Settled};
@@ -96,7 +96,7 @@ pub struct SchematicRenderer;
 
 impl SchematicRenderer {
     /// Render `view` (documenting `subject`) against `design` to an SVG
-    /// string. Wire segments are routed against the placed boxes.
+    /// drawing. Wire segments are routed against the placed boxes.
     ///
     /// `mode` picks the presentation: [`SvgMode::Embed`] drops the
     /// built-in `<style>` (the host owns the look), suppresses the
@@ -110,7 +110,7 @@ impl SchematicRenderer {
         subject: &Instance,
         view: &View,
         mode: SvgMode,
-    ) -> ViewResult<String> {
+    ) -> ViewResult<Drawing> {
         let grid = Grid::of_view(view)?;
         let placement = Placement::compute(design, subject, view, grid)?;
 
@@ -134,13 +134,8 @@ impl SchematicRenderer {
         let has_title = mode.shows_title(view);
         let viewbox = viewbox(design, view, &placement, &wires, &references, mode);
         let manifest = mode.stamp(design);
-        doc = doc.set(
-            "viewBox",
-            format!(
-                "{} {} {} {}",
-                viewbox.x, viewbox.y, viewbox.width, viewbox.height
-            ),
-        );
+        let canvas = Canvas::new(viewbox.width, viewbox.height);
+        doc = mode.frame(doc, Point::new(viewbox.x, viewbox.y), canvas);
 
         if has_title {
             doc = doc.add(
@@ -268,7 +263,7 @@ impl SchematicRenderer {
         }
         doc = doc.add(texts_group);
 
-        Ok(doc.to_string())
+        Ok(Drawing::new(doc, canvas))
     }
 
     /// What `check` needs from `view`'s layout: each include's box, every
@@ -397,6 +392,7 @@ pub(crate) mod tests {
     };
     use crate::dsl::span::{FileId, Span};
     use crate::error::ViewErrorKind;
+    use crate::render::tests::{assert_sized_by_its_viewbox, assert_unsized};
 
     /// Elaborate a single-file `.wb` source into a [`Design`]. The source
     /// must have a single top-level component (the views are built
@@ -450,7 +446,9 @@ pub(crate) mod tests {
             .values()
             .find(|i| i.type_name == view.subject)
             .expect("subject instance");
-        SchematicRenderer.render(design, subject, view, SvgMode::Standalone)
+        SchematicRenderer
+            .render(design, subject, view, SvgMode::Standalone)
+            .map(|drawing| drawing.svg)
     }
 
     fn two_box_design() -> Design {
@@ -941,7 +939,9 @@ component sys {
             .values()
             .find(|i| i.type_name == view.subject)
             .expect("subject instance");
-        SchematicRenderer.render(design, subject, view, SvgMode::Embed)
+        SchematicRenderer
+            .render(design, subject, view, SvgMode::Embed)
+            .map(|drawing| drawing.svg)
     }
 
     #[test]
@@ -970,6 +970,35 @@ component sys {
         assert!(svg.contains("class=\"wirebug wirebug-schematic\""));
     }
 
+    /// Standalone and plain roots carry their canvas as their intrinsic
+    /// size, so a browser shows the view one world unit to the px; an
+    /// embed root leaves its size to the host.
+    #[test]
+    fn only_an_embed_root_has_no_intrinsic_size() {
+        let design = two_box_design();
+        let view = view_of(
+            "sys",
+            &[
+                ("a", 0.0, 0.0, &[("p", Side::East)]),
+                ("b", 16.0, 0.0, &[("p", Side::West)]),
+            ],
+        );
+        let subject = design
+            .instances
+            .values()
+            .find(|i| i.type_name == view.subject)
+            .expect("subject instance");
+        let svg = |mode| {
+            SchematicRenderer
+                .render(&design, subject, &view, mode)
+                .expect("renders")
+                .svg
+        };
+        assert_sized_by_its_viewbox(&svg(SvgMode::Standalone));
+        assert_sized_by_its_viewbox(&svg(SvgMode::Plain));
+        assert_unsized(&svg(SvgMode::Embed));
+    }
+
     #[test]
     fn plain_mode_keeps_styles_but_omits_title_and_stamp() {
         let mut design = two_box_design();
@@ -991,7 +1020,8 @@ component sys {
 
         let standalone = SchematicRenderer
             .render(&design, subject, &view, SvgMode::Standalone)
-            .expect("renders");
+            .expect("renders")
+            .svg;
         assert!(standalone.contains("class=\"stamp\""));
         assert!(standalone.contains("class=\"title\""));
 
@@ -999,7 +1029,8 @@ component sys {
         // header/footer carry the title and identity instead.
         let plain = SchematicRenderer
             .render(&design, subject, &view, SvgMode::Plain)
-            .expect("renders");
+            .expect("renders")
+            .svg;
         assert!(plain.contains("<style>"));
         assert!(!plain.contains("class=\"stamp\""));
         assert!(!plain.contains("class=\"title\""));

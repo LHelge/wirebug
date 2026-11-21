@@ -70,6 +70,18 @@ Five CLI commands share it:
   `export` below), which the manifest names in its last field, `exports`
   (`render::EmbedExports`) — added after the fields hosts already read,
   so they keep their names and places.
+  Every renderer frames its root `<svg>` through one method,
+  `SvgMode::frame(root, origin, canvas)`: the `viewBox`, and — in
+  standalone and plain mode — `width` and `height` equal to the viewBox's
+  size, written alike (world units as px). A browser then shows every
+  view one world unit to the px, so text is the same size in every view,
+  instead of scaling each to its container. Because the size equals the
+  viewBox's, `usvg::Tree::size` — what `--png` sizes its pixmap by and
+  `--pdf` fits to the page and judges legibility by — is unchanged, and so
+  are the PNG and PDF bytes. An embed root keeps the viewBox alone, so a
+  host that sizes embeds with its own CSS lays them out as before. The
+  renderers hand the canvas up as `render::Drawing`, and `RenderedView`
+  keeps it (`RenderedView.canvas`).
   Each view renders or fails on its own (see Render-time errors): `render`
   writes every view that rendered, prints each failure naming its view,
   and exits non-zero.
@@ -153,7 +165,12 @@ The `index.html` is an [`askama`] compile-time template (`templates/`),
 rendered by `render::index_html(views, manifest, live_reload)` — shared by
 `render` (static, `false`) and `serve` (`true`, injects the reload script).
 It takes `render_views`' per-view results, so a failed view keeps its
-place in its kind's tab and shows its error instead of a drawing.
+place in its kind's tab and shows its error instead of a drawing. Each
+drawing is an `<img>` of its SVG, under `img { max-width: 100%; height:
+auto; }`: the standalone root's intrinsic size makes it show at its
+natural size, a wider view shrinks to the page keeping its aspect, and a
+small one is never blown up (only the click-to-zoom lightbox stretches a
+drawing to the window's width).
 
 ## Project manifest
 
@@ -1248,7 +1265,8 @@ splice fewer than two conductors of its merged component end on
   title (`ir::View.span`, stating the size) and on the includes whose
   boxes start first and end last along the longer side. `render::Canvas::fits`
   is the one comparison both this check and the rasteriser make, in `f32`
-  as `usvg` reads the viewBox, so `check` rejects a view exactly when
+  as `usvg` reads the root's size (the viewBox's, which the standalone
+  root also carries as its `width` and `height`), so `check` rejects a view exactly when
   `--png` would refuse it. SVG and PDF output handle such a view (a
   2,000,000-unit view renders in milliseconds), but one rule for every
   mode keeps "passes `check`, renders" true whatever `render` is asked
@@ -1415,7 +1433,8 @@ src/
 ├── render/
 │   ├── mod.rs       # render_views: subject lookup + per-view dispatch + slug,
 │   │                #   one Result<RenderedView, ViewError> per view;
-│   │                #   RenderedView{title,filename,kind,svg} + index_html (tabs)
+│   │                #   RenderedView{title,filename,kind,svg,canvas} + index_html (tabs)
+│   │                #   + SvgMode::frame (root viewBox, and width/height off embed)
 │   │                #   + embed_manifest (manifest.json sidecar for --embed)
 │   ├── geometry.rs  # Point, Bounds (+ overlap test); re-exports ir::Side
 │   ├── lint.rs      # layout checks for `check`: overlaps, crowded ports,

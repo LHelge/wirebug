@@ -168,6 +168,7 @@ impl ViewFormat {
                             filename,
                             kind: view.kind,
                             svg: String::new(),
+                            canvas: view.canvas,
                         }))
                     })
                     .collect()

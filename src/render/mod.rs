@@ -11,11 +11,13 @@ use std::collections::{HashMap, HashSet};
 
 use askama::Template;
 use serde::Serialize;
+use svg::Document;
 
 use crate::dsl::ir::{Design, Instance, View, ViewKind};
 use crate::dsl::manifest::Manifest;
 use crate::error::{Error, Result, ViewError, ViewErrorKind, ViewResult};
 use crate::export::{Format as ExportFormat, PinTables, Table};
+use crate::render::geometry::Point;
 
 pub mod geometry;
 pub mod harness;
@@ -62,12 +64,53 @@ impl SvgMode {
     pub(crate) fn shows_title(self, view: &View) -> bool {
         !view.title.is_empty() && !matches!(self, Self::Plain)
     }
+
+    /// `root`, a view's `<svg>`, given the viewBox that starts at `origin`
+    /// and spans `canvas`.
+    ///
+    /// Outside embed mode the root also carries the canvas as its
+    /// intrinsic `width` and `height`, one world unit to the px, so a
+    /// browser shows every view at the same text size rather than scaling
+    /// each to its container. Equal to the viewBox's size, they leave the
+    /// size the rasteriser and the PDF export read (`usvg::Tree::size`)
+    /// as it was. An embed root keeps the viewBox alone: its host's CSS
+    /// sizes it.
+    pub(crate) fn frame(self, root: Document, origin: Point, canvas: Canvas) -> Document {
+        let Canvas { width, height } = canvas;
+        let root = root.set(
+            "viewBox",
+            format!("{} {} {width} {height}", origin.x, origin.y),
+        );
+        if self.is_embed() {
+            root
+        } else {
+            root.set("width", width.to_string())
+                .set("height", height.to_string())
+        }
+    }
+}
+
+/// A view drawn to SVG: the document, and the canvas its viewBox spans.
+#[derive(Debug)]
+pub(crate) struct Drawing {
+    svg: String,
+    canvas: Canvas,
+}
+
+impl Drawing {
+    /// `root`, the finished `<svg>` of a view, on `canvas`.
+    pub(crate) fn new(root: Document, canvas: Canvas) -> Self {
+        Self {
+            svg: root.to_string(),
+            canvas,
+        }
+    }
 }
 
 /// One rendered view: the SVG document, the file name it should be
 /// written to (a slug of the view title, without a directory), the human
-/// title it was rendered from, and the view `kind` (so the HTML index can
-/// group views into tabs).
+/// title it was rendered from, the view `kind` (so the HTML index can
+/// group views into tabs), and the canvas its viewBox spans.
 #[derive(Debug)]
 #[must_use]
 pub struct RenderedView {
@@ -75,6 +118,7 @@ pub struct RenderedView {
     pub filename: String,
     pub kind: ViewKind,
     pub svg: String,
+    pub canvas: Canvas,
 }
 
 impl RenderedView {
@@ -162,11 +206,12 @@ pub fn render_views(design: &Design, mode: SvgMode) -> Vec<ViewOutcome> {
         .map(|view| {
             let filename = filenames.svg_filename(&view.title);
             render_view(design, view, mode, &pin_tables)
-                .map(|svg| RenderedView {
+                .map(|Drawing { svg, canvas }| RenderedView {
                     title: view.title.clone(),
                     filename,
                     kind: view.kind.clone(),
                     svg,
+                    canvas,
                 })
                 .map_err(|cause| cause.in_view(&view.title, &view.kind))
         })
@@ -181,7 +226,7 @@ fn render_view<'d>(
     view: &View,
     mode: SvgMode,
     pin_tables: &OnceCell<PinTables<'d>>,
-) -> ViewResult<String> {
+) -> ViewResult<Drawing> {
     let subject = subject_instance(design, view)?;
     match &view.kind {
         ViewKind::Schematic => schematic::SchematicRenderer.render(design, subject, view, mode),
@@ -444,14 +489,15 @@ pub(crate) const MAX_CANVAS: f64 = 8192.0;
 
 /// A view's canvas: its viewBox's width and height, in world units.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct Canvas {
+pub struct Canvas {
     width: f64,
     height: f64,
 }
 
 impl Canvas {
     /// A `width` × `height` canvas.
-    pub(crate) fn new(width: f64, height: f64) -> Self {
+    #[must_use]
+    pub fn new(width: f64, height: f64) -> Self {
         Self { width, height }
     }
 
@@ -476,11 +522,15 @@ impl Canvas {
         }
     }
 
-    pub(crate) fn width(&self) -> f64 {
+    /// The canvas's width, in world units.
+    #[must_use]
+    pub fn width(&self) -> f64 {
         self.width
     }
 
-    pub(crate) fn height(&self) -> f64 {
+    /// The canvas's height, in world units.
+    #[must_use]
+    pub fn height(&self) -> f64 {
         self.height
     }
 }
@@ -552,6 +602,137 @@ pub(crate) mod tests {
     use super::*;
     use crate::render::geometry::Side;
 
+    /// The value of `name` on `svg`'s root `<svg>` element, as written.
+    pub(crate) fn root_attribute<'s>(svg: &'s str, name: &str) -> Option<&'s str> {
+        let start = svg.find("<svg ")?;
+        let tag = &svg[start..start + svg[start..].find('>')?];
+        let key = format!(" {name}=\"");
+        let value = &tag[tag.find(&key)? + key.len()..];
+        Some(&value[..value.find('"')?])
+    }
+
+    /// Assert that `svg`'s root carries its viewBox's width and height as
+    /// its own `width` and `height`, written as the viewBox writes them.
+    pub(crate) fn assert_sized_by_its_viewbox(svg: &str) {
+        let viewbox: Vec<&str> = root_attribute(svg, "viewBox")
+            .expect("a viewBox")
+            .split(' ')
+            .collect();
+        assert_eq!(root_attribute(svg, "width"), Some(viewbox[2]), "{svg}");
+        assert_eq!(root_attribute(svg, "height"), Some(viewbox[3]), "{svg}");
+    }
+
+    /// Assert that `svg`'s root has a viewBox but no intrinsic size.
+    pub(crate) fn assert_unsized(svg: &str) {
+        assert!(root_attribute(svg, "viewBox").is_some(), "{svg}");
+        assert_eq!(root_attribute(svg, "width"), None, "{svg}");
+        assert_eq!(root_attribute(svg, "height"), None, "{svg}");
+    }
+
+    /// `svg` with its root's `width` and `height` taken off again.
+    fn without_size(svg: &str) -> String {
+        let mut svg = svg.to_string();
+        for name in ["width", "height"] {
+            let value = root_attribute(&svg, name)
+                .expect("a sized root")
+                .to_string();
+            // The root is the document's first element, so the first match
+            // is its own attribute.
+            svg = svg.replacen(&format!(" {name}=\"{value}\""), "", 1);
+        }
+        assert_unsized(&svg);
+        svg
+    }
+
+    #[test]
+    fn a_frame_sizes_the_root_by_its_viewbox_except_in_embed_mode() {
+        // A fractional side, and one whose shortest form is long: the size
+        // is written exactly as the viewBox writes it.
+        let canvas = Canvas::new(1542.5, 0.1 + 0.2);
+        let root = |mode: SvgMode| {
+            mode.frame(Document::new(), Point::new(-88.0, -48.0), canvas)
+                .to_string()
+        };
+        for mode in [SvgMode::Standalone, SvgMode::Plain] {
+            let svg = root(mode);
+            assert_eq!(
+                root_attribute(&svg, "viewBox"),
+                Some("-88 -48 1542.5 0.30000000000000004")
+            );
+            assert_sized_by_its_viewbox(&svg);
+        }
+        let embed = root(SvgMode::Embed);
+        assert_eq!(
+            root_attribute(&embed, "viewBox"),
+            Some("-88 -48 1542.5 0.30000000000000004")
+        );
+        assert_unsized(&embed);
+    }
+
+    #[test]
+    fn a_rendered_view_carries_the_canvas_its_viewbox_spans() {
+        let design = design_with_views(&["Overview"]);
+        for mode in [SvgMode::Standalone, SvgMode::Plain, SvgMode::Embed] {
+            let views = render_views(&design, mode);
+            let [Ok(view)] = views.as_slice() else {
+                panic!("expected one rendered view: {views:?}");
+            };
+            let viewbox = root_attribute(&view.svg, "viewBox").expect("a viewBox");
+            let size = format!("{} {}", view.canvas.width(), view.canvas.height());
+            assert!(viewbox.ends_with(&size), "{viewbox} spans {size}");
+        }
+    }
+
+    /// The root's intrinsic size equals its viewBox's, so `usvg` reads the
+    /// same size (`Tree::size`) and the same one world unit per size unit
+    /// as before it was written: the PNG's pixels, the PDF's bytes and its
+    /// legibility check all stay as they were.
+    #[test]
+    fn the_intrinsic_size_leaves_png_and_pdf_output_as_they_were() {
+        let mut design = design_with_views(&["Wide"]);
+        // Far enough apart that the text prints too small on A4, so the
+        // legibility check has something to say.
+        design.views[0].includes[1].x = 400.0;
+
+        let views = render_views(&design, SvgMode::Standalone);
+        let [Ok(view)] = views.as_slice() else {
+            panic!("expected one rendered view: {views:?}");
+        };
+        let rasterizer = png::PngRasterizer::new();
+        let raster = |svg: &str| rasterizer.to_png(svg, png::PNG_SCALE).expect("rasterises");
+        let sized = raster(&view.svg);
+        assert_eq!(sized, raster(&without_size(&view.svg)));
+        // The pixel size, from the PNG's header, is the canvas × the scale.
+        let side = |at: usize| u32::from_be_bytes(sized[at..at + 4].try_into().expect("4 bytes"));
+        let pixels = |units: f64| (units * f64::from(png::PNG_SCALE)).round() as u32;
+        assert_eq!(
+            (side(16), side(20)),
+            (pixels(view.canvas.width()), pixels(view.canvas.height()))
+        );
+
+        let exporter = pdf::PdfExporter::new();
+        let export = |strip: bool| {
+            let views = render_views(&design, SvgMode::Plain)
+                .into_iter()
+                .map(|view| {
+                    view.map(|view| RenderedView {
+                        svg: if strip {
+                            without_size(&view.svg)
+                        } else {
+                            view.svg
+                        },
+                        ..view
+                    })
+                })
+                .collect();
+            exporter.to_pdf(views, None, pdf::Paper::A4)
+        };
+        let (sized, before) = (export(false), export(true));
+        assert_eq!(sized.document(), before.document());
+        assert!(!sized.small_text.is_empty(), "a wide view prints small");
+        assert_eq!(sized.small_text, before.small_text);
+    }
+
     #[test]
     fn slug_collapses_and_lowercases() {
         assert_eq!(slug("HV System Overview"), "hv_system_overview");
@@ -590,6 +771,7 @@ pub(crate) mod tests {
             filename: filename.to_string(),
             kind: ViewKind::from(kind),
             svg: String::new(),
+            canvas: Canvas::new(400.0, 300.0),
         }
     }
 
@@ -669,6 +851,26 @@ pub(crate) mod tests {
         assert!(html.contains("<h2>HV Overview</h2>"));
         assert!(html.contains("<img src=\"hv_overview.svg\" alt=\"HV Overview\">"));
         assert!(html.contains("<img src=\"pack_detail.svg\" alt=\"Pack Detail\">"));
+    }
+
+    /// The index shows each drawing as an `<img>`, which a standalone
+    /// SVG's intrinsic size gives a natural size: the `img` rule lets it
+    /// show at that size, shrinks a wider one to the container keeping its
+    /// aspect, and no rule outside the zoomed lightbox stretches it.
+    #[test]
+    fn index_shows_each_drawing_at_its_natural_size_capped_at_the_container() {
+        let views = vec![Ok(view("Overview", "overview.svg", "schematic"))];
+        let html = index_html(&views, None, false).unwrap();
+        assert!(html.contains("<section>"));
+        assert!(html.contains("<a href=\"#lb-overview.svg\"><img src=\"overview.svg\""));
+        assert!(html.contains("\n    img { max-width: 100%; height: auto; }\n"));
+        let stretching = html
+            .lines()
+            .filter(|rule| rule.contains("img {"))
+            .filter(|rule| rule.contains(" width:") || rule.contains("{ width:"));
+        for rule in stretching {
+            assert!(rule.trim_start().starts_with(".lightbox img"), "{rule}");
+        }
     }
 
     #[test]

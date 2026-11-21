@@ -24,7 +24,7 @@ use crate::export::{PinTable, PinTables};
 use crate::render::geometry::{Bounds, Point};
 use crate::render::lint::{IncludeBox, ViewLayout};
 use crate::render::stamp::{STAMP_HEIGHT, STAMP_INSET, stamp_element};
-use crate::render::{Canvas, GridFault, SvgMode};
+use crate::render::{Canvas, Drawing, GridFault, SvgMode};
 pub(super) use fit::MIN_LABEL_SIZE;
 use fit::{FittedLabel, Font};
 use rows::{Entry, Row};
@@ -120,20 +120,20 @@ impl PinoutRenderer {
         subject: &'d Instance,
         view: &View,
         mode: SvgMode,
-    ) -> ViewResult<String> {
+    ) -> ViewResult<Drawing> {
         let step = GridFault::positive_step(view, DEFAULT_GRID)?;
         let tables = Table::all(design, tables, subject, view, step)?;
 
         let has_title = mode.shows_title(view);
         let vb = viewbox(design, view, &tables, mode);
         let manifest = mode.stamp(design);
+        let canvas = Canvas::new(vb.width, vb.height);
 
-        let mut doc = Document::new()
-            .set("xmlns", "http://www.w3.org/2000/svg")
-            .set(
-                "viewBox",
-                format!("{} {} {} {}", vb.x, vb.y, vb.width, vb.height),
-            );
+        let mut doc = mode.frame(
+            Document::new().set("xmlns", "http://www.w3.org/2000/svg"),
+            Point::new(vb.x, vb.y),
+            canvas,
+        );
         if mode.is_embed() {
             doc = doc.set("class", "wirebug wirebug-pinout");
         } else {
@@ -161,7 +161,7 @@ impl PinoutRenderer {
         for table in &tables {
             group = group.add(render_table(table));
         }
-        Ok(doc.add(group).to_string())
+        Ok(Drawing::new(doc.add(group), canvas))
     }
 
     /// Each include's box (its table and face panel), sized as
@@ -1070,6 +1070,7 @@ mod tests {
     use crate::dsl::ir::{Include, InstanceName, TypeName, ViewKind};
     use crate::dsl::span::{FileId, Span};
     use crate::render::schematic::tests::design_from;
+    use crate::render::tests::{assert_sized_by_its_viewbox, assert_unsized};
     use rows::Note;
 
     fn pinout_view(subject: &str, includes: &[(&str, f64, f64)]) -> View {
@@ -1107,6 +1108,7 @@ mod tests {
         PinoutRenderer
             .render(design, &tables, subject, view, mode)
             .expect("renders")
+            .svg
     }
 
     #[test]
@@ -1423,6 +1425,23 @@ component m {
         assert!(svg.contains("<title>RESOLVER SHIELD DRAIN</title>"));
         assert!(svg.contains("c · RESOLVER SHIELD DRAIN"));
         assert!(svg.contains("style=\"font-size: 6px\""));
+    }
+
+    /// Standalone and plain roots carry their canvas as their intrinsic
+    /// size; an embed root leaves its size to the host.
+    #[test]
+    fn only_an_embed_root_has_no_intrinsic_size() {
+        let design = design_from(
+            r#"
+component m {
+    connector x1 "Legacy 1p" { pub port p "P" pin 1; }
+}
+"#,
+        );
+        let view = pinout_view("m", &[("x1", 0.0, 0.0)]);
+        assert_sized_by_its_viewbox(&render(&design, &view, SvgMode::Standalone));
+        assert_sized_by_its_viewbox(&render(&design, &view, SvgMode::Plain));
+        assert_unsized(&render(&design, &view, SvgMode::Embed));
     }
 
     #[test]
