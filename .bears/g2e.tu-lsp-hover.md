@@ -1,12 +1,13 @@
 ---
 id: g2e.tu
 title: LSP hover
-status: open
+status: done
 priority: P3
 created: "2026-11-20T21:40:32.101788475Z"
-updated: "2026-11-20T21:40:32.101788475Z"
+updated: "2026-11-21T19:19:32.702978939Z"
 tags:
   - lsp
+attempts: 1
 ---
 
 ## Summary
