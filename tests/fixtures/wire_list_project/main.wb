@@ -1,0 +1,71 @@
+// The wire list: a rail of four ends, a cable with a twisted pair and a
+// conductor that sets its own length, two conductors crimped into one
+// cavity, a connectorless port, an inline connector, a splice three
+// conductors meet at, a screen grounded at one end and one on no pin, and
+// a sub-loom placed twice whose own wire leaves through its boundary.
+
+use Ecu  from "components/ecu.wb";
+use Loom from "components/loom.wb";
+
+connector_type Dt04_2p "Deutsch DT04-2P" {
+    part: "DT04-2P";
+}
+
+connector_type Dt06_2s "Deutsch DT06-2S" {
+    part: "DT06-2S";
+}
+
+component Vehicle {
+    ecu:   Ecu  "ECU";
+    bcm:   Ecu  "BCM";
+    node:  Ecu  "Node";
+    lamp:  Ecu  "Lamp";
+    front: Loom "Front loom";
+    rear:  Loom "Rear loom";
+
+    inline ic "Branch" {
+        male:   Dt04_2p;
+        female: Dt06_2s;
+        port sig "SIG" pin 1;
+        port gnd "GND" pin 2;
+    }
+
+    splice sp_gnd "Ground splice" {
+        part: "D-436-36";
+    }
+
+    wire white 0.5 "WAKE" [ecu.wake, bcm.wake, node.wake, lamp.wake];
+
+    cable can "CAN" {
+        type:   "Shielded twisted pair";
+        length: 2m;
+
+        twisted {
+            wire yellow 0.5 "CAN H" [ecu.can_h, node.can_h] {
+                length: 2150mm;
+            }
+            wire green 0.5 "CAN L" [ecu.can_l, node.can_l];
+            shield;
+        }
+        shield "CAN SHLD" [ecu.shld];
+    }
+
+    wire red 1.5 "12V" [ecu.pwr, bcm.pwr] {
+        length: 80cm;
+        type:   "FLRY-B";
+        part:   "W-RD-1.5";
+    }
+    wire red 0.5 "12V" [ecu.pwr, lamp.pwr];
+
+    wire blue 0.35 "SENSE" [ecu.sense, bcm.sig];
+
+    wire green 0.5 "SIG" [ecu.sig, ic.sig];
+    wire green 0.5 "SIG" [ic.sig, node.sig];
+
+    wire black 1   "GND" [ecu.gnd, sp_gnd];
+    wire black 0.5 "GND" [bcm.gnd, sp_gnd];
+    wire black 2.5 "GND" [sp_gnd, ic.gnd];
+
+    wire orange 1 "FEED" [bcm.out, front.feed];
+    wire orange 1 "FEED" [node.out, rear.feed];
+}

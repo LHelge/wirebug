@@ -1,0 +1,12 @@
+// A sub-loom placed twice: its own wire leaves through its `feed` port.
+
+use Ecu from "ecu.wb";
+
+component Loom {
+    pub port feed "FEED";
+    lamp: Ecu "Lamp";
+
+    wire orange 1 "FEED" [feed, lamp.pwr] {
+        length: 0.5;
+    }
+}
