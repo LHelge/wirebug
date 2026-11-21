@@ -7,7 +7,7 @@ use super::layout::{PlacedComponent, PlacedPort, PlacedText};
 use super::off_view::OffView;
 use super::{COMPONENT_TITLE_GAP, LABEL_INSET, PORT_RADIUS};
 use crate::dsl::ir::{InstanceName, WireColor};
-use crate::render::geometry::{Point, Side};
+use crate::render::geometry::{Bounds, Point, Side};
 use crate::render::wire_stroke::{WireLayers, WireStroke};
 
 pub(super) fn render_component(cid: &InstanceName, pc: &PlacedComponent) -> Group {
@@ -259,11 +259,23 @@ impl<'a> WireDrawing<'a> {
 }
 
 /// An off-view reference's text at the end of its stub, with every far
-/// end in full as its tooltip. The stub is drawn with the wires.
+/// end in full as its tooltip; a stub with no room for any text has the
+/// tooltip alone. The stub is drawn with the wires.
 pub(super) fn render_off_view(reference: &OffView) -> Group {
+    let group = Group::new().set("class", "off-view");
+    let group = match &reference.owner {
+        Some(owner) => group.set("data-component", owner.to_string()),
+        None => group,
+    };
+    let group = group
+        .set("data-port", reference.port.to_string())
+        .add(Title::new(reference.title.clone()));
+    let Some(text) = reference.text() else {
+        return group;
+    };
     let (at, anchor, rotate) = reference.anchor();
-    let label = text_with_placement(
-        reference.text(),
+    group.add(text_with_placement(
+        text,
         "off-view-label",
         LabelPlacement {
             x: at.x,
@@ -272,16 +284,7 @@ pub(super) fn render_off_view(reference: &OffView) -> Group {
             rotate,
             baseline: Some("central"),
         },
-    );
-    let group = Group::new().set("class", "off-view");
-    let group = match &reference.owner {
-        Some(owner) => group.set("data-component", owner.to_string()),
-        None => group,
-    };
-    group
-        .set("data-port", reference.port.to_string())
-        .add(Title::new(reference.title.clone()))
-        .add(label)
+    ))
 }
 
 /// Along-track clearance a code keeps from a crossing wire, so its halo
@@ -352,6 +355,52 @@ impl CodeObstacle {
 pub(super) struct CodeAnchor {
     pub(super) at: Point,
     vertical: bool,
+}
+
+/// The code's estimated advance per character: the widest capital of the
+/// italic 9px `wire-code` font (DejaVu Sans, about 0.8 em), so an
+/// estimate errs wide. Its half height across, with the halo.
+const CODE_CHAR_WIDTH: f64 = 7.2;
+pub(super) const CODE_HALF_HEIGHT: f64 = 6.0;
+
+impl CodeAnchor {
+    /// The area the code of a wire of `color` covers, halo included.
+    pub(super) fn extent(&self, color: &WireColor) -> Bounds {
+        let half_length = color.code().chars().count() as f64 * CODE_CHAR_WIDTH / 2.0;
+        let (half_x, half_y) = if self.vertical {
+            (CODE_HALF_HEIGHT, half_length)
+        } else {
+            (half_length, CODE_HALF_HEIGHT)
+        };
+        Bounds {
+            origin: Point::new(self.at.x - half_x, self.at.y - half_y),
+            width: 2.0 * half_x,
+            height: 2.0 * half_y,
+        }
+    }
+}
+
+/// The anchor of every routed wire's code, in wire order. Codes dodge wire
+/// crossings (the halo would visually cut the crossed wire) and each other
+/// (parallel wires in a channel would stack their codes); placed anchors
+/// become obstacles for the rest, in source order.
+pub(super) fn code_anchors(wires: &[Vec<Point>]) -> Vec<Option<CodeAnchor>> {
+    let crossings = wire_crossings(wires);
+    let mut placed: Vec<Point> = Vec::new();
+    wires
+        .iter()
+        .zip(&crossings)
+        .map(|(polyline, crossings)| {
+            let obstacles: Vec<_> = crossings
+                .iter()
+                .map(|&p| CodeObstacle::crossing(p))
+                .chain(placed.iter().map(|&p| CodeObstacle::code(p)))
+                .collect();
+            let anchor = wire_code_anchor(polyline, &obstacles);
+            placed.extend(anchor.as_ref().map(|a| a.at));
+            anchor
+        })
+        .collect()
 }
 
 /// The anchor for a wire's color code: the midpoint of the longest

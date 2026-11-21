@@ -520,6 +520,11 @@ impl Canvas {
         self.width as f32 <= limit && self.height as f32 <= limit
     }
 
+    /// Whether neither side is longer than `other`'s.
+    pub(crate) fn within(&self, other: &Canvas) -> bool {
+        self.width <= other.width && self.height <= other.height
+    }
+
     /// Why the canvas cannot be rasterised, when it does not fit.
     pub(crate) fn admit(self) -> ViewResult<()> {
         if self.fits() {

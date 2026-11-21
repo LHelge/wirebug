@@ -10,36 +10,45 @@
 //! text at its end (`→ vcm.can2_h`), collapsed to `+N more` as room runs
 //! out, the whole list in the text's tooltip.
 //!
-//! The reference keeps routed wires off it by being an obstacle to the
-//! router, but only when a wire would otherwise cross it, and only when
-//! reserving it leaves every wire the view draws routable
-//! ([`Settled::new`]). So a view routes as it did without references
-//! unless one is in a wire's way, and a project that passes `check`
-//! without them passes with them.
+//! References never move a wire. The view is routed as if they did not
+//! exist, and each reference is then fitted round what is drawn
+//! ([`Placement::off_views`]): it takes the most detailed text that sits
+//! clear of every wire, box, title, label, annotation, code and reference
+//! already placed, and that keeps the view within `MAX_CANVAS`; where no
+//! text fits it keeps its stub alone, and where not even the stub fits it
+//! is left out. So `check`, which lays the view out the same way, reports
+//! exactly what it would without references.
 
 use std::fmt;
 
-use super::PIN_CHAR_WIDTH;
+use super::draw::{CODE_HALF_HEIGHT, CodeAnchor};
 use super::layout::{Connection, Grid, PlacedComponent, PlacedPort, Placement};
-use super::route::Router;
+use super::{LABEL_INSET, PORT_RADIUS};
 use crate::dsl::ir::{InstanceName, PortName, SpliceName, TypeName, WireColor, WireEnd};
+use crate::render::Canvas;
 use crate::render::geometry::{Bounds, Point, Side};
 
 /// The reference's font size (the `.off-view-label` rule), and its
-/// estimated advance per character: the pin annotation's.
+/// estimated advance per character. PNG and PDF set it in DejaVu Sans,
+/// whose lower-case letters, digits and `_` advance at most 0.64 em, `.`,
+/// `,` and space 0.42 em, and `→`, `+` and `m` a full em; 0.7 em a
+/// character errs wide on every text a reference reads (each `+N more`
+/// or arrow comes with spaces and dots that more than pay for it), so a
+/// text measured as fitting fits as drawn.
 const FONT_SIZE: f64 = 10.0;
-const CHAR_WIDTH: f64 = PIN_CHAR_WIDTH;
+const CHAR_WIDTH: f64 = 7.0;
 /// Half the 4-unit `wire-casing` stroke: how far a wire's ink reaches
 /// either side of its line.
 const CASING_HALF: f64 = 2.0;
-/// The white halo round the text (half its 3px stroke).
-const HALO: f64 = 1.5;
-/// How far either side of a reference's line a wire's ink would touch
-/// its text: half the text's height, its halo and half a casing.
-const ZONE_HALF: f64 = FONT_SIZE / 2.0 + HALO + CASING_HALF;
 /// Between the end of the drawn stub and the reference's text, and
 /// between the pin annotation and the end of the stub.
 const GAP: f64 = 3.0;
+/// The shortest stub worth drawing: one that reaches past the port's dot.
+const MIN_STUB: f64 = PORT_RADIUS + 4.0;
+/// A port label's font (11px) and estimated advance per character, as wide
+/// as DejaVu Sans's widest capitals (0.8 em).
+const LABEL_FONT_SIZE: f64 = 11.0;
+const LABEL_CHAR_WIDTH: f64 = 8.8;
 /// The longest list a reference spells out, in characters (the arrow
 /// aside); a longer one collapses to `+N more`.
 const MAX_CHARS: usize = 32;
@@ -185,23 +194,26 @@ pub(super) struct OffView {
     pub(super) side: Side,
     at: Point,
     texts: Vec<String>,
-    /// Which of `texts` is drawn.
-    shown: usize,
+    /// Which of `texts` is drawn; `None` for a stub with no room for any.
+    shown: Option<usize>,
     pub(super) title: String,
     pub(super) color: WireColor,
-    /// How far out from the port the drawn stub ends, and the text starts.
+    /// How far out from the port the drawn stub ends.
     stub: f64,
+    /// Where the text can go: on the stub's line, past its end, or beside
+    /// it (for a port whose drawn wire runs on along that line).
+    lanes: [Lane; 2],
+    /// Which of `lanes` the text is in.
+    lane: usize,
+}
+
+/// One place for a reference's text: its centre line `across` off the
+/// stub's line (toward [`OffView::beside`]), from `start` out from the
+/// port.
+#[derive(Debug, Clone, Copy)]
+struct Lane {
+    across: f64,
     start: f64,
-    /// Where the space the reference keeps clear starts, out from the
-    /// port: at the port, or, when a drawn wire also leaves the port,
-    /// past the tip of its routing stub, which that wire turns at.
-    keep_from: f64,
-    step: f64,
-    /// Whether the router routes around the reference.
-    pub(super) reserved: bool,
-    /// Whether even its shortest text has no room clear of what is around
-    /// it, so it is never reserved.
-    cramped: bool,
 }
 
 impl OffView {
@@ -216,30 +228,56 @@ impl OffView {
         grid: Grid,
     ) -> Option<Self> {
         let undrawn = port.off_view.as_ref()?;
-        let side = port.label_side();
         let step = grid.step();
         // A drawn wire leaving the port too turns at its routing stub's
-        // tip, one step out; the stub runs a step past that, so it reads
-        // as running on rather than as the text touching the turn.
-        let keep_from = if drawn { step } else { 0.0 };
-        let stub = (keep_from + step).max(reach(component, port) + GAP);
+        // tip, one step out, or runs on along it; the stub runs a step
+        // past the tip, so it reads as running on rather than as the text
+        // touching the turn.
+        let least = if drawn { 2.0 * step } else { step };
+        let half = FONT_SIZE / 2.0;
+        let stub = least
+            .max(MIN_STUB)
+            .max(component.reach_beside(port, -half, half) + GAP);
+        // Beside the stub, the text clears a wire running on along it, and
+        // that wire's code.
+        let across = CODE_HALF_HEIGHT + 1.0 + half;
+        let beside = component
+            .reach_beside(port, across - half, across + half)
+            .max(PORT_RADIUS);
         let texts = undrawn.texts();
         Some(Self {
             owner: owner.cloned(),
             port: port.port.clone(),
-            side,
+            side: port.label_side(),
             at: port.pos,
-            shown: preferred(&texts),
+            shown: Some(preferred(&texts)),
             texts,
             title: undrawn.title(),
             color: undrawn.color.clone(),
             stub,
-            start: stub + GAP,
-            keep_from,
-            step,
-            reserved: false,
-            cramped: false,
+            lanes: [
+                Lane {
+                    across: 0.0,
+                    start: stub + GAP,
+                },
+                Lane {
+                    across,
+                    start: beside + GAP,
+                },
+            ],
+            lane: 0,
         })
+    }
+
+    /// Which way across the stub's line the beside lane lies: below a west
+    /// or east stub (a pin annotation sits above it), left of a north one
+    /// and right of a south one, in screen coordinates (+1 toward larger
+    /// y on a west or east side, larger x on a north or south one).
+    fn beside(side: Side) -> f64 {
+        match side {
+            Side::West | Side::East | Side::South => 1.0,
+            Side::North => -1.0,
+        }
     }
 
     /// The end the reference is drawn at, as the design names it.
@@ -253,16 +291,16 @@ impl OffView {
         }
     }
 
-    /// The text drawn: the arrow at the stub's end, pointing away from the
-    /// port (after the list on a west side, before it elsewhere).
-    pub(super) fn text(&self) -> String {
-        let list = &self.texts[self.shown];
-        match (self.side, list.is_empty()) {
+    /// The text drawn, if any: the arrow at the stub's end, pointing away
+    /// from the port (after the list on a west side, before it elsewhere).
+    pub(super) fn text(&self) -> Option<String> {
+        let list = &self.texts[self.shown?];
+        Some(match (self.side, list.is_empty()) {
             (Side::West, true) => "←".to_string(),
             (_, true) => "→".to_string(),
             (Side::West, false) => format!("{list} ←"),
             (_, false) => format!("→ {list}"),
-        }
+        })
     }
 
     /// The drawn stub, from the port out to where the text starts.
@@ -274,7 +312,8 @@ impl OffView {
     /// west or east port; turned to read outward along a north or south
     /// stub (upward on the north, downward on the south).
     pub(super) fn anchor(&self) -> (Point, &'static str, f64) {
-        let at = self.out(self.start);
+        let lane = self.lanes[self.lane];
+        let at = self.across(self.out(lane.start), lane.across);
         match self.side {
             Side::West => (at, "end", 0.0),
             Side::East => (at, "start", 0.0),
@@ -294,14 +333,22 @@ impl OffView {
         }
     }
 
-    fn text_width(&self) -> f64 {
-        self.text().chars().count() as f64 * CHAR_WIDTH
+    /// `point` moved `distance` toward the beside lane's side.
+    fn across(&self, point: Point, distance: f64) -> Point {
+        let shift = distance * Self::beside(self.side);
+        match self.side {
+            Side::West | Side::East => Point::new(point.x, point.y + shift),
+            Side::North | Side::South => Point::new(point.x + shift, point.y),
+        }
     }
 
-    /// The area `from`..`to` out from the port, `half` either side of the
-    /// stub's line.
-    fn band(&self, from: f64, to: f64, half: f64) -> Bounds {
-        let (a, b) = (self.out(from), self.out(to));
+    /// The area `from`..`to` out from the port, `half` either side of a
+    /// line `across` off the stub's.
+    fn band(&self, from: f64, to: f64, across: f64, half: f64) -> Bounds {
+        let (a, b) = (
+            self.across(self.out(from), across),
+            self.across(self.out(to), across),
+        );
         let (min_x, max_x) = (a.x.min(b.x), a.x.max(b.x));
         let (min_y, max_y) = (a.y.min(b.y), a.y.max(b.y));
         let (min_x, max_x, min_y, max_y) = match self.side {
@@ -315,334 +362,394 @@ impl OffView {
         }
     }
 
-    /// The area the text covers.
-    pub(super) fn extent(&self) -> Bounds {
-        let end = self.start + self.text_width();
-        self.band(self.start, end, FONT_SIZE / 2.0)
+    /// The area the text covers, if it has one.
+    pub(super) fn extent(&self) -> Option<Bounds> {
+        let width = self.text()?.chars().count() as f64 * CHAR_WIDTH;
+        let lane = self.lanes[self.lane];
+        Some(self.band(lane.start, lane.start + width, lane.across, FONT_SIZE / 2.0))
     }
 
-    /// The space a routed wire must keep out of: the stub and the text
-    /// with its halo, widened by a wire's casing. It starts past the
-    /// routing stub's tip when a drawn wire leaves the port too, so that
-    /// wire may turn there.
-    fn zone(&self) -> Bounds {
-        let from = if self.keep_from > 0.0 {
-            self.keep_from + CASING_HALF
-        } else {
-            0.0
-        };
-        let end = self.start + self.text_width();
-        self.band(from, end + HALO, ZONE_HALF)
+    /// The area the stub's ink covers.
+    fn stub_extent(&self) -> Bounds {
+        self.band(0.0, self.stub, 0.0, CASING_HALF)
     }
 
-    /// The obstacle the router routes around when the reference is
-    /// reserved: from [`Self::keep_from`] to the first grid line clear of
-    /// the text, and as many whole grid steps either side of the stub's
-    /// line as cover [`Self::zone`] (one, at any grid of 8.5 or more), so
-    /// every edge it adds to the visibility graph is a grid line and a
-    /// wire running along one keeps clear of the text.
-    fn reservation(&self) -> Bounds {
-        let snap = |d: f64| (d / self.step).ceil() * self.step;
-        let end = snap(self.start + self.text_width() + GAP);
-        self.band(self.keep_from, end, snap(ZONE_HALF))
+    /// Everything the reference draws, for the canvas to hold.
+    pub(super) fn extents(&self) -> impl Iterator<Item = Bounds> + use<> {
+        [Some(self.stub_extent()), self.extent()]
+            .into_iter()
+            .flatten()
     }
 
-    /// Whether `path` runs through the reference.
-    fn crossed_by(&self, path: &[Point]) -> bool {
-        let zone = self.zone();
-        path.windows(2).any(|run| {
-            let (a, b) = (run[0], run[1]);
-            let segment = Bounds {
-                origin: Point::new(a.x.min(b.x), a.y.min(b.y)),
-                width: (a.x - b.x).abs(),
-                height: (a.y - b.y).abs(),
-            };
-            zone.overlaps(&segment)
-        })
+    /// How far out from the port `area` starts, along the reference.
+    fn distance_to(&self, area: &Bounds) -> f64 {
+        match self.side {
+            Side::West => self.at.x - (area.origin.x + area.width),
+            Side::East => area.origin.x - self.at.x,
+            Side::North => self.at.y - (area.origin.y + area.height),
+            Side::South => area.origin.y - self.at.y,
+        }
     }
 
-    /// The shortest of the texts.
+    /// The least detailed text, the arrow alone.
     fn shortest(&self) -> usize {
         self.texts.len() - 1
     }
 }
 
-/// How far out from `port` the texts already beside its stub reach: the
-/// pin annotations of the ports on its side whose band across the stub
-/// meets the reference's, and, on a box's north side, the box's title.
-fn reach(component: &PlacedComponent, port: &PlacedPort) -> f64 {
-    let side = port.label_side();
-    let across = |b: &Bounds| match side {
-        Side::West | Side::East => (b.origin.y, b.origin.y + b.height),
-        Side::North | Side::South => (b.origin.x, b.origin.x + b.width),
-    };
-    let line = match side {
-        Side::West | Side::East => port.pos.y,
-        Side::North | Side::South => port.pos.x,
-    };
-    let half = FONT_SIZE / 2.0;
-    let meets = |b: &Bounds| {
-        let (lo, hi) = across(b);
-        lo < line + half && hi > line - half
-    };
-    let out = |b: &Bounds| match side {
-        Side::West => port.pos.x - b.origin.x,
-        Side::East => b.origin.x + b.width - port.pos.x,
-        Side::North => port.pos.y - b.origin.y,
-        Side::South => b.origin.y + b.height - port.pos.y,
-    };
-    let pins = component
-        .ports
-        .iter()
-        .filter(|p| p.label_side() == side)
-        .filter_map(PlacedPort::pin_extent);
-    let title = (!port.inverted && side == Side::North).then(|| component.title_extent());
-    pins.chain(title)
-        .filter(meets)
-        .map(|b| out(&b))
-        .fold(0.0, f64::max)
+impl PlacedComponent {
+    /// How far out from `port` the texts already beside its stub reach
+    /// across the band `from`..`to` off the stub's line (toward
+    /// [`OffView::beside`]): the pin annotations of the ports on its side
+    /// that meet the band, and, on a box's north side, the box's title.
+    fn reach_beside(&self, port: &PlacedPort, from: f64, to: f64) -> f64 {
+        let side = port.label_side();
+        let across = |b: &Bounds| match side {
+            Side::West | Side::East => (b.origin.y, b.origin.y + b.height),
+            Side::North | Side::South => (b.origin.x, b.origin.x + b.width),
+        };
+        let line = match side {
+            Side::West | Side::East => port.pos.y,
+            Side::North | Side::South => port.pos.x,
+        };
+        let sign = OffView::beside(side);
+        let (lo, hi) = {
+            let (a, b) = (line + sign * from, line + sign * to);
+            (a.min(b), a.max(b))
+        };
+        let meets = |b: &Bounds| {
+            let (b_lo, b_hi) = across(b);
+            b_lo < hi && b_hi > lo
+        };
+        let out = |b: &Bounds| match side {
+            Side::West => port.pos.x - b.origin.x,
+            Side::East => b.origin.x + b.width - port.pos.x,
+            Side::North => port.pos.y - b.origin.y,
+            Side::South => b.origin.y + b.height - port.pos.y,
+        };
+        let pins = self
+            .ports
+            .iter()
+            .filter(|p| p.label_side() == side)
+            .filter_map(PlacedPort::pin_extent);
+        let title = (!port.inverted && side == Side::North).then(|| self.title_extent());
+        pins.chain(title)
+            .filter(meets)
+            .map(|b| out(&b))
+            .fold(0.0, f64::max)
+    }
 }
 
-/// What a reference's space must stay clear of: every other box's keepout,
-/// title and pin annotations, the text boxes, every port and its routing
-/// stub, and the enclosure's boundary.
-struct Room {
-    /// Each by the component it belongs to: its index in the placement, or
-    /// `None` for the enclosure.
-    keepouts: Vec<(Option<usize>, Bounds)>,
-    texts: Vec<(Option<usize>, Bounds)>,
-    points: Vec<(Option<usize>, Point)>,
-    free: Vec<Bounds>,
-    enclosure: Option<Bounds>,
+impl PlacedPort {
+    /// The area the port's name covers (11px, `LABEL_INSET` in from the
+    /// port, turned on a north or south side): inside its box, or, for an
+    /// inverted enclosure port, outside the boundary.
+    fn label_extent(&self) -> Bounds {
+        let length = self.label.chars().count() as f64 * LABEL_CHAR_WIDTH;
+        let half = LABEL_FONT_SIZE / 2.0;
+        let Point { x, y } = self.pos;
+        let (x0, y0, x1, y1) = match self.label_side() {
+            Side::West => (
+                x + LABEL_INSET,
+                y - half,
+                x + LABEL_INSET + length,
+                y + half,
+            ),
+            Side::East => (
+                x - LABEL_INSET - length,
+                y - half,
+                x - LABEL_INSET,
+                y + half,
+            ),
+            Side::North => (
+                x - half,
+                y + LABEL_INSET,
+                x + half,
+                y + LABEL_INSET + length,
+            ),
+            Side::South => (
+                x - half,
+                y - LABEL_INSET - length,
+                x + half,
+                y - LABEL_INSET,
+            ),
+        };
+        Bounds {
+            origin: Point::new(x0, y0),
+            width: x1 - x0,
+            height: y1 - y0,
+        }
+    }
 }
 
-impl Room {
-    fn of(placement: &Placement, step: f64) -> Self {
-        let components = placement
-            .components
-            .values()
-            .enumerate()
-            .map(|(i, pc)| (Some(i), pc))
-            .chain(placement.enclosure().map(|pc| (None, pc)));
-        let mut room = Self {
-            keepouts: Vec::new(),
-            texts: Vec::new(),
-            points: Vec::new(),
-            free: placement
-                .texts
-                .iter()
-                .map(|text| Bounds {
-                    origin: text.origin,
-                    width: text.width,
-                    height: text.height,
-                })
+/// A view's routed wires (one per connection, in connection order) and
+/// their codes: what its references are fitted round.
+pub(super) struct Drawn<'a> {
+    pub(super) connections: &'a [Connection<'a>],
+    pub(super) wires: &'a [Vec<Point>],
+    pub(super) codes: &'a [Option<CodeAnchor>],
+}
+
+/// Everything already drawn in a view that a reference must not cover,
+/// as areas. Each box and title is kept with its component's index in the
+/// placement, so a reference can pass its own.
+struct Clutter {
+    /// Each routed wire segment and each placed reference's stub, widened
+    /// by its casing, with the ends of the connection it draws (a stub's
+    /// port twice).
+    wires: Vec<([WireEnd; 2], Bounds)>,
+    boxes: Vec<(usize, Bounds)>,
+    titles: Vec<(usize, Bounds)>,
+    /// Pin annotations and port labels: texts a reference's text keeps
+    /// off, which its stub may pass beside as a drawn wire would.
+    marks: Vec<Bounds>,
+    /// The wire codes, the text boxes, the enclosure's title and the texts
+    /// of the references placed so far.
+    texts: Vec<Bounds>,
+}
+
+impl Clutter {
+    fn of(placement: &Placement, drawn: &Drawn<'_>) -> Self {
+        let mut wires = Vec::new();
+        for (connection, wire) in drawn.connections.iter().zip(drawn.wires) {
+            for run in wire.windows(2) {
+                wires.push((connection.ends(), casing(run[0], run[1])));
+            }
+        }
+        let components = placement.components.values().enumerate();
+        let enclosure = placement.enclosure();
+        let mut texts: Vec<Bounds> = drawn
+            .codes
+            .iter()
+            .zip(drawn.connections)
+            .filter_map(|(code, connection)| Some(code.as_ref()?.extent(connection.color)))
+            .collect();
+        texts.extend(placement.texts.iter().map(|text| Bounds {
+            origin: text.origin,
+            width: text.width,
+            height: text.height,
+        }));
+        texts.extend(enclosure.map(PlacedComponent::title_extent));
+        Self {
+            wires,
+            boxes: components.clone().map(|(i, pc)| (i, pc.bounds())).collect(),
+            titles: components.map(|(i, pc)| (i, pc.title_extent())).collect(),
+            marks: placement
+                .ports()
+                .flat_map(|port| port.pin_extent().into_iter().chain([port.label_extent()]))
                 .collect(),
-            enclosure: placement.enclosure_bounds(),
-        };
-        for (owner, pc) in components {
-            if owner.is_some() {
-                let b = pc.bounds();
-                room.keepouts.push((
-                    owner,
-                    Bounds {
-                        origin: Point::new(b.origin.x - step, b.origin.y - step),
-                        width: b.width + 2.0 * step,
-                        height: b.height + 2.0 * step,
-                    },
-                ));
-                room.texts.push((owner, pc.title_extent()));
-            }
-            for port in &pc.ports {
-                room.texts.extend(port.pin_extent().map(|b| (owner, b)));
-                room.points.push((owner, port.pos));
-                room.points.push((owner, port.stub(step)));
-            }
+            texts,
         }
-        room
     }
 
-    /// Whether `space`, kept by a reference of `port` (of `owner`), is
-    /// clear of everything it must not cover. The port itself and its
-    /// stub's tip are the reference's own.
-    fn fits(&self, space: &Bounds, owner: Option<usize>, port: &PlacedPort, step: f64) -> bool {
-        let own = [port.pos, port.stub(step)];
-        let others = |(o, b): &(Option<usize>, Bounds)| *o != owner && space.overlaps(b);
-        let inside = |p: Point| {
-            p.x > space.origin.x
-                && p.x < space.origin.x + space.width
-                && p.y > space.origin.y
-                && p.y < space.origin.y + space.height
-        };
-        let within = self.enclosure.is_none_or(|e| {
-            space.origin.x >= e.origin.x
-                && space.origin.y >= e.origin.y
-                && space.origin.x + space.width <= e.origin.x + e.width
-                && space.origin.y + space.height <= e.origin.y + e.height
-        });
-        within
-            && !self.keepouts.iter().any(others)
-            && !self.texts.iter().any(others)
-            && !self.free.iter().any(|b| space.overlaps(b))
-            && !self
-                .points
-                .iter()
-                .any(|&(o, p)| inside(p) && !(o == owner && own.contains(&p)))
+    /// What `reference`'s stub (of the component at `owner`, `None` on
+    /// the enclosure) would run into: wires of other connections than its
+    /// port's, other boxes and titles, codes and other references' texts.
+    fn blocking_stub<'c>(
+        &'c self,
+        reference: &OffView,
+        owner: Option<usize>,
+    ) -> impl Iterator<Item = &'c Bounds> + use<'c> {
+        let end = reference.end();
+        let own = move |(i, _): &&(usize, Bounds)| Some(*i) != owner;
+        let stub = reference.stub_extent();
+        let wires = self
+            .wires
+            .iter()
+            .filter(move |(ends, _)| !ends.contains(&end))
+            .map(|(_, b)| b);
+        let boxes = self.boxes.iter().filter(own).map(|(_, b)| b);
+        let titles = self.titles.iter().filter(own).map(|(_, b)| b);
+        wires
+            .chain(boxes)
+            .chain(titles)
+            .chain(&self.texts)
+            .filter(move |b| stub.overlaps(b))
+    }
+
+    /// Whether `text` sits clear of everything drawn.
+    fn clears(&self, text: &Bounds) -> bool {
+        let areas = self.wires.iter().map(|(_, b)| b);
+        let boxes = self.boxes.iter().chain(&self.titles).map(|(_, b)| b);
+        !areas
+            .chain(boxes)
+            .chain(&self.marks)
+            .chain(&self.texts)
+            .any(|b| text.overlaps(b))
+    }
+
+    /// Count `reference` as drawn, for the references fitted after it.
+    fn add(&mut self, reference: &OffView) {
+        let end = reference.end();
+        self.wires
+            .push(([end.clone(), end], reference.stub_extent()));
+        self.texts.extend(reference.extent());
     }
 }
 
-/// A view's routing settled together with its off-view references: the
-/// router every wire is routed with, each reference as it is drawn, and
-/// the routed wires, `None` when a wire has no route.
-pub(super) struct Settled {
-    pub(super) router: Router,
-    pub(super) references: Vec<OffView>,
-    pub(super) wires: Option<Vec<Vec<Point>>>,
+/// The area a wire run from `a` to `b` covers, its casing included.
+fn casing(a: Point, b: Point) -> Bounds {
+    Bounds {
+        origin: Point::new(a.x.min(b.x) - CASING_HALF, a.y.min(b.y) - CASING_HALF),
+        width: (a.x - b.x).abs() + 2.0 * CASING_HALF,
+        height: (a.y - b.y).abs() + 2.0 * CASING_HALF,
+    }
 }
 
-impl Settled {
-    /// Route `connections` (`placement`'s) and lay out the references.
+impl Placement {
+    /// Every placed port's off-view reference, fitted round what is
+    /// already `drawn`, in port order (boxes in include order, each one's
+    /// ports west, east, north, south in authored order, then the
+    /// enclosure's), each fitted against the ones before it.
     ///
-    /// Each reference first takes the most detailed text whose space is
-    /// clear of the boxes, texts, ports and other references around it,
-    /// else its shortest, kept clear of nothing. The wires are routed as
-    /// if there were no references; a reference a routed wire runs
-    /// through is then reserved, made an obstacle, and the wires routed
-    /// again, until no wire runs through an unreserved reference. A
-    /// reservation that would leave some wire with no route, as the
-    /// router's own graph says ([`Router::connects`]), yields: the
-    /// reference is tried at its shortest text, and else stays where it
-    /// is, unreserved. So reserving never takes a route away, and a view
-    /// whose wires do not meet its references routes exactly as it would
-    /// without them. A view that does not route at all reserves nothing.
-    pub(super) fn new(placement: &Placement, connections: &[Connection<'_>], grid: Grid) -> Self {
-        let step = grid.step();
-        let mut references = references(placement, connections, grid);
-        let base = Router::build(placement, step, &[]);
-        let routes = |router: &Router| connections.iter().all(|c| router.connects(c.a, c.b));
-        if !base.blocked_stubs(placement).is_empty() || !routes(&base) {
-            return Self {
-                router: base,
-                references,
-                wires: None,
-            };
-        }
-        let pairs: Vec<_> = connections.iter().map(|c| (c.a, c.b)).collect();
-        let mut router = base;
-        let mut kept: Vec<Bounds> = Vec::new();
-        let mut yielded: Vec<bool> = references.iter().map(|r| r.cramped).collect();
-        loop {
-            let Ok(wires) = router.route_all(&pairs, grid.pitch()) else {
-                return Self {
-                    router,
-                    references,
-                    wires: None,
+    /// A reference's stub first: one running into a wire of another
+    /// connection, another box or title, a code, a text box or an earlier
+    /// reference is cut short of it, and keeps no text; one too short to
+    /// reach past the port's dot is left out. Then its text, the most
+    /// detailed rung of its ladder (from the one within `MAX_CHARS` down
+    /// to the arrow alone), each tried on the stub's line and then beside
+    /// it, that sits clear of every wire, box, title, pin annotation, port
+    /// label, code, text box and earlier reference; with none, the stub
+    /// stays alone. A rung is taken only if the view's `canvas` with
+    /// it still fits `MAX_CANVAS`, or grows no larger than it was; a stub
+    /// alone that does not is left out. The enclosure's outline is not in
+    /// the way: a reference may cross it.
+    pub(super) fn off_views(
+        &self,
+        drawn: &Drawn<'_>,
+        grid: Grid,
+        canvas: impl Fn(&[OffView]) -> Canvas,
+    ) -> Vec<OffView> {
+        let mut clutter = Clutter::of(self, drawn);
+        let here: Vec<WireEnd> = drawn
+            .connections
+            .iter()
+            .flat_map(Connection::ends)
+            .collect();
+        let components = self
+            .components
+            .iter()
+            .enumerate()
+            .map(|(i, (name, pc))| (Some(i), Some(name), pc))
+            .chain(self.enclosure().map(|pc| (None, None, pc)));
+        let mut fitted: Vec<OffView> = Vec::new();
+        for (index, owner, pc) in components {
+            for port in &pc.ports {
+                let end = match owner {
+                    Some(instance) => WireEnd::Child {
+                        instance: instance.clone(),
+                        port: port.port.clone(),
+                    },
+                    None => WireEnd::Own(port.port.clone()),
                 };
-            };
-            let crossed: Vec<usize> = (0..references.len())
-                .filter(|&i| !references[i].reserved && !yielded[i])
-                .filter(|&i| wires.iter().any(|w| references[i].crossed_by(w)))
-                .collect();
-            let mut grew = false;
-            for i in crossed {
-                let mut shown = vec![references[i].shown];
-                if references[i].shortest() != references[i].shown {
-                    shown.push(references[i].shortest());
+                let Some(mut reference) = OffView::new(owner, pc, port, here.contains(&end), grid)
+                else {
+                    continue;
+                };
+                let first = reference.shown.unwrap_or_default();
+                let blocked = clutter
+                    .blocking_stub(&reference, index)
+                    .map(|area| reference.distance_to(area))
+                    .fold(f64::INFINITY, f64::min);
+                let rungs: Vec<(Option<usize>, usize)> = if blocked.is_finite() {
+                    reference.stub = blocked - 1.0;
+                    vec![(None, 0)]
+                } else {
+                    (first..=reference.shortest())
+                        .flat_map(|shown| [(Some(shown), 0), (Some(shown), 1)])
+                        .chain([(None, 0)])
+                        .collect()
+                };
+                if reference.stub < MIN_STUB {
+                    continue;
                 }
-                for text in shown {
-                    let mut candidate = references[i].clone();
-                    candidate.shown = text;
-                    kept.push(candidate.reservation());
-                    let trial = Router::build(placement, step, &kept);
-                    if routes(&trial) {
-                        candidate.reserved = true;
-                        references[i] = candidate;
-                        router = trial;
-                        grew = true;
-                        break;
+                let before = canvas(&fitted);
+                let chosen = rungs.into_iter().find(|&(shown, lane)| {
+                    let mut trial = reference.clone();
+                    trial.shown = shown;
+                    trial.lane = lane;
+                    if !trial.extent().is_none_or(|text| clutter.clears(&text)) {
+                        return false;
                     }
-                    kept.pop();
-                }
-                if !references[i].reserved {
-                    yielded[i] = true;
-                    references[i].shown = references[i].shortest();
-                }
-            }
-            if !grew {
-                return Self {
-                    router,
-                    references,
-                    wires: Some(wires),
+                    fitted.push(trial);
+                    let after = canvas(&fitted);
+                    fitted.pop();
+                    after.fits() || after.within(&before)
+                });
+                let Some((shown, lane)) = chosen else {
+                    continue;
                 };
+                reference.shown = shown;
+                reference.lane = lane;
+                clutter.add(&reference);
+                fitted.push(reference);
             }
         }
+        fitted
     }
-}
-
-/// Every placed port's reference, in placement order (boxes in include
-/// order, then the enclosure), each at the most detailed text whose space
-/// fits among the others ([`Room::fits`]), else at its shortest.
-fn references(placement: &Placement, connections: &[Connection<'_>], grid: Grid) -> Vec<OffView> {
-    let room = Room::of(placement, grid.step());
-    let drawn: Vec<WireEnd> = connections.iter().flat_map(Connection::ends).collect();
-    let components = placement
-        .components
-        .iter()
-        .enumerate()
-        .map(|(i, (name, pc))| (Some(i), Some(name), pc))
-        .chain(placement.enclosure().map(|pc| (None, None, pc)));
-    let mut taken: Vec<Bounds> = Vec::new();
-    let mut references = Vec::new();
-    for (index, owner, pc) in components {
-        for port in &pc.ports {
-            let end = match owner {
-                Some(instance) => WireEnd::Child {
-                    instance: instance.clone(),
-                    port: port.port.clone(),
-                },
-                None => WireEnd::Own(port.port.clone()),
-            };
-            let Some(mut reference) = OffView::new(owner, pc, port, drawn.contains(&end), grid)
-            else {
-                continue;
-            };
-            let fitting = (reference.shown..reference.texts.len()).find(|&shown| {
-                let mut trial = reference.clone();
-                trial.shown = shown;
-                room.fits(&trial.reservation(), index, port, grid.step())
-                    && !taken.iter().any(|text| trial.extent().overlaps(text))
-            });
-            match fitting {
-                Some(shown) => {
-                    reference.shown = shown;
-                    taken.push(reference.extent());
-                }
-                None => {
-                    reference.shown = reference.shortest();
-                    reference.cramped = true;
-                }
-            }
-            references.push(reference);
-        }
-    }
-    references
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::dsl::ir::{Design, View};
+    use crate::render::MAX_CANVAS;
     use crate::render::schematic::MIN_PORT_PITCH;
+    use crate::render::schematic::draw::code_anchors;
+    use crate::render::schematic::route::Router;
     use crate::render::schematic::tests::{design_from, view_of};
 
-    /// `view` of `design` placed on `grid`, and its routing settled.
-    fn settle(design: &Design, view: &View, grid: f64) -> (Placement, Settled) {
+    /// `view` of `design` placed on `grid` and routed, and its references
+    /// fitted on a canvas `canvas` measures.
+    struct Fitted {
+        placement: Placement,
+        wires: Vec<Vec<Point>>,
+        references: Vec<OffView>,
+    }
+
+    fn fit_on(
+        design: &Design,
+        view: &View,
+        grid: f64,
+        canvas: impl Fn(&[OffView]) -> Canvas,
+    ) -> Fitted {
         let subject = design.get(&design.root).expect("root");
-        let placement = Placement::compute(design, subject, view, Grid::new(grid)).expect("places");
-        let settled = {
+        let grid = Grid::new(grid);
+        let placement = Placement::compute(design, subject, view, grid).expect("places");
+        let (wires, references) = {
             let connections = placement.connections();
-            Settled::new(&placement, &connections, Grid::new(grid))
+            let pairs: Vec<_> = connections.iter().map(|c| (c.a, c.b)).collect();
+            let wires = Router::build(&placement, grid.step())
+                .route_all(&pairs, grid.pitch())
+                .expect("routes");
+            let codes = code_anchors(&wires);
+            let drawn = Drawn {
+                connections: &connections,
+                wires: &wires,
+                codes: &codes,
+            };
+            let references = placement.off_views(&drawn, grid, canvas);
+            (wires, references)
         };
-        (placement, settled)
+        Fitted {
+            placement,
+            wires,
+            references,
+        }
+    }
+
+    /// As [`fit_on`], on a canvas that always fits.
+    fn fit(design: &Design, view: &View, grid: f64) -> Fitted {
+        fit_on(design, view, grid, |_| Canvas::new(0.0, 0.0))
+    }
+
+    /// Each reference as `port: text`, `-` for a stub alone.
+    fn texts(fitted: &Fitted) -> Vec<String> {
+        fitted
+            .references
+            .iter()
+            .map(|r| format!("{}: {}", r.port, r.text().unwrap_or("-".to_string())))
+            .collect()
     }
 
     /// A box with a port on every side, each wired to `far`, which no view
@@ -694,25 +801,15 @@ component sys {
     #[test]
     fn a_reference_runs_out_from_its_port_on_every_side_past_its_pin() {
         let design = four_sides();
-        let (placement, settled) = settle(&design, &four_sides_view(), 15.0);
-        let a = &placement.components[&InstanceName::from("a")];
-        let texts: Vec<(String, String)> = settled
-            .references
-            .iter()
-            .map(|r| (r.port.to_string(), r.text()))
-            .collect();
+        let fitted = fit(&design, &four_sides_view(), 15.0);
+        let a = &fitted.placement.components[&InstanceName::from("a")];
         assert_eq!(
-            texts,
-            [
-                ("w".to_string(), "far.w ←".to_string()),
-                ("e".to_string(), "→ far.e".to_string()),
-                ("n".to_string(), "→ far.n".to_string()),
-                ("s".to_string(), "→ far.s".to_string()),
-            ]
+            texts(&fitted),
+            ["w: far.w ←", "e: → far.e", "n: → far.n", "s: → far.s"]
         );
         let bounds = a.bounds();
-        for reference in &settled.references {
-            let text = reference.extent();
+        for reference in &fitted.references {
+            let text = reference.extent().expect("a text");
             let outside = match reference.side {
                 Side::West => text.origin.x + text.width < bounds.origin.x,
                 Side::East => text.origin.x > bounds.origin.x + bounds.width,
@@ -720,24 +817,19 @@ component sys {
                 Side::South => text.origin.y > bounds.origin.y + bounds.height,
             };
             assert!(outside, "{:?} {text:?}", reference.side);
-            // Clear of every pin annotation and of the box's title.
-            for pin in a.ports.iter().filter_map(PlacedPort::pin_extent) {
-                assert!(
-                    !text.overlaps(&pin),
-                    "{:?}: {text:?} {pin:?}",
-                    reference.side
-                );
-            }
-            assert!(!text.overlaps(&a.title_extent()), "{:?}", reference.side);
-            // The stub runs from the port to the text.
+            // On the stub's line, past its end.
             let [from, to] = reference.stub();
             let port = a.ports.iter().find(|p| p.port == reference.port).unwrap();
             assert_eq!(from, port.pos);
-            assert!(!text.overlaps(&Bounds {
-                origin: Point::new(from.x.min(to.x), from.y.min(to.y)),
-                width: (from.x - to.x).abs(),
-                height: (from.y - to.y).abs(),
-            }));
+            assert!(!text.overlaps(&reference.stub_extent()));
+            assert_eq!(
+                reference.distance_to(&text),
+                reference.distance_to(&Bounds {
+                    origin: to,
+                    width: 0.0,
+                    height: 0.0,
+                }) + GAP
+            );
         }
     }
 
@@ -785,102 +877,143 @@ component sys {
                 ],
             )],
         );
-        let (placement, settled) = settle(&design, &view, MIN_PORT_PITCH / 2.0);
-        let a = &placement.components[&InstanceName::from("a")];
-        let texts: Vec<Bounds> = settled.references.iter().map(OffView::extent).collect();
-        assert_eq!(texts.len(), 5);
-        for (i, text) in texts.iter().enumerate() {
-            for other in &texts[i + 1..] {
-                assert!(!text.overlaps(other), "{text:?} {other:?}");
+        let fitted = fit(&design, &view, MIN_PORT_PITCH / 2.0);
+        // Every reference has room for its name.
+        assert_eq!(
+            texts(&fitted),
+            [
+                "p1: → gone.p",
+                "p2: → gone.p",
+                "p3: → gone.p",
+                "q1: → gone.p",
+                "q2: → gone.p"
+            ]
+        );
+        assert_clear(&fitted);
+    }
+
+    /// Assert that no reference of `fitted` lies over anything drawn: its
+    /// text clear of every wire, box, title, pin annotation, port label,
+    /// code and other reference, and its stub clear of every wire of
+    /// another connection, every other box and title, every code and
+    /// every other reference.
+    fn assert_clear(fitted: &Fitted) {
+        let placement = &fitted.placement;
+        let connections = placement.connections();
+        let codes = code_anchors(&fitted.wires);
+        let runs: Vec<([WireEnd; 2], Bounds)> = connections
+            .iter()
+            .zip(&fitted.wires)
+            .flat_map(|(c, wire)| {
+                let ends = c.ends();
+                wire.windows(2)
+                    .map(move |run| (ends.clone(), casing(run[0], run[1])))
+            })
+            .collect();
+        let boxes: Vec<(Option<&InstanceName>, Bounds)> = placement
+            .components
+            .iter()
+            .flat_map(|(name, pc)| [(Some(name), pc.bounds()), (Some(name), pc.title_extent())])
+            .collect();
+        let marks: Vec<Bounds> = placement
+            .ports()
+            .flat_map(|p| p.pin_extent().into_iter().chain([p.label_extent()]))
+            .collect();
+        let code_areas: Vec<Bounds> = codes
+            .iter()
+            .zip(&connections)
+            .filter_map(|(code, c)| Some(code.as_ref()?.extent(c.color)))
+            .collect();
+        for (i, reference) in fitted.references.iter().enumerate() {
+            let others = fitted
+                .references
+                .iter()
+                .enumerate()
+                .filter(|&(j, _)| j != i)
+                .map(|(_, r)| r);
+            let other_areas: Vec<Bounds> = others
+                .flat_map(|r| [Some(r.stub_extent()), r.extent()])
+                .flatten()
+                .collect();
+            let stub = reference.stub_extent();
+            let end = reference.end();
+            for (ends, run) in &runs {
+                if !ends.contains(&end) {
+                    assert!(!stub.overlaps(run), "{}: stub on a wire", reference.port);
+                }
             }
-            for pin in a.ports.iter().filter_map(PlacedPort::pin_extent) {
-                assert!(!text.overlaps(&pin), "{text:?} {pin:?}");
+            for (owner, area) in &boxes {
+                if *owner != reference.owner.as_ref() {
+                    assert!(!stub.overlaps(area), "{}: stub on a box", reference.port);
+                }
+            }
+            for area in code_areas.iter().chain(&other_areas) {
+                assert!(!stub.overlaps(area), "{}: stub on a text", reference.port);
+            }
+            let Some(text) = reference.extent() else {
+                continue;
+            };
+            let everything = runs
+                .iter()
+                .map(|(_, b)| b)
+                .chain(boxes.iter().map(|(_, b)| b))
+                .chain(&marks)
+                .chain(&code_areas)
+                .chain(&other_areas);
+            for area in everything {
+                assert!(
+                    !text.overlaps(area),
+                    "{}: {text:?} over {area:?}",
+                    reference.port
+                );
             }
         }
     }
 
-    /// `a.p` wired to `b.p` straight across, and `a.q` to `gone`, which
-    /// the view leaves out; with `crimped`, `a.p` is wired to `gone` too.
-    fn across(crimped: bool) -> Design {
-        let extra = if crimped {
-            "wire blue 1 [a.p, gone.p];"
-        } else {
-            ""
-        };
+    /// Two banks of eight ports wired across in reverse, so the wires
+    /// cross in the channel between them, and every port also wired to
+    /// `gone`, which the view leaves out.
+    fn crossed() -> Design {
+        let n = 8;
+        let ports: String = (0..n)
+            .map(|i| format!("pub port p{i} \"P{i}\";\n"))
+            .collect();
+        let wires: String = (0..n)
+            .map(|i| {
+                format!(
+                    "wire red 1 [a.p{i}, b.p{}];\nwire black 1 [a.p{i}, gone.p];\nwire blue 1 [b.p{i}, gone.p];\n",
+                    n - 1 - i
+                )
+            })
+            .collect();
         design_from(&format!(
-            r#"
-component sys {{
-    a: Blk;
-    b: Blk;
-    gone: Blk;
-    wire red 1 [a.p, b.p];
-    wire black 1 [a.q, gone.p];
-    {extra}
-    component Blk {{
-        pub port p "P";
-        pub port q "Q";
-    }}
-}}
-"#
+            "component sys {{\n a: Bank;\n b: Bank;\n gone: Gone;\n{wires}\n component Bank {{\n{ports}}}\n component Gone {{ pub port p \"P\"; }}\n}}\n"
         ))
     }
 
-    fn across_view() -> View {
-        view_of(
-            "sys",
-            &[
-                ("a", 0.0, 0.0, &[("p", Side::East), ("q", Side::East)]),
-                ("b", 30.0, -1.0, &[("p", Side::West)]),
-            ],
-        )
-    }
-
-    /// The wires `view` routes to with no reference reserved.
-    fn unreserved_wires(placement: &Placement, grid: f64) -> Vec<Vec<Point>> {
-        let connections = placement.connections();
-        let pairs: Vec<_> = connections.iter().map(|c| (c.a, c.b)).collect();
-        Router::build(placement, grid, &[])
-            .route_all(&pairs, 2.0 * grid)
-            .expect("routes")
-    }
-
     #[test]
-    fn wires_clear_of_every_reference_route_as_if_there_were_none() {
-        let design = across(false);
-        let (placement, settled) = settle(&design, &across_view(), 15.0);
-        assert_eq!(settled.references.len(), 1);
-        assert!(!settled.references[0].reserved);
-        let wires = settled.wires.expect("routes");
-        assert_eq!(wires, unreserved_wires(&placement, 15.0));
-        assert!(!settled.references[0].crossed_by(&wires[0]));
-    }
-
-    #[test]
-    fn a_wire_that_would_run_through_a_reference_goes_round_it() {
-        // `a.p`'s drawn wire runs straight on to `b.p`, through the
-        // reference of its own undrawn wire to `gone`, until the reference
-        // is reserved.
-        let design = across(true);
-        let (placement, settled) = settle(&design, &across_view(), 15.0);
-        let before = unreserved_wires(&placement, 15.0);
-        let p = settled
-            .references
-            .iter()
-            .find(|r| r.port == PortName::from("p"))
-            .expect("a.p has a reference");
-        assert!(before.iter().any(|w| p.crossed_by(w)), "{before:?}");
-        assert!(p.reserved);
-        let wires = settled.wires.expect("routes");
-        for reference in &settled.references {
-            assert!(!wires.iter().any(|w| reference.crossed_by(w)), "{wires:?}");
+    fn a_reference_among_crossed_wires_gives_way_rather_than_cover_one() {
+        let design = crossed();
+        let east: Vec<(String, Side)> = (0..8).map(|i| (format!("p{i}"), Side::East)).collect();
+        let west: Vec<(String, Side)> = (0..8).map(|i| (format!("p{i}"), Side::West)).collect();
+        let east: Vec<(&str, Side)> = east.iter().map(|(p, s)| (p.as_str(), *s)).collect();
+        let west: Vec<(&str, Side)> = west.iter().map(|(p, s)| (p.as_str(), *s)).collect();
+        for (grid, apart) in [(15.0, 20.0), (MIN_PORT_PITCH / 2.0, 40.0)] {
+            let view = view_of("sys", &[("a", 0.0, 0.0, &east), ("b", apart, 0.0, &west)]);
+            let fitted = fit(&design, &view, grid);
+            assert_clear(&fitted);
+            // Some still name their far end; others give way, down to a
+            // stub alone or nothing.
+            let all = texts(&fitted);
+            assert!(all.iter().any(|t| t.ends_with("gone.p ←")), "{all:?}");
+            let gave_way = all.len() < 16 || all.iter().any(|t| t.ends_with(['-', '→', '←']));
+            assert!(gave_way, "{all:?}");
         }
-        // The drawn wire still leaves through its own stub.
-        assert_eq!(wires[0][0], placement.connections()[0].a.pos);
     }
 
-    #[test]
-    fn a_reference_short_of_room_shortens_and_at_the_last_shows_its_arrow_alone() {
-        let design = design_from(
+    /// `a.s`, on a box above `b`, wired on to three ends no view includes.
+    fn above() -> Design {
+        design_from(
             r#"
 component sys {
     a: Blk;
@@ -895,21 +1028,150 @@ component sys {
     }
 }
 "#,
+        )
+    }
+
+    /// `a.s`'s reference with `b` placed `gap` grid steps below `a`.
+    fn fit_above(gap: f64) -> Fitted {
+        let view = view_of(
+            "sys",
+            &[
+                ("a", 0.0, 0.0, &[("s", Side::South)]),
+                ("b", 0.0, gap, &[("p", Side::West)]),
+            ],
         );
-        let text_below = |gap: f64| {
-            let view = view_of(
-                "sys",
-                &[
-                    ("a", 0.0, 0.0, &[("s", Side::South)]),
-                    ("b", 0.0, gap, &[("p", Side::West)]),
-                ],
-            );
-            let (_, settled) = settle(&design, &view, 20.0);
-            settled.references[0].text()
-        };
-        assert_eq!(text_below(20.0), "→ x1.p, x2.p, x3.p");
-        assert_eq!(text_below(10.0), "→ 3 more");
-        assert_eq!(text_below(8.0), "→");
+        let fitted = fit(&above(), &view, 20.0);
+        assert_clear(&fitted);
+        fitted
+    }
+
+    /// What `a.s` reads with `b` placed `gap` grid steps below `a`.
+    fn reference_above(gap: f64) -> Vec<String> {
+        texts(&fit_above(gap))
+    }
+
+    #[test]
+    fn a_reference_takes_the_most_detailed_text_that_fits() {
+        // `b`'s title is the first thing in the way: the more room above
+        // it, the more the reference says.
+        assert_eq!(reference_above(13.0), ["s: → x1.p, x2.p, x3.p"]);
+        assert_eq!(reference_above(10.0), ["s: → 3 more"]);
+        assert_eq!(reference_above(7.0), ["s: →"]);
+    }
+
+    #[test]
+    fn a_reference_with_no_room_on_its_line_says_what_it_can_beside_it() {
+        // The arrow alone no longer fits past the stub, above `b`'s title;
+        // it still fits beside the stub.
+        assert_eq!(reference_above(6.0), ["s: →"]);
+        assert_eq!(fit_above(6.0).references[0].lane, 1);
+    }
+
+    #[test]
+    fn a_reference_whose_stub_would_meet_something_is_cut_short_or_left_out() {
+        // `b`'s title starts where the stub would end: there is no stub
+        // worth drawing, so no reference.
+        assert!(reference_above(5.0).is_empty());
+    }
+
+    #[test]
+    fn a_wire_passing_in_front_of_the_port_cuts_the_stub_short_of_it() {
+        // `c.s`–`d.n` runs straight down one step in front of `a`'s east
+        // side, across the tip of `a.p`'s stub: the stub stops short of
+        // it, with no room for text.
+        let design = design_from(
+            r#"
+component sys {
+    a: Blk;
+    c: Blk;
+    d: Blk;
+    gone: Blk;
+    wire red 1 [c.s, d.n];
+    wire blue 1 [a.p, gone.p];
+    component Blk {
+        pub port p "P";
+        pub port s "S";
+        pub port n "N";
+    }
+}
+"#,
+        );
+        let view = view_of(
+            "sys",
+            &[
+                ("a", 0.0, 0.0, &[("p", Side::East)]),
+                ("c", 7.0, -10.0, &[("s", Side::South)]),
+                ("d", 7.0, 10.0, &[("n", Side::North)]),
+            ],
+        );
+        let fitted = fit(&design, &view, 15.0);
+        assert_eq!(
+            fitted.wires[0].iter().map(|p| p.x).collect::<Vec<_>>(),
+            [105.0, 105.0]
+        );
+        assert_eq!(texts(&fitted), ["p: -"]);
+        let [from, to] = fitted.references[0].stub();
+        assert!(to.x - from.x < 15.0 - CASING_HALF, "{from:?} {to:?}");
+        assert!(to.x - from.x >= MIN_STUB);
+        assert_clear(&fitted);
+    }
+
+    #[test]
+    fn a_wire_running_on_from_the_port_moves_the_text_beside_it() {
+        // `a.p` is wired straight across to `b.p`, and on to `gone`: the
+        // drawn wire runs along the reference's line, so its text goes
+        // below it.
+        let design = design_from(
+            r#"
+component sys {
+    a: Blk;
+    b: Blk;
+    gone: Blk;
+    wire red 1 [a.p, b.p];
+    wire blue 1 [a.p, gone.p];
+    component Blk {
+        pub port p "P";
+    }
+}
+"#,
+        );
+        let view = view_of(
+            "sys",
+            &[
+                ("a", 0.0, 0.0, &[("p", Side::East)]),
+                ("b", 30.0, 0.0, &[("p", Side::West)]),
+            ],
+        );
+        let fitted = fit(&design, &view, 15.0);
+        assert_eq!(texts(&fitted), ["p: → gone.p"]);
+        let reference = &fitted.references[0];
+        assert_eq!(reference.lane, 1);
+        let text = reference.extent().expect("a text");
+        assert!(text.origin.y > reference.at.y, "{text:?}");
+        assert_clear(&fitted);
+    }
+
+    #[test]
+    fn a_reference_never_takes_the_canvas_past_its_limit() {
+        let design = four_sides();
+        // A canvas that is too large with any text longer than the arrow.
+        let fitted = fit_on(&design, &four_sides_view(), 15.0, |references| {
+            let longest = references
+                .iter()
+                .filter_map(OffView::text)
+                .map(|t| t.chars().count())
+                .max()
+                .unwrap_or(0);
+            let side = if longest > 1 { 2.0 * MAX_CANVAS } else { 100.0 };
+            Canvas::new(side, side)
+        });
+        assert_eq!(texts(&fitted), ["w: ←", "e: →", "n: →", "s: →"]);
+        // A view already past the limit may still draw a reference that
+        // does not make it larger.
+        let fitted = fit_on(&design, &four_sides_view(), 15.0, |_| {
+            Canvas::new(2.0 * MAX_CANVAS, 100.0)
+        });
+        assert_eq!(texts(&fitted)[0], "w: far.w ←");
     }
 
     fn port(instance: &str, port: &str) -> WireEnd {

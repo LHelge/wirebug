@@ -895,7 +895,7 @@ impl Placement {
         let texts = self
             .ports()
             .filter_map(PlacedPort::pin_extent)
-            .chain(references.iter().map(OffView::extent));
+            .chain(references.iter().flat_map(OffView::extents));
         for extent in texts {
             left = left.min(extent.origin.x - PIN_CANVAS_PAD);
             top = top.min(extent.origin.y - PIN_CANVAS_PAD - title_pad);
