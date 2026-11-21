@@ -583,6 +583,15 @@ job; the models carry no serialisation.
   whole numbers in the DSL), one per pin a port is bound to plus one per
   cavity of the connector's `layout` (an inline half's own layout) that no
   port uses (`Cavity.port: None`), so an unused cavity is listed empty. A
+  port of the connector with no pin (the DSL lets a connector port leave
+  its pin out while the pin-out is unknown) is not a cavity: it is an
+  `export::UnpinnedPort` (port and entries) in `PinTable.unpinned`, in
+  source order, so a conductor into it is listed rather than dropped and
+  code that sorts or counts cavities never meets a missing pin.
+  `PinTable::housing()` is what the table's housing is bought as, an
+  `export::Housing` (connector type, description, `part()`): an inline
+  half's connector type, whose metadata is not on the synthetic
+  connector, else the connector's own. A
   ganged port (`pins [2, 3]`) is entered in each of its cavities, marked
   by `Cavity::is_ganged` and `Cavity::ganged_with` (the other pins), since
   the model does not say which cavity takes which conductor. A cavity's

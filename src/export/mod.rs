@@ -13,8 +13,8 @@ mod pins;
 mod wires;
 
 pub use pins::{
-    Cavity, CavityConductor, CavityDrain, CavityEntry, FarEnd, FarSplice, HalfFit, PinTable,
-    PinTables, SplicedEnd,
+    Cavity, CavityConductor, CavityDrain, CavityEntry, FarEnd, FarSplice, HalfFit, Housing,
+    PinTable, PinTables, SplicedEnd, UnpinnedPort,
 };
 pub use wires::{
     Cable, Conductor, Contact, Copper, Drain, End, PortEnd, Row, RowKind, RowLength, ShieldRun,

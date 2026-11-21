@@ -226,6 +226,54 @@ fn the_ecu_connector_lists_each_cavity_by_pin_with_what_it_holds() {
 }
 
 #[test]
+fn a_conductor_into_a_port_without_a_pin_is_listed_with_the_unpinned_ports() {
+    let design = checked_design();
+    let tables = PinTables::from(&design);
+    for (instance, other) in [("Vehicle.ecu", "bcm"), ("Vehicle.bcm", "ecu")] {
+        let x1 = table(&tables, instance, "x1", None);
+        assert!(
+            x1.cavities
+                .iter()
+                .all(|c| c.port.is_none_or(|p| p.name.as_str() != "aux"))
+        );
+        let unpinned: Vec<(&str, Vec<Line>)> = x1
+            .unpinned
+            .iter()
+            .map(|u| {
+                let entries = u
+                    .entries
+                    .iter()
+                    .map(|entry| match entry {
+                        CavityEntry::Conductor(c) => conductor(
+                            &c.owner.path.to_string(),
+                            c.conductor.wire.label.as_deref().unwrap_or_default(),
+                            &c.conductor.wire.color.code(),
+                            c.conductor.wire.gauge,
+                            &far(&c.far),
+                        ),
+                        CavityEntry::Drain(_) => panic!("no drain on aux"),
+                    })
+                    .collect();
+                (u.port.label.as_str(), entries)
+            })
+            .collect();
+        assert_eq!(
+            unpinned,
+            [(
+                "AUX",
+                vec![conductor(
+                    "Vehicle",
+                    "AUX",
+                    "VT",
+                    0.5,
+                    &format!("Vehicle.{other}.aux")
+                )]
+            )]
+        );
+    }
+}
+
+#[test]
 fn a_far_end_on_a_connectorless_port_is_named() {
     let design = checked_design();
     let tables = PinTables::from(&design);

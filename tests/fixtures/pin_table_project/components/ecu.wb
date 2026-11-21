@@ -1,5 +1,6 @@
 // A 12-cavity control connector whose ports are declared out of pin order,
-// one ganged, five cavities used by no port; and a connectorless port.
+// one ganged, five cavities used by no port, one port not yet assigned a
+// pin; and a connectorless port.
 
 connector_type Ecu12 "ECU 12p" {
     part: "ECU-12";
@@ -17,6 +18,7 @@ component Ecu {
         pub port can_h "CAN H" pin 4;
         pub port can_l "CAN L" pin 5;
         pub port shld  "SHLD"  pin 6;
+        pub port aux   "AUX";
     }
     pub port sense "SENSE";
 }

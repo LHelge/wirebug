@@ -1,8 +1,9 @@
 // The pin tables: a double crimp, a ganged port, unused cavities, a drain
 // on a pin at each end, a splice three conductors meet at, a far end on a
-// connectorless port, a sub-loom placed twice whose connector takes a
-// conductor from each side, and an inline connector whose harness views
-// place one conductor in each half and draw another into both.
+// connectorless port, a conductor between ports not yet assigned a pin, a
+// sub-loom placed twice whose connector takes a conductor from each side,
+// and an inline connector whose harness views place one conductor in each
+// half and draw another into both.
 
 use Ecu    from "components/ecu.wb";
 use Sensor from "components/ecu.wb";
@@ -49,6 +50,7 @@ component Vehicle {
     }
 
     wire blue 0.35 "SENSE" [bcm.sig, ecu.sense];
+    wire violet 0.5 "AUX" [ecu.aux, bcm.aux];
 
     wire black 1   "GND" [ecu.gnd, sp_gnd];
     wire black 0.5 "GND" [bcm.gnd, sp_gnd];
