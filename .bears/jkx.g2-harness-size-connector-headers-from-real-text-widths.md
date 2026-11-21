@@ -1,13 +1,14 @@
 ---
 id: jkx.g2
 title: "Harness: size connector headers from real text widths"
-status: open
+status: done
 priority: P1
 created: "2026-11-21T16:06:19.413118140Z"
-updated: "2026-11-21T16:06:19.413118140Z"
+updated: "2026-11-21T16:51:06.942874149Z"
 tags:
   - render
   - harness
+attempts: 1
 ---
 
 ## Summary
