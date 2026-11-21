@@ -8,6 +8,7 @@
 
 use std::fmt;
 
+use crate::dsl::ir::{Length, LengthUnit};
 use crate::dsl::span::{FileId, Span, Spanned};
 
 /// A single lexed identifier (snake_case name, wire colour, view kind).
@@ -362,8 +363,42 @@ pub struct Property {
 #[derive(Debug, Clone)]
 pub enum PropertyValue {
     Str(Spanned<String>),
-    Number(Spanned<f64>),
+    /// Spanned over the number and its unit (`150mm`).
+    Number(Spanned<Quantity>),
     Ident(Spanned<Ident>),
+}
+
+/// A number as a property value: its value and the unit written directly
+/// after it (`mm` in `150mm`), kept faithful like the key. Which units a
+/// key takes is checked in validate.
+#[derive(Debug, Clone)]
+pub struct Quantity {
+    pub value: f64,
+    pub unit: Option<Spanned<String>>,
+}
+
+impl Quantity {
+    /// The unit this quantity is a length in: metres when it has none, and
+    /// `None` when its unit is no length unit.
+    pub fn length_unit(&self) -> Option<LengthUnit> {
+        self.unit
+            .as_ref()
+            .map_or(Some(LengthUnit::Metre), |unit| unit.node.parse().ok())
+    }
+
+    /// The length this quantity is; `None` when its unit is no length unit
+    /// or the length is not positive (validate reports both).
+    pub fn length(&self) -> Option<Length> {
+        Length::new(self.value, self.length_unit()?)
+    }
+}
+
+/// As written, unit included: `150mm`, `-2`.
+impl fmt::Display for Quantity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let unit = self.unit.as_ref().map_or("", |unit| unit.node.as_str());
+        write!(f, "{}{unit}", self.value)
+    }
 }
 
 impl PropertyValue {

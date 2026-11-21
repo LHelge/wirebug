@@ -998,7 +998,7 @@ fn classify(before: &[Token]) -> Block {
             // include's coordinates).
             Token::Ident(_)
             | Token::Str(_)
-            | Token::Number(_)
+            | Token::Number { .. }
             | Token::Colon
             | Token::Comma
             | Token::LParen
@@ -1046,7 +1046,7 @@ fn is_wordlike(token: &Token) -> bool {
     !matches!(
         token,
         Token::Str(_)
-            | Token::Number(_)
+            | Token::Number { .. }
             | Token::LBrace
             | Token::RBrace
             | Token::LBracket

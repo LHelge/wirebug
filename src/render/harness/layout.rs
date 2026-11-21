@@ -822,8 +822,8 @@ fn cable_subtitle(meta: Option<&CableMeta>, count: usize) -> String {
     if let Some(t) = meta.and_then(|m| m.r#type.as_ref()) {
         parts.push(t.clone());
     }
-    if let Some(l) = meta.and_then(|m| m.length) {
-        parts.push(format!("{l} m"));
+    if let Some(length) = meta.and_then(|m| m.length) {
+        parts.push(length.to_string());
     }
     parts.push(format!("×{count}"));
     parts.join(" · ")
@@ -832,7 +832,9 @@ fn cable_subtitle(meta: Option<&CableMeta>, count: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dsl::ir::{ConnectorRef, InstancePath, PartMeta, Port, TypeName, Visibility};
+    use crate::dsl::ir::{
+        ConnectorRef, InstancePath, Length, LengthUnit, PartMeta, Port, TypeName, Visibility,
+    };
 
     fn strand(row_y: f64) -> CableStrand {
         CableStrand {
@@ -952,9 +954,17 @@ component Root {
         let full = CableMeta {
             label: None,
             r#type: Some("2-core".into()),
-            length: Some(0.8),
+            length: Length::new(0.8, LengthUnit::Metre),
         };
         assert_eq!(cable_subtitle(Some(&full), 3), "2-core · 0.8 m · ×3");
+
+        // A length authored in millimetres shows in metres, exactly.
+        let jumper = CableMeta {
+            label: None,
+            r#type: None,
+            length: Length::new(150.0, LengthUnit::Millimetre),
+        };
+        assert_eq!(cable_subtitle(Some(&jumper), 2), "0.15 m · ×2");
 
         let bare = CableMeta {
             label: None,

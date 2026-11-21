@@ -432,7 +432,7 @@ impl Instance {
     /// The length that applies to `wire`, one of this instance's wires: its
     /// own `length`, else that of the cable it belongs to. `None` when
     /// neither sets one.
-    pub fn effective_length(&self, wire: &Wire) -> Option<f64> {
+    pub fn effective_length(&self, wire: &Wire) -> Option<Length> {
         wire.length.or_else(|| {
             wire.cable
                 .as_ref()
@@ -449,8 +449,107 @@ pub struct CableMeta {
     pub label: Option<String>,
     /// Free-text construction note, e.g. `"Twisted pair"`.
     pub r#type: Option<String>,
-    /// Length in metres.
-    pub length: Option<f64>,
+    pub length: Option<Length>,
+}
+
+/// A physical length: a cable's or a conductor's. Held as a whole number of
+/// micrometres, so lengths authored in different units compare and print
+/// exactly — `150mm` is `0.15 m`, never `0.15000000000000002 m` — and a
+/// sum of them would too. Always positive: [`Length::new`] refuses the rest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Length {
+    micrometres: u64,
+}
+
+impl Length {
+    const MICROMETRES_PER_METRE: u64 = 1_000_000;
+
+    /// `value` in `unit`, to the nearest micrometre. `None` unless that is
+    /// at least one micrometre: a length is positive.
+    #[must_use]
+    pub fn new(value: f64, unit: LengthUnit) -> Option<Self> {
+        let micrometres = (value * unit.micrometres() as f64).round();
+        // A float-to-int `as` saturates; no wiring length comes near.
+        (micrometres >= 1.0).then_some(Length {
+            micrometres: micrometres as u64,
+        })
+    }
+
+    /// The length in metres, the unit the IR normalises to.
+    pub fn metres(self) -> f64 {
+        self.micrometres as f64 / Self::MICROMETRES_PER_METRE as f64
+    }
+}
+
+/// In metres, with as many decimals as the length has and no more:
+/// `2 m`, `0.15 m`, `0.000001 m`.
+impl fmt::Display for Length {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let whole = self.micrometres / Self::MICROMETRES_PER_METRE;
+        let fraction = self.micrometres % Self::MICROMETRES_PER_METRE;
+        if fraction == 0 {
+            return write!(f, "{whole} m");
+        }
+        let decimals = format!("{fraction:06}");
+        write!(f, "{whole}.{} m", decimals.trim_end_matches('0'))
+    }
+}
+
+/// A unit a length may be written in, as a suffix touching its number
+/// (`150mm`). A bare number is in metres.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LengthUnit {
+    Metre,
+    Centimetre,
+    Millimetre,
+}
+
+impl LengthUnit {
+    /// Every unit, in the order the diagnostics and completion list them.
+    pub const ALL: [Self; 3] = [Self::Metre, Self::Centimetre, Self::Millimetre];
+
+    /// The suffix the unit is written as.
+    pub fn symbol(self) -> &'static str {
+        match self {
+            Self::Metre => "m",
+            Self::Centimetre => "cm",
+            Self::Millimetre => "mm",
+        }
+    }
+
+    /// Every unit's symbol, as a sentence lists them: `` `m`, `cm` or `mm` ``.
+    pub fn listed() -> String {
+        let symbols: Vec<String> = Self::ALL.iter().map(|u| format!("`{u}`")).collect();
+        match symbols.split_last() {
+            Some((last, rest)) if !rest.is_empty() => format!("{} or {last}", rest.join(", ")),
+            _ => symbols.concat(),
+        }
+    }
+
+    fn micrometres(self) -> u64 {
+        match self {
+            Self::Metre => Length::MICROMETRES_PER_METRE,
+            Self::Centimetre => 10_000,
+            Self::Millimetre => 1_000,
+        }
+    }
+}
+
+impl fmt::Display for LengthUnit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.symbol())
+    }
+}
+
+impl std::str::FromStr for LengthUnit {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::ALL
+            .into_iter()
+            .find(|unit| unit.symbol() == s)
+            .ok_or(())
+    }
 }
 
 /// One housing half of a mated inline connector pair.
@@ -623,10 +722,10 @@ pub struct Wire {
     /// cable in source order. Wires of one cable sharing an index are
     /// twisted together; the harness renderer braids two-conductor groups.
     pub twisted_group: Option<u32>,
-    /// The wire's own length in metres, from its body. For a cable
-    /// conductor it overrides the cable's; [`Instance::effective_length`]
-    /// answers the length that applies.
-    pub length: Option<f64>,
+    /// The wire's own length, from its body. For a cable conductor it
+    /// overrides the cable's; [`Instance::effective_length`] answers the
+    /// length that applies.
+    pub length: Option<Length>,
     /// Free-text insulation/construction type from the body, e.g. `"FLRY-B"`.
     pub r#type: Option<String>,
     /// Part number from the body.
@@ -842,6 +941,63 @@ impl std::str::FromStr for Side {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn length(value: f64, unit: &str) -> Length {
+        Length::new(value, unit.parse().expect("a unit")).expect("a positive length")
+    }
+
+    #[test]
+    fn lengths_in_every_unit_normalise_to_metres() {
+        assert_eq!(length(2.0, "m").metres(), 2.0);
+        assert_eq!(length(150.0, "mm").metres(), 0.15);
+        assert_eq!(length(15.0, "cm").metres(), 0.15);
+        assert_eq!(length(1.1, "cm").metres(), 0.011);
+        assert_eq!(length(150.0, "mm"), length(0.15, "m"));
+        assert_eq!(length(15.0, "cm"), length(150.0, "mm"));
+    }
+
+    #[test]
+    fn a_length_displays_its_metres_without_float_noise() {
+        for (value, unit, shown) in [
+            (2.0, "m", "2 m"),
+            (150.0, "mm", "0.15 m"),
+            (15.0, "cm", "0.15 m"),
+            (1.1, "cm", "0.011 m"),
+            (0.1, "m", "0.1 m"),
+            (1234.5, "mm", "1.2345 m"),
+            (0.001, "mm", "0.000001 m"),
+        ] {
+            assert_eq!(length(value, unit).to_string(), shown, "{value}{unit}");
+        }
+    }
+
+    #[test]
+    fn a_length_is_positive_to_the_micrometre() {
+        for (value, unit) in [(0.0, "m"), (-2.0, "m"), (-150.0, "mm"), (0.0004, "mm")] {
+            let unit = unit.parse().expect("a unit");
+            assert_eq!(Length::new(value, unit), None, "{value}{unit}");
+        }
+        assert_eq!(length(0.0005, "mm").to_string(), "0.000001 m");
+    }
+
+    #[test]
+    fn lengths_order_by_their_size_whatever_their_unit() {
+        let mut lengths = [length(1.0, "m"), length(15.0, "cm"), length(200.0, "mm")];
+        lengths.sort();
+        assert_eq!(lengths.map(|l| l.to_string()), ["0.15 m", "0.2 m", "1 m"]);
+    }
+
+    #[test]
+    fn length_units_parse_from_their_symbols_only() {
+        for unit in LengthUnit::ALL {
+            assert_eq!(unit.symbol().parse(), Ok(unit));
+            assert_eq!(unit.to_string(), unit.symbol());
+        }
+        for other in ["in", "km", "M", "MM", "metre", ""] {
+            assert_eq!(other.parse::<LengthUnit>(), Err(()), "{other}");
+        }
+        assert_eq!(LengthUnit::listed(), "`m`, `cm` or `mm`");
+    }
 
     #[test]
     fn pin_display_list_is_absent_when_unassigned() {

@@ -9,6 +9,8 @@
 use miette::{Diagnostic, NamedSource, SourceSpan};
 use thiserror::Error;
 
+use crate::dsl::ir::LengthUnit;
+
 #[derive(Debug, Error, Diagnostic)]
 pub enum Problem {
     /// A lexical error (bad character, unterminated string, …).
@@ -773,17 +775,27 @@ pub enum Problem {
         at: SourceSpan,
     },
 
-    /// A `length` (in metres) is zero or negative.
+    /// A `length` is zero or negative (or under a micrometre, the finest a
+    /// length resolves to).
     #[error("length must be positive, got {value}")]
-    #[diagnostic(
-        code(wirebug::invalid_length),
-        help("a length is in metres, e.g. `length: 2.5;`")
-    )]
+    #[diagnostic(code(wirebug::invalid_length), help("{}", length_help()))]
     InvalidLength {
-        value: f64,
+        /// The length as written, its unit included (`-150mm`).
+        value: String,
         #[source_code]
         src: NamedSource<String>,
         #[label("not a positive length")]
+        at: SourceSpan,
+    },
+
+    /// A `length` written with a unit that is no length unit (`2in`).
+    #[error("unknown length unit `{unit}`")]
+    #[diagnostic(code(wirebug::unknown_length_unit), help("{}", length_help()))]
+    UnknownLengthUnit {
+        unit: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("not a length unit")]
         at: SourceSpan,
     },
 
@@ -1148,6 +1160,14 @@ impl std::fmt::Display for PropertyOwner {
     }
 }
 
+/// The help of the length problems: how a length is written.
+fn length_help() -> String {
+    format!(
+        "write a length as a positive number of metres (`length: 2.5;`), or with one of the units {} directly after the number (`length: 150mm;`)",
+        LengthUnit::listed()
+    )
+}
+
 impl PropertyKind {
     /// How a value of this kind is written, for the help.
     fn placeholder(self) -> &'static str {
@@ -1245,6 +1265,7 @@ impl Problem {
             | Problem::PropertyType { .. }
             | Problem::InvalidGauge { .. }
             | Problem::InvalidLength { .. }
+            | Problem::UnknownLengthUnit { .. }
             | Problem::WrongIncludeForm { .. }
             | Problem::UnknownViewKind { .. }
             | Problem::DuplicateViewItem { .. }

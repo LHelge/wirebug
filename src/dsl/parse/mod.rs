@@ -29,6 +29,7 @@ use chumsky::recovery::via_parser;
 use chumsky::util::MaybeRef;
 
 use crate::dsl::ast::*;
+use crate::dsl::ir::LengthUnit;
 use crate::dsl::lex::Token;
 use crate::dsl::span::{FileId, Span, Spanned};
 
@@ -559,16 +560,74 @@ where
 
     let string = select! { Token::Str(s) => s }.map_with(|s, e| Spanned::new(s, e.span()));
 
-    let number = select! { Token::Number(n) => n }.try_map(|n, span: Span| {
-        n.parse::<f64>()
+    let numeral = select! { Token::Number { digits, unit } => (digits, unit) };
+
+    // A number with no unit: a gauge, a coordinate, a grid step. Only a
+    // property value may carry a unit (see `quantity`).
+    let number = numeral.try_map(|(digits, unit), span: Span| match unit {
+        Some(unit) => Err(Rich::custom(
+            span,
+            format!("only a `length` takes a unit: write `{digits}`, without the `{unit}`"),
+        )),
+        None => digits
+            .parse::<f64>()
             .map(|v| Spanned::new(v, span))
-            .map_err(|_| Rich::custom(span, format!("invalid number `{n}`")))
+            .map_err(|_| Rich::custom(span, format!("invalid number `{digits}`"))),
     });
 
-    let pin = select! { Token::Number(n) => n }.try_map(|n, span: Span| {
-        n.parse::<u32>()
-            .map(|v| Spanned::new(v, span))
-            .map_err(|_| Rich::custom(span, format!("pin must be a whole number, got `{n}`")))
+    // A whole number: a pin, or a connector layout's row or column count.
+    let whole = |what: &'static str| {
+        numeral.try_map(move |(digits, unit), span: Span| {
+            digits
+                .parse::<u32>()
+                .ok()
+                .filter(|_| unit.is_none())
+                .map(|v| Spanned::new(v, span))
+                .ok_or_else(|| {
+                    let written = format!("{digits}{}", unit.as_deref().unwrap_or_default());
+                    Rich::custom(
+                        span,
+                        format!("{what} must be a whole number, got `{written}`"),
+                    )
+                })
+        })
+    };
+    let pin = whole("pin");
+
+    // A property value's number, with the unit written directly after it,
+    // if any; validate checks the unit against the key.
+    let quantity = numeral.try_map(|(digits, unit), span: Span| {
+        let value = digits
+            .parse::<f64>()
+            .map_err(|_| Rich::custom(span, format!("invalid number `{digits}`")))?;
+        let unit = unit.map(|unit| {
+            let start = span.end - unit.len();
+            Spanned::new(unit, Span::new(span.file, start, span.end))
+        });
+        Ok(Spanned::new(Quantity { value, unit }, span))
+    });
+
+    // A length unit written after a space (`length: 2 m;`): a unit lexes
+    // into its number only when it touches it, so say that, not "expected
+    // ';'". It never matches: on a length unit its error stands in for the
+    // `;` one, and on anything else it expects nothing, so the `;` error
+    // stands as it was.
+    let spaced_unit = custom(|inp| {
+        let before = inp.cursor();
+        let found = inp.peek();
+        inp.skip();
+        let span = inp.span_since(&before);
+        Err::<(), _>(match found {
+            Some(Token::Ident(unit)) if unit.parse::<LengthUnit>().is_ok() => Rich::custom(
+                span,
+                format!("write the unit `{unit}` directly after its number, without a space"),
+            ),
+            found => LabelError::<'tok, I, RichPattern<'tok, Token>>::expected_found(
+                [],
+                found.map(MaybeRef::Val),
+                span,
+            ),
+        })
     });
 
     let connector_property = leading_name(Token::Colon)
@@ -589,12 +648,12 @@ where
         .ignore_then(
             just(Token::Rows)
                 .ignore_then(just(Token::Colon))
-                .ignore_then(pin)
+                .ignore_then(whole("`rows`"))
                 .then_ignore(just(Token::Semicolon))
                 .then(
                     just(Token::Cols)
                         .ignore_then(just(Token::Colon))
-                        .ignore_then(pin)
+                        .ignore_then(whole("`cols`"))
                         .then_ignore(just(Token::Semicolon)),
                 )
                 .then(
@@ -800,7 +859,7 @@ where
                 .map(|(type_name, label)| NamedTail::Instance { type_name, label }),
             choice((
                 string.map(PropertyValue::Str),
-                number.map(PropertyValue::Number),
+                quantity.map(PropertyValue::Number),
             ))
             .map(NamedTail::Value),
         )))
@@ -843,7 +902,9 @@ where
         .then_ignore(just(Token::Colon))
         .then(choice((
             string.map(PropertyValue::Str),
-            number.map(PropertyValue::Number),
+            quantity
+                .then_ignore(spaced_unit.or_not())
+                .map(PropertyValue::Number),
             ident.clone().map(PropertyValue::Ident),
         )))
         .then_ignore(just(Token::Semicolon))
@@ -1643,6 +1704,97 @@ inverter_control = face 47@(1, 0) large 21@(5, 0) 13@(16, 3)
                 format!("{}={value}", p.key.node)
             })
             .collect()
+    }
+
+    #[test]
+    fn a_length_keeps_the_unit_written_after_its_number() {
+        let src = "component c { wire red 1 [a.x, b.y] { length: 150mm; } cable k { length: 2; type: \"t\"; } }";
+        let file = parse_ok(src);
+        let Member::Wire(wire) = &members(&file)[0] else {
+            panic!("expected a wire");
+        };
+        let PropertyValue::Number(length) = &wire.properties[0].value else {
+            panic!("expected a number");
+        };
+        assert_eq!(&src[length.span.start..length.span.end], "150mm");
+        assert_eq!(length.node.value, 150.0);
+        let unit = length.node.unit.as_ref().expect("a unit");
+        assert_eq!(&src[unit.span.start..unit.span.end], "mm");
+        assert_eq!(wire_properties(wire), ["length=150mm"]);
+
+        let Member::Cable(cable) = &members(&file)[1] else {
+            panic!("expected a cable");
+        };
+        let PropertyValue::Number(bare) = &cable.properties[0].value else {
+            panic!("expected a number");
+        };
+        assert!(bare.node.unit.is_none());
+    }
+
+    #[test]
+    fn any_unit_parses_on_a_property_and_validate_judges_it() {
+        // The parse stays faithful: an unknown unit, or a unit on a key that
+        // takes no length, is validate's to report.
+        let file = parse_ok("component c { part: 2in; cable k { length: 3in; } }");
+        let [Member::Property(part), Member::Cable(cable)] = members(&file) else {
+            panic!("expected a property and a cable");
+        };
+        let PropertyValue::Number(n) = &part.value else {
+            panic!("expected a number");
+        };
+        assert_eq!(n.node.to_string(), "2in");
+        assert_eq!(cable.properties.len(), 1);
+    }
+
+    #[test]
+    fn a_unit_where_no_length_goes_is_a_syntax_error() {
+        let cases = [
+            "component c { wire red 1.5mm [a.x, b.y]; }",
+            "component c { connector j { pub port p \"P\" pin 1a; } }",
+            "component c { connector j { pub port p \"P\" pins [1, 2mm]; } }",
+            "view schematic \"V\" { grid: 10mm; }",
+            "view schematic \"V\" { include a at (2cm, 0); }",
+            "view schematic \"V\" { text t at (0, 1m) \"T\"; }",
+            "view schematic \"V\" { enclosure { p at (west, 2mm); } }",
+            "connector_type T \"t\" { pitch: 2.54mm; }",
+            "connector_type T \"t\" { layout grid { rows: 2mm; cols: 2; } }",
+            "connector_type T \"t\" { layout grid { rows: 2; cols: 3x; } }",
+            "connector_type T \"t\" { layout face { cavity 1 at (0mm, 0); } }",
+            "connector_type T \"t\" { layout face { cavity 1at (0, 0); } }",
+        ];
+        let report: Vec<String> = cases.iter().flat_map(|src| errors_at(src)).collect();
+        insta::assert_snapshot!(report.join("\n"), @r"
+        1.5mm: only a `length` takes a unit: write `1.5`, without the `mm`
+        1a: pin must be a whole number, got `1a`
+        2mm: pin must be a whole number, got `2mm`
+        10mm: only a `length` takes a unit: write `10`, without the `mm`
+        2cm: only a `length` takes a unit: write `2`, without the `cm`
+        1m: only a `length` takes a unit: write `1`, without the `m`
+        2mm: only a `length` takes a unit: write `2`, without the `mm`
+        2.54mm: only a `length` takes a unit: write `2.54`, without the `mm`
+        2mm: `rows` must be a whole number, got `2mm`
+        3x: `cols` must be a whole number, got `3x`
+        0mm: only a `length` takes a unit: write `0`, without the `mm`
+        1at: pin must be a whole number, got `1at`
+        ");
+    }
+
+    #[test]
+    fn a_unit_after_a_space_is_told_to_touch_its_number() {
+        let cases = [
+            "component c { cable k { length: 2 m; } }",
+            "component c { wire red 1 [a, b] { length: 150 mm; } }",
+            "component c { cable k { length: 2 x; } }",
+            "component c { cable k { length: 2",
+        ];
+        let report: Vec<String> = cases.iter().flat_map(|src| errors_at(src)).collect();
+        // Anything else after the number keeps the usual error.
+        insta::assert_snapshot!(report.join("\n"), @r"
+        m: write the unit `m` directly after its number, without a space
+        mm: write the unit `mm` directly after its number, without a space
+        x: found 'x' expected ';'
+        : found end of input expected ';'
+        ");
     }
 
     #[test]

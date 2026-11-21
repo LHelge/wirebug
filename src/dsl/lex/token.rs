@@ -62,8 +62,14 @@ pub enum Token {
     Ident(String),
     /// Decoded contents of a `"quoted label"` (without the quotes).
     Str(String),
-    /// Raw numeric literal text, e.g. `50`, `0.25`.
-    Number(String),
+    /// A numeric literal: its raw text (`50`, `-0.25`), and the unit
+    /// written directly after it (`mm` in `150mm`). Any name-shaped run
+    /// touching the digits is the unit, whatever it spells: the parser
+    /// decides where a unit may go, and validation which units exist.
+    Number {
+        digits: String,
+        unit: Option<String>,
+    },
 }
 
 /// Every keyword with its surface text: the lexer's lookup table and the
@@ -185,7 +191,9 @@ impl fmt::Display for Token {
             Token::Slash => "/",
             Token::Ident(name) => name,
             Token::Str(s) => return write!(f, "{s:?}"),
-            Token::Number(n) => n,
+            Token::Number { digits, unit } => {
+                return write!(f, "{digits}{}", unit.as_deref().unwrap_or_default());
+            }
             // Only a keyword left out of `KEYWORDS` lands here, and that
             // keyword would not lex either.
             unlisted => return write!(f, "{unlisted:?}"),
