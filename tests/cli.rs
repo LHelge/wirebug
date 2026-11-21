@@ -2889,6 +2889,21 @@ fn fmt_reports_a_file_that_does_not_parse_and_leaves_it_as_it_is() {
 }
 
 #[test]
+fn fmt_outside_a_project_says_nothing_was_formatted() {
+    let tmp = tempdir().expect("tempdir");
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .arg("fmt")
+        .current_dir(tmp.path())
+        .assert()
+        .failure()
+        .stdout("")
+        .stderr(predicate::str::contains("1 error(s) — nothing formatted"))
+        .stderr(predicate::str::contains("file(s)").not());
+}
+
+#[test]
 fn fmt_help_says_what_is_formatted_and_what_check_does() {
     let output = Command::cargo_bin("wirebug")
         .expect("binary present")
