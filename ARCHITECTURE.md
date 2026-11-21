@@ -143,7 +143,9 @@ Distinct from clap's `--version`, which prints the wirebug app version.
 
 - **AST** — a faithful parse of one `.wb` file. `Definition` (a component
   *type*) holds `Port`/`Connector`/`Instance`/`Wire`/`Property`/nested-
-  `Definition` members; `View`s are top-level siblings. A `Member::Property`
+  `Definition` members; `View`s are top-level siblings, each with an
+  optional `subject` (the component named by `for` after its title;
+  `None` leaves the subject implicit, see the registry). A `Member::Property`
   is a line of the type's part data (`part: "…";`, read by
   `Definition::properties`): the parser reads a component-body statement
   that starts `<name>:` once (`named_member`) and the token after the colon
@@ -157,6 +159,14 @@ Distinct from clap's `--version`, which prints the wirebug app version.
   `DefId`, with flattened ports (connectors are grouping metadata, not a
   namespace — port names are unique per component), per-file type scopes
   (own defs + `use` imports), and resolved instance/endpoint/include refs.
+  Each view is bound to its subject (`ViewBinding.subject`, in
+  `resolve/views.rs`): the component its `for` names, looked up in the
+  view's file scope (own top-level components and `use` imports, not
+  nested ones), else the file's single top-level component; either way
+  canonicalized, so a view in an `extend` fragment documents the merged
+  component. Everything downstream keys on that subject (by type name in
+  `ir::View.subject`), never on the file, so one file may hold views of
+  several components.
 - **Merge groups (`extend`)** — a top-level component may be authored across
   files: `main.wb` has `component Vehicle { … }`, other files
   `extend Vehicle { … }`, and `main.wb` pulls each in with the usual
@@ -415,8 +425,11 @@ so one run reports many. Errors fail the run; warnings fail only under
 - **Resolve** — undefined type, unresolved import, duplicate
   type/instance/port, unknown instance/port in a wire endpoint,
   private-port access (a non-`pub` port referenced from outside), unknown
-  view include, ambiguous view subject, duplicate connector designator
-  (`duplicate_connector_name`), duplicate cable designator
+  view include, a view without `for` in a file with no or several
+  top-level components (`view_subject`; the help shows `for`), a `for`
+  naming no component in scope (the instances' `undefined_type`, on the
+  name) or a connector type (`view_subject_not_component`), duplicate
+  connector designator (`duplicate_connector_name`), duplicate cable designator
   (`duplicate_cable_name`). `extend` fragments add: a fragment nested inside a
   component (`nested_extend`); an `extend` with no root `component` of that
   name (`orphan_fragment`); an instance/port name declared in two fragments of
@@ -474,7 +487,9 @@ so one run reports many. Errors fail the run; warnings fail only under
   as resolved `ir::WireEnd`s, so own port `gnd` and `ecu.gnd` never alias;
   two *different* wires on one port are a deliberate double crimp and are
   not compared). As warnings: a cable with no conductors (`empty_cable`),
-  unused import, bare-port pin, and non-IEC 60757 wire color
+  unused import (an import counts as used when the file instantiates it,
+  merges with it, or names it in a view's `for`), bare-port pin, and
+  non-IEC 60757 wire color
   (`unknown_wire_color` — the `ir::ColorName::Other` escape hatch still
   renders verbatim). Property, arity and value checks and the endpoint
   check live here (not elaborate) so a type instantiated many times
@@ -751,7 +766,8 @@ DSL pipeline notes:
 - Keywords are **reserved** or **contextual** (`Token::is_contextual`;
   one `KEYWORDS` table in `lex/token.rs` drives both lexing and display).
   Contextual ones — the view, `connector_type` layout and cavity words,
-  plus `from` — mean something only in their own production; everywhere a
+  plus `from` and `for` (a view's subject) — mean something only in their
+  own production; everywhere a
   name belongs they are names. Names go through two boxed productions,
   both taking an identifier or a contextual keyword (`Token::as_name`):
   `ident` for a name after a keyword, and `leading_name(separator)` for a

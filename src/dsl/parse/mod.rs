@@ -1061,8 +1061,9 @@ where
     let view = just(Token::View)
         .ignore_then(ident.clone())
         .then(string)
+        .then(just(Token::For).ignore_then(ident.clone()).or_not())
         .then(block(view_item))
-        .map_with(|((kind, title), items), e| {
+        .map_with(|(((kind, title), subject), items), e| {
             let mut grid = None;
             let mut enclosure = None;
             let mut includes = Vec::new();
@@ -1086,6 +1087,7 @@ where
             View {
                 kind,
                 title,
+                subject,
                 grid,
                 has_enclosure,
                 enclosure: enclosure.unwrap_or_default(),
@@ -2023,6 +2025,66 @@ inverter_control = face 47@(1, 0) large 21@(5, 0) 13@(16, 3)
         };
         assert!(v.grid.is_none());
         assert!(v.includes[0].ports.is_empty(), "bare include has no ports");
+    }
+
+    #[test]
+    fn view_names_its_subject_after_for() {
+        let src = r#"view pinout "Sensor pinout" for Sensor { include x1 at (0, 0); }"#;
+        let file = parse_ok(src);
+        let Item::View(v) = &file.items[0] else {
+            panic!("expected view");
+        };
+        let subject = v.subject.as_ref().expect("a subject");
+        assert_eq!(subject.node.as_str(), "Sensor");
+        assert_eq!(&src[subject.span.start..subject.span.end], "Sensor");
+        assert_eq!(v.includes.len(), 1);
+
+        let implicit = parse_ok(r#"view pinout "P" { }"#);
+        let Item::View(v) = &implicit.items[0] else {
+            panic!("expected view");
+        };
+        assert!(v.subject.is_none(), "no `for`, no subject");
+    }
+
+    #[test]
+    fn for_is_still_a_name_wherever_a_name_belongs() {
+        // `for` was an ordinary name before it named a view's subject, so a
+        // port, instance, include or text box called `for` still parses.
+        let file = parse_ok(
+            r#"component c {
+                pub port for "FOR";
+                for: Lamp;
+                wire red 1 [for, for.for];
+            }
+            view schematic "V" for for {
+                include for at (1, 2) ports { west: for; }
+                enclosure { for at (west, 1); }
+                text for at (0, 4) "note";
+            }"#,
+        );
+        let names: Vec<&str> = members(&file)
+            .iter()
+            .filter_map(|m| match m {
+                Member::Port(p) => Some(p.name.node.as_str()),
+                Member::Instance(i) => Some(i.name.node.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names, ["for", "for"]);
+        let Item::View(v) = &file.items[1] else {
+            panic!("expected a view");
+        };
+        assert_eq!(v.subject.as_ref().map(|s| s.node.as_str()), Some("for"));
+        assert_eq!(v.includes[0].instance.node.as_str(), "for");
+        assert_eq!(v.includes[0].ports[0].port.node.as_str(), "for");
+        assert_eq!(v.enclosure[0].port.node.as_str(), "for");
+        assert_eq!(v.texts[0].name.node.as_str(), "for");
+    }
+
+    #[test]
+    fn for_without_a_subject_is_a_parse_error() {
+        let parsed = parse_str(r#"view pinout "P" for { }"#);
+        assert!(!parsed.errors.is_empty(), "`for` needs a component name");
     }
 
     #[test]

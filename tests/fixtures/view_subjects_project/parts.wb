@@ -1,0 +1,24 @@
+// Two components in one file. Without `for` a view here could not tell
+// which of them it documents; each view names its subject.
+
+component Sensor {
+    connector x1 "Sensor 2p" {
+        pub port sig "SIG" pin 1;
+        pub port gnd "GND" pin 2;
+    }
+}
+
+component Lamp {
+    connector x2 "Lamp 2p" {
+        pub port feed "FEED" pin 1;
+        pub port ret  "RET"  pin 2;
+    }
+}
+
+view pinout "Sensor pinout" for Sensor {
+    include x1 at (0, 0);
+}
+
+view pinout "Lamp pinout" for Lamp {
+    include x2 at (0, 0);
+}

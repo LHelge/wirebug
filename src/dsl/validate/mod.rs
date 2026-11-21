@@ -21,7 +21,7 @@
 
 use std::collections::HashMap;
 
-use crate::dsl::ast::{Member, Port, Property, PropertyValue, Wire};
+use crate::dsl::ast::{Item, Member, Port, Property, PropertyValue, Wire};
 use crate::dsl::diagnostics::{FirstProperty, Problem, PropertyKind, PropertyOwner};
 use crate::dsl::ir::{ColorName, WireEnd};
 use crate::dsl::resolve::{DefId, Resolved};
@@ -130,7 +130,12 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
                     && d.name == name
                     && resolved.fragments(id).len() > 1
             });
-            if !instantiated && !merged {
+            // A view's `for` documents the import, which is a use of it.
+            let documented = file.ast.items.iter().any(|item| {
+                matches!(item, Item::View(view)
+                    if view.subject.as_ref().is_some_and(|s| s.node.as_str() == name))
+            });
+            if !instantiated && !merged && !documented {
                 problems.push(Problem::UnusedImport {
                     name: name.to_string(),
                     src: resolved.project.source(fid),
@@ -1022,6 +1027,24 @@ mod tests {
         ]);
         assert!(
             codes.iter().any(|c| c == "wirebug::unused_import"),
+            "{codes:?}"
+        );
+    }
+
+    #[test]
+    fn component_import_named_only_by_a_view_for_does_not_warn() {
+        let codes = validate_files(&[
+            (
+                "main.wb",
+                "use leaf from \"leaf.wb\";\ncomponent m { }\nview pinout \"Leaf\" for leaf { include j at (0, 0); }\n",
+            ),
+            (
+                "leaf.wb",
+                "component leaf { connector j \"J\" { pub port a \"A\" pin 1; } }\n",
+            ),
+        ]);
+        assert!(
+            !codes.iter().any(|c| c == "wirebug::unused_import"),
             "{codes:?}"
         );
     }

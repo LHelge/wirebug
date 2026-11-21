@@ -1,6 +1,6 @@
 ---
 source: src/dsl/parse/mod.rs
-assertion_line: 2210
+assertion_line: 2549
 expression: file
 ---
 File {
@@ -220,6 +220,7 @@ File {
             View {
                 kind: schematic @ 343..352,
                 title: "Battery Detail" @ 353..369,
+                subject: None,
                 grid: Some(
                     20.0 @ 382..384,
                 ),
