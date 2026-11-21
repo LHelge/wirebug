@@ -4,7 +4,7 @@ Text-defined electrical schematics and wiring harnesses.
 
 **wirebug** describes an electrical system in a small text DSL (`.wb` files) and turns it into SVG schematics, wiring harness drawings, and connector pinout drawings. One model, many views — inspired by [Structurizr](https://structurizr.com/) / [LikeC4](https://likec4.dev/) for system architecture and [WireViz](https://github.com/WireViz/WireViz) for wiring harnesses.
 
-A project is a directory rooted at a `wirebug.toml` manifest, with `main.wb` as the conventional entry file beside it. Components are *types* with `pub` ports; you instantiate them, wire the instances together, and split a system across files with `use`. The full language is documented in `.claude/skills/wirebug-dsl/` and mirrored in `.claude/skills/wirebug-dsl/`.
+A project is a directory rooted at a `wirebug.toml` manifest, with `main.wb` as the conventional entry file beside it. Components are *types* with `pub` ports; you instantiate them, wire the instances together, and split a system across files with `use`. The language is documented in [`docs/`](docs/README.md), one page per topic.
 
 ## Install
 
@@ -61,7 +61,7 @@ wirebug check                 # ok — 3 instances, 1 views
 wirebug render                # writes out/overview.svg and out/index.html
 ```
 
-`wirebug init [dir]` creates the directory if need be and writes a `wirebug.toml` (named after the directory, version `0.1.0`), a commented `main.wb` with two components, one wire between them and a schematic view, and a `.gitignore` holding `out/`, where `render` writes by default. It never overwrites: a directory that already has a `wirebug.toml` or a `main.wb` is refused with nothing written, and an existing `.gitignore` is left as it is. Run `wirebug serve` next to see the drawing update as you edit.
+`wirebug init [dir]` creates the directory if need be and writes a `wirebug.toml` (named after the directory, version `0.1.0`), a commented `main.wb` with two components, one wire between them and a schematic view, and a `.gitignore` holding `out/`, where `render` writes by default. It never overwrites: a directory that already has a `wirebug.toml` or a `main.wb` is refused with nothing written, and an existing `.gitignore` is left as it is. Run `wirebug serve` next to see the drawing update as you edit, and see [`docs/`](docs/README.md) for everything a `.wb` file can say.
 
 ## Why
 
