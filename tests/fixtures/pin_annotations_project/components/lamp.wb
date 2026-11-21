@@ -1,0 +1,8 @@
+// One connector: its pins need no designator. `gnd` is ganged.
+component Lamp {
+    connector x1 "Lamp 4p" {
+        pub port pwr "PWR" pin 1;
+        pub port gnd "GND" pins [2, 3];
+        pub port sig "SIG" pin 4;
+    }
+}

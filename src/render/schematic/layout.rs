@@ -12,13 +12,12 @@ use std::collections::HashMap;
 
 use indexmap::IndexMap;
 
+use super::pin::{PinAnnotation, PinOrientation};
 use super::{
-    CHAR_WIDTH, DEFAULT_GRID, LABEL_INSET, MIN_HEIGHT, MIN_PORT_PITCH, MIN_WIDTH, SVG_MARGIN,
-    TEXT_BOX_HEIGHT, TEXT_BOX_MIN_WIDTH, TEXT_BOX_PAD_X,
+    CHAR_WIDTH, DEFAULT_GRID, LABEL_INSET, MIN_HEIGHT, MIN_PORT_PITCH, MIN_WIDTH, PIN_CANVAS_PAD,
+    SVG_MARGIN, TEXT_BOX_HEIGHT, TEXT_BOX_MIN_WIDTH, TEXT_BOX_PAD_X,
 };
-use crate::dsl::ir::{
-    Design, Instance, InstanceName, Pin, Port, PortName, View, WireColor, WireEnd,
-};
+use crate::dsl::ir::{Design, Instance, InstanceName, Port, PortName, View, WireColor, WireEnd};
 use crate::error::ViewResult;
 use crate::render::GridFault;
 use crate::render::geometry::{Bounds, Point, Side};
@@ -143,11 +142,32 @@ pub(super) struct PlacedPort {
     pub(super) port: PortName,
     pub(super) side: Side,
     pub(super) pos: Point,
-    pub(super) pin: Option<String>,
+    /// The pin number(s) drawn outside the box, `None` for a port with no
+    /// pins.
+    pub(super) pin: Option<PinAnnotation>,
     pub(super) label: String,
     /// True for an enclosure port: it sits on the boundary facing *inward*,
     /// so its wire leaves toward the schematic interior, not outward.
     pub(super) inverted: bool,
+}
+
+impl PlacedPort {
+    /// The side the port's texts are laid out for: its own, or the
+    /// opposite one for an inverted enclosure port, which faces the
+    /// interior and so labels like a normal port on the opposite side.
+    pub(super) fn label_side(&self) -> Side {
+        if self.inverted {
+            self.side.opposite()
+        } else {
+            self.side
+        }
+    }
+
+    /// The area the pin annotation covers, if the port has one.
+    fn pin_extent(&self) -> Option<Bounds> {
+        let pin = self.pin.as_ref()?;
+        Some(pin.extent(self.label_side(), self.pos))
+    }
 }
 
 pub(super) struct PlacedText {
@@ -356,14 +376,25 @@ impl Placement {
             let mut port_index = HashMap::new();
             for (side, refs) in side_ports.sides() {
                 let n = refs.len();
-                for (k, (port_name, port)) in refs.iter().enumerate() {
+                let pins: Vec<_> = refs
+                    .iter()
+                    .map(|(_, port)| PinAnnotation::text(inst, port))
+                    .collect();
+                // A lone port has no neighbour for its text to reach.
+                let spacing = if n > 1 { pitch } else { f64::INFINITY };
+                let orientation = PinAnnotation::orientation(
+                    side,
+                    pins.iter().flatten().map(String::as_str),
+                    spacing,
+                );
+                for (k, ((port_name, port), pin)) in refs.iter().zip(pins).enumerate() {
                     let pos = port_position(origin, width, height, side, k, n, pitch);
                     port_index.insert((*port_name).clone(), ports.len());
                     ports.push(PlacedPort {
                         port: (*port_name).clone(),
                         side,
                         pos,
-                        pin: Pin::display_list(&port.pins),
+                        pin: pin.map(|text| PinAnnotation { text, orientation }),
                         label: port.label.clone(),
                         inverted: false,
                     });
@@ -475,10 +506,45 @@ impl Placement {
                 port: ep.port.clone(),
                 side: ep.side,
                 pos,
-                pin: Pin::display_list(&port.pins),
+                pin: PinAnnotation::text(subject, port).map(|text| PinAnnotation {
+                    text,
+                    orientation: PinOrientation::Horizontal,
+                }),
                 label: port.label.clone(),
                 inverted: true,
             });
+        }
+        // Authored coordinates space enclosure ports freely, so each edge's
+        // annotations are oriented by its closest pair (none for a lone
+        // port) rather than the pitch.
+        for side in [Side::West, Side::East, Side::North, Side::South] {
+            let on_side = |p: &&PlacedPort| p.side == side;
+            let mut along: Vec<f64> = ports
+                .iter()
+                .filter(on_side)
+                .map(|p| match side {
+                    Side::West | Side::East => p.pos.y,
+                    Side::North | Side::South => p.pos.x,
+                })
+                .collect();
+            along.sort_by(f64::total_cmp);
+            let spacing = along
+                .windows(2)
+                .map(|w| w[1] - w[0])
+                .fold(f64::INFINITY, f64::min);
+            let orientation = PinAnnotation::orientation(
+                side,
+                ports
+                    .iter()
+                    .filter(on_side)
+                    .filter_map(|p| Some(p.pin.as_ref()?.text.as_str())),
+                spacing,
+            );
+            for placed in ports.iter_mut().filter(|p| p.side == side) {
+                if let Some(pin) = &mut placed.pin {
+                    pin.orientation = orientation;
+                }
+            }
         }
 
         let label = subject
@@ -619,11 +685,26 @@ impl Placement {
 
         let pad = SVG_MARGIN;
         let title_pad = if has_title { 20.0 } else { 0.0 };
+        let (mut left, mut top) = (min_x - pad, min_y - pad - title_pad);
+        let (mut right, mut bottom) = (max_x + pad, max_y + pad);
+
+        // A pin annotation outside a box can reach past everything measured
+        // above (a long designator on an unwired port at the edge). Each is
+        // kept `PIN_CANVAS_PAD` inside the canvas, measured after the margin
+        // so an annotation the margin already holds leaves the canvas as it
+        // was.
+        for extent in self.ports().filter_map(PlacedPort::pin_extent) {
+            left = left.min(extent.origin.x - PIN_CANVAS_PAD);
+            top = top.min(extent.origin.y - PIN_CANVAS_PAD - title_pad);
+            right = right.max(extent.origin.x + extent.width + PIN_CANVAS_PAD);
+            bottom = bottom.max(extent.origin.y + extent.height + PIN_CANVAS_PAD);
+        }
+
         ViewBox {
-            x: min_x - pad,
-            y: min_y - pad - title_pad,
-            width: (max_x - min_x) + 2.0 * pad,
-            height: (max_y - min_y) + 2.0 * pad + title_pad,
+            x: left,
+            y: top,
+            width: right - left,
+            height: bottom - top,
         }
     }
 }
@@ -1119,5 +1200,115 @@ component sys {
             assert_eq!(port.pos.x % 10.0, 0.0, "x off-grid: {:?}", port.pos);
             assert_eq!(port.pos.y % 10.0, 0.0, "y off-grid: {:?}", port.pos);
         }
+    }
+
+    /// `sys`, wired to the outside through an HV and a signal connector
+    /// that both have a pin 1, around `ecu`, which has two connectors with
+    /// long designators, and `lamp`, which has one.
+    fn two_connectors() -> Design {
+        design_from(
+            r#"
+component sys {
+    ecu: Ecu;
+    lamp: Lamp;
+    connector hv "HV 2p" {
+        pub port hv_pos "HV+" pin 1;
+    }
+    connector sig "Signal 2p" {
+        pub port wake "WAKE" pin 1;
+    }
+    wire red 1 [ecu.a, lamp.a];
+    component Ecu {
+        connector bms_signals "Signals 2p" {
+            pub port a "A" pin 1;
+            pub port b "B" pin 2;
+        }
+        connector power "Power 2p" {
+            pub port c "C" pin 1;
+        }
+    }
+    component Lamp {
+        connector x1 "Lamp 2p" {
+            pub port a "A" pin 1;
+            pub port b "B" pin 2;
+        }
+    }
+}
+
+view schematic "T" {
+    enclosure {
+        hv_pos at (west, 0);
+        wake at (0, south);
+    }
+    include ecu at (0, 0) ports { north: a, b; west: c; }
+    include lamp at (14, 0) ports { south: a, b; }
+}
+"#,
+        )
+    }
+
+    /// Each placed port's annotation as `port text turned`, box by box,
+    /// then the enclosure's.
+    fn pins_of(placement: &Placement) -> Vec<String> {
+        placement
+            .components
+            .values()
+            .chain(placement.enclosure())
+            .flat_map(|pc| &pc.ports)
+            .filter_map(|port| {
+                let pin = port.pin.as_ref()?;
+                let turned = pin.orientation == PinOrientation::Vertical;
+                Some(format!("{} {} {turned}", port.port, pin.text))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn annotations_name_the_connector_on_boxes_and_the_enclosure_with_several() {
+        let design = two_connectors();
+        let subject = design.get(&design.root).unwrap();
+        let view = &design.views[0];
+        let placement = Placement::compute(&design, subject, view, Grid::new(15.0)).unwrap();
+        assert_eq!(
+            pins_of(&placement),
+            [
+                // A lone port's text has no neighbour to reach, and stays
+                // level however long it is.
+                "c power:1 false",
+                "a bms_signals:1 true",
+                "b bms_signals:2 true",
+                "a 1 false",
+                "b 2 false",
+                "hv_pos hv:1 false",
+                "wake sig:1 false",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_canvas_holds_a_long_annotation_and_leaves_a_short_one_to_the_margin() {
+        let design = two_connectors();
+        let subject = design.get(&design.root).unwrap();
+        let mut view = view_of(
+            "sys",
+            &[("lamp", 0.0, 0.0, &[("a", Side::West), ("b", Side::East)])],
+        );
+        let grid = Grid::new(15.0);
+        let short = Placement::compute(&design, subject, &view, grid).unwrap();
+        let lamp = &short.components[&InstanceName::from("lamp")];
+        let vb = short.viewbox(false, &[]);
+        assert_eq!(vb.x, lamp.origin.x - SVG_MARGIN);
+        assert_eq!(vb.x + vb.width, lamp.origin.x + lamp.width + SVG_MARGIN);
+
+        view.includes[0].instance = InstanceName::from("ecu");
+        view.includes[0].ports = vec![(PortName::from("a"), Side::West)];
+        let long = Placement::compute(&design, subject, &view, grid).unwrap();
+        let vb = long.viewbox(false, &[]);
+        let ecu = &long.components[&InstanceName::from("ecu")];
+        let west = ecu.ports[0].pin_extent().unwrap();
+        // `bms_signals:1` reaches past the margin on the west; the east,
+        // with no annotation, keeps the margin.
+        assert_eq!(vb.x, west.origin.x - PIN_CANVAS_PAD);
+        assert_eq!(vb.x + vb.width, ecu.origin.x + ecu.width + SVG_MARGIN);
     }
 }

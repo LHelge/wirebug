@@ -4,7 +4,7 @@
 use svg::node::element::{Circle, Group, Polyline, Rectangle, Text};
 
 use super::layout::{PlacedComponent, PlacedPort, PlacedText};
-use super::{COMPONENT_TITLE_GAP, LABEL_INSET, PIN_INSET, PORT_RADIUS};
+use super::{COMPONENT_TITLE_GAP, LABEL_INSET, PORT_RADIUS};
 use crate::dsl::ir::{InstanceName, WireColor};
 use crate::render::geometry::{Point, Side};
 use crate::render::wire_stroke::WireLayers;
@@ -97,11 +97,7 @@ fn render_port(p: &PlacedPort) -> Group {
     // An inverted boundary port faces the interior, so it labels like a
     // normal port on the opposite side: the name sits outside the boundary,
     // the pin number inside.
-    let side = if p.inverted {
-        p.side.opposite()
-    } else {
-        p.side
-    };
+    let side = p.label_side();
 
     let label = text_with_placement(
         p.label.clone(),
@@ -117,7 +113,7 @@ fn render_port(p: &PlacedPort) -> Group {
 
     if let Some(pin) = &p.pin {
         let pin_text =
-            text_with_placement(pin.clone(), "port-pin", outside_pin_placement(side, p.pos));
+            text_with_placement(pin.text.clone(), "port-pin", pin.placement(side, p.pos));
         group = group.add(pin_text);
     }
 
@@ -127,12 +123,12 @@ fn render_port(p: &PlacedPort) -> Group {
 /// Placement for a text label: anchor position, text-anchor,
 /// optional rotation, and optional dominant-baseline override.
 /// Rotation is in degrees, clockwise.
-struct LabelPlacement {
-    x: f64,
-    y: f64,
-    anchor: &'static str,
-    rotate: f64,
-    baseline: Option<&'static str>,
+pub(super) struct LabelPlacement {
+    pub(super) x: f64,
+    pub(super) y: f64,
+    pub(super) anchor: &'static str,
+    pub(super) rotate: f64,
+    pub(super) baseline: Option<&'static str>,
 }
 
 fn text_with_placement(content: String, class: &'static str, lp: LabelPlacement) -> Text {
@@ -186,42 +182,6 @@ fn inside_label_placement(side: Side, pos: Point) -> LabelPlacement {
             anchor: "start",
             rotate: -90.0,
             baseline: Some("central"),
-        },
-    }
-}
-
-/// Pin-number label placement (outside the box). Kept horizontal on
-/// all sides — pin numbers are short enough that they don't fight
-/// each other.
-fn outside_pin_placement(side: Side, pos: Point) -> LabelPlacement {
-    match side {
-        Side::West => LabelPlacement {
-            x: pos.x - PIN_INSET,
-            y: pos.y - 5.0,
-            anchor: "end",
-            rotate: 0.0,
-            baseline: None,
-        },
-        Side::East => LabelPlacement {
-            x: pos.x + PIN_INSET,
-            y: pos.y - 5.0,
-            anchor: "start",
-            rotate: 0.0,
-            baseline: None,
-        },
-        Side::North => LabelPlacement {
-            x: pos.x + PIN_INSET,
-            y: pos.y - 5.0,
-            anchor: "start",
-            rotate: 0.0,
-            baseline: None,
-        },
-        Side::South => LabelPlacement {
-            x: pos.x + PIN_INSET,
-            y: pos.y + 13.0,
-            anchor: "start",
-            rotate: 0.0,
-            baseline: None,
         },
     }
 }

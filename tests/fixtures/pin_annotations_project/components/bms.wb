@@ -1,0 +1,13 @@
+// Long designators, drawn on the finest grid a schematic allows.
+component Bms {
+    connector bms_signals "Signals 6p" {
+        pub port can_h "CAN H" pin 1;
+        pub port can_l "CAN L" pin 2;
+        pub port wake  "WAKE"  pin 3;
+        pub port fault "FAULT" pin 4;
+    }
+    connector power "Power 4p" {
+        pub port bat "BAT" pin 1;
+        pub port gnd "GND" pins [2, 3, 4];
+    }
+}

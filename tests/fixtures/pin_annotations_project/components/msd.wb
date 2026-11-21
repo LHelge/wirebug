@@ -1,0 +1,12 @@
+// Two connectors that both have a pin 1 and a pin 2: a bare number would
+// not say which connector it is on.
+component Msd {
+    connector hv "MSD HV 2p" {
+        pub port hv_in  "HV IN"  pin 1;
+        pub port hv_out "HV OUT" pin 2;
+    }
+    connector intlk "MSD interlock 2p" {
+        pub port intlk_in  "INTLK IN"  pin 1;
+        pub port intlk_out "INTLK OUT" pin 2;
+    }
+}
