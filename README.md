@@ -47,7 +47,7 @@ code --install-extension wirebug-<version>.vsix
 
 Or, in VSCode: **Extensions** panel → **⋯** menu → **Install from VSIX…**. The
 extension provides syntax highlighting plus live diagnostics, completion,
-go-to-definition and hover via `wirebug lsp`, so it needs the `wirebug` binary on your `PATH` (any install
+go-to-definition, hover and formatting via `wirebug lsp`, so it needs the `wirebug` binary on your `PATH` (any install
 method above) or a path set in the `wirebug.server.path` setting.
 
 ## Getting started
@@ -86,10 +86,11 @@ What works today:
   - a **harness** renderer (WireViz-style pin tables, a central spine, and bezier cable bundles);
   - a **pinout** renderer (connector cavity faces plus pin tables, authored from the harness side).
 - `wirebug init` — scaffold a new project (manifest, a minimal `main.wb`, a `.gitignore` for the render output).
+- `wirebug fmt` — format every `.wb` file of a project in place (`--check` to only list the files that would change).
 - `wirebug render` to disk (SVG, or `--png` rasterised, or `--pdf` for a single PDF with one view per page on A4, A3, Letter or Tabloid paper, or `--embed` for naked SVGs + a `manifest.json` sidecar).
 - `wirebug export` — the build tables as CSV or JSON: the wire list (cut list), the connector pin tables (crimp sheet) and the bill of materials.
 - `wirebug serve` — a live-reloading dev server that re-renders on `.wb` or `wirebug.toml` saves.
-- A VSCode extension ([`editors/vscode/`](editors/vscode/)) — syntax highlighting plus live diagnostics, context-aware completion, go-to-definition and hover via `wirebug lsp`, a language server over stdio.
+- A VSCode extension ([`editors/vscode/`](editors/vscode/)) — syntax highlighting plus live diagnostics, context-aware completion, go-to-definition, hover and formatting via `wirebug lsp`, a language server over stdio.
 
 In transition / not yet:
 
@@ -146,6 +147,16 @@ wirebug check --strict --format json examples
 ```
 
 Problems are reported with source snippets and carets (via miette); a clean run exits 0.
+
+Format the project's `.wb` files — every file `check` would load — in place:
+
+```sh
+wirebug fmt                   # rewrites each file that changes, and prints its path
+wirebug fmt --check           # writes nothing; lists the files that would change, exits 1 if any
+wirebug fmt components/lamp.wb   # one file and the files it reaches through `use`/`fragment`
+```
+
+The layout is fixed: four spaces a block deep, one statement a line, and consecutive statements of one kind (ports, `name: value` lines, `use` lines, wires and their endpoints, includes) aligned in columns. Comments stay with their statements, and blank lines between statements are kept, collapsed to one. A file that does not parse is reported and left untouched, and the run exits 1. The VSCode extension formats a buffer the same way.
 
 Print the project's version (from `wirebug.toml`), `v`-prefixed to match a
 git tag — handy in CI to verify a pushed tag matches the manifest:

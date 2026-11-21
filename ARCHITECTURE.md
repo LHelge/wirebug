@@ -12,7 +12,8 @@ Keep this file true in the same change that alters what it describes.
 The only input is the **`.wb` DSL** (reference: `docs/`, one page per
 topic; `tests/docs.rs` parses every `wb` code block in it and in the agent
 skill, `.claude/skills/wirebug-dsl/SKILL.md`). Five CLI commands share
-it: `check`, `render`, `export`, `serve` and `lsp`. Of the other two,
+it: `check`, `render`, `export`, `serve` and `lsp`; `fmt` shares its
+front half (discover, load, lex, parse). Of the other two,
 `manifest version` reads only `wirebug.toml` (see Project manifest), and
 **`init` (`src/init.rs`)** only writes a project: `init::Scaffold` creates
 the directory (with parents) and writes a
@@ -46,6 +47,34 @@ directory shell-quoted when it is not plain).
   `dsl` ends at `dsl::check_loaded` (resolve → elaborate → validate) and
   never depends on `render`, while `render::lint` depends on `dsl` like
   the rest of `render` does; `pipeline` is where both are visible.
+- **`fmt` (`src/dsl/format/`)** — `format::ProjectFormat::load` discovers
+  and loads the project as `check` does (so a `.wb` target is that file
+  and what it reaches through `use`/`fragment`), and formats each loaded
+  file that parses with `format::Formatted::new`; `main` writes the
+  changed ones (or, with `--check`, only lists them) and prints each path
+  on stdout, relative to the current directory. Of the load's problems it
+  keeps only those that stop formatting (`Problem::stops_formatting`: no
+  project, unreadable file, lex/parse/reserved-word errors), prints them,
+  and fails; the files they are in are left as they are. `Formatted::new`
+  refuses any source with a lex or parse error, then lays the source out
+  from the lexer's tokens with their trivia attached
+  (`lex::trivia::AttachedTokens`: a comment ending a token's line trails
+  that token, any other comment or run of blank lines leads the next
+  token). `format/tree.rs` cuts the tokens into statements by the rule the
+  parser's recovery skips by (to the `;`, or through the `{ … }` block a
+  statement opens); `format/print.rs` prints every token's source text
+  again: four spaces a block deep, one statement a line, single spaces
+  (none inside brackets or around `.`, `/`, before `;`, `,`, `:`), a
+  comment inside a statement ending its line (the rest continues a level
+  deeper), blank lines between statements collapsed to one and dropped at
+  a block's start and end. Consecutive one-line statements of one
+  `RowKind` (`use`; ports, public and private apart; `name: value` lines;
+  wires, labelled and unlabelled apart; `include`/`<port> at`) align in
+  columns, a gofmt-style run that a blank line, a block or another kind
+  ends; comments ending the lines of a run line up. The only token ever
+  dropped is a comma before a closing bracket. `tests/format.rs` and
+  `tests/docs.rs` hold every fixture and every `wb` doc block to
+  idempotence and an unchanged AST (spans aside).
 - **`render` (`src/render/`)** — runs the same DSL pipeline, then draws
   every view in the resulting `ir::Design` to SVG (one file per view) plus
   an `index.html` (`render::index_html`) that embeds them all for browsing,
@@ -232,7 +261,11 @@ directory shell-quoted when it is not plain).
   type (an instance's component, a typed connector's or an inline half's
   `connector_type`), pins and connector (a port), and the declaring file
   (relative to `main.wb`'s directory) and line. A `use`/`fragment` path
-  has no hover. Rename/semantic tokens/formatting are deliberately later.
+  has no hover. Formatting (`lsp/formatting.rs`, advertised as
+  `documentFormattingProvider`) runs `format::Formatted` over the open
+  buffer and answers one edit replacing the whole document, or none when
+  it is formatted already or does not parse; the client's tab options are
+  ignored. Rename/semantic tokens are deliberately later.
 
 The `index.html` is an [`askama`] compile-time template (`templates/`),
 rendered by `render::index_html(views, manifest, live_reload)` — shared by
@@ -1525,7 +1558,7 @@ has errors (or, under `--strict`, warnings).
 
 ```
 src/
-├── main.rs          # clap CLI: `init`, `check`, `render`, `export`, `serve`, `lsp`, `manifest version`
+├── main.rs          # clap CLI: `init`, `check`, `fmt`, `render`, `export`, `serve`, `lsp`, `manifest version`
 ├── lib.rs           # re-exports; check_project + render::render_views
 ├── init.rs          # Scaffold: `wirebug init` writes wirebug.toml, main.wb, .gitignore
 ├── pipeline.rs      # check_loaded: dsl::check_loaded, then render::lint
@@ -1550,8 +1583,13 @@ src/
 │   ├── mod.rs           # check_loaded → Checked: resolve→elaborate→validate; CheckReport
 │   ├── span.rs          # FileId, Span, Spanned<T>; Span→miette + chumsky::Span impl
 │   ├── lex/
-│   │   ├── mod.rs       # lex() → Vec<SpannedLexeme>; significant() = the trivia dial
-│   │   └── token.rs     # Token, Trivia, Lexeme
+│   │   ├── mod.rs       # lex() → Vec<SpannedLexeme>; significant() drops trivia for the parser
+│   │   ├── token.rs     # Token, Trivia, Lexeme
+│   │   └── trivia.rs    # AttachedTokens: comments/blank lines attached to tokens (for fmt)
+│   ├── format/          # `wirebug fmt`: Formatted (one source), ProjectFormat (a project)
+│   │   ├── mod.rs       # the API: refuse what does not parse, then print
+│   │   ├── tree.rs      # Statement/Body: attached tokens cut into statements
+│   │   └── print.rs     # Printer: indent, spacing, comments; Row/RowKind column alignment
 │   ├── ast/mod.rs       # spanned AST; refs are unresolved Spanned<Ident>
 │   ├── parse/mod.rs     # chumsky parser over &[(Token, Span)] → ast::File
 │   ├── manifest/        # wirebug.toml loader + git-revision auto-fill
@@ -1654,6 +1692,7 @@ src/
 │   ├── complete.rs   # CompletionIndex (owned Resolved snapshot, per-file
 │   │                 #   last-good) + token-stack cursor contexts + auto-import
 │   ├── definition.rs # go-to-definition: fresh resolve per request, span walk → Target
+│   ├── formatting.rs # document formatting: the buffer through format::Formatted
 │   └── hover.rs      # hover: the same Target, described as Markdown
 └── error.rs         # thiserror types (render path): ViewError per view, Error for IO/index
 ```
@@ -1692,8 +1731,11 @@ is the shared index template for both `render` and `serve`;
 DSL pipeline notes:
 
 - The lexer recognises trivia (whitespace, comments) as first-class spanned
-  lexemes; `lex::significant()` is the *dial* that drops them today — a
-  future `fmt` swaps it for a trivia collector without touching the parser.
+  lexemes, and each reader picks its view of them: `lex::significant()`
+  drops them for the parser, `lex::trivia::AttachedTokens::collect` attaches
+  comments and blank lines to their tokens for `fmt`. The parser never
+  sees trivia, so the formatter needs nothing from it beyond a yes/no on
+  whether the file parses.
 - A number token carries the unit written against it: the name-shaped run
   touching its digits (`Token::Number { digits, unit }`, `150mm`), one
   token spanning both. So a number directly followed by a name is always

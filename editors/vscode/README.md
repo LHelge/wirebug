@@ -2,8 +2,8 @@
 
 Language support for the [wirebug](https://github.com/LHelge/wirebug) `.wb`
 DSL: syntax highlighting, live diagnostics, context-aware code
-completion, go-to-definition, and hover via the `wirebug lsp` language
-server. Hovering a reference shows what it names: its kind and name, its
+completion, go-to-definition, hover, and document formatting (the same
+layout as `wirebug fmt`) via the `wirebug lsp` language server. Hovering a reference shows what it names: its kind and name, its
 label, its type (for an instance or connector), its pins (for a port), and
 the file and line it is declared on.
 
@@ -18,7 +18,7 @@ cargo install --path .          # from a checkout of the wirebug repo
 
 See the [wirebug repository](https://github.com/LHelge/wirebug) for build
 and install instructions. Syntax highlighting works without the binary;
-diagnostics, completion, go-to-definition and hover need it.
+diagnostics, completion, go-to-definition, hover and formatting need it.
 
 The server binary is resolved in this order:
 

@@ -45,7 +45,8 @@ view schematic "Overview" {
 ```
 
 `wirebug init` writes a project like this one; `wirebug check` reports what
-is wrong with a project and `wirebug render` draws its views. The README at
+is wrong with a project, `wirebug fmt` lays its files out in one fixed style
+and `wirebug render` draws its views. The README at
 the root of the repository covers the commands.
 
 ## Every statement at a glance
