@@ -19,11 +19,11 @@ use crate::dsl::ir::{
     ViewKind, Wire, WireEnd,
 };
 use crate::dsl::project::Project;
-use crate::render::GridFault;
 use crate::render::geometry::Bounds;
 use crate::render::harness::HarnessRenderer;
 use crate::render::pinout::PinoutRenderer;
 use crate::render::schematic::SchematicRenderer;
+use crate::render::{Canvas, GridFault, MAX_CANVAS};
 
 /// One include's drawn box.
 pub(super) struct IncludeBox {
@@ -152,6 +152,10 @@ pub(super) struct ViewLayout {
     /// Why the renderer rejects the view's `grid:`, when it does; nothing
     /// is laid out on such a grid, so no box or wire is reported.
     pub(super) grid: Option<GridFault>,
+    /// The canvas of the view's standalone SVG, the largest of the output
+    /// modes and the one `--png` rasterises; `None` when the view cannot
+    /// be drawn, for a reason reported on its own.
+    pub(super) canvas: Option<Canvas>,
 }
 
 /// The conductors each component's harness views draw between them, keyed
@@ -253,6 +257,10 @@ impl Conductor<'_> {
 /// (`undrawn_conductor`). `project` supplies the sources the spans point
 /// into.
 ///
+/// Every view kind is also held to [`MAX_CANVAS`] (`view_too_large`,
+/// labelled on the view's title and the includes farthest apart), the
+/// limit `--png` refuses to rasterise past.
+///
 /// A view whose `grid:` its renderer rejects reports that alone: a step
 /// that is not positive (`invalid_grid`), or one finer than the renderer
 /// can draw ports on (`grid_too_fine`), labelled on the number.
@@ -272,7 +280,7 @@ pub(crate) fn layout_problems(design: &Design, project: &Project) -> Vec<Problem
         let layout = match &view.kind {
             ViewKind::Schematic => SchematicRenderer.layout(design, subject, view),
             ViewKind::Harness => HarnessRenderer.layout(design, subject, view),
-            ViewKind::Pinout => PinoutRenderer.layout(subject, view),
+            ViewKind::Pinout => PinoutRenderer.layout(design, subject, view),
             ViewKind::Other(_) => continue,
         };
         problems.extend(layout.problems(view, project));
@@ -295,10 +303,11 @@ impl ViewLayout {
 
     /// A rejected grid alone, when there is one. Otherwise overlapping
     /// pairs first, then crowded pairs, each in include order, then
-    /// unroutable wires in wire order. A pair that overlaps is not also
-    /// reported as too close, and unroutable wires are reported only in a
-    /// view with neither: colliding boxes are the cause to fix first, and a
-    /// port without room to leave never routes anyway.
+    /// unroutable wires in wire order, then a canvas over the limit. A pair
+    /// that overlaps is not also reported as too close, and unroutable
+    /// wires are reported only in a view with neither: colliding boxes are
+    /// the cause to fix first, and a port without room to leave never
+    /// routes anyway.
     fn problems(&self, view: &View, project: &Project) -> Vec<Problem> {
         if let Some(fault) = self.grid {
             // A renderer's default grid is always valid, so a rejected grid
@@ -401,7 +410,49 @@ impl ViewLayout {
                 })
             }));
         }
+        problems.extend(self.too_large(view, project));
         problems
+    }
+
+    /// `view_too_large` when the canvas is over [`MAX_CANVAS`], labelled on
+    /// the view's title and on the includes whose boxes lie farthest apart
+    /// along the longer side.
+    fn too_large(&self, view: &View, project: &Project) -> Option<Problem> {
+        let canvas = self.canvas.filter(|canvas| !canvas.fits())?;
+        let across = canvas.width() >= canvas.height();
+        let span = |b: &IncludeBox| {
+            let Bounds {
+                origin,
+                width,
+                height,
+            } = b.bounds;
+            if across {
+                (origin.x, origin.x + width)
+            } else {
+                (origin.y, origin.y + height)
+            }
+        };
+        let first = self
+            .boxes
+            .iter()
+            .min_by(|a, b| span(a).0.total_cmp(&span(b).0))
+            .map(|b| b.include);
+        let last = self
+            .boxes
+            .iter()
+            .max_by(|a, b| span(a).1.total_cmp(&span(b).1))
+            .map(|b| b.include);
+        let label = |include: Option<usize>| include.map(|i| view.includes[i].span.into());
+        Some(Problem::ViewTooLarge {
+            view: view.title.clone(),
+            width: canvas.width(),
+            height: canvas.height(),
+            limit: MAX_CANVAS,
+            src: project.source(view.span.file),
+            at: view.span.into(),
+            first: label(first),
+            last: label(last.filter(|&last| Some(last) != first)),
+        })
     }
 }
 
@@ -1047,5 +1098,114 @@ view pinout "P" {
 }
 "#;
         assert_eq!(summary(src), [code("overlapping_includes", &["x2", "x1"])]);
+    }
+
+    /// A view of each kind on `grid`, with its second include at `at` and
+    /// its first at the origin: schematic `a`/`b`, harness `a.j`/`b.j`,
+    /// pinout `x1`/`x2`.
+    fn spread(kind: &str, grid: u32, at: (i64, i64)) -> String {
+        let (x, y) = at;
+        let src = match kind {
+            "schematic" => two_nodes((0, 0), "east", "west")
+                .replace("include b at (0, 0)", &format!("include b at ({x}, {y})")),
+            "harness" => harnessed(
+                "    wire red 1 [a.sig, b.sig];",
+                &format!(
+                    "view harness \"V\" {{\n    grid: 20;\n    include a.j at (0, 0);\n    include b.j at ({x}, {y});\n}}\n"
+                ),
+            ),
+            _ => format!(
+                r#"
+component Sys {{
+    connector x1 "X1 1p" {{
+        pub port a "A" pin 1;
+    }}
+    connector x2 "X2 1p" {{
+        pub port b "B" pin 1;
+    }}
+}}
+
+view pinout "V" {{
+    grid: 20;
+    include x1 at (0, 0);
+    include x2 at ({x}, {y});
+}}
+"#
+            ),
+        };
+        src.replace("grid: 20;", &format!("grid: {grid};"))
+    }
+
+    #[test]
+    fn a_view_too_large_to_rasterise_names_its_size_on_the_title_and_extremes() {
+        let src = spread("schematic", 20, (100_000, 0));
+        assert_eq!(
+            summary(&src),
+            [code("view_too_large", &["\"V\"", "a", "b"])]
+        );
+        let (project, design) = load(&src);
+        let [problem] = layout_problems(&design, &project)
+            .try_into()
+            .expect("one problem");
+        assert!(problem.is_error());
+        assert_eq!(
+            problem.to_string(),
+            "view \"V\" is 2000256 × 218 units, more than the 8192 a view may span on a side"
+        );
+    }
+
+    #[test]
+    fn the_extremes_are_taken_along_the_longer_side() {
+        // `b` is far out to the south; `c`, beside `a`, is the box that
+        // reaches farthest east but plays no part in the height.
+        let src = spread("pinout", 20, (0, 100_000)).replace(
+            "    connector x2",
+            "    connector x3 \"X3 1p\" {\n        pub port c \"C\" pin 1;\n    }\n    connector x2",
+        );
+        let src = src.replace(
+            "    include x2",
+            "    include x3 at (20, 0);\n    include x2",
+        );
+        assert_eq!(
+            summary(&src),
+            [code("view_too_large", &["\"V\"", "x1", "x2"])]
+        );
+    }
+
+    /// The lint and `--png` measure one canvas and compare it with one
+    /// limit, so for every view kind, along either side, and over the
+    /// placements on either side of the limit (a schematic on grid 16 with
+    /// `b` at 496 steps is exactly at it), the lint fires exactly when the
+    /// rasteriser refuses the view. Only the refusal is asked for, so no
+    /// pixmap is allocated.
+    #[test]
+    fn a_view_is_too_large_exactly_when_png_refuses_it() {
+        let rasterizer = crate::render::png::PngRasterizer::new();
+        for kind in ["schematic", "harness", "pinout"] {
+            for grid in [16, 20] {
+                let edge = (MAX_CANVAS / f64::from(grid)) as i64;
+                for axis in ["x", "y"] {
+                    let mut outcomes = Vec::new();
+                    for along in edge - 19..=edge - 7 {
+                        let at = if axis == "x" { (along, 0) } else { (0, along) };
+                        let (project, design) = load(&spread(kind, grid, at));
+                        let too_large = layout_problems(&design, &project)
+                            .iter()
+                            .any(|p| matches!(p, Problem::ViewTooLarge { .. }));
+                        let views = render_views(&design, SvgMode::Standalone);
+                        let [Ok(view)] = views.as_slice() else {
+                            panic!("{kind} at {at:?} on grid {grid} renders: {views:?}");
+                        };
+                        let refused = rasterizer.admitted(&view.svg).is_err();
+                        assert_eq!(too_large, refused, "{kind} at {at:?} on grid {grid}");
+                        outcomes.push(refused);
+                    }
+                    assert!(
+                        outcomes.contains(&false) && outcomes.contains(&true),
+                        "{kind} on grid {grid} along {axis}: the sweep crosses the limit"
+                    );
+                }
+            }
+        }
     }
 }

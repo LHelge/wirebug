@@ -787,6 +787,87 @@ fn render_stops_at_check_instead_of_failing_on_a_grid() {
     assert!(!out.exists(), "nothing is written");
 }
 
+/// Views whose includes sit a thousand grid steps apart, past the canvas
+/// `--png` will rasterise: a schematic too wide, a harness too tall, a
+/// pinout both (a pixmap of 6.5 GB), beside one that fits. How `--png` refuses such a view while writing the
+/// others is tested on a hand-built design (`render::output`).
+const OVERSIZED_VIEWS_ROOT: &str = "tests/fixtures/oversized_views_project";
+
+#[test]
+fn check_rejects_a_view_too_large_to_rasterise() {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--format", "json", OVERSIZED_VIEWS_ROOT])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+    let main = std::fs::read_to_string(format!("{OVERSIZED_VIEWS_ROOT}/main.wb"))
+        .expect("fixture main.wb");
+
+    // Each is an error labelled on the view's title, then on the includes
+    // farthest apart along its longer side; the view that fits reports
+    // nothing.
+    let found: Vec<(&str, &str, Vec<&str>)> = problems
+        .iter()
+        .map(|p| {
+            let labels = p["labels"]
+                .as_array()
+                .expect("labels")
+                .iter()
+                .map(|l| {
+                    let offset = l["span"]["offset"].as_u64().expect("offset") as usize;
+                    let length = l["span"]["length"].as_u64().expect("length") as usize;
+                    &main[offset..offset + length]
+                })
+                .collect();
+            (
+                p["code"].as_str().expect("code"),
+                p["severity"].as_str().expect("severity"),
+                labels,
+            )
+        })
+        .collect();
+    let too_large = |labels: &[&'static str]| ("wirebug::view_too_large", "error", labels.to_vec());
+    assert_eq!(
+        found,
+        [
+            too_large(&["\"Wide\"", "left", "right"]),
+            too_large(&["\"Tall\"", "left.x1", "right.x1"]),
+            too_large(&["\"Service\"", "x8", "x9"]),
+        ]
+    );
+    assert_eq!(
+        problems[0]["message"],
+        "view \"Wide\" is 20256 × 218 units, more than the 8192 a view may span on a side"
+    );
+}
+
+#[test]
+fn render_png_stops_at_check_instead_of_running_out_of_memory() {
+    let tmp = tempdir().expect("tempdir");
+    let out = tmp.path().join("out");
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args([
+            "render",
+            OVERSIZED_VIEWS_ROOT,
+            "--out",
+            out.to_str().unwrap(),
+            "--png",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("view_too_large"))
+        .stderr(predicate::str::contains("not rendering"))
+        .stderr(predicate::str::contains("error: view").not());
+    assert!(!out.exists(), "nothing is written");
+}
+
 #[test]
 fn check_accepts_a_manifest_target() {
     Command::cargo_bin("wirebug")

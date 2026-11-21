@@ -15,7 +15,7 @@ use crate::error::{ViewErrorKind, ViewResult};
 use crate::render::geometry::{Bounds, Point};
 use crate::render::lint::{IncludeBox, ViewLayout};
 use crate::render::stamp::{STAMP_HEIGHT, STAMP_INSET, stamp_element};
-use crate::render::{GridFault, SvgMode};
+use crate::render::{Canvas, GridFault, SvgMode};
 
 const DEFAULT_GRID: f64 = 20.0;
 const HEADER_HEIGHT: f64 = 44.0;
@@ -58,26 +58,11 @@ impl PinoutRenderer {
         mode: SvgMode,
     ) -> ViewResult<String> {
         let step = GridFault::positive_step(view, DEFAULT_GRID)?;
+        let tables = Table::all(subject, view, step)?;
 
-        let mut tables = Vec::new();
-        for inc in &view.includes {
-            let name = inc.instance.as_str();
-            let connector = subject
-                .connectors
-                .get(&ConnectorName::from(name))
-                .ok_or_else(|| ViewErrorKind::UnknownConnector {
-                    subject: subject.type_name.to_string(),
-                    connector: name.to_string(),
-                })?;
-            tables.push(Table::new(connector, subject, inc, step));
-        }
-
-        let has_title = !view.title.is_empty() && mode.titled();
-        let mut vb = viewbox(&tables, has_title);
-        let manifest = mode.stamped().then_some(design.manifest.as_ref()).flatten();
-        if manifest.is_some() {
-            vb.height += STAMP_HEIGHT;
-        }
+        let has_title = mode.shows_title(view);
+        let vb = viewbox(design, view, &tables, mode);
+        let manifest = mode.stamp(design);
 
         let mut doc = Document::new()
             .set("xmlns", "http://www.w3.org/2000/svg")
@@ -115,10 +100,11 @@ impl PinoutRenderer {
         Ok(doc.add(group).to_string())
     }
 
-    /// Each include's table box, sized as [`Self::render`] sizes it, or
-    /// only the fault for a non-positive grid. An include naming no
-    /// connector on the subject is skipped: rendering reports it.
-    pub(super) fn layout(&self, subject: &Instance, view: &View) -> ViewLayout {
+    /// Each include's table box, sized as [`Self::render`] sizes it, and
+    /// the canvas of the standalone SVG, or only the fault for a
+    /// non-positive grid. An include naming no connector on the subject is
+    /// skipped, and leaves no canvas: rendering reports it.
+    pub(super) fn layout(&self, design: &Design, subject: &Instance, view: &View) -> ViewLayout {
         let step = match GridFault::positive_step(view, DEFAULT_GRID) {
             Ok(step) => step,
             Err(fault) => return ViewLayout::bad_grid(fault),
@@ -137,8 +123,13 @@ impl PinoutRenderer {
                 })
             })
             .collect();
+        let canvas = Table::all(subject, view, step).ok().map(|tables| {
+            let vb = viewbox(design, view, &tables, SvgMode::Standalone);
+            Canvas::new(vb.width, vb.height)
+        });
         ViewLayout {
             boxes,
+            canvas,
             ..ViewLayout::default()
         }
     }
@@ -156,6 +147,26 @@ struct Table {
 }
 
 impl Table {
+    /// One table per include of `view`, in include order, on a grid of
+    /// `step` world units; fails on an include naming no connector of
+    /// `subject`.
+    fn all(subject: &Instance, view: &View, step: f64) -> ViewResult<Vec<Self>> {
+        view.includes
+            .iter()
+            .map(|inc| {
+                let name = inc.instance.as_str();
+                let connector = subject
+                    .connectors
+                    .get(&ConnectorName::from(name))
+                    .ok_or_else(|| ViewErrorKind::UnknownConnector {
+                        subject: subject.type_name.to_string(),
+                        connector: name.to_string(),
+                    })?;
+                Ok(Self::new(connector, subject, inc, step))
+            })
+            .collect()
+    }
+
     /// The table for `connector`, centred where `inc` places it on a grid
     /// of `step` world units.
     fn new(connector: &Connector, subject: &Instance, inc: &Include, step: f64) -> Self {
@@ -619,7 +630,17 @@ fn render_face(face: &Face, x: f64, y: f64) -> Group {
     group
 }
 
-fn viewbox(tables: &[Table], has_title: bool) -> ViewBox {
+/// The viewBox `view` is drawn in under `mode`: its tables, with room for
+/// the title and the identity stamp when the mode draws them.
+fn viewbox(design: &Design, view: &View, tables: &[Table], mode: SvgMode) -> ViewBox {
+    let mut vb = tables_viewbox(tables, mode.shows_title(view));
+    if mode.stamp(design).is_some() {
+        vb.height += STAMP_HEIGHT;
+    }
+    vb
+}
+
+fn tables_viewbox(tables: &[Table], has_title: bool) -> ViewBox {
     if tables.is_empty() {
         return ViewBox {
             x: 0.0,

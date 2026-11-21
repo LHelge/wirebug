@@ -478,8 +478,24 @@ so one run reports many. Errors fail the run; warnings fail only under
   pairs are not also reported as too close, and `unroutable_wire` is
   reported only in a view with neither. Together they are exactly the
   conditions under which `route_all` returns `RouteFailed`, so a project
-  that passes `check` does not fail to route. A later layout-derived check
-  adds a field to `ViewLayout` and a mapping in `ViewLayout::problems`.
+  that passes `check` does not fail to route. Last, the canvas: each
+  renderer's `layout` also reports `ViewLayout.canvas`, the viewBox of the
+  view's standalone SVG (titled and stamped, the largest of the output
+  modes and the one `--png` rasterises), from the very function its
+  `render` sizes the viewBox with — a schematic routes every wire for it,
+  since wires can detour outside the boxes, so it has a canvas only when
+  nothing above stops routing. A canvas longer on a side than
+  `render::MAX_CANVAS` (8192 units; the constant's comment says why) is
+  `view_too_large`, an error in every view kind, labelled on the view's
+  title (`ir::View.span`, stating the size) and on the includes whose
+  boxes start first and end last along the longer side. `render::Canvas::fits`
+  is the one comparison both this check and the rasteriser make, in `f32`
+  as `usvg` reads the viewBox, so `check` rejects a view exactly when
+  `--png` would refuse it. SVG and PDF output handle such a view (a
+  2,000,000-unit view renders in milliseconds), but one rule for every
+  mode keeps "passes `check`, renders" true whatever `render` is asked
+  for. A later layout-derived check adds a field to `ViewLayout` and a
+  mapping in `ViewLayout::problems`.
   As a warning, after every view's problems: a conductor of a component
   with at least one harness view that none of those views draws
   (`undrawn_conductor`, labelled on the conductor's `ir::Wire.span`, which
@@ -537,13 +553,13 @@ phases above). Render adds only geometry/dispatch errors, in `src/error.rs`
     `grid_too_fine`), so a backstop for hand-built designs;
   - a canvas too large to rasterise (`CanvasTooLarge`, the size and
     `render::MAX_CANVAS`): `PngRasterizer::to_png` refuses a view whose
-    viewBox exceeds the limit before allocating its pixmap. The pixmap
-    itself is reserved fallibly (`try_reserve_exact`, then
-    `Pixmap::from_vec`; `Pixmap::new` would abort the process when the
+    viewBox exceeds the limit before allocating its pixmap — caught earlier
+    by the Layout phase (`view_too_large`), so a backstop for hand-built
+    designs. The pixmap itself is reserved fallibly (`try_reserve_exact`,
+    then `Pixmap::from_vec`; `Pixmap::new` would abort the process when the
     allocator refuses), so a pixmap that still cannot be had, at a larger
     `ViewFormat::Png` scale, is a `PngEncode` failure of that view, not an
-    abort. SVG and PDF output handle such a view (a 2,000,000-unit view
-    renders in milliseconds), so only `--png` refuses it;
+    abort;
   - our own SVG failing to parse or convert for `--png` / `--pdf`.
 - **`error::Error`** — what stops the whole render: file IO when writing
   output (`Write`), the HTML index template (`Template`) and serializing

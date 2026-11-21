@@ -1,0 +1,62 @@
+// Views whose includes sit so far apart that the canvas outgrows what
+// `--png` can rasterise, beside one that fits: `check` rejects each on its
+// title, whatever the output mode, so `render` never gets to fail.
+component Vehicle {
+    left:  Module "Left";
+    right: Module "Right";
+
+    connector x8 "Service 1p" {
+        pub port svc "SVC" pin 1;
+    }
+
+    connector x9 "Diagnostic 1p" {
+        pub port diag "DIAG" pin 1;
+    }
+
+    wire red 1 [left.sig, right.sig];
+
+    component Module {
+        connector x1 "Signal 1p" {
+            pub port sig "SIG" pin 1;
+        }
+    }
+}
+
+view schematic "Overview" {
+    grid: 20;
+
+    include left at (0, 0) ports {
+        east: sig;
+    }
+
+    include right at (16, 0) ports {
+        west: sig;
+    }
+}
+
+// Meant `(16, 0)`: a thousand steps on a 20-unit grid is 20000 units.
+view schematic "Wide" {
+    grid: 20;
+
+    include left at (0, 0) ports {
+        east: sig;
+    }
+
+    include right at (1000, 0) ports {
+        west: sig;
+    }
+}
+
+view harness "Tall" {
+    grid: 20;
+
+    include left.x1  at (0, 0);
+    include right.x1 at (0, 1000);
+}
+
+view pinout "Service" {
+    grid: 20;
+
+    include x8 at (0, 0);
+    include x9 at (1000, 1000);
+}
