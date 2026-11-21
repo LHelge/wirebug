@@ -24,6 +24,7 @@ use crate::dsl::ir::{
 use crate::error::ViewResult;
 use crate::render::GridFault;
 use crate::render::geometry::{Bounds, Point, Side};
+use crate::render::text::Font;
 
 /// A port's identity within a view: a port on an included child instance, or
 /// one of the subject's own ports drawn on the enclosure boundary.
@@ -154,7 +155,17 @@ impl PlacedComponent {
     /// The area the title above the box covers (bold 13px, centred), its
     /// width estimated at [`TITLE_CHAR_WIDTH`] per character.
     pub(super) fn title_extent(&self) -> Bounds {
-        let width = self.label.chars().count() as f64 * TITLE_CHAR_WIDTH;
+        self.title_area(self.label.chars().count() as f64 * TITLE_CHAR_WIDTH)
+    }
+
+    /// The same area measured with the shared estimator, which bounds the
+    /// bundled font's widths: what another text must keep clear of.
+    pub(super) fn title_bound(&self) -> Bounds {
+        self.title_area(TITLE_FONT.width(&self.label))
+    }
+
+    /// The area a title `width` long covers, centred above the box.
+    fn title_area(&self, width: f64) -> Bounds {
         Bounds {
             origin: Point::new(
                 self.origin.x + (self.width - width) / 2.0,
@@ -169,6 +180,7 @@ impl PlacedComponent {
 /// The title's estimated advance per character, and how far its glyphs
 /// reach above and below its baseline: bold 13px sans-serif.
 const TITLE_CHAR_WIDTH: f64 = 8.5;
+const TITLE_FONT: Font = Font::bold(13.0);
 const TITLE_ASCENT: f64 = 12.0;
 const TITLE_DESCENT: f64 = 3.0;
 
@@ -204,6 +216,13 @@ impl PlacedPort {
     pub(super) fn pin_extent(&self) -> Option<Bounds> {
         let pin = self.pin.as_ref()?;
         Some(pin.extent(self.label_side(), self.pos))
+    }
+
+    /// The pin annotation's area measured with the shared estimator
+    /// ([`PinAnnotation::bound`]), if the port has one.
+    pub(super) fn pin_bound(&self) -> Option<Bounds> {
+        let pin = self.pin.as_ref()?;
+        Some(pin.bound(self.label_side(), self.pos))
     }
 
     /// The tip of the port's routing stub: `step` out the way its wire
