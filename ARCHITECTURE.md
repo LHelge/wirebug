@@ -591,10 +591,23 @@ the box, and the reference beyond both; neighbouring references are a
 pitch apart across the stub and the text is 10px high, so they clear at
 the minimum grid. Where a drawn wire also leaves the port, that wire turns
 at its routing stub's tip or runs on along it, so the reference's stub
-runs a step past the tip, and its text may go *beside* the stub instead:
-below a west or east stub (the pin annotation is above), left of a north
-one, right of a south one, 12 units off the line so it clears the wire
-running on along it and that wire's code.
+runs a step past the tip, and its text may go *beside* the stub instead,
+at the end of a **leader**: below a west or east stub (the pin annotation
+is above), left of a north one, right of a south one. The leader is drawn
+in the undrawn wire's colour and layers, as the stub is: it follows the
+port's line out to a branch point (`MIN_STUB` out, or past the pin
+annotations on the lane's side), jogs across into the lane and runs 3
+units along it, and the text follows. So even where the drawn wire covers
+the stub, the reader sees a second wire branch off that port toward the
+text. The lane is centred 8.5 units off the line (clear of the drawn
+wire's casing and the text's halo) or, where that meets the wire's code,
+12 (clear of the code too); a lane is offered only where its centre line
+lies strictly nearer the port's own line than the line of any other port
+on that side of the box (`PlacedComponent::nearest_line_is_own`, from the
+real port positions). So at the default grid both lanes may be used, at a
+grid of 10 only the nearer one, and at the finest grid none: there a
+reference whose line a drawn wire runs on along keeps only what fits on
+its line.
 
 References never move a wire, and are fitted after routing
 (`Placement::off_views`, called by `render` and by `check`'s Layout phase
@@ -615,8 +628,11 @@ is fitted against everything drawn and every reference fitted before it:
   room allows). The first rung whose text, on the stub's line or else
   beside it, sits clear of every wire (with its casing), box, title, pin
   annotation (where it is drawn, moved past a title or not), port label,
-  code, text box and earlier reference is drawn. With none, the stub is
-  drawn alone, with its tooltip.
+  code, text box and earlier reference is drawn (and whose leader, as new
+  ink, is clear of all of those but its own port's wires). With none, the
+  stub is drawn alone, with its tooltip, unless a drawn wire of its own
+  port runs out along it at least as far, so it would show nothing: then
+  the reference is left out, and the SVG has no element for it.
 - **Canvas.** A rung is taken only if the standalone canvas
   (`Placement::viewbox`, which holds each reference's stub and text
   `PIN_CANVAS_PAD` inside it) with it still fits `MAX_CANVAS`, or grows no
@@ -626,10 +642,14 @@ is fitted against everything drawn and every reference fitted before it:
 
 The enclosure's outline is a drawn line, not an obstacle: a reference may
 cross it (an own port's `leaves <Subject>` reference reaching out past
-it). Text is measured at 0.7 em a character of the 10px font, wider than
-DejaVu Sans (the font PNG and PDF set it in) sets an identifier, `+N more`
-or the arrow with its space, so a text measured as clear is clear as
-drawn. So `check` is unchanged by construction: `include_too_close`,
+it). The reference's text is measured with the shared estimator
+(`render::text::Font`, 10px regular), whose character classes bound the
+bundled DejaVu Sans, so a text measured as clear is clear as drawn in PNG
+and PDF. What it is kept clear of is measured the same way for the test
+alone (pin annotations as `PinAnnotation::bound`, titles as
+`PlacedComponent::title_bound`, wire codes and port labels), without moving
+where those texts are drawn, which still follows the schematic's own flat
+estimates. So `check` is unchanged by construction: `include_too_close`,
 `unroutable_wire` and `overlapping_includes` read boxes and routes that do
 not depend on references, and the canvas rule never takes a view past
 `view_too_large`'s limit that was within it. A stub drawn through its own
