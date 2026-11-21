@@ -80,7 +80,7 @@ pub(crate) fn check_open_documents<'a>(
         };
         if let Ok(lexemes) = lex(&text, FileId(0)) {
             let tokens = significant(&lexemes);
-            if let Some(file) = parse_file(tokens, FileId(0), text.len()).file {
+            if let Some(file) = parse_file(tokens, FileId(0), &text).file {
                 index.add_unlinked(canonical, &file);
             }
         }

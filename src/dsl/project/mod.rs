@@ -263,7 +263,7 @@ impl Loader<'_> {
             }
         };
 
-        let parsed = parse_file(significant(&lexemes), id, src.len());
+        let parsed = parse_file(significant(&lexemes), id, &src);
         for err in parsed.errors {
             self.problems.push(match err {
                 ParseError::Syntax { span, message } => Problem::Parse {

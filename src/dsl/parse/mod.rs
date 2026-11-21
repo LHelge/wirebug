@@ -182,15 +182,16 @@ enum InlineItem {
     Port(Port),
 }
 
-/// Parse the significant token stream of one file into an [`ast::File`].
-pub fn parse_file(tokens: Vec<(Token, Span)>, file: FileId, src_len: usize) -> Parsed {
+/// Parse the significant token stream of one file, lexed from `src`, into
+/// an [`ast::File`].
+pub fn parse_file(tokens: Vec<(Token, Span)>, file: FileId, src: &str) -> Parsed {
     let eoi = Span {
         file,
-        start: src_len,
-        end: src_len,
+        start: src.len(),
+        end: src.len(),
     };
     let balanced = braces_balance(&tokens);
-    let token_starts: Vec<usize> = tokens.iter().map(|(_, span)| span.start).collect();
+    let layout = TokenLayout::new(src, &tokens);
     let stream = Stream::from_iter(tokens).map(eoi, |(t, s)| (t, s));
     let mut notes = Notes::from(Vec::new());
     let (file, syntax) = parser()
@@ -205,7 +206,7 @@ pub fn parse_file(tokens: Vec<(Token, Span)>, file: FileId, src_len: usize) -> P
             recovery => recoveries.push(recovery),
         }
     }
-    let mut syntax = without_tails(syntax, &recoveries, &token_starts);
+    let mut syntax = without_tails(syntax, &recoveries, &layout);
     if !balanced {
         // An unmatched brace puts every statement after it in another
         // block, and each would report an error of its own: keep the first
@@ -234,17 +235,17 @@ pub fn parse_file(tokens: Vec<(Token, Span)>, file: FileId, src_len: usize) -> P
 
 /// The syntax errors to report: each recovered statement's, except where a
 /// statement is the rest of the one before it. A statement that fails right
-/// after one that failed on its own `;` (a `;` too early: `pub port ; a
-/// "A";`) is that statement's tail, unless it starts with a reserved
-/// keyword and so is a statement of its own; its error would only repeat
-/// the first.
+/// after one that failed on its own `;` is that statement's tail when it
+/// goes on where the `;` cut it ([`TokenLayout::continues`]), unless it
+/// starts with a reserved keyword and so is a statement of its own; its
+/// error would only repeat the first.
 ///
 /// `recoveries` are the recovery notes, one per emitted error and in the
-/// same order; `token_starts` the start of every token, in order.
+/// same order.
 fn without_tails(
     syntax: Vec<Rich<'_, Token, Span>>,
     recoveries: &[Note],
-    token_starts: &[usize],
+    layout: &TokenLayout,
 ) -> Vec<ParseError> {
     let mut reported = Vec::new();
     // The span of the statement skipped last, and whether it failed on the
@@ -262,8 +263,7 @@ fn without_tails(
             }) => {
                 let tail = !keyword_led
                     && previous.is_some_and(|(before, on_semicolon)| {
-                        on_semicolon
-                            && next_token_starts_at(token_starts, before.end, skipped.start)
+                        on_semicolon && layout.continues(before, skipped.start)
                     });
                 let on_semicolon =
                     error.found() == Some(&Token::Semicolon) && span.end == skipped.end;
@@ -285,12 +285,60 @@ fn without_tails(
     reported
 }
 
-/// Whether the first token at or after byte `after` starts at byte `at`:
-/// nothing parsed between a statement that ends at `after` and one that
-/// starts at `at`.
-fn next_token_starts_at(token_starts: &[usize], after: usize, at: usize) -> bool {
-    let next = token_starts.partition_point(|&start| start < after);
-    token_starts.get(next) == Some(&at)
+/// Where a file's tokens sit in its source, to tell the tail of a statement
+/// a `;` cut short from the statement after it.
+struct TokenLayout<'src> {
+    src: &'src str,
+    /// The start of every token, in order.
+    starts: Vec<usize>,
+    /// How many `[` and `(` are open before each token (and, last, after
+    /// the final one).
+    open_brackets: Vec<usize>,
+}
+
+impl<'src> TokenLayout<'src> {
+    fn new(src: &'src str, tokens: &[(Token, Span)]) -> Self {
+        let starts = tokens.iter().map(|(_, span)| span.start).collect();
+        let open_brackets = std::iter::once(0)
+            .chain(tokens.iter().scan(0usize, |open, (token, _)| {
+                *open = match token {
+                    Token::LBracket | Token::LParen => *open + 1,
+                    Token::RBracket | Token::RParen => open.saturating_sub(1),
+                    _ => *open,
+                };
+                Some(*open)
+            }))
+            .collect();
+        TokenLayout {
+            src,
+            starts,
+            open_brackets,
+        }
+    }
+
+    /// The index of the first token at or after byte `at`.
+    fn index_at(&self, at: usize) -> usize {
+        self.starts.partition_point(|&start| start < at)
+    }
+
+    /// Whether the statement starting at byte `at` goes on where `cut`, a
+    /// statement that failed on its own `;`, stopped: it starts at the next
+    /// token, and on the same line (`pub port ; a "A";`) or inside a `[` or
+    /// `(` that `cut` left open (a `;` at a line end inside a wire's
+    /// endpoint list). On the next line, outside any bracket, it is the
+    /// author's next statement however the one before ended (`pub port a
+    /// "A" pin;` cut short, then `l Lamp;`), and reports its own error.
+    fn continues(&self, cut: Span, at: usize) -> bool {
+        let next = self.index_at(cut.end);
+        if self.starts.get(next) != Some(&at) {
+            return false;
+        }
+        let same_line = self
+            .src
+            .get(cut.end..at)
+            .is_some_and(|gap| !gap.contains('\n'));
+        same_line || self.open_brackets[next] > self.open_brackets[self.index_at(cut.start)]
+    }
 }
 
 /// Whether every `}` closes a `{` and every `{` is closed. Recovery only
@@ -1090,7 +1138,7 @@ mod tests {
 
     fn parse_str(src: &str) -> Parsed {
         let lexemes = lex(src, FileId(0)).expect("lexes");
-        parse_file(significant(&lexemes), FileId(0), src.len())
+        parse_file(significant(&lexemes), FileId(0), src)
     }
 
     fn parse_ok(src: &str) -> File {
@@ -1969,6 +2017,8 @@ view schematic "V" {
             r#"pub port c0 ; "C0" pin 1;"#,
             "wire red 1 [a.b; c.d];",
             "wire red 1 ; [a.b, c.d];",
+            // Inside an open `[`, the next line still belongs to the wire.
+            "wire red 1 [\n    a.b, ;\n    c.d,\n];",
         ] {
             let src = format!("component C {{ {body} pub port ok \"OK\"; }}");
             assert_eq!(errors_at(&src).len(), 1, "{body}: {:?}", errors_at(&src));
@@ -1992,6 +2042,23 @@ view schematic "V" {
         ;: found ';' expected something else | pin: found 'pin' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'component', 'extend', something else, or '}'
         pin: found 'pin' expected something else | Lamp: found 'Lamp' expected ':'
         "#);
+    }
+
+    #[test]
+    fn a_statement_on_the_line_after_a_cut_short_one_reports_its_own_error() {
+        // `pin;` fails on its own `;`, but a name-led statement on the next
+        // line is the author's next statement, not the tail of that one.
+        let report = [
+            "component C {\n    pub port a \"A\" pin;\n    l Lamp;\n}",
+            "component C {\n    pub port a \"A\" pin;\n    lamp: Lamp \"L\" extra;\n}",
+        ]
+        .iter()
+        .map(|src| errors_at(src).join(" | "))
+        .collect::<Vec<_>>();
+        insta::assert_snapshot!(report.join("\n"), @r"
+        ;: found ';' expected something else | Lamp: found 'Lamp' expected ':'
+        ;: found ';' expected something else | extra: found 'extra' expected ';'
+        ");
     }
 
     #[test]
