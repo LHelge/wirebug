@@ -24,6 +24,9 @@ fragment "looms/brake_branch.wb";
 fragment "looms/key_branch.wb";
 fragment "looms/gear_branch.wb";
 fragment "looms/rear_lighting.wb";
+fragment "looms/cooling.wb";
+fragment "looms/ground.wb";
+fragment "looms/interlock.wb";
 
 use Vcm from "components/lv/vcm.wb";
 
