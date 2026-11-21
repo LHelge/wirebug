@@ -1386,6 +1386,27 @@ mod tests {
     }
 
     #[test]
+    fn a_types_placements_are_listed_in_ir_order_and_the_first_is_the_subject() {
+        let (design, problems) =
+            with_spare(&["Plug", "Spare"], "    front: Spare;\n    rear: Spare;");
+        assert!(problems.is_empty(), "{problems:?}");
+        let design = design.expect("a design");
+        let spare = TypeName::from("Spare");
+        let paths: Vec<String> = design
+            .placements_of(&spare)
+            .map(|i| i.path.to_string())
+            .collect();
+        assert_eq!(paths, ["Vehicle.front", "Vehicle.rear"]);
+        assert_eq!(
+            design
+                .subject_of(&design.views[0])
+                .map(|i| i.path.to_string()),
+            Some("Vehicle.front".to_string())
+        );
+        assert_eq!(design.placements_of(&TypeName::from("Nowhere")).count(), 0);
+    }
+
+    #[test]
     fn no_root_when_main_has_no_single_top_level() {
         let (design, problems) =
             elaborate_files(&[("main.wb", "component a { } component b { }\n")]);

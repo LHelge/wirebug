@@ -549,10 +549,14 @@ refinement.
 An include names one of the subject's own connectors; it becomes one pin
 table centred at its grid point. Like the other views it documents a type
 and is drawn against `Design::subject_of` (the first instance). The
-header's bold line is the component (that instance's label, else its type
-name) and the designator, `Inverter · control`; the second line the
-housing's description and `part`, each left out when missing (and the line
-with them). When the connector type has a `layout` (`grid` or `face`),
+header (`Header`) has a bold title, the component and the designator,
+`Inverter · control`: the component is that instance's label only when the
+type is placed exactly once (`Design::placements_of`), else its type name,
+since a label would name one placement of a sheet that serves them all.
+Under the title come the header's lines — today one, the housing's
+description and `part`, each left out when missing (and the line with
+them); `Header::height` grows by a line height for each line past the
+first, and every size below the header follows from it. When the connector type has a `layout` (`grid` or `face`),
 its cavity face sits under the header, then a caption band (`FACE_CAPTION`,
 "Viewed from harness side": the language authors every layout from the
 harness side and has no notion of another), then the rows. Rows are one

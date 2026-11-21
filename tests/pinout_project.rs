@@ -65,8 +65,14 @@ impl Table {
     }
 }
 
-/// The pin tables of the fixture's one view, read back from its SVG.
+/// The pin tables of the inverter's view.
 fn tables() -> Vec<Table> {
+    tables_of("Inverter pinouts")
+}
+
+/// The pin tables of the fixture's view titled `title`, read back from its
+/// SVG.
+fn tables_of(title: &str) -> Vec<Table> {
     let main = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pinout_project/main.wb");
     let report = check_project(Some(&main));
     assert!(
@@ -75,10 +81,15 @@ fn tables() -> Vec<Table> {
         report.problems
     );
     let design = report.design.expect("a design");
-    let [view] = &render_views(&design, SvgMode::Standalone)[..] else {
-        panic!("one view");
-    };
-    let svg = &view.as_ref().expect("renders").svg;
+    let views = render_views(&design, SvgMode::Standalone)
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .expect("renders");
+    let svg = &views
+        .iter()
+        .find(|view| view.title == title)
+        .unwrap_or_else(|| panic!("no view {title}"))
+        .svg;
 
     let mut tables: Vec<Table> = Vec::new();
     let mut open_text: Option<Label> = None;
@@ -152,6 +163,17 @@ fn each_header_names_the_component_connector_description_and_part() {
     assert_eq!(tables[0].texts("pinout-part"), ["Control 6+4p · CT-10"]);
     assert_eq!(tables[1].texts("pinout-title"), ["Inverter · signal"]);
     assert_eq!(tables[1].texts("pinout-part"), ["Signal 2x3 · SG-6"]);
+}
+
+#[test]
+fn a_type_placed_more_than_once_is_named_by_its_type() {
+    let tables = tables_of("Sensor pinout");
+    let [sensor] = &tables[..] else {
+        panic!("one table");
+    };
+    // Neither "Front sensor" nor "Rear sensor": the sheet serves both.
+    assert_eq!(sensor.texts("pinout-title"), ["Sensor · x1"]);
+    assert_eq!(sensor.texts("pinout-part"), ["Sensor 2p"]);
 }
 
 #[test]

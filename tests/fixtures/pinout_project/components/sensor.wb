@@ -1,0 +1,13 @@
+// A type placed twice: its pinout documents the type, so the header names
+// `Sensor`, not either placement's label.
+
+component Sensor {
+    connector x1 "Sensor 2p" {
+        pub port sig "SIG" pin 1;
+        pub port gnd "GND" pin 2;
+    }
+}
+
+view pinout "Sensor pinout" {
+    include x1 at (0, 0);
+}

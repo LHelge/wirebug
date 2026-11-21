@@ -1,8 +1,11 @@
-// The pinout view documents the Inverter type; it is drawn against its
-// one placement here, whose label heads each table.
+// The inverter is placed once, so its label heads each of its tables; the
+// sensor twice, so its tables are headed by its type.
 
 use Inverter from "components/inverter.wb";
+use Sensor from "components/sensor.wb";
 
 component Vehicle {
-    inv: Inverter "Inverter";
+    inv:          Inverter "Inverter";
+    front_sensor: Sensor   "Front sensor";
+    rear_sensor:  Sensor   "Rear sensor";
 }
