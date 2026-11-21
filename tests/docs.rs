@@ -235,11 +235,17 @@ fn skill_fits_its_context_budget() {
     assert!(bytes <= 20_000, "the skill is {bytes} bytes, over 20 000");
 }
 
+/// A keyword list: its words, and whether the paragraph before it labels
+/// them `**reserved**` (`Some(true)`), `**contextual**` (`Some(false)`) or
+/// neither (`None`).
+type KeywordList = (Option<bool>, Vec<String>);
+
 /// The keyword lists of `markdown`: each paragraph, outside fenced blocks,
 /// made of nothing but backticked names (`` `use` `component` … ``).
-fn keyword_lists(markdown: &str) -> Vec<Vec<String>> {
+fn keyword_lists(markdown: &str) -> Vec<KeywordList> {
     let mut lists = Vec::new();
     let mut paragraph = String::new();
+    let mut previous = String::new();
     let mut in_fence = false;
     for line in markdown.lines().chain([""]) {
         if line.trim_start().starts_with("```") {
@@ -250,14 +256,33 @@ fn keyword_lists(markdown: &str) -> Vec<Vec<String>> {
             continue;
         }
         if line.trim().is_empty() {
-            lists.extend(backticked_names(&paragraph));
-            paragraph.clear();
+            if paragraph.is_empty() {
+                continue;
+            }
+            if let Some(names) = backticked_names(&paragraph) {
+                lists.push((kind_label(&previous), names));
+            }
+            previous = std::mem::take(&mut paragraph);
         } else {
             paragraph.push_str(line);
             paragraph.push(' ');
         }
     }
     lists
+}
+
+/// Whether `paragraph` labels the keyword list after it reserved or
+/// contextual, from the one of the two words it bolds.
+fn kind_label(paragraph: &str) -> Option<bool> {
+    let paragraph = paragraph.to_lowercase();
+    match (
+        paragraph.contains("**reserved**"),
+        paragraph.contains("**contextual**"),
+    ) {
+        (true, false) => Some(true),
+        (false, true) => Some(false),
+        _ => None,
+    }
 }
 
 /// The names of `paragraph` when it is only backticked names, else `None`.
@@ -284,32 +309,38 @@ fn keyword_token(word: &str) -> Option<Token> {
 }
 
 /// What is wrong with the keyword lists of `markdowns` (named `what` in
-/// the messages): a listed word the lexer does not know, a list mixing
-/// reserved and contextual words, a word listed twice, or a keyword not
-/// listed.
+/// the messages): a list under no reserved or contextual label, a listed
+/// word the lexer does not know or knows as the other kind, a word listed
+/// twice, or a keyword not listed.
 fn keyword_list_problems(what: &str, markdowns: &[String]) -> Vec<String> {
     let mut problems = Vec::new();
     let mut listed = BTreeSet::new();
     for markdown in markdowns {
-        for list in keyword_lists(markdown) {
-            let mut reserved = BTreeSet::new();
+        for (label, list) in keyword_lists(markdown) {
+            if label.is_none() {
+                problems.push(format!(
+                    "{what}: a keyword list follows no paragraph bolding **reserved** or **contextual**"
+                ));
+            }
             for word in list {
                 match keyword_token(&word) {
                     None => problems.push(format!(
                         "{what}: lists `{word}` among the keywords, but it is no keyword"
                     )),
                     Some(token) => {
-                        reserved.insert(token.is_reserved());
+                        let kind = |reserved| if reserved { "reserved" } else { "contextual" };
+                        if let Some(label) = label.filter(|&l| l != token.is_reserved()) {
+                            problems.push(format!(
+                                "{what}: lists `{word}` as {}, but it is {}",
+                                kind(label),
+                                kind(!label)
+                            ));
+                        }
                     }
                 }
                 if !listed.insert(word.clone()) {
                     problems.push(format!("{what}: lists the keyword `{word}` twice"));
                 }
-            }
-            if reserved.len() > 1 {
-                problems.push(format!(
-                    "{what}: a keyword list mixes reserved and contextual words"
-                ));
             }
         }
     }
@@ -343,15 +374,18 @@ fn the_reference_and_the_skill_list_exactly_the_lexers_keywords() {
 
 #[test]
 fn a_keyword_list_is_a_paragraph_of_backticked_names() {
-    let markdown = "Reserved:\n\n`use` `component`\n`view`\n\n\
-                    Colors `red` `blue` are words.\n\n```text\n`a` `b`\n```\n";
+    let markdown = "**Reserved**:\n\n`use` `component`\n`view`\n\n\
+                    Colors `red` `blue` are words.\n\n```text\n`a` `b`\n```\n\n\
+                    `at` `for`\n";
     assert_eq!(
         keyword_lists(markdown),
-        vec![vec![
-            "use".to_owned(),
-            "component".to_owned(),
-            "view".to_owned()
-        ]]
+        vec![
+            (
+                Some(true),
+                vec!["use".to_owned(), "component".to_owned(), "view".to_owned()]
+            ),
+            (None, vec!["at".to_owned(), "for".to_owned()]),
+        ]
     );
 }
 
@@ -364,15 +398,20 @@ fn a_wrong_or_missing_keyword_is_reported() {
             .collect::<Vec<_>>()
             .join(" ")
     };
-    let complete = format!("{}\n\n{}\n", list(true), list(false));
+    let complete = format!(
+        "**Reserved**:\n\n{}\n\nThe **contextual** ones:\n\n{}\n",
+        list(true),
+        list(false)
+    );
     assert_eq!(
         keyword_list_problems("x", &[complete]),
         Vec::<String>::new()
     );
 
-    let markdown = "`use` `shield`\n\n`wire` `harness`\n".to_owned();
+    let markdown = "**Reserved**\n\n`use` `shield`\n\n`wire` `harness`\n".to_owned();
     let problems = keyword_list_problems("x", &[markdown]);
-    assert!(problems.contains(&"x: a keyword list mixes reserved and contextual words".to_owned()));
+    assert!(problems.contains(&"x: lists `shield` as reserved, but it is contextual".to_owned()));
+    assert!(problems.iter().any(|p| p.contains("follows no paragraph")));
     assert!(
         problems
             .contains(&"x: lists `harness` among the keywords, but it is no keyword".to_owned())
