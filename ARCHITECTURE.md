@@ -37,8 +37,9 @@ Five CLI commands share it:
   (`render/harness/`), and `pinout` (`render/pinout/`). `--png` rasterises each view to PNG instead
   (`render/png.rs`, via `resvg`, at `png::PNG_SCALE` pixels per unit); `--pdf` writes one PDF with one view
   per page (`render/pdf.rs`, via `svg2pdf` + `pdf-writer` — on the
-  `--paper` sheet (`pdf::Paper`: `a4`, the default, `a3`, `letter`,
-  `tabloid`; refused without `--pdf`), landscape for a view wider than
+  `--paper` sheet (`a4`, the default, `a3`, `letter`, `tabloid`; refused
+  without `--pdf`; the CLI's `PaperArg` maps into the library's
+  `pdf::Paper`, which knows no flags), landscape for a view wider than
   tall and portrait otherwise (with equal margins, also the orientation
   with the larger scale), the view scaled to fit inside 15 mm margins,
   down without limit and up by at most 2× (`MAX_UPSCALE`, so a small view
@@ -50,12 +51,15 @@ Five CLI commands share it:
   stamp and a `n / total` page number — so every page reads the same
   regardless of view scale). A page whose view's smallest text prints
   below `pdf::MIN_LEGIBLE_PT` (5 pt) — the smallest text being
-  `RenderedView::smallest_text`, the smallest font in the kind's
-  stylesheet (plus a pinout's cavity-label shrink floor), times the
-  page's scale — is kept and reported as a `pdf::SmallText`
-  (`PdfExport::small_text`, then `Written::small_text`) with the smallest
-  paper, by area, that would print it legibly; `main` prints each as
-  `warning: view "<title>": …` and leaves the exit status alone, also
+  `RenderedView::smallest_text`, the smallest px font in the kind's
+  stylesheet (plus a pinout's cavity-label shrink floor; a test holds
+  every built-in font declaration to one px size, so none escapes),
+  times the page's scale — is kept and reported as a `pdf::SmallText`
+  (`PdfExport::small_text`, then `Written::small_text`) whose
+  `pdf::BestPaper` is the smallest paper, by area, that would print it
+  legibly, or else the paper that comes closest and the size it gives;
+  `main` prints each as `warning: view "<title>": …`, adding the
+  `(--paper <name>)` hint for a legible paper, and leaves the exit status alone, also
   under `--strict` (the paper is a render option, not the project, so
   this is no `check` diagnostic). `--embed` emits host-styled "naked" SVGs
   plus a `manifest.json` sidecar in place of the HTML index (see below)

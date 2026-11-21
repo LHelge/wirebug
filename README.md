@@ -278,11 +278,11 @@ wirebug render examples --out out/ --pdf --paper a3 # the same on A3 (a4, a3, le
 wirebug render examples/wirebug.toml --out out/ --embed  # naked SVGs + manifest.json
 ```
 
-`--pdf` lays each view on a page of the `--paper` size (A4 unless told otherwise), landscape for a view wider than tall and portrait otherwise, and scales it to fit inside the margins — down as far as it takes, up by at most 2×. A wide view fitted to a small sheet shrinks its text with it, so `render` warns of every page whose smallest text (a schematic's wire codes, a harness's cable labels, a pinout's shrunk cavity labels) would print under 5 pt, and names the smallest paper that prints it legibly:
+`--pdf` lays each view on a page of the `--paper` size (A4 unless told otherwise), landscape for a view wider than tall and portrait otherwise, and scales it to fit inside the margins — down as far as it takes, up by at most 2×. A wide view fitted to a small sheet shrinks its text with it, so `render` warns of every page whose smallest text (a schematic's wire codes, a harness's cable labels, a pinout's shrunk cavity labels) would print under 5 pt. It names the smallest paper that prints it legibly, or, when none does, the paper that comes closest and the size it gives there, so a near miss reads differently from a view that needs redrawing:
 
 ```
-warning: view "HV System Overview": smallest text 3.2 pt on A4, below the 5 pt legibility minimum; too small on every paper size
 warning: view "CAN bus": smallest text 4.3 pt on A4, below the 5 pt legibility minimum; legible on Tabloid (--paper tabloid)
+warning: view "HV System Overview": smallest text 3.2 pt on A4, below the 5 pt legibility minimum; closest is Tabloid at 4.9 pt
 ```
 
 The page is written all the same and the exit status is unchanged — also under `--strict`, which makes the project's own warnings fatal, not the paper's. `--paper` without `--pdf` is refused.
