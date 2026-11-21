@@ -32,7 +32,11 @@ Five CLI commands share it:
 - **`render` (`src/render/`)** — runs the same DSL pipeline, then draws
   every view in the resulting `ir::Design` to SVG (one file per view) plus
   an `index.html` (`render::index_html`) that embeds them all for browsing,
-  grouped into **Schematics** / **Harnesses** tabs by view kind. Three view
+  grouped into **Schematics** / **Harnesses** tabs by view kind, all into
+  `--out`. Without it, `main` writes to `out` in the project root (the
+  directory of the entry file `project::discover` finds, beside
+  `wirebug.toml`), wherever the command runs from; an explicit `--out` is
+  taken from the current directory. Three view
   kinds render today: `schematic` (`render/schematic/`), `harness`
   (`render/harness/`), and `pinout` (`render/pinout/`). `--png` rasterises each view to PNG instead
   (`render/png.rs`, via `resvg`, at `png::PNG_SCALE` pixels per unit); `--pdf` writes one PDF with one view
