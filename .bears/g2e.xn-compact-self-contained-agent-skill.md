@@ -1,16 +1,17 @@
 ---
 id: g2e.xn
 title: Compact, self-contained agent skill
-status: open
+status: done
 priority: P2
 created: "2026-11-20T22:44:45.081803839Z"
-updated: "2026-11-20T22:44:45.081803839Z"
+updated: "2026-11-21T20:29:23.897381029Z"
 tags:
   - docs
   - skill
 depends_on:
   - g2e.f7
   - g2e.6x
+attempts: 1
 ---
 
 ## Summary
