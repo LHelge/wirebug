@@ -292,26 +292,6 @@ pub(super) struct ConnectorEnd<'d> {
 }
 
 impl<'d> ConnectorEnd<'d> {
-    /// The connector of the child `instance`'s `port`, the wire end `end`;
-    /// `None` for a port on no connector.
-    fn of(
-        design: &'d Design,
-        subject: &'d Instance,
-        end: &'d WireEnd,
-        instance: &'d InstanceName,
-        port: &'d PortName,
-    ) -> Option<Self> {
-        let child = subject.children.get(instance).and_then(|p| design.get(p))?;
-        let connector = &child.ports.get(port)?.connector.as_ref()?.name;
-        Some(Self {
-            end,
-            instance,
-            connector,
-            port,
-            child,
-        })
-    }
-
     /// The node this end draws in.
     fn node(&self) -> HarnessNode<'d> {
         HarnessNode::Connector(self.instance, self.connector)
@@ -352,12 +332,31 @@ impl<'d> HarnessEnd<'d> {
     /// end no harness view can draw: the subject's own port, or a port on
     /// no connector.
     fn of(design: &'d Design, subject: &'d Instance, end: &'d WireEnd) -> Option<Self> {
-        match end {
-            WireEnd::Own(_) => None,
-            WireEnd::Child { instance, port } => {
-                ConnectorEnd::of(design, subject, end, instance, port).map(Self::Connector)
+        let node = HarnessNode::of_end(design, subject, end)?;
+        Self::at(design, subject, end, node)
+    }
+
+    /// `end`, which lands on `node` ([`HarnessNode::of_end`]), with the
+    /// child instance and port of an end on a connector.
+    fn at(
+        design: &'d Design,
+        subject: &'d Instance,
+        end: &'d WireEnd,
+        node: HarnessNode<'d>,
+    ) -> Option<Self> {
+        match (node, end) {
+            (HarnessNode::Splice(splice), _) => Some(Self::Splice { end, splice }),
+            (HarnessNode::Connector(instance, connector), WireEnd::Child { port, .. }) => {
+                let child = subject.children.get(instance).and_then(|p| design.get(p))?;
+                Some(Self::Connector(ConnectorEnd {
+                    end,
+                    instance,
+                    connector,
+                    port,
+                    child,
+                }))
             }
-            WireEnd::Splice(splice) => Some(Self::Splice { end, splice }),
+            (HarnessNode::Connector(..), _) => None,
         }
     }
 
@@ -396,10 +395,10 @@ impl<'d> HarnessConductor<'d> {
     pub(super) fn all(design: &'d Design, subject: &'d Instance) -> impl Iterator<Item = Self> {
         subject.wires.iter().enumerate().flat_map(move |(w, wire)| {
             wire.segments().filter_map(move |segment| {
-                HarnessNode::between(design, subject, segment.ends)?;
+                let [from_node, to_node] = HarnessNode::between(design, subject, segment.ends)?;
                 let [from, to] = segment.ends;
-                let from = HarnessEnd::of(design, subject, from)?;
-                let to = HarnessEnd::of(design, subject, to)?;
+                let from = HarnessEnd::at(design, subject, from, from_node)?;
+                let to = HarnessEnd::at(design, subject, to, to_node)?;
                 Some(Self {
                     segment: Segment {
                         wire: w,

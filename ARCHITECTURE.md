@@ -452,12 +452,14 @@ splice of the subject; an end is a `layout::HarnessEnd`, `Connector` or
 `HarnessLayout::compute` keeps those whose two ends' connectors or splices
 are included and records them as `HarnessLayout.drawn` (`lint::Segment`,
 wire and pair index), which is what `check`'s `undrawn_conductor` reads.
-That scoping rule is written once, in the IR (`ir::HarnessScope`, built
-from a harness view and the instance it is drawn against, over
-`ir::HarnessNode`, what an end or an include lands on): `draws` (both
-ends' nodes included, and distinct — `HarnessNode::between`, which also
-bounds `HarnessConductor::all`), `draws_screen` and `draws_drain` (below),
-and `half` (the half an inline is included through). The layout asks it,
+That scoping rule is written once, in the IR (`ir::HarnessScope`,
+crate-internal, built from a harness view and the instance it is drawn
+against, over `ir::HarnessNode`, what an end or an include lands on —
+`HarnessNode::of_end` is the one lookup from a wire end to its connector,
+and the layout's `HarnessEnd`s are built from it): `draws` (both ends'
+nodes included, and distinct — `HarnessNode::between`, which also bounds
+`HarnessConductor::all`), `draws_screen` and `draws_drain` (below), and
+`half` (the half an inline is included through). The layout asks it,
 and so does the pin-table export, which reads off it which housing half
 of an inline connector a conductor is drawn into.
 
