@@ -1,0 +1,4 @@
+[project]
+name = "oversized-views-project"
+version = "0.1.0"
+description = "Fixture with views too large to rasterise"

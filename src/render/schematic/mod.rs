@@ -17,12 +17,12 @@ use svg::node::element::{Group, Style, Text};
 
 use crate::dsl::ir::{Design, Instance, InstanceName, View};
 use crate::error::{ViewErrorKind, ViewResult};
-use crate::render::SvgMode;
 use crate::render::geometry::Point;
 use crate::render::lint::{CrowdedPort, IncludeBox, UnroutableWire, ViewLayout, WireEndAt};
 use crate::render::stamp::{STAMP_HEIGHT, STAMP_INSET, stamp_element};
+use crate::render::{Canvas, SvgMode};
 
-use layout::{Grid, PlacedPort, Placement};
+use layout::{Connection, Grid, PlacedPort, Placement, ViewBox};
 use route::Router;
 
 /// Grid step (world units) used when a view doesn't specify one. Ports
@@ -91,14 +91,7 @@ impl SchematicRenderer {
         // component bounds, so the viewBox has to enclose them too.
         let router = Router::build(&placement, grid.step());
         let connections = placement.connections();
-        let pairs: Vec<_> = connections.iter().map(|c| (c.a, c.b)).collect();
-        // Spread parallel wires in a shared channel by the port pitch (two
-        // steps), so a nudged bundle matches the spacing of the ports it
-        // fans out from rather than packing twice as tight.
-        let wires = router.route_all(&pairs, grid.pitch()).map_err(|unrouted| {
-            let [from, to] = connections[unrouted.pair].ends();
-            ViewErrorKind::RouteFailed { from, to }
-        })?;
+        let wires = route(&router, &connections, grid)?;
 
         let mut doc = Document::new().set("xmlns", "http://www.w3.org/2000/svg");
         if mode.is_embed() {
@@ -107,12 +100,9 @@ impl SchematicRenderer {
             doc = doc.add(Style::new(STYLE));
         }
 
-        let has_title = !view.title.is_empty() && mode.titled();
-        let mut viewbox = placement.viewbox(has_title, &wires);
-        let manifest = mode.stamped().then_some(design.manifest.as_ref()).flatten();
-        if manifest.is_some() {
-            viewbox.height += STAMP_HEIGHT;
-        }
+        let has_title = mode.shows_title(view);
+        let viewbox = viewbox(design, view, &placement, &wires, mode);
+        let manifest = mode.stamp(design);
         doc = doc.set(
             "viewBox",
             format!(
@@ -181,9 +171,10 @@ impl SchematicRenderer {
 
     /// What `check` needs from `view`'s layout: each include's box, every
     /// wired port whose wire [`Self::render`] could not route because
-    /// another box sits inside its clearance, and every wire the router
-    /// finds no path for. Nothing but the fault when the grid is invalid:
-    /// no box can be laid out on it.
+    /// another box sits inside its clearance, every wire the router finds
+    /// no path for, and, when every wire routes, the canvas of the
+    /// standalone SVG. Nothing but the fault when the grid is invalid: no
+    /// box can be laid out on it.
     pub(super) fn layout(&self, design: &Design, subject: &Instance, view: &View) -> ViewLayout {
         let grid = match Grid::of_view(view) {
             Ok(grid) => grid,
@@ -210,7 +201,7 @@ impl SchematicRenderer {
             })
             .collect();
         let router = Router::build(&placement, grid.step());
-        let crowded = router
+        let crowded: Vec<_> = router
             .blocked_stubs(&placement)
             .into_iter()
             .filter_map(|blocked| {
@@ -225,21 +216,66 @@ impl SchematicRenderer {
             include: owner.and_then(include_named),
             port: port.port.clone(),
         };
-        let unroutable = placement
-            .connections()
+        let connections = placement.connections();
+        let unroutable: Vec<_> = connections
             .iter()
             .filter(|c| !router.connects(c.a, c.b))
             .map(|c| UnroutableWire {
                 ends: [end(c.owners[0], c.a), end(c.owners[1], c.b)],
             })
             .collect();
+        // The canvas encloses the routed wires, and only a view whose every
+        // wire routes is drawn at all.
+        let canvas = if crowded.is_empty() && unroutable.is_empty() {
+            route(&router, &connections, grid).ok().map(|wires| {
+                let vb = viewbox(design, view, &placement, &wires, SvgMode::Standalone);
+                Canvas::new(vb.width, vb.height)
+            })
+        } else {
+            None
+        };
         ViewLayout {
             boxes,
             crowded,
             unroutable,
+            canvas,
             ..ViewLayout::default()
         }
     }
+}
+
+/// Route every connection as [`SchematicRenderer::render`] draws it, or
+/// name the wire that has no route.
+fn route(
+    router: &Router,
+    connections: &[Connection<'_>],
+    grid: Grid,
+) -> ViewResult<Vec<Vec<Point>>> {
+    let pairs: Vec<_> = connections.iter().map(|c| (c.a, c.b)).collect();
+    // Spread parallel wires in a shared channel by the port pitch (two
+    // steps), so a nudged bundle matches the spacing of the ports it fans
+    // out from rather than packing twice as tight.
+    router.route_all(&pairs, grid.pitch()).map_err(|unrouted| {
+        let [from, to] = connections[unrouted.pair].ends();
+        ViewErrorKind::RouteFailed { from, to }
+    })
+}
+
+/// The viewBox `view` is drawn in under `mode`: `placement` and its routed
+/// `wires`, with room for the title and the identity stamp when the mode
+/// draws them.
+fn viewbox(
+    design: &Design,
+    view: &View,
+    placement: &Placement,
+    wires: &[Vec<Point>],
+    mode: SvgMode,
+) -> ViewBox {
+    let mut viewbox = placement.viewbox(mode.shows_title(view), wires);
+    if mode.stamp(design).is_some() {
+        viewbox.height += STAMP_HEIGHT;
+    }
+    viewbox
 }
 
 #[cfg(test)]

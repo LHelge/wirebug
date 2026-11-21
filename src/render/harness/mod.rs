@@ -25,9 +25,9 @@ use crate::dsl::ir::{Design, Instance, View};
 use crate::error::ViewResult;
 use crate::render::lint::{Conductor, IncludeBox, ViewLayout};
 use crate::render::stamp::{STAMP_HEIGHT, STAMP_INSET, stamp_element};
-use crate::render::{GridFault, SvgMode};
+use crate::render::{Canvas, GridFault, SvgMode};
 
-use layout::{HarnessConductor, HarnessLayout};
+use layout::{HarnessConductor, HarnessLayout, ViewBox};
 
 /// Grid step (world units) used when a harness view omits one.
 pub(super) const DEFAULT_GRID: f64 = 20.0;
@@ -123,12 +123,9 @@ impl HarnessRenderer {
             doc = doc.add(Style::new(STYLE));
         }
 
-        let has_title = !view.title.is_empty() && mode.titled();
-        let mut vb = layout.viewbox(has_title);
-        let manifest = mode.stamped().then_some(design.manifest.as_ref()).flatten();
-        if manifest.is_some() {
-            vb.height += STAMP_HEIGHT;
-        }
+        let has_title = mode.shows_title(view);
+        let vb = viewbox(design, view, &layout, mode);
+        let manifest = mode.stamp(design);
         doc = doc.set(
             "viewBox",
             format!("{} {} {} {}", vb.x, vb.y, vb.width, vb.height),
@@ -171,31 +168,37 @@ impl HarnessRenderer {
         Ok(doc.to_string())
     }
 
-    /// Each include's pin-table box and the conductors drawn, from the same
-    /// layout [`Self::render`] draws. A non-positive grid lays out no boxes,
-    /// only the fault; which conductors a view draws does not depend on its
-    /// grid, so they are still counted.
+    /// Each include's pin-table box, the conductors drawn and the canvas of
+    /// the standalone SVG, from the same layout [`Self::render`] draws. A
+    /// non-positive grid lays out no boxes and no canvas, only the fault;
+    /// which conductors a view draws does not depend on its grid, so they
+    /// are still counted.
     pub(super) fn layout(&self, design: &Design, subject: &Instance, view: &View) -> ViewLayout {
         let (step, fault) = match GridFault::positive_step(view, DEFAULT_GRID) {
             Ok(step) => (step, None),
             Err(fault) => (DEFAULT_GRID, Some(fault)),
         };
         let layout = HarnessLayout::compute(design, subject, view, step);
-        let boxes = match fault {
-            Some(_) => Vec::new(),
-            None => layout
-                .nodes
-                .iter()
-                .map(|node| IncludeBox {
-                    include: node.include,
-                    bounds: node.bounds(),
-                })
-                .collect(),
+        let (boxes, canvas) = match fault {
+            Some(_) => (Vec::new(), None),
+            None => {
+                let boxes = layout
+                    .nodes
+                    .iter()
+                    .map(|node| IncludeBox {
+                        include: node.include,
+                        bounds: node.bounds(),
+                    })
+                    .collect();
+                let vb = viewbox(design, view, &layout, SvgMode::Standalone);
+                (boxes, Some(Canvas::new(vb.width, vb.height)))
+            }
         };
         ViewLayout {
             boxes,
             drawn: layout.drawn,
             grid: fault,
+            canvas,
             ..ViewLayout::default()
         }
     }
@@ -216,6 +219,16 @@ impl HarnessRenderer {
             })
             .collect()
     }
+}
+
+/// The viewBox `view` is drawn in under `mode`: the laid-out drawing, with
+/// room for the title and the identity stamp when the mode draws them.
+fn viewbox(design: &Design, view: &View, layout: &HarnessLayout, mode: SvgMode) -> ViewBox {
+    let mut vb = layout.viewbox(mode.shows_title(view));
+    if mode.stamp(design).is_some() {
+        vb.height += STAMP_HEIGHT;
+    }
+    vb
 }
 
 #[cfg(test)]

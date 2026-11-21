@@ -46,12 +46,18 @@ impl SvgMode {
         matches!(self, Self::Embed)
     }
 
-    pub(crate) fn stamped(self) -> bool {
-        matches!(self, Self::Standalone)
+    /// The manifest whose identity stamp `design`'s views carry in this
+    /// mode, if they carry one.
+    pub(crate) fn stamp(self, design: &Design) -> Option<&Manifest> {
+        match self {
+            Self::Standalone => design.manifest.as_ref(),
+            Self::Plain | Self::Embed => None,
+        }
     }
 
-    pub(crate) fn titled(self) -> bool {
-        !matches!(self, Self::Plain)
+    /// Whether `view`, drawn in this mode, shows its title.
+    pub(crate) fn shows_title(self, view: &View) -> bool {
+        !view.title.is_empty() && !matches!(self, Self::Plain)
     }
 }
 
@@ -341,7 +347,9 @@ impl GridFault {
 /// process. At [`png::PNG_SCALE`] this is 16384 px a side, a pixmap of at
 /// most 1 GiB, which still holds an A0 sheet at 300 dpi (14043 px on its
 /// long edge) and is almost four times the widest view of the example
-/// project (about 2200 units). SVG and PDF output have no such cost.
+/// project (about 2200 units). SVG and PDF output have no such cost, but
+/// `check` holds every view to the limit, so a project that passes it
+/// renders in every mode.
 pub(crate) const MAX_CANVAS: f64 = 8192.0;
 
 /// A view's canvas: its viewBox's width and height, in world units.
@@ -376,6 +384,14 @@ impl Canvas {
                 limit: MAX_CANVAS,
             })
         }
+    }
+
+    pub(crate) fn width(&self) -> f64 {
+        self.width
+    }
+
+    pub(crate) fn height(&self) -> f64 {
+        self.height
     }
 }
 

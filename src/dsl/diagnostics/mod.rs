@@ -453,6 +453,36 @@ pub enum Problem {
         at: SourceSpan,
     },
 
+    /// A view's canvas is longer on a side than `render::MAX_CANVAS`, the
+    /// most `--png` will rasterise (its pixmap is allocated whole, so a
+    /// view whose includes sit far apart would exhaust memory). Held in
+    /// every output mode, so a project that passes `check` renders in each.
+    /// Found by laying the view out (`render::lint`), labelled on the title
+    /// and on the includes farthest apart along the longer side.
+    #[error(
+        "view \"{view}\" is {width} × {height} units, more than the {limit} a view may span on a side"
+    )]
+    #[diagnostic(
+        code(wirebug::view_too_large),
+        help(
+            "include positions count grid steps, so `at (1000, 0)` on `grid: 20;` lies 20000 units out; place the includes closer together, or split the drawing into several views"
+        )
+    )]
+    ViewTooLarge {
+        view: String,
+        width: f64,
+        height: f64,
+        limit: f64,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("{width} × {height} units")]
+        at: SourceSpan,
+        #[label("from here")]
+        first: Option<SourceSpan>,
+        #[label("to here")]
+        last: Option<SourceSpan>,
+    },
+
     /// A conductor between connectors of two of a component's children that
     /// none of the component's harness views draws: no view includes both
     /// ends' connectors, so the build drawings miss it. A warning: the
@@ -1027,6 +1057,7 @@ impl Problem {
             | Problem::UnroutableWire { .. }
             | Problem::InvalidGrid { .. }
             | Problem::GridTooFine { .. }
+            | Problem::ViewTooLarge { .. }
             | Problem::DuplicateConnectorName { .. }
             | Problem::DuplicateConnectorPin { .. }
             | Problem::UnknownInlineProperty { .. }

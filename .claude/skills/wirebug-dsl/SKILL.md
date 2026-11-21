@@ -506,6 +506,8 @@ Sides are authored, never guessed: place a port on the side facing the box it wi
 
 Leave room between boxes. `check` lays each view out with the renderer's own box sizes and rejects includes whose boxes overlap (`overlapping_includes`, in every view kind; touching edges are fine). In a schematic a wire leaves its port by one grid step and keeps one step clear of every other box, so a wired port needs **two grid steps** of space before the box it faces (`include_too_close`), and boxes closer than two steps to each other leave no gap to route through (`unroutable_wire` when a wire is walled in). The enclosure is never in the way.
 
+Keep a view compact: its drawing may span at most 8192 units on a side, margins, title and stamp included (`view_too_large`, an error in every view kind, naming the size and labelled on the title and the includes farthest apart). Positions count grid steps, so `at (1000, 0)` on `grid: 20;` is already 20000 units out; split a sprawling drawing into several views instead.
+
 ### Harness views
 
 A `harness` include selects a whole **connector** by its designator and draws it as a pin table. Cables between connectors are derived from the model's wires.
