@@ -480,11 +480,18 @@ the right of the stub, while every text on that side ends clear of the
 next port's stub (`PIN_INSET + width ≤ spacing − PIN_NEIGHBOUR_GAP`, with
 `PIN_CHAR_WIDTH` per character; the spacing is the pitch, an enclosure
 edge's closest pair, or none for a lone port); otherwise the whole side
-turns (`rotate(-90)`, reading upward) to run along the stubs, right of a
-north stub and left of a south one, so again only its height faces a
-neighbour and the two texts of a short wire from a south port to a north
-port sit either side of it. The minimum grid is therefore unchanged by
-long designators. What a long text can still meet is what lies beyond the
+turns to run along the stubs, right of a north stub and left of a south
+one, so again only its height faces a neighbour and the two texts of a
+short wire from a south port to a north port sit either side of it. A
+turned text reads toward its port (`rotate(90)`, downward, on a north
+side; `rotate(-90)`, upward, on a south one), so the pin number at its
+end sits next to the port and the designator runs out along the stub
+(an off-view reference on the same stub reads the other way, away from
+the box, and starts past the text). The rule is the same on every
+component: a single-connector side turns too when a bare text would not
+fit level, such as a ganged `1,2,3` on the default grid or a two-digit
+pin on a grid of 10. The minimum grid is therefore unchanged by long
+designators. What a long text can still meet is what lies beyond the
 stub's first grid step: the wire's own first bend, wires in the channel in
 front of the box, a `wire-code`, and the component title above a north
 side (the router and the code placement do not see annotations). The
