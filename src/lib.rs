@@ -11,7 +11,7 @@
 pub mod dsl;
 pub mod error;
 pub mod lsp;
-pub mod pipeline;
+mod pipeline;
 pub mod render;
 pub mod serve;
 

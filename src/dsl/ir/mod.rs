@@ -353,7 +353,7 @@ impl Design {
     /// inline's designator, which could shadow a real component type, and
     /// an inline is never a view subject. `None` when the design never
     /// instantiates the type.
-    pub fn subject_of(&self, view: &View) -> Option<&Instance> {
+    pub(crate) fn subject_of(&self, view: &View) -> Option<&Instance> {
         self.instances
             .values()
             .find(|inst| inst.inline.is_none() && inst.type_name == view.subject)

@@ -988,7 +988,7 @@ impl Problem {
     /// one has to be sorted.
     ///
     /// [`Project::drop_parse_cascades`]: crate::dsl::project::Project::drop_parse_cascades
-    pub fn reports_an_absence(&self) -> bool {
+    pub(crate) fn reports_an_absence(&self) -> bool {
         match self {
             Problem::UndefinedType { .. }
             | Problem::UndefinedConnectorType { .. }

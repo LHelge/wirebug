@@ -262,7 +262,7 @@ impl Conductor<'_> {
 /// (`uninstantiated_view_subject`, `unknown_view_kind`), and these checks
 /// run only on a design without errors.
 #[must_use]
-pub fn layout_problems(design: &Design, project: &Project) -> Vec<Problem> {
+pub(crate) fn layout_problems(design: &Design, project: &Project) -> Vec<Problem> {
     let mut problems = Vec::new();
     let mut coverage = HarnessCoverage::default();
     for view in &design.views {

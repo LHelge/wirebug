@@ -66,7 +66,7 @@ impl Project {
     /// resolves to nothing may have been declared in a skipped statement.
     /// The syntax errors stand for them until they are fixed. A project
     /// that parsed whole keeps every problem.
-    pub fn drop_parse_cascades(&self, problems: &mut Vec<Problem>) {
+    pub(crate) fn drop_parse_cascades(&self, problems: &mut Vec<Problem>) {
         if !self.parsed_whole {
             problems.retain(|problem| !problem.reports_an_absence());
         }
