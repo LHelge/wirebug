@@ -1,0 +1,51 @@
+// Long labels: a harness view whose texts are each long enough to overrun a
+// box sized at a flat 7 px a character, in the bold title font above all:
+// a long bold title (the lamp's), a long description line (the BCM's), long
+// pin labels, a ganged pin list, a long cable type, a long screen label, and
+// a splice with a long name, label and part. Every box is sized from the
+// font's own widths, so each text stays inside it.
+
+component Vehicle {
+    bcm:  Controller "BCM";
+    stop: Lamp       "High-mount stop lamp assembly";
+
+    splice sp_rear_ground_return "Rear lamp ground return" {
+        part: "Raychem D-436-0036 solder sleeve";
+    }
+
+    cable stop_feed "Rear lighting feed" {
+        type:   "Shielded twisted pair, halogen-free, 105 °C";
+        length: 2.5;
+        twisted {
+            wire white/blue 0.5 "STOP LAMP SUPPLY" [bcm.stop_out, stop.stop_in];
+            wire white/red  0.5 "STOP LAMP SENSE"  [bcm.stop_sense, stop.sense];
+        }
+        shield "Stop lamp feed screen" [bcm.screen];
+    }
+
+    wire black 0.5 "LAMP GROUND RETURN" [stop.gnd, sp_rear_ground_return];
+    wire black 1   "GND" [sp_rear_ground_return, bcm.gnd];
+
+    component Controller {
+        connector x1 "Body controller, rear lighting connector" {
+            pub port stop_out   "STOP OUT"   pin 1;
+            pub port stop_sense "STOP SENSE" pin 2;
+            pub port screen     "SCREEN"     pin 3;
+            pub port gnd        "GND"        pins [4, 5, 6, 7];
+        }
+    }
+
+    component Lamp {
+        connector x1 "Lamp 3p" {
+            pub port stop_in "STOP LAMP SUPPLY POSITIVE" pin 1;
+            pub port sense   "STOP LAMP FILAMENT SENSE"  pin 2;
+            pub port gnd     "LAMP GROUND"               pin 3;
+        }
+    }
+}
+
+view harness "Rear lighting" {
+    include bcm.x1                at (0, 0);
+    include stop.x1               at (90, 0);
+    include sp_rear_ground_return at (45, 14);
+}

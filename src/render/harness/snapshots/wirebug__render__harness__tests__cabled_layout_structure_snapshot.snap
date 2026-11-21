@@ -1,10 +1,10 @@
 ---
 source: src/render/harness/mod.rs
-assertion_line: 578
+assertion_line: 924
 expression: "structural(&compute(&design, &view))"
 ---
 node "Source" @(-60,-42) East pins=2
 node "Sink" @(260,-42) West pins=2
-cable "Power feed" [2-core · 0.8 m · ×2] @(84,-28)
+cable "Power feed" [2-core · 0.8 m · ×2] @(97,-28)
   strand orange row=35 (60,9)->(260,9)
   strand black row=57 (60,31)->(260,31)

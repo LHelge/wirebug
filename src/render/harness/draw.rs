@@ -8,8 +8,8 @@ use super::layout::{
     CableBox, ConnectorNode, DrainRow, LooseWire, SpliceNode, SpliceText, braid_partners,
 };
 use super::{
-    BADGE_INSET, BADGE_SIZE, HEADER_HEIGHT, LABEL_CHAR_WIDTH, NODE_PAD, PIN_COL_WIDTH,
-    PIN_DOT_RADIUS, ROW_HEIGHT, SHIELD_INSET, SPLICE_DOT_RADIUS, TWIST_PITCH,
+    BADGE_INSET, BADGE_SIZE, CABLE_LABEL_FONT, HEADER_HEIGHT, NODE_PAD, PIN_DOT_RADIUS, ROW_HEIGHT,
+    SHIELD_INSET, SPLICE_DOT_RADIUS, TWIST_PITCH,
 };
 use crate::dsl::ir::WireColor;
 use crate::render::geometry::{Point, Side};
@@ -116,14 +116,14 @@ pub(super) fn render_node(node: &ConnectorNode) -> Group {
         // by different edges, so this is decided per row, not per node.
         let facing_west = row.side == Side::West;
         let pin_col_x = if facing_west {
-            ox + PIN_COL_WIDTH / 2.0
+            ox + node.pin_col / 2.0
         } else {
-            ox + node.width - PIN_COL_WIDTH / 2.0
+            ox + node.width - node.pin_col / 2.0
         };
         let (label_x, label_anchor) = if facing_west {
-            (ox + PIN_COL_WIDTH + NODE_PAD, "start")
+            (ox + node.pin_col + NODE_PAD, "start")
         } else {
-            (ox + node.width - PIN_COL_WIDTH - NODE_PAD, "end")
+            (ox + node.width - node.pin_col - NODE_PAD, "end")
         };
 
         if i > 0 {
@@ -287,7 +287,7 @@ pub(super) fn render_cable_box(cb: &CableBox) -> Group {
     // a centred minimum braid; the labels then overlap it, but the pair
     // stays visibly twisted.
     let braid_span = |i: usize, j: usize| {
-        let text = |k: usize| annotations[k].chars().count() as f64 * LABEL_CHAR_WIDTH;
+        let text = |k: usize| CABLE_LABEL_FONT.width(&annotations[k]);
         let (first, second) = (i.min(j), i.max(j));
         let xa = ox + 2.0 * NODE_PAD + text(first);
         let xb = ox + cb.width - 2.0 * NODE_PAD - text(second);
@@ -440,17 +440,6 @@ pub(super) fn render_loose(wire: &LooseWire) -> Group {
     add_strand(Group::new().set("class", "cable"), &wire.color, &[d]).add(annotation)
 }
 
-/// `text` cut to at most `max_chars` characters, ending in an ellipsis when
-/// anything was cut: the label first, then the gauge, then the colour code
-/// survive. A trailing separator before the ellipsis is dropped.
-pub(super) fn shorten(text: &str, max_chars: usize) -> String {
-    if text.chars().count() <= max_chars {
-        return text.to_string();
-    }
-    let kept: String = text.chars().take(max_chars.saturating_sub(1)).collect();
-    format!("{}…", kept.trim_end_matches([' ', '·']))
-}
-
 /// The text shown along a wire: `<label> · <gauge>mm² · <color code>`,
 /// dropping the label part when the wire is unlabelled. The color code is
 /// IEC 60757 where known (`ir::WireColor::code`), so the strand stays
@@ -496,17 +485,6 @@ mod tests {
         let d = braid_d(Point::new(0.0, 10.0), 30.0, 30.0, 0.0, 30.0);
         assert_eq!(d.matches(" C").count(), 2);
         assert!(d.ends_with("30,10"), "{d}");
-    }
-
-    #[test]
-    fn a_shortened_annotation_keeps_its_start_and_ends_in_an_ellipsis() {
-        let text = "WAKE · 0.5mm² · WH";
-        assert_eq!(shorten(text, 40), text, "room enough: unchanged");
-        assert_eq!(shorten(text, text.chars().count()), text);
-        assert_eq!(shorten(text, 13), "WAKE · 0.5mm…");
-        // The separator before the cut is dropped, not left dangling.
-        assert_eq!(shorten(text, 8), "WAKE…");
-        assert_eq!(shorten(text, 1), "…");
     }
 
     #[test]

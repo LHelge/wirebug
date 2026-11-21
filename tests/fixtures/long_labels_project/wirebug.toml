@@ -1,0 +1,5 @@
+[project]
+name = "long-labels-project"
+version = "0.1.0"
+description = "Long labels fixture: harness texts wider than the old flat per-character estimate"
+revision = "fixture"
