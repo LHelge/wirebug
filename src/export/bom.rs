@@ -83,15 +83,6 @@ pub enum LineKind {
 }
 
 impl LineKind {
-    /// Every kind, in the order a [`Bom`] lists them.
-    pub const ALL: [Self; 5] = [
-        Self::Housing,
-        Self::Cable,
-        Self::Wire,
-        Self::Component,
-        Self::Splice,
-    ];
-
     /// The kind's name, as the export writes it.
     pub fn as_str(self) -> &'static str {
         match self {
