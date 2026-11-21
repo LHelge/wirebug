@@ -17,10 +17,13 @@ other than letters, digits, `-` and `_` turned into one `-`; version
 `0.1.0`), `main.wb` from `templates/init/main.wb` (`include_str!`, so
 `Cargo.toml`'s `templates/**` include ships it; it must pass
 `check --strict`, which `tests/cli.rs` holds it to) and, only when absent,
-a `.gitignore` of `out/`. It refuses with `Error::InitExists`, before
-writing anything, when the manifest or `main.wb` is there, and opens every
+a `.gitignore` of `out/`. It refuses, before writing anything, with
+`Error::InitNotADirectory` when the path exists but is no directory and
+with `Error::InitExists` when the manifest or `main.wb`
+(`project::ENTRY_FILE`, the name discovery loads) is there, and opens every
 file `create_new`, so it never overwrites. `main` prints the `Scaffolded`
-summary (each file, then the `check`/`render` commands to run next).
+summary (each file, then the `check`/`render` commands to run next, the
+directory shell-quoted when it is not plain).
 
 - **`check` (`src/dsl/`, then `src/render/lint.rs`)** — lex → parse →
   load project → resolve → elaborate → validate, then the **layout

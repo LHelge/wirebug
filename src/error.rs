@@ -55,6 +55,11 @@ pub enum Error {
     /// rather than overwrite it.
     #[error("{path} already exists; not overwriting it")]
     InitExists { path: PathBuf },
+
+    /// `init` was pointed at something other than a directory, so there is
+    /// nowhere to put a project.
+    #[error("{path} is not a directory; cannot create a project in it")]
+    InitNotADirectory { path: PathBuf },
 }
 
 /// Convenience alias used throughout the crate.

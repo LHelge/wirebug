@@ -2740,3 +2740,23 @@ fn init_help_says_what_it_writes_and_refuses() {
         String::from_utf8(output.stdout).expect("utf-8")
     );
 }
+
+#[test]
+fn init_refuses_a_path_that_is_a_file() {
+    let tmp = tempdir().expect("tempdir");
+    let file = tmp.path().join("afile");
+    std::fs::write(&file, "mine").expect("write");
+
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .arg("init")
+        .arg(&file)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(format!(
+            "{} is not a directory; cannot create a project in it",
+            file.display()
+        )));
+
+    assert_eq!(std::fs::read_to_string(&file).expect("read"), "mine");
+}
