@@ -17,5 +17,6 @@ pub use pins::{
     PinTables, SplicedEnd,
 };
 pub use wires::{
-    Cable, Conductor, Contact, Drain, End, PortEnd, Row, RowKind, ShieldRun, SpliceEnd, WireList,
+    Cable, Conductor, Contact, Copper, Drain, End, PortEnd, Row, RowKind, RowLength, ShieldRun,
+    SpliceEnd, WireList,
 };

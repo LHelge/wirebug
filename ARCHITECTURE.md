@@ -280,7 +280,7 @@ Distinct from clap's `--version`, which prints the wirebug app version.
   one), built by `Length::new(value, LengthUnit)` from the AST's
   `ast::Quantity` (the number and the unit written after it, `150mm`;
   `Quantity::length`, a bare number in metres), so lengths in any unit
-  compare (`Ord`) and print exactly: `Length::metres()` normalises,
+  compare (`Ord`), add (`+`) and print exactly: `Length::metres()` normalises,
   `Display` prints metres with only the decimals the length has
   (`0.15 m`). The closed `LengthUnit` set (`m`, `cm`, `mm`) is
   `LengthUnit::ALL`. A length that does not convert (an unknown unit, not
@@ -545,8 +545,16 @@ job; the models carry no serialisation.
   like a conductor does and a pin table built from the list sees it.
   Every row has its `owner` (the instance whose body declares it), its
   `Cable` (designator and `CableMeta`) when it runs in one, and the
-  length that applies (`Instance::effective_length` for a conductor, the
-  cable's for a screen; each segment of a rail carries its wire's).
+  length it stands for, an `export::RowLength`: `Own(Length)` for a
+  two-ended conductor (`Instance::effective_length`) or a screen (its
+  cable's), `Unset`, or `Rail { total, first }` on each segment of a
+  wire with more than two ends — a rail's `length` is the whole rail's,
+  not each leg's (a cable conductor is two-ended, so a cable's length
+  never meets a rail). `RowLength::copper()` gives what a row adds to a
+  total (a rail's on its first segment only), and `WireList::copper()`
+  sums the conductors so each rail counts once, as an `export::Copper`
+  (the summed `Length`, which adds exactly, and how many conductors have
+  none); screens are not counted.
   An `export::End` is typed: `Port` (a port of an instance placed in the
   owner, inline connectors included), `Boundary` (the owner's own port,
   where the conductor leaves it), `Splice` (one of the owner's), or

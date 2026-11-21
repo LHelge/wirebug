@@ -1,4 +1,4 @@
-// The wire list: a rail of four ends, a cable with a twisted pair and a
+// The wire list: a rail of four ends 4 m long in all, a cable with a twisted pair and a
 // conductor that sets its own length, two conductors crimped into one
 // cavity, a connectorless port, an inline connector, a splice three
 // conductors meet at, a screen grounded at one end and one on no pin, and
@@ -34,7 +34,9 @@ component Vehicle {
         part: "D-436-36";
     }
 
-    wire white 0.5 "WAKE" [ecu.wake, bcm.wake, node.wake, lamp.wake];
+    wire white 0.5 "WAKE" [ecu.wake, bcm.wake, node.wake, lamp.wake] {
+        length: 4m;
+    }
 
     cable can "CAN" {
         type:   "Shielded twisted pair";

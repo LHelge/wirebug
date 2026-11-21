@@ -59,6 +59,38 @@ impl<'d> WireList<'d> {
             RowKind::Conductor(_) => None,
         })
     }
+
+    /// The copper the list's conductors add up to, each rail's length
+    /// counted once ([`RowLength::copper`]), and how many conductors have
+    /// no length to add. Screens are not copper to cut: a screen comes
+    /// with its cable.
+    pub fn copper(&self) -> Copper {
+        self.conductors()
+            .fold(Copper::default(), |total, (row, _)| match row.length {
+                RowLength::Unset => Copper {
+                    unmeasured: total.unmeasured + 1,
+                    ..total
+                },
+                length => Copper {
+                    length: match (total.length, length.copper()) {
+                        (Some(sum), Some(more)) => Some(sum + more),
+                        (sum, more) => sum.or(more),
+                    },
+                    ..total
+                },
+            })
+    }
+}
+
+/// What a [`WireList`]'s conductors add up to ([`WireList::copper`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Copper {
+    /// The summed length of every conductor that has one, each rail once;
+    /// `None` when none has.
+    pub length: Option<Length>,
+    /// The conductors with no length ([`RowLength::Unset`]), so missing
+    /// from `length`: each segment of a rail without one counts.
+    pub unmeasured: usize,
 }
 
 impl<'a, 'd> IntoIterator for &'a WireList<'d> {
@@ -80,10 +112,8 @@ pub struct Row<'d> {
     pub owner: &'d Instance,
     /// The cable the row runs in; `None` for a loose wire.
     pub cable: Option<Cable<'d>>,
-    /// The length that applies: a conductor's own, else its cable's
-    /// ([`Instance::effective_length`]); a screen's is its cable's. Each
-    /// segment of a rail carries its wire's length. `None` when unset.
-    pub length: Option<Length>,
+    /// The length the row stands for: its own, or its share of a rail's.
+    pub length: RowLength,
     /// A conductor or a screen, with what is particular to it.
     pub kind: RowKind<'d>,
 }
@@ -97,7 +127,7 @@ impl<'d> Row<'d> {
             wire.segments().map(move |segment| Self {
                 owner,
                 cable,
-                length,
+                length: RowLength::of(wire, length, &segment),
                 kind: RowKind::Conductor(Conductor {
                     wire,
                     segment,
@@ -109,7 +139,7 @@ impl<'d> Row<'d> {
             meta.shields().map(move |(screened, shield)| Self {
                 owner,
                 cable: Some(Cable { name, meta }),
-                length: meta.length,
+                length: meta.length.map_or(RowLength::Unset, RowLength::Own),
                 kind: RowKind::Shield(ShieldRun {
                     screened,
                     shield,
@@ -126,6 +156,53 @@ impl<'d> Row<'d> {
         match &self.kind {
             RowKind::Conductor(conductor) => &conductor.ends,
             RowKind::Shield(shield) => shield.drain.ends(),
+        }
+    }
+}
+
+/// The length a [`Row`] stands for. A `length` on a wire with more than two
+/// ends is the length of the whole rail, not of each of its segments, so a
+/// rail's segments share it rather than each carrying it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowLength {
+    /// No length is set: neither the wire nor its cable has one.
+    Unset,
+    /// The row's own length: a two-ended conductor's (its own `length`,
+    /// else its cable's, [`Instance::effective_length`]), or a screen's
+    /// (its cable's).
+    Own(Length),
+    /// One segment of a rail, a wire with more than two ends: `total` is
+    /// the whole rail's length, not this segment's. `first` marks the
+    /// rail's first segment, the one row that counts the rail's copper.
+    Rail { total: Length, first: bool },
+}
+
+impl RowLength {
+    /// The length of `segment`, one of `wire`'s, when `length` is the one
+    /// that applies to the wire. A cable conductor is always two-ended, so
+    /// a cable's length never meets a rail.
+    fn of(wire: &Wire, length: Option<Length>, segment: &WireSegment) -> Self {
+        match length {
+            None => Self::Unset,
+            Some(total) if wire.endpoints.len() > 2 => Self::Rail {
+                total,
+                first: segment.index == 0,
+            },
+            Some(own) => Self::Own(own),
+        }
+    }
+
+    /// The copper this row adds to a total: its own length; a rail's whole
+    /// length on the rail's first segment and nothing on its others; nothing
+    /// when unset. Summing this over rows counts each rail once.
+    pub fn copper(self) -> Option<Length> {
+        match self {
+            Self::Own(length)
+            | Self::Rail {
+                total: length,
+                first: true,
+            } => Some(length),
+            Self::Rail { first: false, .. } | Self::Unset => None,
         }
     }
 }
@@ -388,8 +465,12 @@ component Loom {
         segments.fold(root, |path, segment| path.child(segment))
     }
 
-    fn length(value: f64, unit: LengthUnit) -> Option<Length> {
-        Length::new(value, unit)
+    fn length(value: f64, unit: LengthUnit) -> Length {
+        Length::new(value, unit).expect("a positive length")
+    }
+
+    fn own(value: f64, unit: LengthUnit) -> RowLength {
+        RowLength::Own(length(value, unit))
     }
 
     /// A port end's instance path, port name and contact.
@@ -445,6 +526,67 @@ component Loom {
     }
 
     #[test]
+    fn a_rails_length_is_the_whole_rails_and_counts_once() {
+        let design = design(&format!(
+            "{USES}component Car {{ a: Ecu; b: Ecu; c: Ecu; d: Ecu;\n\
+             wire white 0.5 [a.sense, b.sense, c.sense, d.sense] {{ length: 3m; }}\n\
+             wire red 1 [a.pwr, b.pwr] {{ length: 40cm; }}\n\
+             wire black 1 [c.pwr, d.pwr]; }}\n"
+        ));
+        let list = WireList::from(&design);
+        let lengths: Vec<RowLength> = list.conductors().map(|(row, _)| row.length).collect();
+        let total = length(3.0, LengthUnit::Metre);
+        let rail = |first| RowLength::Rail { total, first };
+        assert_eq!(
+            lengths,
+            [
+                rail(true),
+                rail(false),
+                rail(false),
+                own(40.0, LengthUnit::Centimetre),
+                RowLength::Unset,
+            ]
+        );
+        let counted: Vec<Option<Length>> = lengths.iter().map(|l| l.copper()).collect();
+        assert_eq!(
+            counted,
+            [
+                Some(total),
+                None,
+                None,
+                Some(length(0.4, LengthUnit::Metre)),
+                None
+            ]
+        );
+        // 3 m of rail once, not three times, plus the 0.4 m wire; the
+        // unmeasured wire is counted apart.
+        assert_eq!(
+            list.copper(),
+            Copper {
+                length: Some(length(3.4, LengthUnit::Metre)),
+                unmeasured: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn a_list_with_no_lengths_totals_no_copper_and_counts_what_is_unmeasured() {
+        let design = design(&format!(
+            "{USES}component Car {{ a: Ecu; b: Ecu; c: Ecu;\n\
+             wire white 0.5 [a.sense, b.sense, c.sense];\n\
+             cable k {{ wire red 1 [a.pwr, b.pwr]; shield [a.shld]; }} }}\n"
+        ));
+        let list = WireList::from(&design);
+        assert_eq!(
+            list.copper(),
+            Copper {
+                length: None,
+                unmeasured: 3,
+            }
+        );
+    }
+
+    #[test]
     fn a_cable_conductor_takes_the_cable_length_unless_it_sets_its_own() {
         let design = design(&format!(
             "{USES}component Car {{ ecu: Ecu; node: Ecu;\n\
@@ -478,7 +620,7 @@ component Loom {
                     Some("can"),
                     Some("CAN H"),
                     Some(0),
-                    length(150.0, LengthUnit::Millimetre),
+                    own(150.0, LengthUnit::Millimetre),
                     None,
                     Some("TP-YE"),
                 ),
@@ -486,7 +628,7 @@ component Loom {
                     Some("can"),
                     Some("CAN L"),
                     Some(0),
-                    length(2.0, LengthUnit::Metre),
+                    own(2.0, LengthUnit::Metre),
                     None,
                     None
                 ),
@@ -494,11 +636,11 @@ component Loom {
                     Some("can"),
                     Some("PWR"),
                     None,
-                    length(2.1, LengthUnit::Metre),
+                    own(2.1, LengthUnit::Metre),
                     Some("FLRY-B"),
                     None,
                 ),
-                (None, None, None, None, None, None),
+                (None, None, None, RowLength::Unset, None, None),
             ]
         );
         let (row, _) = list.conductors().next().expect("a conductor");
@@ -648,7 +790,7 @@ component Loom {
         assert_eq!(overall.screened, Screened::Cable);
         assert_eq!(overall.shield.label.as_deref(), Some("SHLD"));
         assert_eq!(overall_row.cable.map(|c| c.name.as_str()), Some("can"));
-        assert_eq!(overall_row.length, length(3.0, LengthUnit::Metre));
+        assert_eq!(overall_row.length, own(3.0, LengthUnit::Metre));
         let Drain::Single(drain) = overall.drain else {
             panic!("grounded at one end");
         };
@@ -663,7 +805,7 @@ component Loom {
         assert_eq!(pair.screened, Screened::Pair(0));
         assert!(matches!(pair.drain, Drain::NoPin));
         assert!(pair_row.ends().is_empty());
-        assert_eq!(pair_row.length, length(3.0, LengthUnit::Metre));
+        assert_eq!(pair_row.length, own(3.0, LengthUnit::Metre));
     }
 
     #[test]
