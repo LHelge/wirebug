@@ -1,7 +1,7 @@
 //! End-to-end check of the `splice_project` fixture: a ground splice three
 //! devices' grounds join at, run on to the battery on one heavy conductor,
-//! and a butt splice a cable conductor ends on — elaborated into the IR and
-//! drawn in harness views.
+//! and a butt splice a cable conductor ends on — elaborated into the IR,
+//! drawn in harness views, and drawn as the nets they join in a schematic.
 //!
 //! Tests never target `examples/` — that is the real, freely-changing
 //! vehicle project.
@@ -141,4 +141,18 @@ fn the_embed_stylesheet_styles_the_splice_classes() {
             "{class}"
         );
     }
+}
+
+#[test]
+fn a_schematic_draws_the_ports_a_splice_joins_as_one_net() {
+    let views = views();
+    let grounds = view(&views, "Grounds");
+    // Four grounds through `sp_gnd`, chained like a rail: three segments,
+    // each in its own conductor's color; and the feed through `sp_feed`.
+    assert_eq!(grounds.matches("class=\"wire\"").count(), 4);
+    assert_eq!(grounds.matches("data-color=\"black\"").count(), 2);
+    assert_eq!(grounds.matches("data-color=\"brown\"").count(), 1);
+    assert_eq!(grounds.matches("data-color=\"red\"").count(), 1);
+    // No splice appears as a box or a dot in a schematic.
+    assert!(!grounds.contains("sp_gnd") && !grounds.contains("class=\"splice"));
 }
