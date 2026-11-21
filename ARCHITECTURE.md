@@ -82,7 +82,10 @@ Four CLI commands share it:
   inserting the full `<Name> from "<relative path>";` remainder — plus
   `extend` targets, the `connector_type`/`layout` bodies, and the keys of
   a cable body, of a wire body (a `{` right after a wire's `]`) and of a
-  component's part data (beside the member keywords), and `for` after a
+  component's part data (beside the member keywords), the length units
+  on a number the cursor touches after a key that takes a length
+  (`length: 150‸`; each item's text edit replaces the unit typed so far,
+  `Cursor.unit`), and `for` after a
   view's title with the file's component types after it; inside a view,
   includes, `ports { }` and `enclosure { }` complete against the
   component its `for` names (`FileScope.top_level`, then
