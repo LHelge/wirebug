@@ -20,3 +20,6 @@ attempts: 1
 ## Testing
 - Unit tests beside the code; end-to-end coverage via `tests/fixtures/` (never `examples/`).
 - `cargo fmt && cargo clippy -- -D warnings && cargo test` pass.
+
+## Decided (2026-11-21, by the orchestrator of the backlog run; the author left the design open)
+The form is `text "<label>" at (x, y);`, with no name. The old named form (`text <name> at (x, y) "<label>";`) keeps parsing and rendering, with a `deprecated_text_syntax` warning, because the author's wiring project in another repository still uses it. Removing it is task `xrs`.
