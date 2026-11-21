@@ -17,7 +17,7 @@ use crate::dsl::ast;
 use crate::dsl::diagnostics::Problem;
 use crate::dsl::lex::{lex, significant};
 use crate::dsl::manifest::{self, Manifest};
-use crate::dsl::parse::{ParseError, parse_file};
+use crate::dsl::parse::{Completeness, ParseError, parse_file};
 use crate::dsl::span::FileId;
 
 /// One loaded source file. `files[id.0]` is the file with that [`FileId`].
@@ -248,6 +248,11 @@ impl Loader<'_> {
                     at: span.into(),
                 },
             });
+        }
+        // Only a file that parsed whole loads: the later phases would take
+        // what a skipped statement declared for something missing.
+        if parsed.completeness != Completeness::Whole {
+            return None;
         }
         let ast = parsed.file?;
 

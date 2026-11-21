@@ -70,7 +70,9 @@ Four CLI commands share it:
   (per-file scopes + merged components) consulted by a token-stack scan
   of the live buffer — lex-only, so completion survives parse breakage,
   and a file that fails to load keeps its last-good scope
-  (`CompletionIndex::update_with`). Completion covers auto-import —
+  (`CompletionIndex::update_with`).
+  A buffer with several broken statements gets a squiggle for each.
+  Completion covers auto-import —
   `use ‸` offers every component/connector_type defined elsewhere,
   inserting the full `<Name> from "<relative path>";` remainder — plus
   `extend` targets and the `connector_type`/`layout` bodies. An open
@@ -137,7 +139,8 @@ Distinct from clap's `--version`, which prints the wirebug app version.
   members; `View`s are top-level siblings. A `Definition.kind` marks it
   `component` (introduces the type) or `extend` (a fragment merged into a
   same-named component). Every node carries a `Span`; type/instance/port
-  references are *unresolved* `Spanned<Ident>`.
+  references are *unresolved* `Spanned<Ident>`. A statement with a
+  syntax error is skipped and leaves no node (see DSL validation).
 - **Resolved registry** — every definition (top-level and nested) keyed by
   `DefId`, with flattened ports (connectors are grouping metadata, not a
   namespace — port names are unique per component), per-file type scopes
@@ -344,6 +347,28 @@ so one run reports many. Errors fail the run; warnings fail only under
   and goes on, so every occurrence of the word is reported, and the later
   phases check the name like any other (an `include wire` of an instance
   that does not exist is also an `unknown_include`).
+  A syntax error does not stop the parse either: every `{ … }` block (a
+  component body, a view, a connector type, a connector, an inline, a
+  cable, a `ports { }` or `enclosure { }` block) and the file's top level
+  recover per statement (`parse::block`). A statement that does not parse
+  gets the error it got before recovery (same span, same expected set,
+  the block's `}` included), is skipped up to its `;` or through the
+  `{ … }` it opens (never past the `}` that closes its block), and the
+  block reads on, so one run reports each broken statement once. The
+  fixed-shape bodies (`twisted { }`, `layout grid { }`, `layout face { }`)
+  stay one statement: a mistake inside skips the whole of it. Two guards
+  against one mistake reporting twice: a statement that fails right after
+  one that failed on its own `;` is that statement's tail (`pub port ;
+  a "A";`) and is not reported, unless it starts with a reserved keyword;
+  and a file whose braces do not balance (`parse::Completeness::
+  Misnested`: every statement after the stray or missing `}` lands in
+  another block) reports its first syntax error alone and is left out of
+  the load, as if it had not parsed. The skipped statement's reserved
+  words go with it: the parser rewinds out of the failed attempt, and the
+  `TruncateState` notes rewind with it, so no note points into a skipped
+  region and the notes of the statements around it all stand.
+  A file with a syntax error is left out of the load, as it was before
+  the parse could recover: only the syntax errors are reported for it.
 - **Resolve** — undefined type, unresolved import, duplicate
   type/instance/port, unknown instance/port in a wire endpoint,
   private-port access (a non-`pub` port referenced from outside), unknown
