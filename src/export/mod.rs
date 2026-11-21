@@ -6,16 +6,19 @@
 //! [`WireList`] is the cut list: one [`Row`] per physical conductor and per
 //! cable screen. [`PinTables`], built from it, is the crimp sheet: one
 //! [`PinTable`] per connector (per housing half of an inline connector),
-//! one [`Cavity`] per pin. Writing a table out (CSV, JSON) is the CLI's
-//! business, not this module's.
+//! one [`Cavity`] per pin. The models carry no serialisation: [`Export`]
+//! writes a table out as CSV or JSON through record types of its own, the
+//! wire format `wirebug export` prints.
 
 mod pins;
+mod records;
 mod wires;
 
 pub use pins::{
     Cavity, CavityConductor, CavityDrain, CavityEntry, FarEnd, FarSplice, HalfFit, Housing,
     PinTable, PinTables, SplicedEnd, UnpinnedPort,
 };
+pub use records::{Export, Exported, FORMAT_VERSION, Format, Table};
 pub use wires::{
     Cable, Conductor, Contact, Copper, Drain, End, PortEnd, Row, RowKind, RowLength, ShieldRun,
     SpliceEnd, WireList,
