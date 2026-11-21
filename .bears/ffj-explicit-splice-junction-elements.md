@@ -1,10 +1,10 @@
 ---
 id: ffj
 title: Explicit splice / junction elements
-status: proposed
+status: open
 priority: P3
 created: "2026-11-20T21:40:32.019278995Z"
-updated: "2026-11-20T21:40:32.022239636Z"
+updated: "2026-11-21T01:36:29.879636522Z"
 tags:
   - dsl
   - harness

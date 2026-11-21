@@ -1,10 +1,10 @@
 ---
 id: bu4
 title: Make view `text` syntax match other declarations
-status: proposed
+status: open
 priority: P3
 created: "2026-11-20T21:40:32.001396078Z"
-updated: "2026-11-20T21:40:32.004119768Z"
+updated: "2026-11-21T01:36:29.863483564Z"
 tags:
   - dsl
 parent: k7r

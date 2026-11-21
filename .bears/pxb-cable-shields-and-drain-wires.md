@@ -1,10 +1,10 @@
 ---
 id: pxb
 title: Cable shields and drain wires
-status: proposed
+status: open
 priority: P3
 created: "2026-11-20T21:40:32.012812790Z"
-updated: "2026-11-20T21:40:32.015977859Z"
+updated: "2026-11-21T01:36:29.874657649Z"
 tags:
   - dsl
   - harness
