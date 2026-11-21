@@ -171,10 +171,10 @@ Every project carries a `wirebug.toml` at the project root, beside `main.wb`. It
 
 ```toml
 [project]
-name        = "aphid-evpack"
+name        = "ev-conversion-example"
 version     = "0.1.0"
-description = "Aphid EV conversion — top-level vehicle wiring"
-authors     = ["Aphid EV team"]
+description = "Example EV conversion — vehicle wiring"
+authors     = ["wirebug contributors"]
 license     = "MIT"
 revision    = "B"             # optional; auto-filled from git when absent
 date        = "2026-05-28"    # optional; ISO date

@@ -1,4 +1,4 @@
-// Aphid EV — CAN buses.
+// CAN buses.
 //
 // Two independent buses gatewayed by the VCM:
 //   CAN1 (OEM powertrain) — VCM → OBC → inverter. The two OEM units share a

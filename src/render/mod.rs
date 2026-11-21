@@ -882,7 +882,7 @@ pub(crate) mod tests {
     #[test]
     fn pdf_filename_slugs_the_project_name() {
         let manifest = Manifest {
-            name: "Aphid EVPack".to_string(),
+            name: "EV Conversion Example".to_string(),
             version: "0.1.0".to_string(),
             description: None,
             authors: Vec::new(),
@@ -890,7 +890,7 @@ pub(crate) mod tests {
             revision: None,
             date: None,
         };
-        assert_eq!(pdf_filename(Some(&manifest)), "aphid_evpack.pdf");
+        assert_eq!(pdf_filename(Some(&manifest)), "ev_conversion_example.pdf");
         assert_eq!(pdf_filename(None), "views.pdf");
     }
 

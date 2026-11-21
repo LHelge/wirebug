@@ -1,4 +1,4 @@
-// Aphid EV — 12V system: distribution, chassis ground, and safe power.
+// 12V system: distribution, chassis ground, and safe power.
 //
 // A `Vehicle` fragment owning the fuse box and every 12V feed and ground
 // wire. The DC-DC source (`charger`) and the consumers live in other
