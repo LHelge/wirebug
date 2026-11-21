@@ -522,6 +522,76 @@ fn check_strict_fails_on_a_duplicate_view_title() {
         ));
 }
 
+const PART_DATA_ERRORS_ROOT: &str = "tests/fixtures/part_data_errors_project";
+
+#[test]
+fn check_rejects_bad_part_data_and_a_key_an_extend_fragment_sets_again() {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--format", "json", PART_DATA_ERRORS_ROOT])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+
+    /// A diagnostic as (code, severity, file name, the text of its labels).
+    fn summary(p: &serde_json::Value) -> (String, String, String, Vec<String>) {
+        let file = p["filename"].as_str().expect("filename");
+        let src = std::fs::read_to_string(file).expect("the file a diagnostic names");
+        let labels = p["labels"]
+            .as_array()
+            .expect("labels")
+            .iter()
+            .map(|l| {
+                let offset = l["span"]["offset"].as_u64().expect("offset") as usize;
+                let length = l["span"]["length"].as_u64().expect("length") as usize;
+                src[offset..offset + length].to_string()
+            })
+            .collect();
+        (
+            p["code"].as_str().unwrap_or("").to_string(),
+            p["severity"].as_str().expect("severity").to_string(),
+            file.rsplit('/').next().expect("file name").to_string(),
+            labels,
+        )
+    }
+    let found: Vec<_> = problems.iter().map(summary).collect();
+    let row = |code: &str, file: &str, label: &str| {
+        (
+            code.to_string(),
+            "error".to_string(),
+            file.to_string(),
+            vec![label.to_string()],
+        )
+    };
+    assert_eq!(
+        found,
+        [
+            row("wirebug::cable_property_type", "relay.wb", "40"),
+            row("wirebug::unknown_cable_property", "relay.wb", "colour"),
+            row("wirebug::duplicate_cable_property", "harness.wb", "part"),
+        ]
+    );
+    // The root's `part`, in main.wb, rides along as the repeat's related
+    // note.
+    let related = problems[2]["related"].as_array().expect("related");
+    let [first] = related.as_slice() else {
+        panic!("expected one related note: {}", problems[2]);
+    };
+    assert_eq!(
+        summary(first),
+        (
+            String::new(),
+            "advice".to_string(),
+            "main.wb".to_string(),
+            vec!["part".to_string()]
+        )
+    );
+}
+
 const UNDRAWN_CONDUCTORS_ROOT: &str = "tests/fixtures/undrawn_conductors_project";
 
 #[test]

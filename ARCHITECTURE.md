@@ -141,8 +141,13 @@ Distinct from clap's `--version`, which prints the wirebug app version.
 ## DSL mental model
 
 - **AST** — a faithful parse of one `.wb` file. `Definition` (a component
-  *type*) holds `Port`/`Connector`/`Instance`/`Wire`/nested-`Definition`
-  members; `View`s are top-level siblings. A `Definition.kind` marks it
+  *type*) holds `Port`/`Connector`/`Instance`/`Wire`/`Property`/nested-
+  `Definition` members; `View`s are top-level siblings. A `Member::Property`
+  is a line of the type's part data (`part: "…";`, read by
+  `Definition::properties`): the parser reads a component-body statement
+  that starts `<name>:` once (`named_member`) and the token after the colon
+  decides — a name makes an instance (`part: Fuse;` is an instance named
+  `part`), a string or number a property. A `Definition.kind` marks it
   `component` (introduces the type) or `extend` (a fragment merged into a
   same-named component). Every node carries a `Span`; type/instance/port
   references are *unresolved* `Spanned<Ident>`. A statement with a
@@ -182,7 +187,13 @@ Distinct from clap's `--version`, which prints the wirebug app version.
   holds) elaborates to typed `Wire.length`/`r#type`/`part`; a conductor's
   `length` overrides its cable's, and `Instance::effective_length(wire)`
   answers the one that applies (its own, else its cable's
-  `CableMeta.length`); `CableMeta.length` itself stays the cable's. Every
+  `CableMeta.length`); `CableMeta.length` itself stays the cable's. A
+  component type's part data elaborates to `Instance.part`, an
+  `ir::PartMeta` of typed optional strings (`number` from `part:`,
+  `manufacturer`, `description`, `rating`) collected across the type's
+  fragments, root first, so every placement of the type carries the same;
+  a synthetic inline instance's is empty (its halves' part data lives in
+  `InlineMeta`). Every
   `Wire` keeps its authored `span` (the `wire` statement, inside its
   cable for a conductor), so a check over the drawings can point back at
   it. So the schematic renderer ignores cables
@@ -439,10 +450,19 @@ so one run reports many. Errors fail the run; warnings fail only under
 - **Validate** — wire arity (fewer than two endpoints, error); cable wire
   arity (a cable conductor that isn't exactly two endpoints,
   `cable_wire_arity`); property checks on a cable body and on any wire's
-  body (`validate_properties`, keyed by `diagnostics::PropertyOwner`, whose
-  `keys()` say what each body takes: a cable `type` and `length`, a wire
-  `length`, `type` and `part`) — an unknown key, a key set twice, a value
-  of the wrong kind (strings for `type`/`part`, a number for `length`).
+  body and on a component's part data (`validate_properties`, keyed by
+  `diagnostics::PropertyOwner`, whose `keys()` say what each body takes: a
+  cable `type` and `length`, a wire `length`, `type` and `part`, a
+  component `part`, `manufacturer`, `description` and `rating`, a closed
+  set a later bill of materials reads) — an unknown key, a key set twice, a
+  value of the wrong kind (strings for `type`/`part` and the component
+  keys, a number for `length`). A component split with `extend` sets each
+  key once across its fragments (`validate_fragment_properties`): a
+  fragment may set a key the root left unset, and a key one fragment sets
+  after another did is the same `duplicate_cable_property`, against the
+  first setting (the root's first) — two labels when both fragments sit in
+  one file, else `DuplicateFragmentProperty` with the first setting as a
+  `#[related]` note (`FirstProperty`), as for `duplicate_view_title`.
   The codes keep the names from when only cables had properties
   (`unknown_cable_property`, `duplicate_cable_property`,
   `cable_property_type`); the messages name the owner (`unknown wire

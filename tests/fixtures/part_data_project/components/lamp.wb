@@ -1,0 +1,6 @@
+// A type with no part data: still a component, just one a bill of
+// materials cannot name.
+component Lamp {
+    pub port a "A";
+    pub port b "B";
+}

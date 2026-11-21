@@ -832,7 +832,7 @@ fn cable_subtitle(meta: Option<&CableMeta>, count: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dsl::ir::{ConnectorRef, InstancePath, Port, TypeName, Visibility};
+    use crate::dsl::ir::{ConnectorRef, InstancePath, PartMeta, Port, TypeName, Visibility};
 
     fn strand(row_y: f64) -> CableStrand {
         CableStrand {
@@ -1015,6 +1015,7 @@ component Root {
             cables: IndexMap::new(),
             connectors: IndexMap::new(),
             inline: None,
+            part: PartMeta::default(),
         };
 
         let visible: HashSet<PortName> = [PortName::from("p")].into_iter().collect();
@@ -1057,6 +1058,7 @@ component Root {
             cables: IndexMap::new(),
             connectors: IndexMap::new(),
             inline: None,
+            part: PartMeta::default(),
         };
 
         let visible: HashSet<PortName> = [PortName::from("a"), PortName::from("c")]

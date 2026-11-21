@@ -1,0 +1,5 @@
+[project]
+name = "part-data-project"
+version = "0.1.0"
+description = "Part-data fixture: component types carrying part, manufacturer, description and rating"
+revision = "fixture"

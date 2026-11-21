@@ -102,6 +102,31 @@ component CellModule {
 }
 ```
 
+### Part data
+
+A component body may carry `key: value;` lines that say what the type is bought as — what a bill of materials lists it by. They sit anywhere among the members:
+
+```
+component Contactor {
+    part:         "EV200AAANA";
+    manufacturer: "TE Connectivity";
+    description:  "HV main contactor, 12 V coil";
+    rating:       "500 A";
+
+    pub port in  "IN";
+    pub port out "OUT";
+}
+```
+
+- `part: "<string>";` — the manufacturer part number.
+- `manufacturer: "<string>";` — who makes it.
+- `description: "<string>";` — what it is, for humans.
+- `rating: "<string>";` — free text such as `"500 A"` or `"12 V, 2 W"` (a string, since ratings mix units).
+
+All four are optional, each may appear once, and every value is a quoted string. The data belongs to the **type**: every placement of `Contactor` carries it. A type without a `part` is still fine, just one a bill of materials cannot name. Any other key is an error (`unknown_cable_property`, the code cable, wire and component bodies share), as is a key set twice (`duplicate_cable_property`) or a number where the string belongs (`cable_property_type`). Part data is not drawn in any view.
+
+A `<name>:` line is part data only when a **string or number** follows the colon; a type name after the colon makes it an instance, so `part: Fuse "F1";` places a `Fuse` named `part`.
+
 ## Splitting a component across files (`extend`)
 
 A large top-level component — the vehicle root, say — can be authored across
@@ -147,6 +172,11 @@ Rules:
   whole merged component.
 - `extend` is top-level only (not nested), and every `extend <name>` needs a
   `component <name>` somewhere — a lone `extend` is an error.
+- Part data (`part:`, `manufacturer:`, …) is set **once** across the merged
+  component: in the `component` or in one `extend`. An `extend` may set a key
+  the `component` left unset; setting a key that the `component` or another
+  `extend` already set is an error (`duplicate_cable_property`, pointing at
+  both places).
 
 ## Ports
 
@@ -436,7 +466,7 @@ wire red 0.5 "12V" [fuses.ecu, ecu.b_pos] {
 - `type: "<string>";` — the insulation/construction type, free text (e.g. `"FLRY-B"`).
 - `part: "<string>";` — the part number.
 
-All three are optional, and each may appear once. Any other key is an error (`unknown_cable_property`, the code cable and wire bodies share), as is a key set twice (`duplicate_cable_property`) or a value of the wrong kind — a string for `length`, a number for `type` or `part` (`cable_property_type`). The positional form without a body is unchanged.
+All three are optional, and each may appear once. Any other key is an error (`unknown_cable_property`, the code cable, wire and component bodies share), as is a key set twice (`duplicate_cable_property`) or a value of the wrong kind — a string for `length`, a number for `type` or `part` (`cable_property_type`). The positional form without a body is unchanged.
 
 ## Cables
 
@@ -591,7 +621,7 @@ Keywords come in two kinds. Words are case-sensitive, so `Layout` or `Wire` is n
 - **Reserved** — the words that declare the design: `use`, `component`, `extend`, `connector_type`, `connector`, `inline`, `port`, `pub`, `pin`, `pins`, `wire`, `cable`, `twisted`, `view`. They can never name anything; `pub port wire "W";` is an error, `'wire' is a reserved word`. Pick another name (`wire_1`, `w`).
 - **Contextual** — words that mean something only inside a view, a `connector_type` layout, a cavity line or a `use` line: `from`, `include`, `text`, `at`, `grid`, `enclosure`, `ports`, `layout`, `face`, `cavity`, `rows`, `cols`, `numbering`, `size`. Anywhere a name belongs they are ordinary names, so `pub port size "SIZE";`, an instance `grid: Sensor;`, `connector layout: Plug { … }`, `cable text { … }` and `include at at (1, 2);` are all valid.
 
-Other words the grammar reads in one place only (`schematic`, `harness`, `pinout`, `type`, `length`, `part`, `male`, `female`, `north`, `east`, `south`, `west`, the wire colors, the numbering modes, `large`) are not keywords at all.
+Other words the grammar reads in one place only (`schematic`, `harness`, `pinout`, `type`, `length`, `part`, `manufacturer`, `description`, `rating`, `male`, `female`, `north`, `east`, `south`, `west`, the wire colors, the numbering modes, `large`) are not keywords at all.
 
 ## Common patterns
 
@@ -639,6 +669,7 @@ wire orange 50 [pack.hv_neg, inv.dc_neg, charger.hv_neg, conv.hv_neg];
 - **Do not** add junction nodes by hand — multi-endpoint wires imply junctions automatically.
 - **Do not** put `pub` on an inline connector's ports, include both halves of one inline in a single harness view, or include an inline in a schematic view.
 - **Do not** write a `;` after a wire's property body (`[a, b] { length: 1; }`, not `{ … };`), or put `part` on a cable — it is a per-wire key.
+- **Do not** put part numbers in labels or comments when the type can carry them: write `part: "…";` (and `manufacturer`, `description`, `rating`) in the component body. Quote the value — `part: Fuse;` is an instance named `part`, not a part number.
 - **Do not** put a multi-endpoint wire inside a `cable` — cable conductors are point-to-point (exactly two endpoints). Keep fan-out rails as loose wires.
 - **Do not** use block comments (`/* */`). Line comments (`//`) only.
 - **Do not** mix grid coordinates with pixel coordinates. View positions are in grid cells.

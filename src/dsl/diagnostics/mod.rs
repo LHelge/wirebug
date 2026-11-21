@@ -675,8 +675,9 @@ pub enum Problem {
         at: SourceSpan,
     },
 
-    /// A cable's or a wire's body uses a key its owner does not take. The
-    /// code keeps its first name, from when only cables had properties.
+    /// A cable's, a wire's or a component's body uses a key its owner does
+    /// not take. The code keeps its first name, from when only cables had
+    /// properties.
     #[error("unknown {owner} property `{key}`")]
     #[diagnostic(
         code(wirebug::unknown_cable_property),
@@ -691,7 +692,8 @@ pub enum Problem {
         at: SourceSpan,
     },
 
-    /// A cable's or a wire's body sets the same key twice.
+    /// A cable's, a wire's or a component's body sets the same key twice
+    /// (for a component split with `extend`, two fragments in one file).
     #[error("duplicate {owner} property `{key}`")]
     #[diagnostic(code(wirebug::duplicate_cable_property))]
     DuplicateProperty {
@@ -705,7 +707,28 @@ pub enum Problem {
         first: SourceSpan,
     },
 
-    /// A cable or wire property's value is the wrong kind (e.g.
+    /// A component split with `extend` sets a property in one file that a
+    /// fragment in another file already set. The same code as any repeated
+    /// key; the first setting is a related note, since one diagnostic
+    /// carries one source file.
+    #[error("duplicate component property `{key}`")]
+    #[diagnostic(
+        code(wirebug::duplicate_cable_property),
+        help(
+            "a component split with `extend` sets each property once, in its `component` or in one `extend`"
+        )
+    )]
+    DuplicateFragmentProperty {
+        key: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("set again here")]
+        at: SourceSpan,
+        #[related]
+        first: [FirstProperty; 1],
+    },
+
+    /// A cable, wire or component property's value is the wrong kind (e.g.
     /// `length: "x"`).
     #[error("{owner} property `{key}` expects {expected}")]
     #[diagnostic(code(wirebug::cable_property_type))]
@@ -1001,12 +1024,29 @@ pub struct FirstViewTitle {
     pub at: SourceSpan,
 }
 
+/// The fragment that first set a component property, attached to
+/// [`Problem::DuplicateFragmentProperty`] as a related note: the two
+/// fragments are in different files.
+#[derive(Debug, Error, Diagnostic)]
+#[error("component property `{key}` first set here")]
+#[diagnostic(severity(Advice))]
+pub struct FirstProperty {
+    pub key: String,
+    #[source_code]
+    pub src: NamedSource<String>,
+    #[label("first set here")]
+    pub at: SourceSpan,
+}
+
 /// What a `key: value;` property body belongs to: it decides the keys the
 /// body takes, and the property problems name it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PropertyOwner {
     Cable,
     Wire,
+    /// A component type's part data, the `key: value;` lines among its
+    /// members.
+    Component,
 }
 
 /// The kind of value a property key takes.
@@ -1031,6 +1071,14 @@ impl PropertyOwner {
                 ("length", PropertyKind::Length),
                 ("type", PropertyKind::Str),
                 ("part", PropertyKind::Str),
+            ],
+            // What a bill of materials lists a component by. All free text:
+            // a rating mixes units ("500 A", "12 V 2 W").
+            PropertyOwner::Component => &[
+                ("part", PropertyKind::Str),
+                ("manufacturer", PropertyKind::Str),
+                ("description", PropertyKind::Str),
+                ("rating", PropertyKind::Str),
             ],
         }
     }
@@ -1064,6 +1112,7 @@ impl std::fmt::Display for PropertyOwner {
         f.write_str(match self {
             PropertyOwner::Cable => "cable",
             PropertyOwner::Wire => "wire",
+            PropertyOwner::Component => "component",
         })
     }
 }
@@ -1160,6 +1209,7 @@ impl Problem {
             | Problem::DuplicateEndpoint { .. }
             | Problem::UnknownProperty { .. }
             | Problem::DuplicateProperty { .. }
+            | Problem::DuplicateFragmentProperty { .. }
             | Problem::PropertyType { .. }
             | Problem::InvalidGauge { .. }
             | Problem::InvalidLength { .. }

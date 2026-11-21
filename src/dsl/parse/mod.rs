@@ -162,6 +162,16 @@ enum CableItem {
     Member(CableMember),
 }
 
+/// What follows `<name>:` in a component body: a type and an optional
+/// label (an instance), or a value (a part-data property).
+enum NamedTail {
+    Instance {
+        type_name: Spanned<Ident>,
+        label: Option<Spanned<String>>,
+    },
+    Value(PropertyValue),
+}
+
 /// One top-level file entry, parsed in source order and folded into
 /// [`File::uses`] plus [`File::items`].
 enum FileEntry {
@@ -773,18 +783,40 @@ where
         })
         .boxed();
 
-    // --- Instances ---
+    // --- Instances and part data ---
 
-    let instance = leading_name(Token::Colon)
+    // A component-body statement that starts `<name>:`. A type name after
+    // the colon makes it an instance (`pack: Battery "Pack";`, and
+    // `part: Plug;` is an instance named `part`); a string or a number
+    // makes it a part-data property of the type (`part: "…";`), its key
+    // checked in validate. One production for both, so the name is read
+    // once and a broken instance fails where it did before.
+    let named_member = leading_name(Token::Colon)
         .then_ignore(just(Token::Colon))
-        .then(ident.clone())
-        .then(string.or_not())
+        .then(choice((
+            ident
+                .clone()
+                .then(string.or_not())
+                .map(|(type_name, label)| NamedTail::Instance { type_name, label }),
+            choice((
+                string.map(PropertyValue::Str),
+                number.map(PropertyValue::Number),
+            ))
+            .map(NamedTail::Value),
+        )))
         .then_ignore(just(Token::Semicolon))
-        .map_with(|((name, type_name), label), e| Instance {
-            type_name,
-            name,
-            label,
-            span: e.span(),
+        .map_with(|(name, tail), e| match tail {
+            NamedTail::Instance { type_name, label } => Member::Instance(Instance {
+                type_name,
+                name,
+                label,
+                span: e.span(),
+            }),
+            NamedTail::Value(value) => Member::Property(Property {
+                key: name,
+                value,
+                span: e.span(),
+            }),
         })
         .boxed();
 
@@ -1076,7 +1108,7 @@ where
             wire.map(Member::Wire),
             cable.map(Member::Cable),
             definition.map(Member::Definition),
-            instance.map(Member::Instance),
+            named_member,
         ));
         let head = choice((
             just(Token::Component).to(DefKind::Component),
@@ -1764,6 +1796,113 @@ inverter_control = face 47@(1, 0) large 21@(5, 0) 13@(16, 3)
             b.label.as_ref().map(|l| l.node.as_str()),
             Some("Front Battery")
         );
+    }
+
+    #[test]
+    fn component_part_data_parses_beside_its_members() {
+        let file = parse_ok(
+            r#"component Contactor {
+                part:         "EV200AAANA";
+                manufacturer: "TE Connectivity";
+                pub port a "A";
+                rating:       "500 A";
+                coil: Coil;
+            }"#,
+        );
+        let Item::Definition(def) = &file.items[0] else {
+            panic!("expected the component");
+        };
+        let properties: Vec<String> = def
+            .properties()
+            .map(|p| match &p.value {
+                PropertyValue::Str(s) => format!("{}={:?}", p.key.node, s.node),
+                other => panic!("expected a string, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            properties,
+            [
+                r#"part="EV200AAANA""#,
+                r#"manufacturer="TE Connectivity""#,
+                r#"rating="500 A""#
+            ]
+        );
+        assert!(matches!(members(&file)[2], Member::Port(_)));
+        assert!(matches!(members(&file)[4], Member::Instance(_)));
+    }
+
+    #[test]
+    fn a_name_after_the_colon_is_an_instance_and_a_value_a_property() {
+        // `part: Plug;` places a `Plug` named `part`; only a string or a
+        // number after the colon makes part data.
+        let file = parse_ok(
+            r#"component c { part: Plug; part: Plug "Label"; part: "P-1"; rating: 500; }"#,
+        );
+        let shapes: Vec<String> = members(&file)
+            .iter()
+            .map(|m| match m {
+                Member::Instance(i) => format!(
+                    "instance {}: {} {:?}",
+                    i.name.node,
+                    i.type_name.node,
+                    i.label.as_ref().map(|l| l.node.as_str())
+                ),
+                Member::Property(p) => match &p.value {
+                    PropertyValue::Str(s) => format!("property {}={:?}", p.key.node, s.node),
+                    PropertyValue::Number(n) => format!("property {}={}", p.key.node, n.node),
+                    PropertyValue::Ident(i) => format!("property {}={}", p.key.node, i.node),
+                },
+                other => panic!("unexpected member {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            shapes,
+            [
+                "instance part: Plug None",
+                r#"instance part: Plug Some("Label")"#,
+                r#"property part="P-1""#,
+                "property rating=500",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_broken_part_data_line_is_reported_alone_and_skipped() {
+        let src = r#"component c {
+                part: "P-1" "extra";
+                manufacturer "TE";
+                pub port ok "OK";
+            }"#;
+        assert_eq!(
+            errors_at(src),
+            [
+                "\"extra\": found '\"extra\"' expected ';'",
+                "\"TE\": found '\"TE\"' expected ':'"
+            ]
+        );
+        let file = parse_str(src).file.expect("a file");
+        assert!(matches!(members(&file), [Member::Port(_)]));
+    }
+
+    #[test]
+    fn a_broken_instance_fails_where_it_did_before_part_data() {
+        // The value branch must not move or widen the errors of an
+        // instance that does not parse.
+        let report: Vec<String> = [
+            "component C { l: ; }",
+            "component C { l Lamp; }",
+            r#"component C { l: Lamp "L" extra; }"#,
+            "component C { l: Lamp",
+        ]
+        .iter()
+        .flat_map(|src| errors_at(src))
+        .collect();
+        insta::assert_snapshot!(report.join("\n"), @r"
+        ;: found ';' expected something else
+        Lamp: found 'Lamp' expected ':'
+        extra: found 'extra' expected ';'
+        : found end of input expected something else, or ';'
+        ");
     }
 
     #[test]

@@ -1,0 +1,7 @@
+component Fuse {
+    pub port supply "SUPPLY";
+    pub port load   "LOAD";
+
+    part:   "0287010.PXCN";
+    rating: "10 A";
+}
