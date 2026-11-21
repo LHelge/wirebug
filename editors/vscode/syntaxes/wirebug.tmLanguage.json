@@ -7,6 +7,7 @@
     { "include": "#strings" },
     { "include": "#type-declaration" },
     { "include": "#use-import" },
+    { "include": "#fragment-import" },
     { "include": "#view-kind" },
     { "include": "#view-subject" },
     { "include": "#numbering-mode" },
@@ -45,6 +46,13 @@
       "captures": {
         "1": { "name": "keyword.control.import.wirebug" },
         "2": { "name": "entity.name.type.wirebug" }
+      }
+    },
+    "fragment-import": {
+      "comment": "`fragment \"<path>\";` starts a top-level statement. Only there: anywhere else `fragment` is an ordinary name (`pub port fragment \"F\";`, `fragment: Lamp;`).",
+      "match": "^\\s*(fragment)(?=\\s*\")",
+      "captures": {
+        "1": { "name": "keyword.control.import.wirebug" }
       }
     },
     "view-kind": {
