@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use crate::dsl::ast::{self, Item};
 use crate::dsl::diagnostics::{FirstViewTitle, Problem};
-use crate::dsl::ir::{ConnectorName, InstanceName, PortName, Side, ViewKind};
+use crate::dsl::ir::{ConnectorName, InstanceName, PortName, Side, SpliceName, ViewKind};
 use crate::dsl::span::{FileId, Span, Spanned};
 
 use super::{ComponentScope, ConnectorTypeScope, DefId, InlineFacts, Resolver, ViewBinding};
@@ -66,6 +66,7 @@ impl<'a> Resolver<'a> {
             None => problems.push(Problem::UnknownPort {
                 port: port.to_string(),
                 on: format!(" on `{}`", self.defs[tid].name),
+                help: None,
                 src: self.project.source(file),
                 at: span.into(),
             }),
@@ -215,7 +216,7 @@ impl<'a> Resolver<'a> {
         let Some(conn) = &inc.connector else {
             problems.push(Problem::WrongIncludeForm {
                 message: "a harness include must name a connector".to_string(),
-                help: "write `include <instance>.<connector> at (x, y);`".to_string(),
+                help: "write `include <instance>.<connector> at (x, y);`, or `include <splice> at (x, y);` to place one of the subject's splices".to_string(),
                 src: self.project.source(file),
                 at: inc.instance.span.into(),
             });
@@ -294,6 +295,51 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    /// An include naming one of the subject's splices places that joint,
+    /// in a harness view only, and by its name alone: `include <splice> at
+    /// (x, y);`, with no `.connector` and no `ports { }` block.
+    fn check_splice_include(
+        &self,
+        inc: &ast::Include,
+        kind: &ViewKind,
+        file: FileId,
+        problems: &mut Vec<Problem>,
+    ) {
+        let splice = inc.instance.node.as_str();
+        if !kind.is_harness() {
+            let help = if kind.is_schematic() {
+                format!(
+                    "remove this include: a schematic draws the ports splice `{splice}` joins as one connection between them"
+                )
+            } else {
+                "remove this include: a pinout view draws its subject's connectors".to_string()
+            };
+            problems.push(Problem::WrongIncludeForm {
+                message: format!("a splice is placed in harness views, not in a {kind} view"),
+                help,
+                src: self.project.source(file),
+                at: inc.instance.span.into(),
+            });
+            return;
+        }
+        if let Some(segment) = &inc.connector {
+            problems.push(Problem::WrongIncludeForm {
+                message: "a splice include names the splice alone".to_string(),
+                help: format!("write `include {splice} at (x, y);`"),
+                src: self.project.source(file),
+                at: segment.span.into(),
+            });
+        }
+        if let Some(first) = inc.ports.first() {
+            problems.push(Problem::WrongIncludeForm {
+                message: "a splice include places a joint, not selected ports".to_string(),
+                help: "remove the `ports { }` block from this splice include".to_string(),
+                src: self.project.source(file),
+                at: first.span.into(),
+            });
+        }
+    }
+
     /// A pinout include names a connector on the view subject itself:
     /// `include <connector> at (x, y);`. It carries neither an instance
     /// connector segment nor a schematic `ports { }` block.
@@ -366,7 +412,10 @@ impl<'a> Resolver<'a> {
             let is_inline = self
                 .lookup_inline(subject, &InstanceName::from(name))
                 .is_some();
-            let target = if is_inline {
+            let is_splice = self
+                .lookup_splice(subject, &SpliceName::from(name))
+                .is_some();
+            let target = if is_inline || is_splice {
                 Some(name.to_string())
             } else {
                 include_target(inc, is_harness)
@@ -527,11 +576,15 @@ impl<'a> Resolver<'a> {
                     self.check_duplicate_includes(view, s, FileId(fi), &mut problems);
                     let is_harness = view_kind.is_harness();
                     for inc in &view.includes {
+                        let name = inc.instance.node.as_str();
+                        if self.lookup_splice(s, &SpliceName::from(name)).is_some() {
+                            self.check_splice_include(inc, &view_kind, FileId(fi), &mut problems);
+                            continue;
+                        }
                         if view_kind.is_pinout() {
                             self.check_pinout_include(inc, s, FileId(fi), &mut problems);
                             continue;
                         }
-                        let name = inc.instance.node.as_str();
                         match self.lookup_instance(s, &InstanceName::from(name)) {
                             None if is_harness
                                 && let Some(facts) =
@@ -598,6 +651,51 @@ mod tests {
     fn unknown_view_kind_is_reported() {
         let p = problems(&[("main.wb", "component m { } view schemtic \"V\" { }\n")]);
         assert!(has(&p, "wirebug::unknown_view_kind"), "{:?}", codes(&p));
+    }
+
+    /// Every problem code of a component `m` with a splice `sp` (and two
+    /// `leaf`s wired to it), under `view`.
+    fn splice_view(view: &str) -> Vec<String> {
+        codes(&problems(&[(
+            "main.wb",
+            &format!(
+                "component leaf {{ connector j {{ pub port a \"A\" pin 1; }} }}\n\
+                 component m {{ l: leaf; r: leaf; splice sp;\n\
+                 wire red 1 [l.a, sp]; wire red 1 [sp, r.a]; }}\n{view}\n"
+            ),
+        )]))
+    }
+
+    #[test]
+    fn a_harness_view_places_a_splice_by_its_name() {
+        assert!(
+            splice_view(
+                "view harness \"H\" for m { include l.j at (0, 0); include sp at (10, 0); }"
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_splice_include_in_another_form_or_view_kind_is_the_wrong_form() {
+        for view in [
+            "view harness \"H\" for m { include sp.j at (0, 0); }",
+            "view harness \"H\" for m { include sp at (0, 0) ports { west: a; } }",
+            "view schematic \"S\" for m { include sp at (0, 0); }",
+            "view pinout \"P\" for m { include sp at (0, 0); }",
+        ] {
+            assert_eq!(splice_view(view), ["wirebug::wrong_include_form"], "{view}");
+        }
+    }
+
+    #[test]
+    fn a_splice_included_twice_is_a_duplicate_include() {
+        assert_eq!(
+            splice_view(
+                "view harness \"H\" for m { include sp at (0, 0); include sp at (10, 0); }"
+            ),
+            ["wirebug::duplicate_view_include"]
+        );
     }
 
     #[test]

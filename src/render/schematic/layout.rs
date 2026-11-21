@@ -295,7 +295,9 @@ impl Placement {
         let mut connections: Vec<Segment> = Vec::new();
         for wire in &subject.wires {
             for pair in wire.endpoints.windows(2) {
-                let (a, b) = (endpoint_key(&pair[0]), endpoint_key(&pair[1]));
+                let (Some(a), Some(b)) = (endpoint_key(&pair[0]), endpoint_key(&pair[1])) else {
+                    continue;
+                };
                 if side_of.contains_key(&a) && side_of.contains_key(&b) {
                     connections.push(Segment {
                         a,
@@ -617,14 +619,16 @@ fn grow_bounds(bounds: &mut Option<(f64, f64, f64, f64)>, a: Point, b: Point) {
 
 /// A wire endpoint's port key: a child instance's port, or a subject-own port
 /// on the enclosure boundary. Whether the key is actually drawn depends on it
-/// being listed (present in `side_of`); see [`Placement::compute`].
-fn endpoint_key(end: &crate::dsl::ir::WireEnd) -> PortKey {
+/// being listed (present in `side_of`); see [`Placement::compute`]. A splice
+/// has no port in a schematic (`None`), so a segment ending on one drops.
+fn endpoint_key(end: &WireEnd) -> Option<PortKey> {
     match end {
-        crate::dsl::ir::WireEnd::Child { instance, port } => PortKey::Child {
+        WireEnd::Child { instance, port } => Some(PortKey::Child {
             instance: instance.clone(),
             port: port.clone(),
-        },
-        crate::dsl::ir::WireEnd::Own(port) => PortKey::Enclosure(port.clone()),
+        }),
+        WireEnd::Own(port) => Some(PortKey::Enclosure(port.clone())),
+        WireEnd::Splice(_) => None,
     }
 }
 

@@ -1,0 +1,76 @@
+// Splices: three devices' grounds join at one joint in the loom, each on a
+// conductor of its own gauge and color, and the joint runs on to the
+// battery minus on one heavy conductor. A second splice is a butt splice
+// inside a cable: the lamp feed changes gauge on its way. A loose rail
+// stays a rail.
+
+use Ecu     from "components/ecu.wb";
+use Lamp    from "components/lamp.wb";
+use Battery from "components/battery.wb";
+
+component Vehicle {
+    ecu:  Ecu     "ECU";
+    lamp: Lamp    "Lamp";
+    pump: Lamp    "Pump";
+    bat:  Battery "Battery";
+
+    splice sp_gnd "Ground splice" {
+        part:        "D-436-36";
+        description: "Solder sleeve";
+    }
+
+    wire black 1   "GND" [ecu.gnd, sp_gnd];
+    wire black 0.5 "GND" [lamp.gnd, sp_gnd];
+    wire brown 0.5 "GND" [pump.gnd, sp_gnd];
+    wire black 2.5 "GND" [sp_gnd, bat.neg];
+
+    splice sp_feed;
+
+    cable feed "Lamp feed" {
+        length: 1.2;
+        wire red 1.5 "12V" [bat.pos, sp_feed];
+        wire red 0.5 "12V" [sp_feed, lamp.pos];
+    }
+
+    wire white 0.5 "WAKE" [ecu.wake, lamp.wake, pump.wake];
+}
+
+view harness "Ground loom" {
+    include ecu.x1  at (0, 0);
+    include lamp.x1 at (0, 12);
+    include pump.x1 at (0, 24);
+    include sp_gnd  at (20, 12);
+    include bat.x1  at (40, 12);
+}
+
+view harness "Lamp feed" {
+    include bat.x1  at (0, 0);
+    include sp_feed at (20, 0);
+    include lamp.x1 at (40, 0);
+}
+
+view harness "Wake" {
+    include ecu.x1  at (0, 0);
+    include lamp.x1 at (24, -8);
+    include pump.x1 at (24, 8);
+}
+
+view schematic "Grounds" {
+    grid: 20;
+
+    include ecu at (4, 4) ports {
+        east: gnd;
+    }
+
+    include lamp at (4, 14) ports {
+        east: gnd, pos;
+    }
+
+    include pump at (4, 24) ports {
+        east: gnd;
+    }
+
+    include bat at (30, 14) ports {
+        west: neg, pos;
+    }
+}

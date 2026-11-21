@@ -1,0 +1,5 @@
+[project]
+name = "splice-errors-project"
+version = "0.1.0"
+description = "Splice fixture: each splice wrong in one way"
+revision = "fixture"

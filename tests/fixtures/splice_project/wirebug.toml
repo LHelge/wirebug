@@ -1,0 +1,5 @@
+[project]
+name = "splice-project"
+version = "0.1.0"
+description = "Splice fixture: a ground splice and a butt splice, each conductor to them its own wire"
+revision = "fixture"

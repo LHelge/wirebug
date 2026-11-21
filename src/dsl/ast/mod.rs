@@ -203,6 +203,14 @@ impl Definition {
             _ => None,
         })
     }
+
+    /// The type's `splice` members, in source order.
+    pub fn splices(&self) -> impl Iterator<Item = &Splice> {
+        self.members.iter().filter_map(|m| match m {
+            Member::Splice(s) => Some(s),
+            _ => None,
+        })
+    }
 }
 
 /// One entry inside a component body.
@@ -215,6 +223,8 @@ pub enum Member {
     Instance(Instance),
     Wire(Wire),
     Cable(Cable),
+    /// A joint inside the component that conductors end on.
+    Splice(Splice),
     /// A part-data line of the type (`part: "…";`): a `<name>:` followed
     /// by a value, where an instance has a type name. Keys and value kinds
     /// are checked in validate.
@@ -233,6 +243,7 @@ impl Member {
             Member::Instance(i) => i.span,
             Member::Wire(w) => w.span,
             Member::Cable(c) => c.span,
+            Member::Splice(s) => s.span,
             Member::Property(p) => p.span,
             Member::Definition(d) => d.span,
         }
@@ -352,12 +363,29 @@ pub struct Wire {
     pub span: Span,
 }
 
-/// `inst.port` or bare `port` (the enclosing component's own port).
+/// `inst.port`, or a bare name: the enclosing component's own port or one
+/// of its splices (resolve tells which; they share one namespace).
 #[derive(Debug, Clone)]
 pub struct Endpoint {
-    /// `None` for a bare reference to the enclosing component's own port.
+    /// `None` for a bare reference to the enclosing component's own port or
+    /// splice.
     pub instance: Option<Spanned<Ident>>,
     pub port: Spanned<Ident>,
+    pub span: Span,
+}
+
+/// `splice <name> ["<label>"];`, or the same with a `{ <property>* }` body
+/// in place of the `;` — a named joint inside a component (a crimp or
+/// solder splice in a harness) that conductors end on: a wire endpoint
+/// naming it bare, like an own port, ends on the joint. Its body's keys
+/// (`part`, `description`) are checked in validate, as a cable's are.
+#[derive(Debug, Clone)]
+pub struct Splice {
+    pub name: Spanned<Ident>,
+    pub label: Option<Spanned<String>>,
+    /// The `key: value;` lines of the optional body. Empty when the splice
+    /// has no body.
+    pub properties: Vec<Property>,
     pub span: Span,
 }
 
@@ -401,13 +429,18 @@ impl Cable {
     /// shields' (the cable's own, then each twisted pair's): the
     /// references that resolve against the enclosing component.
     pub fn endpoints(&self) -> impl Iterator<Item = &Endpoint> {
-        let shields = self
-            .shields
-            .iter()
-            .chain(self.twisted_groups().flat_map(|t| &t.shields));
         self.wires()
             .flat_map(|w| &w.endpoints)
-            .chain(shields.flat_map(|s| &s.ends))
+            .chain(self.shield_ends())
+    }
+
+    /// The ends of the cable's shields, the cable's own and then each
+    /// twisted pair's: the pins their drains land on.
+    pub fn shield_ends(&self) -> impl Iterator<Item = &Endpoint> {
+        self.shields
+            .iter()
+            .chain(self.twisted_groups().flat_map(|t| &t.shields))
+            .flat_map(|s| &s.ends)
     }
 }
 

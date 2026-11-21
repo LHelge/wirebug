@@ -1,0 +1,7 @@
+component Lamp {
+    connector x1 "Lamp 3p" {
+        pub port pos  "12V"  pin 1;
+        pub port gnd  "GND"  pin 2;
+        pub port wake "WAKE" pin 3;
+    }
+}

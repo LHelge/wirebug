@@ -523,6 +523,76 @@ fn check_reports_each_wrong_shield_where_it_is_written() {
     assert!(messages.contains(&"shield lists endpoint `pump.gnd` twice"));
 }
 
+const SPLICE_ERRORS_ROOT: &str = "tests/fixtures/splice_errors_project";
+
+#[test]
+fn check_reports_each_wrong_splice_where_it_is_written() {
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--format", "json", SPLICE_ERRORS_ROOT])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+    let main =
+        std::fs::read_to_string(format!("{SPLICE_ERRORS_ROOT}/main.wb")).expect("fixture main.wb");
+
+    /// A problem as (code, severity, the text of every label).
+    type Found<'a> = (&'a str, &'a str, Vec<&'a str>);
+    let found: Vec<Found> = problems
+        .iter()
+        .map(|p| {
+            let labels = p["labels"]
+                .as_array()
+                .expect("labels")
+                .iter()
+                .map(|l| {
+                    let offset = l["span"]["offset"].as_u64().expect("offset") as usize;
+                    let length = l["span"]["length"].as_u64().expect("length") as usize;
+                    &main[offset..offset + length]
+                })
+                .collect();
+            (
+                p["code"].as_str().expect("code"),
+                p["severity"].as_str().expect("severity"),
+                labels,
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        found,
+        [
+            (
+                "wirebug::duplicate_splice_name",
+                "error",
+                vec!["out", "out"]
+            ),
+            ("wirebug::unknown_port", "error", vec!["spp"]),
+            ("wirebug::shield_on_splice", "error", vec!["sp"]),
+            ("wirebug::wrong_include_form", "error", vec!["sp"]),
+            (
+                "wirebug::splice_wire_arity",
+                "error",
+                vec!["wire black 1 [a.y, sp, c.y];"],
+            ),
+            ("wirebug::unknown_cable_property", "error", vec!["colour"]),
+            ("wirebug::splice_joins_nothing", "warning", vec!["once"]),
+        ]
+    );
+    let messages: Vec<&str> = problems
+        .iter()
+        .map(|p| p["message"].as_str().expect("message"))
+        .collect();
+    assert!(messages.contains(&"splice `out` has the same name as a port of `Vehicle`"));
+    assert!(messages.contains(&"a wire to a splice has exactly two ends, found 3"));
+    assert!(messages.contains(&"splice `once` joins nothing: only one conductor ends on it"));
+    assert!(messages.contains(&"unknown splice property `colour`"));
+}
+
 const DUPLICATE_TITLES_ROOT: &str = "tests/fixtures/duplicate_titles_project";
 
 #[test]
@@ -1295,7 +1365,8 @@ fn render_stops_at_check_instead_of_failing_on_an_uninstantiated_subject() {
 }
 
 /// Ports, instances, a connector and a cable named with contextual keywords
-/// (`at`, `from`, `fragment`, `size`, `grid`, `layout`, `text`).
+/// (`at`, `from`, `fragment`, `size`, `grid`, `layout`, `text`, `shield`,
+/// `splice`, `face`).
 const CONTEXTUAL_NAMES_ROOT: &str = "tests/fixtures/contextual_names_project";
 
 #[test]

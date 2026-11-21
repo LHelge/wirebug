@@ -924,6 +924,25 @@ where
         })
         .boxed();
 
+    // `splice <name> ["<label>"];`, or with a `{ <property>* }` body in
+    // place of the `;`: a joint conductors end on. `splice` is contextual,
+    // so `splice: Sensor;` fails here on the colon and reads on as an
+    // instance named `splice` (`named_member`).
+    let splice = just(Token::Splice)
+        .ignore_then(ident.clone())
+        .then(string.or_not())
+        .then(choice((
+            block(property.clone()),
+            just(Token::Semicolon).to(Vec::new()),
+        )))
+        .map_with(|((name, label), properties), e| Splice {
+            name,
+            label,
+            properties,
+            span: e.span(),
+        })
+        .boxed();
+
     // `[<endpoint>, …]`: a wire's endpoints, or the pins a shield's drain
     // lands on.
     let endpoints = endpoint
@@ -1222,6 +1241,7 @@ where
             inline.map(Member::Inline),
             wire.map(Member::Wire),
             cable.map(Member::Cable),
+            splice.map(Member::Splice),
             definition.map(Member::Definition),
             named_member,
         ));
@@ -2106,6 +2126,83 @@ inverter_control = face 47@(1, 0) large 21@(5, 0) 13@(16, 3)
     }
 
     #[test]
+    fn a_splice_is_a_named_member_with_an_optional_label_and_body() {
+        let file = parse_ok(
+            r#"component c {
+                splice sp_gnd "Ground splice";
+                splice bare;
+                splice crimped { part: "BSC-2.5"; description: "Butt splice"; }
+                wire black 2.5 [ecu.gnd, sp_gnd];
+            }"#,
+        );
+        let [
+            Member::Splice(labelled),
+            Member::Splice(bare),
+            Member::Splice(crimped),
+            Member::Wire(wire),
+        ] = members(&file)
+        else {
+            panic!("expected three splices and a wire");
+        };
+        assert_eq!(labelled.name.node.as_str(), "sp_gnd");
+        assert_eq!(
+            labelled.label.as_ref().map(|l| l.node.as_str()),
+            Some("Ground splice")
+        );
+        assert!(labelled.properties.is_empty());
+        assert!(bare.label.is_none() && bare.properties.is_empty());
+        let keys: Vec<&str> = crimped
+            .properties
+            .iter()
+            .map(|p| p.key.node.as_str())
+            .collect();
+        assert_eq!(keys, ["part", "description"]);
+        // A conductor ends on the splice by its bare name, like an own port.
+        let ends: Vec<(Option<&str>, &str)> = wire
+            .endpoints
+            .iter()
+            .map(|ep| {
+                (
+                    ep.instance.as_ref().map(|i| i.node.as_str()),
+                    ep.port.node.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(ends, [(Some("ecu"), "gnd"), (None, "sp_gnd")]);
+    }
+
+    #[test]
+    fn splice_is_a_name_where_a_name_belongs() {
+        let file = parse_ok(
+            r#"component c {
+                pub port splice "SPLICE";
+                splice: Lamp;
+                splice splice;
+                wire red 1 [splice.splice, splice];
+            }"#,
+        );
+        let [
+            Member::Port(port),
+            Member::Instance(inst),
+            Member::Splice(splice),
+            Member::Wire(wire),
+        ] = members(&file)
+        else {
+            panic!("expected a port, an instance, a splice and a wire");
+        };
+        assert_eq!(port.name.node.as_str(), "splice");
+        assert_eq!(inst.name.node.as_str(), "splice");
+        assert_eq!(splice.name.node.as_str(), "splice");
+        assert_eq!(wire.endpoints.len(), 2);
+    }
+
+    #[test]
+    fn a_semicolon_after_a_splice_body_is_a_parse_error() {
+        let parsed = parse_str(r#"component c { splice sp { part: "x"; }; }"#);
+        assert!(!parsed.errors.is_empty());
+    }
+
+    #[test]
     fn a_statement_after_a_wire_body_cut_short_reports_its_own_error() {
         // `length: ;` fails on its own `;`; the next line is the author's
         // next property, not that line's tail.
@@ -2768,11 +2865,11 @@ use Relay from "relay.wb";
         ];
         let report: Vec<String> = cases.iter().flat_map(|src| errors_at(src)).collect();
         insta::assert_snapshot!(report.join("\n"), @r"
-        view: found 'view' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'component', 'extend', something else, or '}'
-        use: found 'use' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'component', 'extend', something else, or '}'
-        connector_type: found 'connector_type' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'component', 'extend', something else, or '}'
-        twisted: found 'twisted' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'component', 'extend', something else, or '}'
-        pin: found 'pin' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'component', 'extend', something else, or '}'
+        view: found 'view' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'splice', 'component', 'extend', something else, or '}'
+        use: found 'use' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'splice', 'component', 'extend', something else, or '}'
+        connector_type: found 'connector_type' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'splice', 'component', 'extend', something else, or '}'
+        twisted: found 'twisted' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'splice', 'component', 'extend', something else, or '}'
+        pin: found 'pin' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'splice', 'component', 'extend', something else, or '}'
         port: found 'port' expected something else, 'shield', 'twisted', 'wire', or '}'
         wire: found 'wire' expected 'layout', something else, or '}'
         cable: found 'cable' expected something else, 'pub', 'port', or '}'
@@ -2897,7 +2994,7 @@ view schematic "V" {
         .collect::<Vec<_>>();
         insta::assert_snapshot!(report.join("\n"), @r#"
         ;: found ';' expected something else | "x": found '"x"' expected something else
-        ;: found ';' expected something else | pin: found 'pin' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'component', 'extend', something else, or '}'
+        ;: found ';' expected something else | pin: found 'pin' expected 'pub', 'port', 'connector', 'inline', 'wire', 'cable', 'splice', 'component', 'extend', something else, or '}'
         pin: found 'pin' expected something else | Lamp: found 'Lamp' expected ':'
         "#);
     }

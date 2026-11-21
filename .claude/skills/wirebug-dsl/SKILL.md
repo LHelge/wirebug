@@ -1,6 +1,6 @@
 ---
 name: wirebug-dsl
-description: Use this skill whenever editing, creating, reviewing, or discussing wirebug DSL files (.wb extension) — a text-defined electrical schematic and wiring harness language for the Aphid EV project. Covers component definitions, type/instance separation, ports (pub vs private), connector groupings, multi-endpoint wires, hierarchical composition, imports between files, views, and grid-based layout. Trigger whenever the user mentions wirebug, .wb files, components, schematics, harnesses, EV wiring, or is designing electrical systems in text. Trigger whenever a .wb file is open, being edited, or referenced.
+description: Use this skill whenever editing, creating, reviewing, or discussing wirebug DSL files (.wb extension) — a text-defined electrical schematic and wiring harness language for the Aphid EV project. Covers component definitions, type/instance separation, ports (pub vs private), connector groupings, multi-endpoint wires, splices, hierarchical composition, imports between files, views, and grid-based layout. Trigger whenever the user mentions wirebug, .wb files, components, schematics, harnesses, EV wiring, or is designing electrical systems in text. Trigger whenever a .wb file is open, being edited, or referenced.
 ---
 
 # wirebug DSL
@@ -454,7 +454,7 @@ wire <color>[/<tracer>] <gauge_mm2> ["<label>"] [<endpoint>, <endpoint>, ...] { 
 - `color` — bare identifier from the IEC 60757 vocabulary: `black`, `brown`, `red`, `orange`, `yellow`, `green`, `blue`, `violet`, `grey`, `white`, `pink`, `turquoise`, `gold`, `silver` (synonyms `purple` and `gray` normalise to `violet`/`grey`). Any other name still renders verbatim but raises a `check` warning (fatal under `--strict`). A two-tone (tracer/striped) wire writes base and tracer separated by a slash — `green/yellow` — and draws as the base colour with a dashed tracer overlay; colour-code annotations join the IEC 60757 codes with a slash (`GN/YE`).
 - `gauge_mm2` — number in mm² (e.g., `50`, `4`, `0.5`, `0.25`). It must be positive: `check` rejects `0` or a negative gauge (`invalid_gauge`).
 - `"<label>"` — optional signal name (e.g., `"HV+"`, `"CAN H"`), shown on the wire in a harness drawing. Omit it when the net name adds nothing.
-- The bracketed list contains two or more endpoints. Each endpoint is `instance.port` or just `port` if referencing the enclosing component's own port (a `pub` port being wired to internals). An endpoint may appear only once per wire: `check` rejects `[ecu.gnd, ecu.gnd]` (`duplicate_endpoint`). Two separate wires ending on the same port are fine — that is a double crimp.
+- The bracketed list contains two or more endpoints. Each endpoint is `instance.port`, or a bare name: the enclosing component's own port (a `pub` port being wired to internals), or one of its splices (see Splices). An endpoint may appear only once per wire: `check` rejects `[ecu.gnd, ecu.gnd]` (`duplicate_endpoint`). Two separate wires ending on the same port are fine — that is a double crimp.
 
 ```
 // two-endpoint wire
@@ -470,7 +470,7 @@ wire orange 50 [pack.hv_pos, inv.dc_pos, charger.hv_pos, conv.hv_pos];
 wire orange 50 [hv_pos, c_main_pos.out];
 ```
 
-Multi-endpoint wires model shared rails (HV power bus, enable signals to parallel coils). The renderer derives junction dots from the topology — don't try to add junction nodes manually.
+Multi-endpoint wires model shared rails (HV power bus, enable signals to parallel coils): where the branches meet is left to the build. When the joint is a physical part of the harness — a crimp or solder splice in the loom, with conductors of different gauges or colors — declare it as a `splice` and run one wire to it from each pin instead (see Splices).
 
 ### Wire properties
 
@@ -580,7 +580,42 @@ shield ["<label>"];                            // lands on no pin: cut back, or 
 
 A cable's wires are still ordinary connections: they show in schematic views like any other wire. The cable grouping adds the harness box and the BOM metadata.
 
-**Cables vs. shared rails.** Use a `cable` for a real bundle of two-pin conductors. Use a loose multi-endpoint `wire` for a bus/rail that branches to many pins. Explicit junction elements are not in the language yet.
+**Cables vs. shared rails.** Use a `cable` for a real bundle of two-pin conductors. Use a loose multi-endpoint `wire` for a bus/rail that branches to many pins, or a `splice` when the branch point is a joint built into the harness (see Splices); a cable conductor may end on a splice.
+
+## Splices
+
+A `splice` is a joint inside a component — a crimp or solder splice in a loom — that conductors end on. It gives the joint an identity (a name, a label, a part), and each conductor to it is an ordinary two-ended wire with its own color, gauge and length:
+
+```
+component Vehicle {
+    ecu:  Ecu  "ECU";
+    lamp: Lamp "Lamp";
+    bat:  Battery "Battery";
+
+    splice sp_gnd "Ground splice" {
+        part:        "D-436-36";
+        description: "Solder sleeve";
+    }
+
+    wire black 1   "GND" [ecu.gnd,  sp_gnd];
+    wire black 0.5 "GND" [lamp.gnd, sp_gnd];
+    wire black 2.5 "GND" [sp_gnd, bat.neg];
+}
+```
+
+```
+splice <name> ["<label>"];
+splice <name> ["<label>"] { part: "<string>"; description: "<string>"; }
+```
+
+- A splice is a member of a component (or `extend`) body. The optional label names it in a drawing; the optional body takes `part:` (the splice's part number) and `description:`, both strings, each once — any other key is `unknown_cable_property`, a repeat `duplicate_cable_property`, a number `cable_property_type`. Like a wire's body, it ends at its `}` with no `;`.
+- A conductor ends on a splice by its **bare name**, where an endpoint goes: `[ecu.gnd, sp_gnd]`. A bare name is either an own port or a splice, so a splice's name must differ from every port, instance, inline connector, connector designator, cable designator and other splice of the component (`duplicate_splice_name`). In a component split with `extend`, a splice is visible to every fragment, like a port.
+- **All conductors ending on one splice are joined.** Any wire may end on one: a loose wire, a cable conductor (a cable's conductor can run from a pin to a splice), or a wire from one splice to another (the two joints are then one net).
+- A wire to a splice has **exactly two ends** (`splice_wire_arity` otherwise): a splice joins point-to-point conductors. A shared rail without a splice stays a loose multi-endpoint wire, valid as ever; the two are for different things.
+- A splice that fewer than two conductors end on joins nothing (`splice_joins_nothing`, a warning, fatal under `--strict`). Two is fine: a butt splice, for a gauge or color change.
+- A shield's drain lands on a pin, never on a splice (`shield_on_splice`).
+- A bare endpoint that is neither a port nor a splice is `unknown_port`, its help saying a bare name may be either.
+- `splice` is a keyword only at the start of a statement in a component body, followed by a name; anywhere else it is an ordinary name (`pub port splice "S";`, an instance `splice: Sensor;`, an endpoint `ecu.splice`).
 
 ## Views
 
@@ -727,7 +762,7 @@ Views live in the same file as the component they primarily document — like un
 Keywords come in two kinds. Words are case-sensitive, so `Layout` or `Wire` is never a keyword.
 
 - **Reserved** — the words that declare the design: `use`, `component`, `extend`, `connector_type`, `connector`, `inline`, `port`, `pub`, `pin`, `pins`, `wire`, `cable`, `twisted`, `view`. They can never name anything; `pub port wire "W";` is an error, `'wire' is a reserved word`. Pick another name (`wire_1`, `w`).
-- **Contextual** — words that mean something only inside a view (or after its title), a `connector_type` layout, a cavity line, a `use` line, at the start of a top-level statement, or at the start of a statement in a cable body or a `twisted { }` group: `from`, `fragment`, `shield`, `for`, `include`, `text`, `at`, `grid`, `enclosure`, `ports`, `layout`, `face`, `cavity`, `rows`, `cols`, `numbering`, `size`. Anywhere a name belongs they are ordinary names, so `pub port size "SIZE";`, `pub port for "FOR";`, an instance `grid: Sensor;`, `connector layout: Plug { … }`, `cable text { … }` and `include at at (1, 2);` are all valid, and so are `pub port fragment "F";`, an instance `fragment: Lamp;`, `pub port shield "SHIELD";` and an endpoint `ecu.shield`.
+- **Contextual** — words that mean something only inside a view (or after its title), a `connector_type` layout, a cavity line, a `use` line, at the start of a top-level statement, at the start of a statement in a cable body or a `twisted { }` group, or at the start of a statement in a component body followed by a name: `from`, `fragment`, `shield`, `splice`, `for`, `include`, `text`, `at`, `grid`, `enclosure`, `ports`, `layout`, `face`, `cavity`, `rows`, `cols`, `numbering`, `size`. Anywhere a name belongs they are ordinary names, so `pub port size "SIZE";`, `pub port for "FOR";`, an instance `grid: Sensor;`, `connector layout: Plug { … }`, `cable text { … }` and `include at at (1, 2);` are all valid, and so are `pub port fragment "F";`, an instance `fragment: Lamp;`, `pub port shield "SHIELD";`, an endpoint `ecu.shield`, `pub port splice "SPLICE";` and an instance `splice: Sensor;`.
 
 Other words the grammar reads in one place only (`schematic`, `harness`, `pinout`, `type`, `length`, `part`, `manufacturer`, `description`, `rating`, `male`, `female`, `north`, `east`, `south`, `west`, the wire colors, the numbering modes, `large`) are not keywords at all.
 
@@ -775,7 +810,7 @@ wire orange 50 [pack.hv_neg, inv.dc_neg, charger.hv_neg, conv.hv_neg];
 - **Do not** pull a file of `extend`s in with `use Vehicle from "x.wb";` in new code: write `fragment "x.wb";`. (The `use` spelling still works.)
 - **Do not** reference unexposed (non-`pub`) ports of nested components from outside. Private is private.
 - **Do not** introduce new keywords or option fields that aren't documented in this skill or already used in the project's `.wb` files. If something is awkward to express, raise it with the user rather than inventing syntax.
-- **Do not** add junction nodes by hand — multi-endpoint wires imply junctions automatically.
+- **Do not** invent junction nodes: a rail is a multi-endpoint wire, and a physical joint is a `splice` with one two-ended wire to it per pin. Do not list a splice among more than two endpoints, or name one as a shield end.
 - **Do not** put `pub` on an inline connector's ports, include both halves of one inline in a single harness view, or include an inline in a schematic view.
 - **Do not** write a `;` after a wire's property body (`[a, b] { length: 1; }`, not `{ … };`), or put `part` on a cable — it is a per-wire key.
 - **Do not** put a space between a length and its unit (`150mm`, not `150 mm`), or a unit on any number but a `length` (a gauge is `1.5`, not `1.5mm`).
