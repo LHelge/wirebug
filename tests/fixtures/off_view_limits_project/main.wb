@@ -11,6 +11,8 @@ component Vehicle {
     b:     Bank;
     gone:  Sink;
     dev:   Device;
+    c:     Quad;
+    d:     Quad;
 
     pub port feed "FEED";
 
@@ -48,6 +50,13 @@ component Vehicle {
     // An own port the enclosed view does not place on its enclosure.
     wire green 0.5 [dev.q, feed];
 
+    // Neighbours: `c.p0` and `c.p2` run straight across to `d` and on to
+    // `gone`; `c.p1` and `c.p3` have no wire at all.
+    wire red  0.5 [c.p0, d.p0];
+    wire blue 0.5 [c.p0, gone.p0];
+    wire red  0.5 [c.p2, d.p2];
+    wire blue 0.5 [c.p2, gone.p2];
+
     component Module {
         pub port sig "SIG";
         pub port out "OUT";
@@ -81,6 +90,12 @@ component Vehicle {
         pub port p7 "P7";
         pub port q7 "Q7";
     }
+    component Quad {
+        pub port p0 "P0";
+        pub port p1 "P1";
+        pub port p2 "P2";
+        pub port p3 "P3";
+    }
     component Device {
         pub port q "Q";
     }
@@ -111,5 +126,35 @@ view schematic "Enclosed" {
     }
     include dev at (0, 0) ports {
         east: q;
+    }
+}
+
+view schematic "Neighbours, grid 15" {
+    grid: 15;
+    include c at (0, 0) ports {
+        east: p0, p1, p2, p3;
+    }
+    include d at (30, 0) ports {
+        west: p0, p1, p2, p3;
+    }
+}
+
+view schematic "Neighbours, grid 10" {
+    grid: 10;
+    include c at (0, 0) ports {
+        east: p0, p1, p2, p3;
+    }
+    include d at (30, 0) ports {
+        west: p0, p1, p2, p3;
+    }
+}
+
+view schematic "Neighbours, grid 7.5" {
+    grid: 7.5;
+    include c at (0, 0) ports {
+        east: p0, p1, p2, p3;
+    }
+    include d at (30, 0) ports {
+        west: p0, p1, p2, p3;
     }
 }

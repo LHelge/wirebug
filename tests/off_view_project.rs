@@ -228,3 +228,29 @@ fn an_own_port_off_the_enclosure_keeps_its_mark_past_the_outline() {
         )]
     );
 }
+
+#[test]
+fn a_reference_beside_its_wire_stays_with_its_own_port() {
+    // `c.p0` and `c.p2` run straight across to `d` and on to `gone`;
+    // `c.p1` and `c.p3` have no wire. Their texts go beside the drawn
+    // wire, at the end of a leader, only while that keeps them nearer
+    // their own port than the unwired one below: in full at the default
+    // grid, an arrow at grid 10, and not at all at the finest grid.
+    let views = limits();
+    let at = |grid: &str| references(&view(&views, &format!("Neighbours, grid {grid}")));
+    assert_eq!(
+        at("15"),
+        [
+            reference("c.p0", "→ gone.p0", "gone.p0"),
+            reference("c.p2", "→ gone.p2", "gone.p2")
+        ]
+    );
+    assert_eq!(
+        at("10"),
+        [
+            reference("c.p0", "→", "gone.p0"),
+            reference("c.p2", "→", "gone.p2")
+        ]
+    );
+    assert!(at("7.5").is_empty());
+}
