@@ -2,10 +2,10 @@
 id: kss
 title: "Harden `check`: catch real mistakes before render"
 type: epic
-status: open
+status: done
 priority: P1
 created: "2026-11-20T21:40:31.964595699Z"
-updated: "2026-11-20T21:40:31.964595699Z"
+updated: "2026-11-21T01:35:29.477958534Z"
 ---
 
 ## Scope
