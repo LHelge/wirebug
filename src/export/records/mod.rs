@@ -2,7 +2,7 @@
 //! `render --embed` writes beside its manifest.
 //!
 //! Each table is turned into dedicated record types, built from the typed
-//! models ([`WireList`], [`PinTables`]) and owned by this module, so the
+//! models ([`WireList`], [`PinTables`], [`Bom`]) and owned by this module, so the
 //! models and the IR stay free of serialisation. A table's CSV is the
 //! flattening of the same records its JSON nests, one CSV row per record
 //! (per cavity entry, for the pin tables), so the two formats carry the
@@ -16,15 +16,17 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use super::{PinTables, WireList};
+use super::{Bom, PinTables, WireList};
 use crate::dsl::ir::{Design, Pin};
 use crate::dsl::manifest::Manifest;
 use crate::error::{Error, Result};
 
+mod bom;
 mod connectors;
 mod ends;
 mod wires;
 
+use bom::BomSheet;
 use connectors::ConnectorSheet;
 use wires::WireSheet;
 
@@ -40,11 +42,13 @@ pub enum Table {
     Wires,
     /// The connector pin tables (crimp sheet): one row per cavity entry.
     Connectors,
+    /// The bill of materials: one row per thing to buy, with its quantity.
+    Bom,
 }
 
 impl Table {
     /// Every table, in the order `render --embed` writes them.
-    pub const ALL: [Self; 2] = [Self::Wires, Self::Connectors];
+    pub const ALL: [Self; 3] = [Self::Wires, Self::Connectors, Self::Bom];
 
     /// The table's name: its `export` subcommand, its JSON `table` field
     /// and the stem of its file name.
@@ -52,6 +56,7 @@ impl Table {
         match self {
             Self::Wires => "wires",
             Self::Connectors => "connectors",
+            Self::Bom => "bom",
         }
     }
 
@@ -65,6 +70,7 @@ impl Table {
         match self {
             Self::Wires => "wire-list",
             Self::Connectors => "pin-table",
+            Self::Bom => "BOM",
         }
     }
 }
@@ -126,6 +132,7 @@ impl Export {
                 project,
                 format,
             ),
+            Table::Bom => Self::of(&BomSheet::from(&Bom::from(design)), project, format),
         }
     }
 

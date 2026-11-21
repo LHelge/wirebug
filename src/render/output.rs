@@ -371,6 +371,7 @@ mod tests {
         assert_eq!(
             entries,
             [
+                "bom.json",
                 "connectors.json",
                 "detail.svg",
                 "manifest.json",
@@ -397,7 +398,7 @@ mod tests {
             .collect();
         assert_eq!(titles, ["Overview", "Detail"]);
         // Each table the manifest names is written beside it, as JSON.
-        for table in ["wires", "connectors"] {
+        for table in ["wires", "connectors", "bom"] {
             let filename = manifest["exports"][table].as_str().expect("named");
             let document: serde_json::Value =
                 serde_json::from_str(&fs::read_to_string(out.join(filename)).expect("written"))
