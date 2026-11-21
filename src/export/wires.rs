@@ -231,7 +231,7 @@ pub enum End<'d> {
 
 impl<'d> End<'d> {
     /// `end`, written in `owner`'s body, resolved against the design.
-    fn of(design: &'d Design, owner: &'d Instance, end: &'d WireEnd) -> Self {
+    pub(super) fn of(design: &'d Design, owner: &'d Instance, end: &'d WireEnd) -> Self {
         let resolved = match end {
             WireEnd::Own(port) => owner.ports.get(port).map(|port| {
                 Self::Boundary(PortEnd {
