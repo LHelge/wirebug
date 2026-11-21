@@ -79,7 +79,7 @@ What works today:
 
 In transition / not yet:
 
-- Object-avoiding harness routing (the harness renderer flexes beziers, no obstacle avoidance yet)
+- Object-avoiding harness routing (the harness renderer flexes beziers with no general obstacle avoidance; a loose wire that would pass behind a cable box runs in a lane of its own)
 - A rendered BOM view (the BOM is an export table, not a drawing)
 - View composition / `extends`
 - Unconnected-port linting, theming, auto-layout
