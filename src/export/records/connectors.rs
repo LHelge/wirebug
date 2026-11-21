@@ -317,7 +317,8 @@ impl Sheet for ConnectorSheet {
     ];
 
     /// One row per entry of each cavity, then of each port without a pin;
-    /// one row, of kind `empty`, for a cavity or port with none.
+    /// one row, of kind `empty`, for a cavity or port with none, and for a
+    /// connector with neither.
     fn csv_rows(&self) -> Vec<Vec<String>> {
         let mut rows = Vec::new();
         for table in &self.connectors {
@@ -349,6 +350,11 @@ impl Sheet for ConnectorSheet {
             }
             for unpinned in &table.unpinned {
                 push(lead(None, &[], Some(&unpinned.port)), &unpinned.entries);
+            }
+            // A connector with no cavity and no port is still a table, as in
+            // the JSON: one `empty` row with no pin and no port.
+            if table.cavities.is_empty() && table.unpinned.is_empty() {
+                push(lead(None, &[], None), &[]);
             }
         }
         rows
@@ -706,6 +712,32 @@ mod tests {
             of(&rows, "Car.ic", "female", &names),
             strings(&[&["", "Branch", "1", "L-A", "undetermined"]])
         );
+    }
+
+    #[test]
+    fn a_connector_with_no_cavity_and_no_port_is_one_empty_row() {
+        let design = design(
+            LIB,
+            &format!(
+                "{USES}component Car {{ a: Ecu;\n\
+                 connector x2 \"Empty\" {{ }}\n\
+                 port feed \"FEED\"; }}\n"
+            ),
+        );
+        let (_, rows) = csv_rows(&design, Table::Connectors);
+        let names = ["connector", "housing_description", "pin", "port", "entry"];
+        assert_eq!(
+            of(&rows, "Car", "", &names),
+            strings(&[&["x2", "Empty", "", "", "empty"]])
+        );
+        let document = json(&design, Table::Connectors);
+        let empty = document["connectors"]
+            .as_array()
+            .expect("connectors")
+            .iter()
+            .find(|t| t["instance"] == "Car")
+            .expect("the root's connector");
+        assert_eq!(empty["cavities"], serde_json::json!([]));
     }
 
     #[test]

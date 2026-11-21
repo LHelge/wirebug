@@ -321,7 +321,7 @@ An end, in either table, is eight columns after its prefix (`from`, `to`, `far`)
 
 A `length` on a wire with more than two ends is the length of the whole rail, so summing `length_m` gives the copper to cut, each rail counted once.
 
-**`wirebug export connectors`** — one table per connector of each placed instance, and two per inline connector, its male and female half (a half it does not declare is a table too, with no `housing_type`, described by the inline's label, as the BOM lists it); within it, one row per conductor or drain crimped into each cavity (two for a double crimp), a cavity in pin order with nothing in it as one row of entry `empty` (so unused pins are listed), and then each port of the connector that has no pin assigned yet, with an empty `pin`:
+**`wirebug export connectors`** — one table per connector of each placed instance, and two per inline connector, its male and female half (a half it does not declare is a table too, with no `housing_type`, described by the inline's label, as the BOM lists it); within it, one row per conductor or drain crimped into each cavity (two for a double crimp), a cavity in pin order with nothing in it as one row of entry `empty` (so unused pins are listed), and then each port of the connector that has no pin assigned yet, with an empty `pin`; a connector with no cavity and no port at all is one `empty` row with no `pin` and no `port`, so every table the JSON lists is in the CSV too:
 
 | Column | Holds |
 |---|---|
