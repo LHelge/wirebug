@@ -1688,4 +1688,72 @@ view schematic "T" {
         assert_eq!(vb.x, west.origin.x - PIN_CANVAS_PAD);
         assert_eq!(vb.x + vb.width, ecu.origin.x + ecu.width + SVG_MARGIN);
     }
+
+    #[test]
+    fn a_single_connector_side_turns_when_a_bare_text_would_reach_the_next_port() {
+        // The rule is the same on every component: `1,2,3` level would run
+        // over the next port's stub at the default pitch, and so would a
+        // two-digit pin on a grid of 10, so their sides turn; a side of
+        // single digits stays level.
+        let design = design_from(
+            r#"
+component sys {
+    lamp: Lamp;
+    component Lamp {
+        connector x1 "Lamp 8p" {
+            pub port a "A" pins [1, 2, 3];
+            pub port b "B" pin 4;
+            pub port c "C" pin 10;
+            pub port d "D" pin 11;
+            pub port e "E" pin 5;
+            pub port f "F" pin 6;
+        }
+    }
+}
+"#,
+        );
+        let subject = design.get(&design.root).unwrap();
+        let view = view_of(
+            "sys",
+            &[(
+                "lamp",
+                0.0,
+                0.0,
+                &[
+                    ("a", Side::North),
+                    ("b", Side::North),
+                    ("c", Side::South),
+                    ("d", Side::South),
+                    ("e", Side::West),
+                    ("f", Side::West),
+                ],
+            )],
+        );
+        let turned = |grid: f64| {
+            let placement = Placement::compute(&design, subject, &view, Grid::new(grid)).unwrap();
+            pins_of(&placement)
+        };
+        assert_eq!(
+            turned(15.0),
+            [
+                "e 5 false",
+                "f 6 false",
+                "a 1,2,3 true",
+                "b 4 true",
+                "c 10 false",
+                "d 11 false",
+            ]
+        );
+        assert_eq!(
+            turned(10.0),
+            [
+                "e 5 false",
+                "f 6 false",
+                "a 1,2,3 true",
+                "b 4 true",
+                "c 10 true",
+                "d 11 true",
+            ]
+        );
+    }
 }
