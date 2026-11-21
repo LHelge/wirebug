@@ -575,35 +575,51 @@ port label stays inside the box, the pin annotation beside the stub near
 the box, and the reference beyond both; neighbouring references are a
 pitch apart across the stub and the text is 10px high, so they clear at
 the minimum grid. Where a drawn wire also leaves the port, that wire turns
-at its routing stub's tip, so the reference's stub runs a step past it.
-The text is the most detailed of a ladder that fits: all far ends while
-they fit `MAX_CHARS` (32), then fewer with `+N more`, then `N more`, and
-last the arrow alone; a splice lists what it joins as far as room allows.
-A rung fits when its space is clear of other boxes' keepouts, titles and
-pin annotations, the text boxes, every port and routing stub, the
-enclosure's boundary, and the texts of references placed before it;
-with none fitting, the reference is *cramped*: it shows its arrow alone.
-The canvas (`Placement::viewbox`) keeps each reference's text inside it
-as it does a pin annotation.
+at its routing stub's tip or runs on along it, so the reference's stub
+runs a step past the tip, and its text may go *beside* the stub instead:
+below a west or east stub (the pin annotation is above), left of a north
+one, right of a south one, 12 units off the line so it clears the wire
+running on along it and that wire's code.
 
-The router keeps wires off a reference only when one would run through
-it (`off_view::Settled::new`, which both `render` and `check`'s Layout
-phase call, so they see one routing). The wires are first routed with no
-reference; each reference a routed wire crosses (its stub and text, widened
-by the halo and a wire's casing) is *reserved* — an obstacle to
-`Router::build`, one grid-aligned rectangle from the port (from the stub's
-tip when a drawn wire leaves the port too) to past the text, whole grid
-steps either side of the stub's line — and the wires are routed again,
-until no wire crosses an unreserved reference. A reservation that would
-leave some connection without a path in the visibility graph
-(`Router::connects`) yields: the reference is tried at its arrow alone,
-and else stays unreserved. So reserving never takes a route away: a view
-`check` passes without references it passes with them (its Layout
-problems, `include_too_close` from `Router::blocked_stubs`, which sees only
-the boxes, and `unroutable_wire`, are unchanged), and a view whose wires
-miss its references routes exactly as before. A view that does not route
-reserves nothing. Reservations join the nudging walls too, so a nudged
-channel stays off them.
+References never move a wire, and are fitted after routing
+(`Placement::off_views`, called by `render` and by `check`'s Layout phase
+for the canvas, from the same routed wires and code anchors,
+`draw::code_anchors`). The view is routed exactly as without references;
+then each reference, in port order (boxes in include order, each box's
+ports west, east, north, south in authored order, then the enclosure's),
+is fitted against everything drawn and every reference fitted before it:
+
+- **Stub.** It must not run into a wire of another connection (wires
+  leaving its own port share its first run), another box or its title, a
+  code, a text box or an earlier reference. If it would, it is cut short
+  of the first thing in its way and keeps no text; cut shorter than
+  `MIN_STUB` (past the port's dot), the reference is left out.
+- **Text.** Its ladder runs from the most detailed text within
+  `MAX_CHARS` (32): all far ends, then fewer with `+N more`, then
+  `N more`, then the arrow alone (a splice lists what it joins as far as
+  room allows). The first rung whose text, on the stub's line or else
+  beside it, sits clear of every wire (with its casing), box, title, pin
+  annotation (where it is drawn, moved past a title or not), port label,
+  code, text box and earlier reference is drawn. With none, the stub is
+  drawn alone, with its tooltip.
+- **Canvas.** A rung is taken only if the standalone canvas
+  (`Placement::viewbox`, which holds each reference's stub and text
+  `PIN_CANVAS_PAD` inside it) with it still fits `MAX_CANVAS`, or grows no
+  larger than it was; otherwise a shorter rung, and a stub alone that does
+  not is left out. Every output mode draws the references fitted on the
+  standalone canvas.
+
+The enclosure's outline is a drawn line, not an obstacle: a reference may
+cross it (an own port's `leaves <Subject>` reference reaching out past
+it). Text is measured at 0.7 em a character of the 10px font, wider than
+DejaVu Sans (the font PNG and PDF set it in) sets an identifier, `+N more`
+or the arrow with its space, so a text measured as clear is clear as
+drawn. So `check` is unchanged by construction: `include_too_close`,
+`unroutable_wire` and `overlapping_includes` read boxes and routes that do
+not depend on references, and the canvas rule never takes a view past
+`view_too_large`'s limit that was within it. A stub drawn through its own
+box's title (a north port under it) is what a drawn north wire does too;
+the router does not see titles either.
 
 ### Wire strokes (`render/wire_stroke.rs`)
 
@@ -1481,7 +1497,7 @@ src/
 │   │   │                #   qualified on multi-connector boxes), its
 │   │   │                #   orientation, anchor and extent
 │   │   ├── off_view.rs  # OffView: where a port's undrawn wires go (stub +
-│   │   │                #   text), and Settled: routing reserved round them
+│   │   │                #   text), fitted round what is drawn after routing
 │   │   └── route/       # orthogonal connector routing (paper §4–6)
 │   │       ├── mod.rs       # Router: build OVG once, route_all + nudge
 │   │       ├── geometry.rs  # Rect, Dir
@@ -1620,9 +1636,9 @@ map. Two choices settle the ties a symmetric layout produces:
   channels, and the separation constraints built from them, come in the
   order the routes (in connection order) first reach them; the solver
   breaks equal violations by constraint order.
-- **Off-view reservations** are tried in placement order (boxes in include
-  order, ports in side order, then the enclosure), each round of reserving
-  over the references the last routing crossed.
+- **Off-view references** are fitted in port order (boxes in include
+  order, ports in side order, then the enclosure), each against those
+  before it; they never feed back into routing.
 
 `tests/fixtures/tied_routes_project` holds the mirror-image ties; a
 test renders it repeatedly in one process and a CLI test in several.
