@@ -640,14 +640,23 @@ is `export::records` (below), and the IR is not a wire format.
   private `Groups` collector), so they come in order of first use and no
   hash order reaches the output. `HousingLine` reads `PinTables`, one
   housing per table (`PinTable::housing()`, so each declared half of an
-  inline is one), keyed by part, else connector type, else neither
-  (connector blocks naming no type, one line). `CableLine` reads every
+  inline is one) — except that an inline connector is always two
+  housings: a half it does not declare (the pin tables have no table of
+  it) is added beside the table of the other half, or both beside the one
+  table of an inline declaring none, as an `export::Housing` of no type
+  described by the inline's label. Housings are keyed by part, else
+  connector type, else description (a connector block naming no type),
+  else nothing (one line). `CableLine` reads every
   instance's `cables`, keyed by `CableMeta.type`; its `length()` sums the
   cables' own `length`, not their conductors'. `WireLine` reads the
   `WireList`'s conductor rows in no cable, keyed by colour, gauge (its
   bits), `type` and `part`; its `length()` collects the rows'
   `RowLength`s into an `export::Copper` (`FromIterator<RowLength>`, which
-  `WireList::copper` uses too), so a rail counts once. `ComponentLine`
+  `WireList::copper` uses too), so a rail counts once; its `boundary()`
+  counts the rows with an `End::Boundary` end on a `Contact::Connectorless`
+  port — a wire-through continuation of the parent's conductor, kept in
+  the quantity but flagged (a boundary port on the owner's own connector
+  is a real termination). `ComponentLine`
   reads the instances, keyed by `PartMeta.number`, else by type; the
   root, inline instances and, without a part number, assemblies
   (`Instance::is_assembly`: children and no port or connector of its own)
@@ -679,8 +688,9 @@ is `export::records` (below), and the IR is not a wire format.
   `length_m` is `WireList::copper()`. Twisted pairs are numbered from 1
   (the IR's `twisted_group` + 1). The columns are a public interface and
   are listed in README's "Exporting build tables"; a change to one's
-  name, place or meaning raises `FORMAT_VERSION`; a new table does not
-  (adding the BOM left it at 1). A new table is a new `Table` variant, a
+  name, place or meaning raises `FORMAT_VERSION` once the table has been
+  released; a new table does not (adding the BOM left it at 1), and nor
+  did the BOM's `boundary` column, added before the table was released. A new table is a new `Table` variant, a
   `Sheet` impl and an `EmbedExports` field.
 
 ## DSL validation (`check`)

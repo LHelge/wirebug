@@ -74,7 +74,8 @@ redesign each when it lands.
 - Port re-export aliases (`pub port x "X" = inner.port;` — a pure boundary
   mapping with no wire). Decided against for now (2026-06): the wire-through
   pattern stays; revisit when a BOM view makes invented color/gauge on
-  zero-length boundary wires actually hurt.
+  zero-length boundary wires actually hurt — the BOM export now counts
+  these wires and flags them (its `boundary` column).
 
 ## Coding practices
 
