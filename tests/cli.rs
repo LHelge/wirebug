@@ -1046,6 +1046,81 @@ view schematic "M" { include l at (0, 0); }
         .success();
 }
 
+/// `main.wb` merges `traction.wb` in with the older spelling,
+/// `use Vehicle from "traction.wb";`.
+const USE_AS_MERGE_TRIGGER_ROOT: &str = "tests/fixtures/split_project";
+
+#[test]
+fn check_strict_accepts_use_as_a_merge_trigger() {
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--strict", USE_AS_MERGE_TRIGGER_ROOT])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("warning").not());
+}
+
+/// `main.wb` pulls its fragments in with `fragment "<path>";`.
+const FRAGMENT_ROOT: &str = "tests/fixtures/fragment_project";
+
+#[test]
+fn check_strict_accepts_fragment_lines() {
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--strict", FRAGMENT_ROOT])
+        .assert()
+        .success();
+}
+
+#[test]
+fn check_reports_a_missing_unused_or_repeated_fragment() {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(
+        tmp.path().join("wirebug.toml"),
+        "[project]\nname = \"t\"\nversion = \"0.0.0\"\n",
+    )
+    .expect("write wirebug.toml");
+    std::fs::write(tmp.path().join("lamp.wb"), "component Lamp { }\n").expect("write lamp.wb");
+    std::fs::write(
+        tmp.path().join("hv.wb"),
+        "extend Root { pub port hv \"HV\"; }\n",
+    )
+    .expect("write hv.wb");
+    std::fs::write(
+        tmp.path().join("main.wb"),
+        "fragment \"nope.wb\";\nfragment \"lamp.wb\";\nfragment \"hv.wb\";\nfragment \"hv.wb\";\ncomponent Root { }\n",
+    )
+    .expect("write main.wb");
+
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--format", "json", tmp.path().to_str().unwrap()])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+    let found: Vec<(&str, &str)> = problems
+        .iter()
+        .map(|p| {
+            (
+                p["code"].as_str().expect("code"),
+                p["severity"].as_str().expect("severity"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        found,
+        [
+            ("wirebug::use_not_found", "error"),
+            ("wirebug::unused_fragment", "warning"),
+            ("wirebug::duplicate_fragment", "warning"),
+        ]
+    );
+}
+
 #[test]
 fn check_rejects_an_undeclared_inline_half() {
     let tmp = tempdir().expect("tempdir");
@@ -1143,7 +1218,7 @@ fn render_stops_at_check_instead_of_failing_on_an_uninstantiated_subject() {
 }
 
 /// Ports, instances, a connector and a cable named with contextual keywords
-/// (`at`, `from`, `size`, `grid`, `layout`, `text`).
+/// (`at`, `from`, `fragment`, `size`, `grid`, `layout`, `text`).
 const CONTEXTUAL_NAMES_ROOT: &str = "tests/fixtures/contextual_names_project";
 
 #[test]

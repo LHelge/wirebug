@@ -37,13 +37,14 @@ my-ev/
 
 Conventions the `examples/` project follows: every instance is declared in exactly one fragment (the system the device belongs to); cross-system wires live in the fragment owning the *signal* (interlock wires in `safety.wb`, 12V and grounds in `lv.wb`); a single-system point-to-point cable stays in its system file, a multi-system bundle lives in its loom file; views sit in the file whose subject they document (component detail views beside the component, system views in the system fragment, harness views in the loom).
 
-Filesystem layout is for human navigation only. **A component's logical position in the hierarchy is determined entirely by `use` statements and nesting in the DSL**, not by what directory the file lives in. Moving a `.wb` file to a different folder must never change the model — the only thing that matters is which paths the `use` statements resolve to.
+Filesystem layout is for human navigation only. **A component's logical position in the hierarchy is determined entirely by `use` and `fragment` statements and nesting in the DSL**, not by what directory the file lives in. Moving a `.wb` file to a different folder must never change the model — the only thing that matters is which paths the `use` and `fragment` statements resolve to.
 
 ## File contents
 
 A `.wb` file contains zero or more of, in any order:
 
 - `use` declarations (imports from other files)
+- `fragment` statements (files pulled in for their `extend`s and views)
 - `component` definitions (type definitions, which may nest other definitions)
 - `view` declarations (rendering targets)
 
@@ -66,6 +67,19 @@ If multiple imports come from the same file, repeat the statement (no list form 
 use CellModule from "components/cell_module.wb";
 use Contactor  from "components/contactor.wb";
 ```
+
+### Pulling in a file (`fragment`)
+
+```
+fragment "systems/traction.wb";
+```
+
+A `fragment` statement loads a file into the project **without importing any name**. The path is relative to the file that names it, as in a `use`. It is the statement for a file of `extend` fragments and views (see Splitting a component across files): each top-level `extend` in that file merges into the component of the same name in this file's scope, and its views render. A component the pulled-in file defines is *not* in scope here — to instantiate it, `use` it by name.
+
+- A file loads once however many `use` and `fragment` lines name it, so naming one file in both is fine, and so is a cycle.
+- A missing file is `use_not_found`, labelled on the path.
+- A `fragment` of a file that adds nothing — no view, and no `extend` of a component in this file's scope — warns (`unused_fragment`, fatal under `--strict`): a stale line.
+- Two `fragment` lines in one file naming the same file warn (`duplicate_fragment`); remove the repeat.
 
 ## Component definitions
 
@@ -131,12 +145,12 @@ A `<name>:` line is part data only when a **string or number** follows the colon
 
 A large top-level component — the vehicle root, say — can be authored across
 several files. One file introduces it with `component`; others add to it with
-`extend`. `main.wb` pulls the fragments in with ordinary `use` statements:
+`extend`. `main.wb` pulls the fragments in with `fragment` statements:
 
 ```
 // main.wb
-use Vehicle from "traction.wb";
-use Vehicle from "charging.wb";
+fragment "traction.wb";
+fragment "charging.wb";
 use Battery from "components/battery.wb";
 
 component Vehicle {
@@ -160,10 +174,16 @@ Rules:
 - The fragments merge into one component. `component Vehicle` (in `main.wb`) is
   the **root fragment**; each `extend Vehicle` adds members. `main.wb` must
   still declare exactly one top-level `component`.
-- A `use Vehicle from "traction.wb"` both loads the file and triggers the
-  merge (a same-name collision with `extend` on either side merges instead of
-  erroring). Without `extend`, two same-named `component`s are still a
-  duplicate-type error.
+- `fragment "traction.wb";` loads the file, and its `extend Vehicle` merges
+  into the `Vehicle` in `main.wb`'s scope. A file of fragments may pull in
+  further fragment files the same way, as long as it has the component in its
+  own scope (its own `extend Vehicle` counts).
+- `use Vehicle from "traction.wb";` is the older spelling of the same: it
+  loads the file and triggers the merge (a same-name collision with `extend`
+  on either side merges instead of erroring). It keeps working, with no
+  warning; prefer `fragment` in new files, since it says what it does.
+  Without `extend`, two same-named `component`s are still a duplicate-type
+  error.
 - Each fragment carries its **own** `use` imports for the types it
   instantiates (`traction.wb` imports `Inverter` itself).
 - The merged component is **one flat namespace**: a wire or view in any
@@ -673,7 +693,7 @@ Views live in the same file as the component they primarily document — like un
 Keywords come in two kinds. Words are case-sensitive, so `Layout` or `Wire` is never a keyword.
 
 - **Reserved** — the words that declare the design: `use`, `component`, `extend`, `connector_type`, `connector`, `inline`, `port`, `pub`, `pin`, `pins`, `wire`, `cable`, `twisted`, `view`. They can never name anything; `pub port wire "W";` is an error, `'wire' is a reserved word`. Pick another name (`wire_1`, `w`).
-- **Contextual** — words that mean something only inside a view (or after its title), a `connector_type` layout, a cavity line or a `use` line: `from`, `for`, `include`, `text`, `at`, `grid`, `enclosure`, `ports`, `layout`, `face`, `cavity`, `rows`, `cols`, `numbering`, `size`. Anywhere a name belongs they are ordinary names, so `pub port size "SIZE";`, `pub port for "FOR";`, an instance `grid: Sensor;`, `connector layout: Plug { … }`, `cable text { … }` and `include at at (1, 2);` are all valid.
+- **Contextual** — words that mean something only inside a view (or after its title), a `connector_type` layout, a cavity line, a `use` line or at the start of a top-level statement: `from`, `fragment`, `for`, `include`, `text`, `at`, `grid`, `enclosure`, `ports`, `layout`, `face`, `cavity`, `rows`, `cols`, `numbering`, `size`. Anywhere a name belongs they are ordinary names, so `pub port size "SIZE";`, `pub port for "FOR";`, an instance `grid: Sensor;`, `connector layout: Plug { … }`, `cable text { … }` and `include at at (1, 2);` are all valid, and so are `pub port fragment "F";` and an instance `fragment: Lamp;`.
 
 Other words the grammar reads in one place only (`schematic`, `harness`, `pinout`, `type`, `length`, `part`, `manufacturer`, `description`, `rating`, `male`, `female`, `north`, `east`, `south`, `west`, the wire colors, the numbering modes, `large`) are not keywords at all.
 
@@ -717,7 +737,8 @@ wire orange 50 [pack.hv_neg, inv.dc_neg, charger.hv_neg, conv.hv_neg];
 
 - **Do not** include wires in views. They're derived from the model; you control which show by listing their ports.
 - **Do not** expect a port to appear in a view unless you list it in that include's `ports` block. Listing is the scope.
-- **Do not** rely on filesystem structure for hierarchy. Only `use` and nesting matter.
+- **Do not** rely on filesystem structure for hierarchy. Only `use`, `fragment` and nesting matter.
+- **Do not** pull a file of `extend`s in with `use Vehicle from "x.wb";` in new code: write `fragment "x.wb";`. (The `use` spelling still works.)
 - **Do not** reference unexposed (non-`pub`) ports of nested components from outside. Private is private.
 - **Do not** introduce new keywords or option fields that aren't documented in this skill or already used in the project's `.wb` files. If something is awkward to express, raise it with the user rather than inventing syntax.
 - **Do not** add junction nodes by hand — multi-endpoint wires imply junctions automatically.

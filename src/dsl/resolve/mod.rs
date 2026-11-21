@@ -244,7 +244,11 @@ pub(super) mod testkit {
         )
         .expect("write wirebug.toml");
         for (name, body) in files {
-            std::fs::write(dir.path().join(name), body).expect("write");
+            let path = dir.path().join(name);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("create dirs");
+            }
+            std::fs::write(path, body).expect("write");
         }
         let (project, mut problems) = load(&dir.path().join("main.wb"));
         let project = project.expect("loads");
@@ -289,7 +293,11 @@ pub(super) mod testkit {
         )
         .expect("write wirebug.toml");
         for (name, body) in files {
-            std::fs::write(dir.path().join(name), body).expect("write");
+            let path = dir.path().join(name);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).expect("create dirs");
+            }
+            std::fs::write(path, body).expect("write");
         }
         let (project, load_problems) = load(&dir.path().join("main.wb"));
         assert!(load_problems.is_empty(), "load: {load_problems:?}");

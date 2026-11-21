@@ -13,6 +13,7 @@ pub enum Token {
     // Keywords.
     Use,
     From,
+    Fragment,
     Component,
     Extend,
     ConnectorType,
@@ -74,9 +75,10 @@ pub enum Token {
 
 /// Every keyword with its surface text: the lexer's lookup table and the
 /// keywords' [`Display`](fmt::Display) form, so the two cannot drift.
-pub(super) static KEYWORDS: [(&str, Token); 29] = [
+pub(super) static KEYWORDS: [(&str, Token); 30] = [
     ("use", Token::Use),
     ("from", Token::From),
+    ("fragment", Token::Fragment),
     ("component", Token::Component),
     ("extend", Token::Extend),
     ("connector_type", Token::ConnectorType),
@@ -125,8 +127,9 @@ impl Token {
     }
 
     /// A contextual keyword: one that means something only inside a view,
-    /// a `connector_type` layout, a cavity line, after `use <Name>`, or
-    /// after a view's title (`for <Component>`).
+    /// a `connector_type` layout, a cavity line, after `use <Name>`, after
+    /// a view's title (`for <Component>`), or at the start of a top-level
+    /// statement (`fragment "<path>";`).
     /// Where the grammar expects a name, it is an ordinary name
     /// (`pub port size "SIZE";`), so the word stays free for users.
     ///
@@ -137,6 +140,7 @@ impl Token {
         matches!(
             self,
             Token::From
+                | Token::Fragment
                 | Token::For
                 | Token::Include
                 | Token::Text

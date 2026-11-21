@@ -62,7 +62,7 @@ What works today:
 
 - The `.wb` DSL front end, end to end via `wirebug check`:
   - a lexer and [`chumsky`](https://github.com/zesterer/chumsky) parser for the DSL;
-  - multi-file projects — discover `wirebug.toml`, load `main.wb`, and resolve `use` imports transitively;
+  - multi-file projects — discover `wirebug.toml`, load `main.wb`, and follow `use` and `fragment` imports transitively;
   - name resolution (types, instances, ports, view includes);
   - elaboration of the type/instance hierarchy into a flat, addressable IR;
   - validation (undefined names, duplicates, private-port access, containment cycles, …);
@@ -158,7 +158,9 @@ version.)
 
 **View** — a rendering target that documents a component: a kind (`schematic`, `harness`, or `pinout`), a grid, and what to place where. A `schematic` include lists the ports to show on each side; a `harness` include names a child instance's connector and draws its whole pin table; a `pinout` include names one of the subject component's own connectors and draws its cavity face. Wires are derived from the model, never listed in views — a wire draws only between ports/connectors both views include. A view documents its file's single top-level component unless it names one after its title — `view pinout "Sensor pinout" for Sensor { … }` — so a file defining several components gives each of its views a `for` (`view_subject` otherwise); `for` takes a component the file defines or imports. A view is drawn against an instance of the component it documents, so that component must be instantiated somewhere in the design (`uninstantiated_view_subject` otherwise). A schematic view may also carry free-text notes, label first like every other declaration: `text "120 Ω termination" at (8, 4);` centres a boxed label on that grid point. The older named form, `text <name> at (8, 4) "<label>";`, still renders but is deprecated and will be removed: `check` warns about it (`deprecated_text_syntax`) and shows the statement rewritten.
 
-**Project** — a directory rooted at `wirebug.toml`, with `main.wb` beside it as the entry file. The CLI intentionally feels Cargo-like: from inside a project, commands walk up parent directories until they find the manifest; you can also point commands at the project root or at `wirebug.toml` explicitly. Logical hierarchy comes only from `use` imports and DSL nesting, never from directory layout.
+**Fragment** — a large component can be authored across files: one file introduces it with `component Vehicle { … }`, others add to it with `extend Vehicle { … }`, and the fragments merge into one component whose instances and ports every fragment's wires and views may reference. A file pulls a fragment file in with `fragment "systems/traction.wb";`: that loads the file without importing any name, so its `extend`s merge into the components of their names in scope and its views render. (`use Vehicle from "systems/traction.wb";` is the older spelling of the same and keeps working; prefer `fragment`, which says what it does.) `check` warns about a `fragment` of a file that adds nothing — no view and no `extend` to merge (`unused_fragment`) — and about a file pulled in twice from one file (`duplicate_fragment`).
+
+**Project** — a directory rooted at `wirebug.toml`, with `main.wb` beside it as the entry file. The CLI intentionally feels Cargo-like: from inside a project, commands walk up parent directories until they find the manifest; you can also point commands at the project root or at `wirebug.toml` explicitly. Logical hierarchy comes only from `use` and `fragment` imports and DSL nesting, never from directory layout.
 
 ## Project manifest
 

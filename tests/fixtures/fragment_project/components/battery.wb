@@ -1,0 +1,16 @@
+component Battery {
+    component CellPack {
+        pub port hv_pos "HV+";
+        pub port hv_neg "HV-";
+    }
+
+    pack: CellPack "Cells";
+
+    connector hv "HV 2p" {
+        pub port hv_pos "HV+" pin 1;
+        pub port hv_neg "HV-" pin 2;
+    }
+
+    wire orange 50 [hv_pos, pack.hv_pos];
+    wire orange 50 [hv_neg, pack.hv_neg];
+}

@@ -149,7 +149,14 @@ Distinct from clap's `--version`, which prints the wirebug app version.
 
 ## DSL mental model
 
-- **AST** — a faithful parse of one `.wb` file. `Definition` (a component
+- **AST** — a faithful parse of one `.wb` file. A `File` holds its `use`
+  imports (`File.uses`), its `fragment` lines (`File.fragments`, an
+  `ast::Fragment` being just the path) and its items; `File::imports()`
+  lists the `use` and `fragment` lines together in source order, as
+  `ast::Import`s, which is the order the loader follows them in. A path
+  names a file through `Project::import_target` (relative to the naming
+  file's directory, canonicalized), the one lookup resolve and the LSP
+  share. `Definition` (a component
   *type*) holds `Port`/`Connector`/`Instance`/`Wire`/`Property`/nested-
   `Definition` members; `View`s are top-level siblings, each with an
   optional `subject` (the component named by `for` after its title;
@@ -174,7 +181,8 @@ Distinct from clap's `--version`, which prints the wirebug app version.
 - **Resolved registry** — every definition (top-level and nested) keyed by
   `DefId`, with flattened ports (connectors are grouping metadata, not a
   namespace — port names are unique per component), per-file type scopes
-  (own defs + `use` imports), and resolved instance/endpoint/include refs.
+  (own defs + `use` imports; a `fragment` adds no name), and resolved
+  instance/endpoint/include refs.
   Each view is bound to its subject (`ViewBinding.subject`, in
   `resolve/views.rs`): the component its `for` names, looked up in the
   view's file scope (own top-level components and `use` imports, not
@@ -185,12 +193,21 @@ Distinct from clap's `--version`, which prints the wirebug app version.
   several components.
 - **Merge groups (`extend`)** — a top-level component may be authored across
   files: `main.wb` has `component Vehicle { … }`, other files
-  `extend Vehicle { … }`, and `main.wb` pulls each in with the usual
-  `use Vehicle from "traction.wb";`. A same-name collision in a file's scope
+  `extend Vehicle { … }`, and `main.wb` pulls each in with
+  `fragment "traction.wb";`, or the older `use Vehicle from "traction.wb";`,
+  which keeps working unchanged. A same-name collision in a file's scope
   is a *merge* (not the `duplicate_type` error) as soon as either side is an
-  `extend`. `resolve::MergeGroups` records the fragment set with one
-  **canonical** id (the lone root `component`, kept first); `Resolved::
-  fragments(d)` yields a component's fragments (just `[d]` when unmerged).
+  `extend`; that is how the `use` spelling merges. A `fragment` brings no
+  name into the scope: once the file's scope is complete (own definitions,
+  then every `use`, so the lines' order does not matter), `build_scopes`
+  links each top-level `extend` of the named file into the group of the
+  scope entry of its name (`Resolver::merge_fragment`). An `extend` whose
+  component is not in the naming file's scope is not merged by the line, so
+  a file of nothing but `fragment` lines passes nothing on to a file that
+  names it: merging is not transitive, as with `use`.
+  `resolve::MergeGroups` records the fragment set with one **canonical**
+  id (the lone root `component`, kept first); `Resolved::fragments(d)`
+  yields a component's fragments (just `[d]` when unmerged).
   Type resolution stays per-fragment (each carries its own `use` imports), but
   the merged component is one **flat namespace**: endpoints (`check_endpoint`),
   view includes/enclosures (`resolve/views.rs`), and elaboration all consult
@@ -400,7 +417,8 @@ Problems are miette `Diagnostic`s (`dsl::diagnostics::Problem`), collected
 so one run reports many. Errors fail the run; warnings fail only under
 `--strict`. The checks, by phase:
 
-- **Load** — file not found for a `use`; no `wirebug.toml`; IO.
+- **Load** — file not found for a `use` or a `fragment`
+  (`use_not_found`, on the path); no `wirebug.toml`; IO.
 - **Parse/lex** — syntax and lexical errors (with expected-token sets),
   a unit on a number where no length goes (a gauge, a coordinate, a
   `grid:`, a pin, `rows`/`cols`, a `connector_type` property: the bare
@@ -446,8 +464,8 @@ so one run reports many. Errors fail the run; warnings fail only under
   syntax error (`Project.parsed_whole` is false: a hole, a misnested file,
   or a lex error) the problems that report an absence
   (`Problem::reports_an_absence`: unknown or undefined names, unresolved
-  or unused imports, no root, a view of nothing, an empty cable, a port
-  without `pub` — a `;` too early parts `pub ; port a "A";` into a skipped
+  or unused imports and unused fragments, no root, a view of nothing, an
+  empty cable, a port without `pub` — a `;` too early parts `pub ; port a "A";` into a skipped
   `pub` and a private port) are dropped (`Project::drop_parse_cascades`,
   in `dsl::check_loaded`, so for the CLI and the LSP alike), and come
   back once the syntax is fixed. The problems that report something present and wrong (a bad
@@ -482,7 +500,13 @@ so one run reports many. Errors fail the run; warnings fail only under
   A `text` box outside a schematic view is `unsupported_view_text`; two
   boxes of one view sharing a name are `duplicate_view_text` (only the
   deprecated named form has a name to clash).
-  As warnings: a text box in the deprecated named form
+  As warnings: a `fragment` that adds nothing — the file it names has no
+  view, and no top-level `extend` that the line merged (`unused_fragment`,
+  on the path; a stale line, in the spirit of `unused_import`); a second
+  `fragment` in one file naming a file an earlier one did, compared by the
+  loaded file so `./x.wb` repeats `x.wb` (`duplicate_fragment`, on both
+  paths; a `use` of the same file is no repeat, since a file loads once
+  whatever names it); a text box in the deprecated named form
   (`deprecated_text_syntax`, labelled on the statement, its help the
   statement rewritten label first by `ast::TextBox::current_form`); and a
   view title already used by another view anywhere in the
@@ -704,11 +728,12 @@ src/
 │   ├── ast/mod.rs       # spanned AST; refs are unresolved Spanned<Ident>
 │   ├── parse/mod.rs     # chumsky parser over &[(Token, Span)] → ast::File
 │   ├── manifest/        # wirebug.toml loader + git-revision auto-fill
-│   ├── project/mod.rs   # walk-up discovery + transitive `use` loading → Project
+│   ├── project/mod.rs   # walk-up discovery + transitive `use`/`fragment` loading → Project
 │   ├── resolve/         # DefId registry + reference checks, one pass per file
 │   │   ├── mod.rs       # data model (Resolved, *Facts) + the resolve() driver
 │   │   ├── register.rs  # pass 1: AST walk → DefInfo facts, local duplicates
-│   │   ├── scopes.rs    # per-file type scopes (own defs + `use` imports)
+│   │   ├── scopes.rs    # per-file type scopes (own defs + `use` imports),
+│   │   │                #   `fragment` merges, unused/duplicate fragments
 │   │   ├── merge.rs     # MergeGroups: `extend` canonicals, orphans, dup guards
 │   │   ├── refs.rs      # flat-namespace lookups + instance/connector/inline/
 │   │   │                #   endpoint reference binding
@@ -814,7 +839,8 @@ DSL pipeline notes:
 - Keywords are **reserved** or **contextual** (`Token::is_contextual`;
   one `KEYWORDS` table in `lex/token.rs` drives both lexing and display).
   Contextual ones — the view, `connector_type` layout and cavity words,
-  plus `from` and `for` (a view's subject) — mean something only in their
+  plus `from`, `for` (a view's subject) and `fragment` (a top-level
+  statement, where no name can start one) — mean something only in their
   own production; everywhere a
   name belongs they are names. Names go through two boxed productions,
   both taking an identifier or a contextual keyword (`Token::as_name`):
@@ -832,9 +858,10 @@ DSL pipeline notes:
   reserved unless listed as contextual. LSP completion reads names through `Token::as_name` and
   only treats `ports {`/`enclosure {` as their blocks in their own
   position, so a connector named `ports` stays a connector body.
-- Files are loaded once each (by canonical path), so a `use` cycle or a
-  diamond import is harmless and never double-reports. Directory layout
-  never affects logical hierarchy — only `use` paths and DSL nesting do.
+- Files are loaded once each (by canonical path), so an import cycle or a
+  diamond import (`use` and `fragment` alike) is harmless and never
+  double-reports. Directory layout never affects logical hierarchy — only
+  `use` and `fragment` paths and DSL nesting do.
 - Wire endpoints are at most two-part (`inst.port` or bare `port`); the
   deep dotted form is an IR *path*, not surface syntax.
 
