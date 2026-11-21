@@ -158,7 +158,7 @@ enum ViewItem {
 /// [`Cable`]: a property (`type`/`length`), or a conductor entry (a plain
 /// wire or a `twisted { }` group).
 enum CableItem {
-    Property(CableProperty),
+    Property(Property),
     Member(CableMember),
 }
 
@@ -806,7 +806,25 @@ where
             },
         });
 
-    // A color is `base` or two-tone `base/tracer` (`green/yellow`).
+    // A `<key>: <value>;` line of a cable body or a wire body.
+    let property = leading_name(Token::Colon)
+        .then_ignore(just(Token::Colon))
+        .then(choice((
+            string.map(PropertyValue::Str),
+            number.map(PropertyValue::Number),
+            ident.clone().map(PropertyValue::Ident),
+        )))
+        .then_ignore(just(Token::Semicolon))
+        .map_with(|(key, value), e| Property {
+            key,
+            value,
+            span: e.span(),
+        })
+        .boxed();
+
+    // A color is `base` or two-tone `base/tracer` (`green/yellow`). An
+    // optional `{ <property>* }` body ends the wire in place of its `;`,
+    // like an include's `ports { }` block.
     let wire = just(Token::Wire)
         .ignore_then(ident.clone())
         .then(just(Token::Slash).ignore_then(ident.clone()).or_not())
@@ -820,32 +838,24 @@ where
                 .collect::<Vec<_>>()
                 .delimited_by(just(Token::LBracket), just(Token::RBracket)),
         )
-        .then_ignore(just(Token::Semicolon))
-        .map_with(|((((color, tracer), gauge), label), endpoints), e| Wire {
-            color,
-            tracer,
-            gauge,
-            label,
-            endpoints,
-            span: e.span(),
-        })
+        .then(choice((
+            block(property.clone()),
+            just(Token::Semicolon).to(Vec::new()),
+        )))
+        .map_with(
+            |(((((color, tracer), gauge), label), endpoints), properties), e| Wire {
+                color,
+                tracer,
+                gauge,
+                label,
+                endpoints,
+                properties,
+                span: e.span(),
+            },
+        )
         .boxed();
 
     // --- Cables ---
-
-    let cable_property = leading_name(Token::Colon)
-        .then_ignore(just(Token::Colon))
-        .then(choice((
-            string.map(CablePropertyValue::Str),
-            number.map(CablePropertyValue::Number),
-            ident.clone().map(CablePropertyValue::Ident),
-        )))
-        .then_ignore(just(Token::Semicolon))
-        .map_with(|(key, value), e| CableProperty {
-            key,
-            value,
-            span: e.span(),
-        });
 
     // `twisted { <wire> <wire> }` — a twisted pair. Exactly two
     // conductors, converted from the repeated parse by `try_map` so a
@@ -873,10 +883,10 @@ where
     // Properties and conductor entries may interleave in any order; the
     // fold partitions them, each keeping its source order.
     let cable_item = choice((
-        cable_property.map(CableItem::Property),
+        property.map(CableItem::Property),
         twisted_group.map(|t| CableItem::Member(CableMember::Twisted(t))),
         wire.clone()
-            .map(|w| CableItem::Member(CableMember::Wire(w))),
+            .map(|w| CableItem::Member(CableMember::Wire(Box::new(w)))),
     ));
 
     let cable = just(Token::Cable)
@@ -1506,7 +1516,7 @@ inverter_control = face 47@(1, 0) large 21@(5, 0) 13@(16, 3)
         assert_eq!(cable.properties[0].key.node.as_str(), "type");
         assert!(matches!(
             cable.properties[1].value,
-            CablePropertyValue::Number(_)
+            PropertyValue::Number(_)
         ));
         assert_eq!(cable.wires().count(), 2);
     }
@@ -1584,6 +1594,144 @@ inverter_control = face 47@(1, 0) large 21@(5, 0) 13@(16, 3)
         assert!(cable.label.is_none());
         assert!(cable.properties.is_empty());
         assert_eq!(cable.wires().count(), 1);
+    }
+
+    /// Each property of `wire` as `<key>=<value>`.
+    fn wire_properties(wire: &Wire) -> Vec<String> {
+        wire.properties
+            .iter()
+            .map(|p| {
+                let value = match &p.value {
+                    PropertyValue::Str(s) => format!("{:?}", s.node),
+                    PropertyValue::Number(n) => n.node.to_string(),
+                    PropertyValue::Ident(i) => i.node.to_string(),
+                };
+                format!("{}={value}", p.key.node)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn wire_body_carries_properties_in_place_of_the_semicolon() {
+        let file = parse_ok(
+            r#"component c {
+                wire red 0.5 "12V" [a.x, b.y] {
+                    length: 1.2;
+                    type:   "FLRY-B";
+                    part:   "W-123";
+                }
+                wire black 0.5 [a.g, b.g];
+            }"#,
+        );
+        let [Member::Wire(with_body), Member::Wire(without)] = members(&file) else {
+            panic!("expected two wires, got {:?}", members(&file));
+        };
+        assert_eq!(
+            wire_properties(with_body),
+            ["length=1.2", r#"type="FLRY-B""#, r#"part="W-123""#]
+        );
+        assert_eq!(
+            with_body.label.as_ref().map(|l| l.node.as_str()),
+            Some("12V")
+        );
+        assert_eq!(with_body.endpoints.len(), 2);
+        assert!(without.properties.is_empty());
+    }
+
+    #[test]
+    fn an_empty_wire_body_parses() {
+        let file = parse_ok("component c { wire red 1 [a.x, b.y] { } }");
+        let Member::Wire(w) = &members(&file)[0] else {
+            panic!("expected a wire");
+        };
+        assert!(w.properties.is_empty());
+    }
+
+    #[test]
+    fn a_semicolon_after_a_wire_body_is_a_parse_error() {
+        // A brace block ends its statement; no `;` follows the `}`.
+        let parsed = parse_str("component c { wire red 1 [a.x, b.y] { length: 1; }; }");
+        assert_eq!(parsed.errors.len(), 1, "{:?}", parsed.errors);
+    }
+
+    #[test]
+    fn cable_conductors_carry_bodies_inside_and_outside_a_twisted_pair() {
+        let file = parse_ok(
+            r#"component c {
+                cable loom {
+                    length: 2.0;
+                    wire red 1.5 [a.pwr, b.pwr] { length: 2.4; }
+                    twisted {
+                        wire white/blue 0.5 [a.h, b.h] { part: "TP-1"; }
+                        wire white/red 0.5 [a.l, b.l];
+                    }
+                }
+            }"#,
+        );
+        let Member::Cable(cable) = &members(&file)[0] else {
+            panic!("expected a cable");
+        };
+        assert_eq!(cable.properties.len(), 1, "the cable keeps its own length");
+        let bodies: Vec<Vec<String>> = cable.wires().map(wire_properties).collect();
+        assert_eq!(
+            bodies,
+            [
+                vec!["length=2.4".to_string()],
+                vec![r#"part="TP-1""#.to_string()],
+                vec![],
+            ]
+        );
+    }
+
+    #[test]
+    fn a_broken_line_in_a_wire_body_is_reported_alone_and_skipped() {
+        let src = r#"component c {
+                wire red 1 [a.x, b.y] {
+                    length 1.2;
+                    type: "FLRY-B";
+                }
+                pub port ok "OK";
+            }"#;
+        assert_eq!(errors_at(src), ["1.2: found '1.2' expected ':'"]);
+        let parsed = parse_str(src);
+        let file = parsed.file.expect("a file");
+        let Member::Wire(w) = &members(&file)[0] else {
+            panic!("expected the wire");
+        };
+        assert_eq!(wire_properties(w), [r#"type="FLRY-B""#]);
+        assert!(matches!(members(&file)[1], Member::Port(_)));
+    }
+
+    #[test]
+    fn a_broken_line_in_a_twisted_conductor_body_keeps_the_pair() {
+        let src = r#"component c {
+                cable k {
+                    twisted {
+                        wire red 1 [a.x, b.x] { length: ; }
+                        wire blue 1 [a.y, b.y];
+                    }
+                }
+            }"#;
+        assert_eq!(errors_at(src), [";: found ';' expected something else"]);
+        let file = parse_str(src).file.expect("a file");
+        let Member::Cable(cable) = &members(&file)[0] else {
+            panic!("expected the cable");
+        };
+        assert_eq!(cable.wires().count(), 2);
+    }
+
+    #[test]
+    fn a_statement_after_a_wire_body_cut_short_reports_its_own_error() {
+        // `length: ;` fails on its own `;`; the next line is the author's
+        // next property, not that line's tail.
+        let src = "component c {\n    wire red 1 [a.x, b.y] {\n        length: ;\n        type \"x\";\n    }\n}";
+        assert_eq!(
+            errors_at(src),
+            [
+                ";: found ';' expected something else",
+                "\"x\": found '\"x\"' expected ':'"
+            ]
+        );
     }
 
     #[test]

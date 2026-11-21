@@ -1,6 +1,6 @@
 ---
 source: src/dsl/parse/mod.rs
-assertion_line: 1327
+assertion_line: 2210
 expression: file
 ---
 File {
@@ -154,6 +154,7 @@ File {
                                     },
                                 },
                             ],
+                            properties: [],
                             span: Span {
                                 file: FileId(
                                     0,
@@ -195,6 +196,7 @@ File {
                                     },
                                 },
                             ],
+                            properties: [],
                             span: Span {
                                 file: FileId(
                                     0,

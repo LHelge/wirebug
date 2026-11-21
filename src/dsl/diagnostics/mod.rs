@@ -675,13 +675,15 @@ pub enum Problem {
         at: SourceSpan,
     },
 
-    /// A cable property uses a key other than `type` or `length`.
-    #[error("unknown cable property `{key}`")]
+    /// A cable's or a wire's body uses a key its owner does not take. The
+    /// code keeps its first name, from when only cables had properties.
+    #[error("unknown {owner} property `{key}`")]
     #[diagnostic(
         code(wirebug::unknown_cable_property),
-        help("a cable supports `type: \"...\";` and `length: <number>;`")
+        help("a {owner} supports {}", owner.supported())
     )]
-    UnknownCableProperty {
+    UnknownProperty {
+        owner: PropertyOwner,
         key: String,
         #[source_code]
         src: NamedSource<String>,
@@ -689,10 +691,11 @@ pub enum Problem {
         at: SourceSpan,
     },
 
-    /// A cable sets the same property key twice.
-    #[error("duplicate cable property `{key}`")]
+    /// A cable's or a wire's body sets the same key twice.
+    #[error("duplicate {owner} property `{key}`")]
     #[diagnostic(code(wirebug::duplicate_cable_property))]
-    DuplicateCableProperty {
+    DuplicateProperty {
+        owner: PropertyOwner,
         key: String,
         #[source_code]
         src: NamedSource<String>,
@@ -702,13 +705,14 @@ pub enum Problem {
         first: SourceSpan,
     },
 
-    /// A cable property's value is the wrong kind (e.g. `length: "x"`).
-    #[error("cable property `{key}` expects {expected}")]
+    /// A cable or wire property's value is the wrong kind (e.g.
+    /// `length: "x"`).
+    #[error("{owner} property `{key}` expects {expected}")]
     #[diagnostic(code(wirebug::cable_property_type))]
-    CablePropertyType {
+    PropertyType {
+        owner: PropertyOwner,
         key: String,
-        /// e.g. "a number" or "a string".
-        expected: String,
+        expected: PropertyKind,
         #[source_code]
         src: NamedSource<String>,
         #[label("wrong value type")]
@@ -997,6 +1001,93 @@ pub struct FirstViewTitle {
     pub at: SourceSpan,
 }
 
+/// What a `key: value;` property body belongs to: it decides the keys the
+/// body takes, and the property problems name it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PropertyOwner {
+    Cable,
+    Wire,
+}
+
+/// The kind of value a property key takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PropertyKind {
+    /// A quoted string.
+    Str,
+    /// A positive number of metres.
+    Length,
+}
+
+impl PropertyOwner {
+    /// The keys this owner's body takes, with the kind of value each wants,
+    /// in the order the help lists them.
+    pub fn keys(self) -> &'static [(&'static str, PropertyKind)] {
+        match self {
+            PropertyOwner::Cable => &[
+                ("type", PropertyKind::Str),
+                ("length", PropertyKind::Length),
+            ],
+            PropertyOwner::Wire => &[
+                ("length", PropertyKind::Length),
+                ("type", PropertyKind::Str),
+                ("part", PropertyKind::Str),
+            ],
+        }
+    }
+
+    /// The kind of value `key` takes here; `None` for a key this owner does
+    /// not take.
+    pub fn expects(self, key: &str) -> Option<PropertyKind> {
+        self.keys()
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|&(_, kind)| kind)
+    }
+
+    /// The keys as the help lists them: `` `type: "...";` and `length: <number>;` ``.
+    fn supported(self) -> String {
+        let lines: Vec<String> = self
+            .keys()
+            .iter()
+            .map(|(key, kind)| format!("`{key}: {};`", kind.placeholder()))
+            .collect();
+        match lines.split_last() {
+            Some((last, [])) => last.clone(),
+            Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+            None => String::new(),
+        }
+    }
+}
+
+impl std::fmt::Display for PropertyOwner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            PropertyOwner::Cable => "cable",
+            PropertyOwner::Wire => "wire",
+        })
+    }
+}
+
+impl PropertyKind {
+    /// How a value of this kind is written, for the help.
+    fn placeholder(self) -> &'static str {
+        match self {
+            PropertyKind::Str => "\"...\"",
+            PropertyKind::Length => "<number>",
+        }
+    }
+}
+
+/// What the type error says the key expects: "a string", "a number".
+impl std::fmt::Display for PropertyKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            PropertyKind::Str => "a string",
+            PropertyKind::Length => "a number",
+        })
+    }
+}
+
 impl Problem {
     /// True for problems that fail the run (severity error). Warnings
     /// return false unless the caller is running `--strict`.
@@ -1067,9 +1158,9 @@ impl Problem {
             | Problem::DuplicateCableName { .. }
             | Problem::CableWireArity { .. }
             | Problem::DuplicateEndpoint { .. }
-            | Problem::UnknownCableProperty { .. }
-            | Problem::DuplicateCableProperty { .. }
-            | Problem::CablePropertyType { .. }
+            | Problem::UnknownProperty { .. }
+            | Problem::DuplicateProperty { .. }
+            | Problem::PropertyType { .. }
             | Problem::InvalidGauge { .. }
             | Problem::InvalidLength { .. }
             | Problem::WrongIncludeForm { .. }

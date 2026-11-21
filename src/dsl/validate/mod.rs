@@ -6,7 +6,9 @@
 //!
 //! - wire arity (a wire needs at least two endpoints) — an error;
 //! - pin number range (pins are positive integers) — an error;
-//! - wire gauge and cable `length` (both must be positive) — errors;
+//! - the property bodies of cables and wires (known keys, each once, with
+//!   the right kind of value) — errors;
+//! - wire gauge and any `length` (both must be positive) — errors;
 //! - an endpoint repeated within one wire — an error;
 //! - a cable with no conductors — a warning;
 //! - unused imports and pin assignments outside a connector — warnings,
@@ -18,8 +20,8 @@
 
 use std::collections::HashMap;
 
-use crate::dsl::ast::{CablePropertyValue, Member, Port, Wire};
-use crate::dsl::diagnostics::Problem;
+use crate::dsl::ast::{Member, Port, Property, PropertyValue, Wire};
+use crate::dsl::diagnostics::{Problem, PropertyKind, PropertyOwner};
 use crate::dsl::ir::{ColorName, WireEnd};
 use crate::dsl::resolve::Resolved;
 use crate::dsl::span::{FileId, Span, Spanned};
@@ -40,9 +42,7 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
                             at: wire.span.into(),
                         });
                     }
-                    validate_wire_colors(wire, def.file, resolved, &mut problems);
-                    validate_gauge(wire, def.file, resolved, &mut problems);
-                    validate_distinct_endpoints(wire, def.file, resolved, &mut problems);
+                    validate_wire(wire, def.file, resolved, &mut problems);
                 }
                 Member::Port(port) if !port.pins.is_empty() => {
                     validate_pin_numbers(port, def.file, resolved, &mut problems);
@@ -79,47 +79,15 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
                                 at: wire.span.into(),
                             });
                         }
-                        validate_wire_colors(wire, def.file, resolved, &mut problems);
-                        validate_gauge(wire, def.file, resolved, &mut problems);
-                        validate_distinct_endpoints(wire, def.file, resolved, &mut problems);
+                        validate_wire(wire, def.file, resolved, &mut problems);
                     }
-                    let mut seen: HashMap<&str, Span> = HashMap::new();
-                    for p in &cable.properties {
-                        let key = p.key.node.as_str();
-                        if let Some(&first) = seen.get(key) {
-                            problems.push(Problem::DuplicateCableProperty {
-                                key: key.to_string(),
-                                src: src(),
-                                at: p.key.span.into(),
-                                first: first.into(),
-                            });
-                        } else {
-                            seen.insert(key, p.key.span);
-                        }
-                        let wrong = |expected: &str| Problem::CablePropertyType {
-                            key: key.to_string(),
-                            expected: expected.to_string(),
-                            src: src(),
-                            at: p.value.span().into(),
-                        };
-                        match key {
-                            "type" if !matches!(p.value, CablePropertyValue::Str(_)) => {
-                                problems.push(wrong("a string"));
-                            }
-                            "length" => match &p.value {
-                                CablePropertyValue::Number(length) => {
-                                    validate_length(length, def.file, resolved, &mut problems);
-                                }
-                                _ => problems.push(wrong("a number")),
-                            },
-                            "type" => {}
-                            _ => problems.push(Problem::UnknownCableProperty {
-                                key: key.to_string(),
-                                src: src(),
-                                at: p.key.span.into(),
-                            }),
-                        }
-                    }
+                    validate_properties(
+                        PropertyOwner::Cable,
+                        &cable.properties,
+                        def.file,
+                        resolved,
+                        &mut problems,
+                    );
                 }
                 _ => {}
             }
@@ -164,6 +132,70 @@ pub fn validate(resolved: &Resolved) -> Vec<Problem> {
     }
 
     problems
+}
+
+/// The checks every wire takes, loose or a cable's conductor: its colors,
+/// gauge, endpoints and body.
+fn validate_wire(wire: &Wire, file: FileId, resolved: &Resolved, problems: &mut Vec<Problem>) {
+    validate_wire_colors(wire, file, resolved, problems);
+    validate_gauge(wire, file, resolved, problems);
+    validate_distinct_endpoints(wire, file, resolved, problems);
+    validate_properties(
+        PropertyOwner::Wire,
+        &wire.properties,
+        file,
+        resolved,
+        problems,
+    );
+}
+
+/// Check a property body against the keys its `owner` takes: an unknown
+/// key, a key set twice, a value of the wrong kind, and a length that is
+/// not positive are each reported, on the key or the value.
+fn validate_properties(
+    owner: PropertyOwner,
+    properties: &[Property],
+    file: FileId,
+    resolved: &Resolved,
+    problems: &mut Vec<Problem>,
+) {
+    let mut seen: HashMap<&str, Span> = HashMap::new();
+    for p in properties {
+        let key = p.key.node.as_str();
+        if let Some(&first) = seen.get(key) {
+            problems.push(Problem::DuplicateProperty {
+                owner,
+                key: key.to_string(),
+                src: resolved.project.source(file),
+                at: p.key.span.into(),
+                first: first.into(),
+            });
+        } else {
+            seen.insert(key, p.key.span);
+        }
+        let Some(expected) = owner.expects(key) else {
+            problems.push(Problem::UnknownProperty {
+                owner,
+                key: key.to_string(),
+                src: resolved.project.source(file),
+                at: p.key.span.into(),
+            });
+            continue;
+        };
+        match (expected, &p.value) {
+            (PropertyKind::Str, PropertyValue::Str(_)) => {}
+            (PropertyKind::Length, PropertyValue::Number(length)) => {
+                validate_length(length, file, resolved, problems);
+            }
+            _ => problems.push(Problem::PropertyType {
+                owner,
+                key: key.to_string(),
+                expected,
+                src: resolved.project.source(file),
+                at: p.value.span().into(),
+            }),
+        }
+    }
 }
 
 /// Warn on a base or tracer color outside the IEC 60757 set. The wire
@@ -591,6 +623,118 @@ mod tests {
                 .any(|c| c == "wirebug::duplicate_cable_property"),
             "{codes:?}"
         );
+    }
+
+    /// A component with own ports `a` and `b` and one loose wire between
+    /// them, with `body` as the wire's body.
+    fn wire_body(body: &str) -> Vec<String> {
+        validate_files(&[(
+            "main.wb",
+            &format!(
+                "component m {{ pub port a \"A\"; pub port b \"B\"; wire red 1 [a, b] {{ {body} }} }}\n"
+            ),
+        )])
+    }
+
+    #[test]
+    fn wire_body_with_length_type_and_part_is_clean() {
+        let codes = wire_body("length: 1.2; type: \"FLRY-B\"; part: \"W-1\";");
+        assert!(codes.is_empty(), "{codes:?}");
+    }
+
+    #[test]
+    fn unknown_wire_property_reuses_the_cable_property_code() {
+        let codes = wire_body("colour: \"red\";");
+        assert_eq!(codes, ["wirebug::unknown_cable_property"]);
+    }
+
+    #[test]
+    fn duplicate_wire_property_reuses_the_cable_property_code() {
+        let codes = wire_body("part: \"A\"; part: \"B\";");
+        assert_eq!(codes, ["wirebug::duplicate_cable_property"]);
+    }
+
+    #[test]
+    fn wrongly_typed_wire_properties_reuse_the_cable_property_code() {
+        for body in ["length: \"long\";", "type: 5;", "part: abc;"] {
+            assert_eq!(
+                wire_body(body),
+                ["wirebug::cable_property_type"],
+                "body {body:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn non_positive_wire_length_errors() {
+        for length in ["0", "-1.5"] {
+            let codes = wire_body(&format!("length: {length};"));
+            assert_eq!(codes, ["wirebug::invalid_length"], "length {length}");
+        }
+    }
+
+    #[test]
+    fn part_is_a_wire_property_but_not_a_cable_property() {
+        let codes = cable("part: \"C-1\"; wire red 1 [a, b] { part: \"W-1\"; }");
+        assert_eq!(codes, ["wirebug::unknown_cable_property"]);
+    }
+
+    #[test]
+    fn cable_conductor_bodies_are_checked_inside_a_twisted_pair_too() {
+        let codes = cable(
+            "length: 2; wire red 1 [a, b] { length: 3; } \
+             twisted { wire red 1 [a, b] { length: 0; } wire blue 1 [a, c] { lenght: 1; } }",
+        );
+        assert_eq!(
+            codes,
+            ["wirebug::invalid_length", "wirebug::unknown_cable_property"]
+        );
+    }
+
+    #[test]
+    fn wire_property_problems_name_the_wire() {
+        let messages = |src: &str| -> Vec<String> {
+            let dir = tempfile::tempdir().expect("tempdir");
+            std::fs::write(dir.path().join("main.wb"), src).expect("write");
+            let (project, _) = load(&dir.path().join("main.wb"));
+            let resolved = resolve(project.as_ref().expect("loads"));
+            validate(&resolved)
+                .iter()
+                .map(|p| match p.help() {
+                    Some(help) => format!("{p} | {help}"),
+                    None => p.to_string(),
+                })
+                .collect()
+        };
+        let wire = messages(
+            "component m { pub port a \"A\"; pub port b \"B\"; \
+             wire red 1 [a, b] { colour: 1; part: 2; part: \"x\"; } }\n",
+        );
+        insta::assert_snapshot!(wire.join("\n"), @r#"
+        unknown wire property `colour` | a wire supports `length: <number>;`, `type: "...";` and `part: "...";`
+        wire property `part` expects a string
+        duplicate wire property `part`
+        "#);
+        // A cable's wording is unchanged.
+        let cable = messages(
+            "component m { pub port a \"A\"; pub port b \"B\"; \
+             cable k { colour: 1; length: \"x\"; type: \"t\"; type: \"u\"; wire red 1 [a, b]; } }\n",
+        );
+        insta::assert_snapshot!(cable.join("\n"), @r#"
+        unknown cable property `colour` | a cable supports `type: "...";` and `length: <number>;`
+        cable property `length` expects a number
+        duplicate cable property `type`
+        "#);
+    }
+
+    #[test]
+    fn invalid_wire_length_in_a_type_instantiated_twice_reports_once() {
+        let codes = validate_files(&[(
+            "main.wb",
+            "component leaf { pub port a \"A\"; pub port b \"B\"; wire red 1 [a, b] { length: 0; } }\n\
+             component m { l1: leaf; l2: leaf; }\n",
+        )]);
+        assert_eq!(codes, ["wirebug::invalid_length"]);
     }
 
     #[test]

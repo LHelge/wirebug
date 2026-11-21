@@ -1,0 +1,8 @@
+component Ecu {
+    connector x1 "ECU 4p" {
+        pub port pwr "PWR" pin 1;
+        pub port gnd "GND" pin 2;
+        pub port can_h "CAN H" pin 3;
+        pub port can_l "CAN L" pin 4;
+    }
+}

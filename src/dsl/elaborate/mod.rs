@@ -7,7 +7,7 @@
 //! its children. Definitions vanish here; only instances flow to the IR.
 //! A type stack guards against containment cycles.
 
-use crate::dsl::ast::{self, CablePropertyValue, ConnectorPropertyValue, Member};
+use crate::dsl::ast::{self, ConnectorPropertyValue, Member, PropertyValue};
 use crate::dsl::diagnostics::Problem;
 use crate::dsl::ir::{
     CableMeta, CableName, Connector, ConnectorCavity, ConnectorFaceLayout, ConnectorGridLayout,
@@ -440,8 +440,11 @@ fn elaborate_enclosure_port(ep: &ast::EnclosurePort) -> Option<EnclosurePort> {
     })
 }
 
+/// Rewrite an authored wire into the IR. Its body's properties map to typed
+/// fields; unknown keys and wrong value types are reported in `validate`,
+/// and here they are dropped, as for a cable.
 fn rewrite_wire(w: &ast::Wire, cable: Option<CableName>, twisted_group: Option<u32>) -> Wire {
-    Wire {
+    let mut wire = Wire {
         color: WireColor::new(
             w.color.node.as_str(),
             w.tracer.as_ref().map(|t| t.node.as_str()),
@@ -451,8 +454,20 @@ fn rewrite_wire(w: &ast::Wire, cable: Option<CableName>, twisted_group: Option<u
         endpoints: w.endpoints.iter().map(WireEnd::from).collect(),
         cable,
         twisted_group,
+        length: None,
+        r#type: None,
+        part: None,
         span: w.span,
+    };
+    for p in &w.properties {
+        match (p.key.node.as_str(), &p.value) {
+            ("length", PropertyValue::Number(n)) => wire.length = Some(n.node),
+            ("type", PropertyValue::Str(s)) => wire.r#type = Some(s.node.clone()),
+            ("part", PropertyValue::Str(s)) => wire.part = Some(s.node.clone()),
+            _ => {}
+        }
     }
+    wire
 }
 
 /// Map a cable's faithful AST properties to typed [`CableMeta`]. Unknown keys
@@ -465,8 +480,8 @@ fn cable_meta(c: &ast::Cable) -> CableMeta {
     };
     for p in &c.properties {
         match (p.key.node.as_str(), &p.value) {
-            ("type", CablePropertyValue::Str(s)) => meta.r#type = Some(s.node.clone()),
-            ("length", CablePropertyValue::Number(n)) => meta.length = Some(n.node),
+            ("type", PropertyValue::Str(s)) => meta.r#type = Some(s.node.clone()),
+            ("length", PropertyValue::Number(n)) => meta.length = Some(n.node),
             _ => {}
         }
     }
@@ -702,6 +717,69 @@ mod tests {
         assert_eq!(meta.label.as_deref(), Some("Power feed"));
         assert_eq!(meta.r#type.as_deref(), Some("2-core"));
         assert_eq!(meta.length, Some(0.8));
+    }
+
+    #[test]
+    fn wire_body_properties_land_on_the_ir_wire() {
+        let (design, problems) = elaborate_files(&[(
+            "main.wb",
+            "component m {
+                pub port a \"A\"; pub port b \"B\";
+                wire red 0.5 [a, b] { length: 1.2; type: \"FLRY-B\"; part: \"W-1\"; }
+                wire black 0.5 [a, b];
+            }\n",
+        )]);
+        assert!(problems.is_empty(), "{problems:?}");
+        let m = design.unwrap();
+        let root = m.get(&m.root).unwrap();
+        let [with_body, bare] = root.wires.as_slice() else {
+            panic!("expected two wires");
+        };
+        assert_eq!(with_body.length, Some(1.2));
+        assert_eq!(with_body.r#type.as_deref(), Some("FLRY-B"));
+        assert_eq!(with_body.part.as_deref(), Some("W-1"));
+        assert_eq!(
+            (bare.length, bare.r#type.as_deref(), bare.part.as_deref()),
+            (None, None, None)
+        );
+    }
+
+    #[test]
+    fn a_conductor_length_overrides_its_cables() {
+        let (design, problems) = elaborate_files(&[(
+            "main.wb",
+            "component m {
+                pub port a \"A\"; pub port b \"B\"; pub port c \"C\"; pub port d \"D\";
+                wire red 1 [a, b] { length: 0.3; }
+                wire red 1 [c, d];
+                cable feed {
+                    length: 2.0;
+                    wire red 1 [a, c] { length: 2.4; }
+                    twisted {
+                        wire white 0.5 [b, d] { length: 2.1; }
+                        wire white/red 0.5 [b, c];
+                    }
+                }
+                cable spare { wire red 1 [a, d]; }
+            }\n",
+        )]);
+        assert!(problems.is_empty(), "{problems:?}");
+        let m = design.unwrap();
+        let root = m.get(&m.root).unwrap();
+        let lengths: Vec<Option<f64>> = root
+            .wires
+            .iter()
+            .map(|w| root.effective_length(w))
+            .collect();
+        // Loose wires have only their own; a conductor's own wins over its
+        // cable's, a conductor without one takes the cable's, and a cable
+        // without a length leaves its conductors without one.
+        assert_eq!(
+            lengths,
+            [Some(0.3), None, Some(2.4), Some(2.1), Some(2.0), None]
+        );
+        // The cable's own length is untouched by its conductors'.
+        assert_eq!(root.cables[&CableName::from("feed")].length, Some(2.0));
     }
 
     #[test]

@@ -1,0 +1,5 @@
+[project]
+name = "wire-properties-project"
+version = "0.1.0"
+description = "Wire-property fixture: loose wires and cable conductors with property bodies"
+revision = "fixture"

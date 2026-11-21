@@ -176,9 +176,15 @@ Distinct from clap's `--version`, which prints the wirebug app version.
   `Instance.wires` tagged with `Wire.cable = Some(name)`; loose wires are
   `None`. A conductor inside a `twisted { }` group also carries
   `Wire.twisted_group = Some(i)` (numbered per cable in source order), so
-  grouping survives flattening. Every `Wire` keeps its authored `span`
-  (the `wire` statement, inside its cable for a conductor), so a check over
-  the drawings can point back at it. So the schematic renderer ignores cables
+  grouping survives flattening. A wire's optional `{ key: value; }` body
+  (`ast::Wire.properties`, the same `ast::Property` lines a cable body
+  holds) elaborates to typed `Wire.length`/`r#type`/`part`; a conductor's
+  `length` overrides its cable's, and `Instance::effective_length(wire)`
+  answers the one that applies (its own, else its cable's
+  `CableMeta.length`); `CableMeta.length` itself stays the cable's. Every
+  `Wire` keeps its authored `span` (the `wire` statement, inside its
+  cable for a conductor), so a check over the drawings can point back at
+  it. So the schematic renderer ignores cables
   for free, and only the harness renderer reads the tags. Cable
   conductors are 2-endpoint by rule; shared rails stay loose
   multi-endpoint wires.
@@ -354,14 +360,16 @@ so one run reports many. Errors fail the run; warnings fail only under
   that does not exist is also an `unknown_include`).
   A syntax error does not stop the parse either: every `{ … }` block (a
   component body, a view, a connector type, a connector, an inline, a
-  cable, a `ports { }` or `enclosure { }` block) and the file's top level
-  recover per statement (`parse::block`). A statement that does not parse
+  cable, a wire's body, a `ports { }` or `enclosure { }` block) and the
+  file's top level recover per statement (`parse::block`). A statement that does not parse
   gets the error it got before recovery (same span, same expected set,
   the block's `}` included), is skipped up to its `;` or through the
   `{ … }` it opens (never past the `}` that closes its block), and the
   block reads on, so one run reports each broken statement once. The
   fixed-shape bodies (`twisted { }`, `layout grid { }`, `layout face { }`)
-  stay one statement: a mistake inside skips the whole of it. Two guards
+  stay one statement: a mistake inside skips the whole of it (a broken
+  line in the body of a wire inside `twisted { }` is still skipped alone,
+  since the wire body is a block of its own). Two guards
   against one mistake reporting twice: a statement that fails right after
   one that failed on its own `;` is that statement's tail, and is not
   reported, when it goes on where the `;` cut it — on the same line
@@ -429,18 +437,24 @@ so one run reports many. Errors fail the run; warnings fail only under
   and `render` use to find the instance a view is drawn against.
 - **Validate** — wire arity (fewer than two endpoints, error); cable wire
   arity (a cable conductor that isn't exactly two endpoints,
-  `cable_wire_arity`); cable property checks (`unknown_cable_property`,
-  `duplicate_cable_property`, `cable_property_type` — `type` wants a string,
-  `length` a number); non-positive values (`invalid_gauge` on a wire or
-  cable conductor's gauge, `invalid_length` on a cable `length`, both
-  labelled on the number); an endpoint listed twice in one wire or cable
+  `cable_wire_arity`); property checks on a cable body and on any wire's
+  body (`validate_properties`, keyed by `diagnostics::PropertyOwner`, whose
+  `keys()` say what each body takes: a cable `type` and `length`, a wire
+  `length`, `type` and `part`) — an unknown key, a key set twice, a value
+  of the wrong kind (strings for `type`/`part`, a number for `length`).
+  The codes keep the names from when only cables had properties
+  (`unknown_cable_property`, `duplicate_cable_property`,
+  `cable_property_type`); the messages name the owner (`unknown wire
+  property`). Non-positive values (`invalid_gauge` on a wire or cable
+  conductor's gauge, `invalid_length` on a cable's or a wire's `length`,
+  both labelled on the number); an endpoint listed twice in one wire or cable
   conductor (`duplicate_endpoint`, labelled on both occurrences — compared
   as resolved `ir::WireEnd`s, so own port `gnd` and `ecu.gnd` never alias;
   two *different* wires on one port are a deliberate double crimp and are
   not compared). As warnings: a cable with no conductors (`empty_cable`),
   unused import, bare-port pin, and non-IEC 60757 wire color
   (`unknown_wire_color` — the `ir::ColorName::Other` escape hatch still
-  renders verbatim). Cable property/arity/value checks and the endpoint
+  renders verbatim). Property, arity and value checks and the endpoint
   check live here (not elaborate) so a type instantiated many times
   reports each once.
 
@@ -622,7 +636,7 @@ src/
 │   │   └── views.rs     # view subject binding + include/enclosure checks
 │   ├── elaborate/mod.rs # AST/registry → ir::Design; containment-cycle guard
 │   ├── ir/mod.rs        # id newtypes + elaborated Design/Instance/Port/Wire/View
-│   ├── validate/mod.rs  # wire arity, pin/gauge/length values (errors) + --strict warnings
+│   ├── validate/mod.rs  # wire arity, cable/wire properties, pin/gauge/length values (errors) + --strict warnings
 │   └── diagnostics/mod.rs # miette `Problem` enum (one variant per failure class)
 │
 │  # ── ir::Design → SVG renderer ──
