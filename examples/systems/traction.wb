@@ -1,4 +1,4 @@
-// Aphid EV — traction system.
+// Traction system.
 //
 // A `Vehicle` fragment: the battery string, HV junction box, inverter,
 // OBC/DC-DC, and drive motor, plus the HV bus and the motor-phase cable

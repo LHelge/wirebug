@@ -1,4 +1,4 @@
-// Aphid EV — rear lighting loom.
+// Rear lighting loom.
 //
 // The run from the VCM to the three stop lamps. Its stop feed is a shared
 // rail (systems/lighting.wb): one wire, branching to every lamp. The

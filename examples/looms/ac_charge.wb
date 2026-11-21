@@ -1,4 +1,4 @@
-// Aphid EV — AC charge harness (Mitsubishi Outlander OBC).
+// AC charge harness (Mitsubishi Outlander OBC).
 //
 // The mains charge inlet feeds the on-board charger over a 3-lead cable
 // (line, neutral, protective earth). Two pilot signals break out from the

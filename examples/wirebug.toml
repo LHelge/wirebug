@@ -1,5 +1,5 @@
 [project]
-name = "aphid-evpack"
+name = "ev-conversion-example"
 version = "0.1.0"
-description = "Aphid EV conversion — top-level vehicle wiring"
-authors = ["Aphid EV team"]
+description = "Example EV conversion — vehicle wiring"
+authors = ["wirebug contributors"]

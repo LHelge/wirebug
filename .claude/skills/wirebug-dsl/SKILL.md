@@ -1,11 +1,11 @@
 ---
 name: wirebug-dsl
-description: Use this skill whenever editing, creating, reviewing, or discussing wirebug DSL files (.wb extension) — a text-defined electrical schematic and wiring harness language for the Aphid EV project. Covers component definitions, type/instance separation, ports (pub vs private), connector groupings, multi-endpoint wires, splices, hierarchical composition, imports between files, views, and grid-based layout. Trigger whenever the user mentions wirebug, .wb files, components, schematics, harnesses, EV wiring, or is designing electrical systems in text. Trigger whenever a .wb file is open, being edited, or referenced.
+description: Use this skill whenever editing, creating, reviewing, or discussing wirebug DSL files (.wb extension) — a text-defined language for electrical schematics and wiring harnesses. Covers component definitions, type/instance separation, ports (pub vs private), connector groupings, multi-endpoint wires, splices, hierarchical composition, imports between files, views, and grid-based layout. Trigger whenever the user mentions wirebug, .wb files, components, schematics, harnesses, wiring, or is designing electrical systems in text. Trigger whenever a .wb file is open, being edited, or referenced.
 ---
 
 # wirebug DSL
 
-wirebug is a text-defined DSL for describing electrical systems — components, wires, and the views that render them. Source files end in `.wb`. The DSL was designed for the Aphid EV conversion project but the syntax is general-purpose.
+wirebug is a text-defined DSL for describing electrical systems — components, wires, and the views that render them. Source files end in `.wb`. The syntax is general-purpose: any system of connected electrical components, from a single control box to a whole vehicle.
 
 The syntax here is authoritative and matches the implemented parser (`cargo run -- check <project>` validates a project). Avoid inventing syntax that isn't documented here or already present in the project's existing `.wb` files — when in doubt, ask.
 

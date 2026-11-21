@@ -1,4 +1,4 @@
-// Aphid EV — exterior lighting (stop lamps).
+// Exterior lighting (stop lamps).
 //
 // A `Vehicle` fragment owning the brake lights. They are driven directly
 // from the VCM's brake-light output — no relay — so the VCM can light them

@@ -1,4 +1,4 @@
-// Aphid EV conversion — top-level vehicle wiring
+// Example EV conversion — top-level vehicle wiring
 //
 // The Vehicle component is authored as fragments, one file per system:
 // each `systems/*.wb` extends Vehicle with the instances and wires of

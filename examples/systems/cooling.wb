@@ -1,4 +1,4 @@
-// Aphid EV — thermal management (coolant pump + radiator fan).
+// Thermal management (coolant pump + radiator fan).
 //
 // A `Vehicle` fragment owning the cooling devices and their control wiring.
 // The coolant pump is a smart 4-wire unit fed from the EV-12V rail (the

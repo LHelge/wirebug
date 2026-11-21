@@ -1,4 +1,4 @@
-// Aphid EV — safety system: the HV interlock loop.
+// Safety system: the HV interlock loop.
 //
 // A `Vehicle` fragment owning the safety devices (MSD, e-stop) and the
 // interlock chain that threads every HV enclosure. The fuse box sources
