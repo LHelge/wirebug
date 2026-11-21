@@ -155,14 +155,32 @@ impl FarText {
     /// A conductor's far end: the port's full path, then the connector and
     /// pin it is crimped into when it is on one; for a splice, its path,
     /// then what its net joins beyond it, named from the splice's
-    /// component, collapsed to `+N more` as room runs out.
+    /// component, collapsed to `+N more` as room runs out. A boundary port
+    /// on one of its component's connectors is a pin like any other; one on
+    /// no connector is where the conductor leaves its component, to be
+    /// carried on by a wire of the component it is placed in, and says so.
     fn of_conductor(far: &FarEnd<'_>) -> Self {
         let texts = match far {
-            FarEnd::Port(end) | FarEnd::Boundary(end) => Self::port_texts(end),
+            FarEnd::Port(end) => Self::port_texts(end),
+            FarEnd::Boundary(end) => match end.contact() {
+                Contact::Connector { .. } => Self::port_texts(end),
+                Contact::Connectorless => Self::leaving_texts(end),
+            },
             FarEnd::Splice(splice) => Self::splice_texts(splice),
             FarEnd::Unresolved(end) => vec![format!("→ {end}")],
         };
         Self { texts }
+    }
+
+    /// The conductor leaves `end`'s component through its port `end`: the
+    /// port's full path, then its name alone, each with the mark — so even a
+    /// narrow column never shows it as an ordinary destination.
+    fn leaving_texts(end: &PortEnd<'_>) -> Vec<String> {
+        let leaves = format!("leaves {}", end.instance.type_name);
+        vec![
+            format!("→ {}.{} ({leaves})", end.instance.path, end.port.name),
+            format!("→ {} ({leaves})", end.port.name),
+        ]
     }
 
     /// A drain's other end, for a screen grounded at both ends, and which

@@ -657,9 +657,15 @@ or gauge; the far column names the screen — the cable and the shield's
 label, else `shield` / `pair N shield` — and its other end for a screen
 grounded at both). A bound pin with no entry shows a dash
 (`pin-unwired`). The far end (`rows::FarText`) is a list of texts, most
-detailed first: a port's full path, then with `(connector:pin)`; a
-splice's path with what its net joins beyond it, named from the splice's
-component and collapsed to `+N more`, then the bare splice. The swatch
+detailed first: a port's full path with `(connector:pin)`, then without;
+a splice's path with what its net joins beyond it, named from the splice's
+component and collapsed to `+N more`, then the bare splice. A
+`FarEnd::Boundary` on one of its component's connectors reads like any
+port (a real termination on a pin); one on no connector is where the
+conductor leaves its component for the parent's wire to carry on, so it
+is marked, `→ Vehicle.loom.out (leaves Loom)`, falling back to
+`→ out (leaves Loom)` — never shown as an ordinary destination. Where
+it continues is not followed (the export's wire list has it). The swatch
 (`swatch`) is painted as the harness paints a strand — `WireColor::css`
 for the base, `WireColor::tracer` as a stripe — with the authored colour
 as `data-color` in every mode; it is a `<path>`, since `.pinout rect`

@@ -1655,9 +1655,14 @@ component m {
     /// `ports`) and an `Ecu` (whose `x1` has ports `p1`…`p6` on pins 1–6)
     /// with `body` (wires, cables, splices) between them.
     fn wired(ports: &str, body: &str) -> Design {
+        wired_inside(&format!("connector x1 \"X\" {{ {ports} }}"), body)
+    }
+
+    /// As [`wired`], with `inside` as the whole body of `m`.
+    fn wired_inside(inside: &str, body: &str) -> Design {
         let dir = tempfile::tempdir().expect("tempdir");
         let lib = format!(
-            "component m {{ connector x1 \"X\" {{ {ports} }} }}\n\
+            "component m {{ {inside} }}\n\
              component Ecu {{ connector x1 \"ECU\" {{\n\
                pub port p1 \"P1\" pin 1; pub port p2 \"P2\" pin 2; pub port p3 \"P3\" pin 3;\n\
                pub port p4 \"P4\" pin 4; pub port p5 \"P5\" pin 5; pub port p6 \"P6\" pin 6;\n\
@@ -1867,6 +1872,36 @@ component m {
         assert_eq!(collapsed.text, "→ top.sp (ecu.p1, +2 more)");
         let bare = far.fit(WIRE_FONT, WIRE_FONT.width("→ top.sp (ecu"));
         assert_eq!(bare.text, "→ top.sp");
+    }
+
+    #[test]
+    fn a_conductor_leaving_through_a_boundary_port_says_it_leaves_the_component() {
+        // `m`'s own wires: one out through its connectorless port `out`
+        // (the wire-through pattern, carried on by `top`), one to a pin of
+        // its other connector — a real termination on a pin.
+        let design = wired_inside(
+            "pub port out \"OUT\";\n\
+             connector x1 \"X\" { port a \"A\" pin 1; port b \"B\" pin 2; }\n\
+             connector x2 \"Y\" { pub port c \"C\" pin 1; }\n\
+             wire red 1 [a, out];\n\
+             wire black 0.5 [b, c];",
+            "wire green 1 [dev.out, ecu.p3];\nwire white 0.5 [dev.c, ecu.p4];",
+        );
+        let table = table_of(&design);
+        assert_eq!(
+            listing(&table),
+            [
+                (
+                    Some(1),
+                    vec!["RD · 1 · → top.dev.out (leaves m)".to_string()]
+                ),
+                (Some(2), vec!["BK · 0.5 · → top.dev.c (x2:1)".to_string()]),
+            ]
+        );
+        // Short of room, the mark stays and the path shortens.
+        let far = table.rows[0].entries[0].far();
+        let narrow = far.fit(WIRE_FONT, WIRE_FONT.width("→ out (leaves m)"));
+        assert_eq!(narrow.text, "→ out (leaves m)");
     }
 
     #[test]

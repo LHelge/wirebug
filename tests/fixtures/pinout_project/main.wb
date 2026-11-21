@@ -6,7 +6,8 @@
 // two-tone pair in a screened cable whose drain lands on the inverter, a
 // double crimp (two conductors into the inverter's WAKE), a ganged port
 // (B+ and B- over two cavities each), a conductor to a splice that joins
-// three more ends, and a conductor into a port with no pin.
+// three more ends, a conductor into a port with no pin, and the
+// continuation of a conductor that leaves the inverter at a boundary port.
 
 use Inverter from "components/inverter.wb";
 use Sensor from "components/sensor.wb";
@@ -38,4 +39,7 @@ component Vehicle {
     wire black 1   [vcm.gnd, sp_gnd];
 
     wire violet 0.5 [inv.spare, vcm.spare];
+
+    // Carries on the inverter's TEMP+ conductor, which leaves it at TEMP OUT.
+    wire grey 0.5 [inv.temp_out, vcm.temp];
 }
