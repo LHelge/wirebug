@@ -2,10 +2,10 @@
 id: jkx
 title: Improve rendered output
 type: epic
-status: open
+status: done
 priority: P2
 created: "2026-11-20T21:40:32.042817669Z"
-updated: "2026-11-20T21:40:32.042817669Z"
+updated: "2026-11-21T17:58:54.718994311Z"
 ---
 
 ## Scope
