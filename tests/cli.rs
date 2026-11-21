@@ -1277,6 +1277,71 @@ fn check_reports_a_missing_unused_or_repeated_fragment() {
     );
 }
 
+/// A project whose `main.wb` names `systems/all.wb` with `fragment`, and
+/// `systems/all.wb` holds `all` and nothing else.
+fn project_with_an_aggregating_file(all: &str) -> tempfile::TempDir {
+    let tmp = tempdir().expect("tempdir");
+    std::fs::write(
+        tmp.path().join("wirebug.toml"),
+        "[project]\nname = \"t\"\nversion = \"0.0.0\"\n",
+    )
+    .expect("write wirebug.toml");
+    std::fs::write(
+        tmp.path().join("main.wb"),
+        "fragment \"systems/all.wb\";\ncomponent Vehicle { }\nview schematic \"V\" { }\n",
+    )
+    .expect("write main.wb");
+    std::fs::create_dir(tmp.path().join("systems")).expect("mkdir systems");
+    std::fs::write(tmp.path().join("systems/all.wb"), all).expect("write all.wb");
+    std::fs::write(
+        tmp.path().join("systems/a.wb"),
+        "extend Vehicle { pub port x \"X\"; }\n",
+    )
+    .expect("write a.wb");
+    tmp
+}
+
+#[test]
+fn check_strict_accepts_an_aggregating_file_that_uses_the_component() {
+    let tmp =
+        project_with_an_aggregating_file("use Vehicle from \"../main.wb\";\nfragment \"a.wb\";\n");
+    Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args(["check", "--strict", tmp.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("warning").not());
+}
+
+#[test]
+fn check_strict_rejects_two_files_that_only_fragment_each_other() {
+    let tmp = project_with_an_aggregating_file("fragment \"../main.wb\";\n");
+    let output = Command::cargo_bin("wirebug")
+        .expect("binary present")
+        .args([
+            "check",
+            "--strict",
+            "--format",
+            "json",
+            tmp.path().to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let problems: Vec<serde_json::Value> =
+        serde_json::from_slice(&output).expect("check prints a JSON array");
+    let codes: Vec<&str> = problems
+        .iter()
+        .map(|p| p["code"].as_str().expect("code"))
+        .collect();
+    assert_eq!(
+        codes,
+        ["wirebug::unused_fragment", "wirebug::unused_fragment"]
+    );
+}
+
 #[test]
 fn check_rejects_an_undeclared_inline_half() {
     let tmp = tempdir().expect("tempdir");
