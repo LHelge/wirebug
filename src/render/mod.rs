@@ -141,7 +141,7 @@ impl RenderedView {
     /// here. It is the kind's smallest, not this drawing's: a schematic
     /// without wire codes is judged by their size all the same.
     #[must_use]
-    pub fn smallest_text(&self) -> Option<f64> {
+    pub(crate) fn smallest_text(&self) -> Option<f64> {
         let (style, shrinks_to) = match &self.kind {
             ViewKind::Schematic => (schematic::STYLE, None),
             ViewKind::Harness => (harness::STYLE, None),
