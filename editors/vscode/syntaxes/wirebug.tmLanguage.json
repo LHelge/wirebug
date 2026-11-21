@@ -80,7 +80,7 @@
       }
     },
     "declared-name": {
-      "comment": "The name after a declaring keyword. Contextual keywords (size, grid, at, …) are ordinary names here, so this runs before #keywords.",
+      "comment": "The name after a declaring keyword. Contextual keywords (size, grid, at, …) are ordinary names here, so this runs before #keywords. `text` takes a name only in its deprecated named form (`text note at (…) \"…\"`); the current `text \"…\" at (…)` does not match here, so #keywords takes `text` and #strings its label.",
       "match": "\\b(port|connector|inline|cable|text)\\s+([a-z_][A-Za-z0-9_]*)\\b",
       "captures": {
         "1": { "name": "storage.type.wirebug" },
