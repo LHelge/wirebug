@@ -168,6 +168,17 @@ fn limits() -> Vec<RenderedView> {
     views_of("off_view_limits_project", SvgMode::Standalone)
 }
 
+/// The width of `svg`'s root viewBox, in world units.
+fn viewbox_width(svg: &str) -> f64 {
+    let viewbox = &svg[svg.find("viewBox=\"").expect("a viewBox") + "viewBox=\"".len()..];
+    let viewbox = &viewbox[..viewbox.find('"').expect("a closing quote")];
+    viewbox
+        .split(' ')
+        .nth(2)
+        .and_then(|width| width.parse().ok())
+        .expect("a numeric width")
+}
+
 #[test]
 fn a_reference_never_takes_a_view_past_the_canvas_limit() {
     // The view is nearly as wide as a canvas may be: the reference gives
@@ -178,7 +189,8 @@ fn a_reference_never_takes_a_view_past_the_canvas_limit() {
         .iter()
         .find(|v| v.title == "Near the canvas limit")
         .expect("the view");
-    assert!(near.canvas.width() <= 8192.0, "{}", near.canvas.width());
+    let width = viewbox_width(&near.svg);
+    assert!(width <= 8192.0, "{width}");
     assert_eq!(
         references(&near.svg),
         [reference("right.out", "→", "far.some_long_port_name")]
