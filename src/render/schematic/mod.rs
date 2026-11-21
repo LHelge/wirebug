@@ -10,6 +10,7 @@
 
 mod draw;
 pub(super) mod layout;
+mod pin;
 mod route;
 
 use svg::Document;
@@ -34,10 +35,26 @@ pub(super) const MIN_HEIGHT: f64 = 100.0;
 /// Tightest spacing between adjacent ports at which their labels and pin
 /// numbers still clear each other (labels are 11px, pins 10px). Ports sit
 /// two grid steps apart, so the grid step must be at least half this; a
-/// finer grid errors rather than overlapping labels.
+/// finer grid errors rather than overlapping labels. It holds for a pin
+/// annotation of any length (`hv:2,3`), because only an annotation's
+/// height ever faces the next port: one that would reach the next port on
+/// a north or south side turns to run along its stub (`pin::PinAnnotation`).
 pub(super) const MIN_PORT_PITCH: f64 = 15.0;
 pub(super) const LABEL_INSET: f64 = 10.0;
+/// How far a pin annotation keeps from its own port along the stub, and
+/// from its own stub when it reads across a north or south side.
 pub(super) const PIN_INSET: f64 = 6.0;
+/// The least room between a level north or south pin annotation and the
+/// next port's stub: half the 4-unit `wire-casing` stroke, plus one.
+pub(super) const PIN_NEIGHBOUR_GAP: f64 = 3.0;
+/// How far a pin annotation turned along a north or south stub sits beside
+/// it, centre of the text to the stub — the band a level west or east
+/// annotation keeps above its stub.
+pub(super) const PIN_ACROSS: f64 = 8.0;
+/// Estimated advance of one character of the 10px pin font.
+pub(super) const PIN_CHAR_WIDTH: f64 = 6.0;
+/// The least room between a pin annotation and the canvas edge.
+pub(super) const PIN_CANVAS_PAD: f64 = 12.0;
 pub(super) const PORT_RADIUS: f64 = 4.0;
 pub(super) const CHAR_WIDTH: f64 = 7.5;
 pub(super) const COMPONENT_TITLE_GAP: f64 = 8.0;

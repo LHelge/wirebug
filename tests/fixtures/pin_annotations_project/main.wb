@@ -1,0 +1,56 @@
+// Pin annotations: a pin number reads `<designator>:<pin>` on a component
+// with more than one connector, and stays bare on one with a single
+// connector, on all four sides of a box.
+
+use Msd  from "components/msd.wb";
+use Lamp from "components/lamp.wb";
+use Bms  from "components/bms.wb";
+
+component Vehicle {
+    msd:   Msd  "MSD";
+    lamp:  Lamp "Lamp";
+    left:  Lamp "Left";
+    bms:   Bms  "BMS";
+    probe: Lamp "Probe";
+
+    wire orange 25  [msd.hv_in, lamp.pwr];
+    wire black  1   [msd.hv_out, lamp.gnd];
+    wire green  0.5 [msd.intlk_in, left.pwr];
+    wire green  0.5 [msd.intlk_out, left.sig];
+
+    wire white  0.5 [bms.can_h, probe.pwr];
+    wire white  0.5 [bms.can_l, probe.sig];
+    wire red    1   [bms.bat, probe.gnd];
+}
+
+view schematic "MSD" {
+    include msd at (0, 0) ports {
+        west:  hv_in;
+        east:  hv_out;
+        south: intlk_in, intlk_out;
+    }
+
+    include lamp at (0, -12) ports {
+        south: pwr, gnd;
+        north: sig;
+    }
+
+    include left at (0, 12) ports {
+        north: pwr, sig;
+    }
+}
+
+view schematic "Fine grid" {
+    grid: 7.5;
+
+    include bms at (0, 0) ports {
+        north: can_h, can_l;
+        south: wake, fault;
+        west:  bat;
+        east:  gnd;
+    }
+
+    include probe at (40, 0) ports {
+        west: pwr, sig, gnd;
+    }
+}

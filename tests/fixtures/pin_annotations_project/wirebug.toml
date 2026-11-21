@@ -1,0 +1,5 @@
+[project]
+name = "pin-annotations-project"
+version = "0.1.0"
+description = "Pin annotation fixture: connector-qualified pin numbers beside single- and multi-connector boxes"
+revision = "fixture"
