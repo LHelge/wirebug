@@ -50,8 +50,12 @@ struct FileScope {
     /// Connector types *defined* in this file (no imports) — what another
     /// file could `use` from it.
     own_connector_types: Vec<String>,
-    /// The file's lone top-level component — the subject of its views.
+    /// The file's lone top-level component — the subject of its views
+    /// that leave out `for`.
     subject: Option<ComponentKey>,
+    /// The components this file imports by name: with
+    /// [`top_level`](Self::top_level), what a view's `for` may name.
+    imported: HashMap<String, ComponentKey>,
     /// Built from a buffer whose broken statements the parser skipped, so
     /// it lacks what they declared (and, where a `;` was missing, the
     /// statement after).
@@ -183,6 +187,9 @@ pub(crate) fn build_index(project: &Project, resolved: &Resolved) -> CompletionI
                 scope.connector_types.push(name.to_string());
             } else {
                 scope.component_types.push(name.to_string());
+                if let Some(key) = imported_component(project, resolved, file, import) {
+                    scope.imported.insert(name.to_string(), key);
+                }
             }
         }
         files.insert(file.path.clone(), scope);
@@ -211,7 +218,11 @@ impl CompletionIndex {
             self.components.insert(key + base, entry);
         }
         for (path, mut scope) in other.files {
-            for key in scope.top_level.values_mut() {
+            for key in scope
+                .top_level
+                .values_mut()
+                .chain(scope.imported.values_mut())
+            {
                 *key += base;
             }
             scope.subject = scope.subject.map(|k| k + base);
@@ -277,7 +288,14 @@ impl CompletionIndex {
         let mut queue: Vec<ComponentKey> = self
             .files
             .values()
-            .flat_map(|scope| scope.top_level.values().copied().chain(scope.subject))
+            .flat_map(|scope| {
+                scope
+                    .top_level
+                    .values()
+                    .chain(scope.imported.values())
+                    .copied()
+                    .chain(scope.subject)
+            })
             .collect();
         let mut keep = HashSet::new();
         while let Some(key) = queue.pop() {
@@ -304,6 +322,23 @@ impl CompletionIndex {
 
     fn component(&self, key: ComponentKey) -> Option<&ComponentEntry> {
         self.components.get(&key)
+    }
+
+    /// The component the view around the cursor documents: the one its
+    /// `for` names, else the file's lone top-level component.
+    fn view_subject(&self, scope: &FileScope, cursor: &Cursor) -> Option<ComponentKey> {
+        let named = cursor.blocks.iter().rev().find_map(|block| match block {
+            Block::View { subject, .. } => Some(subject),
+            _ => None,
+        })?;
+        match named {
+            Some(name) => scope
+                .top_level
+                .get(name)
+                .or_else(|| scope.imported.get(name))
+                .copied(),
+            None => scope.subject,
+        }
     }
 
     /// Resolve the cursor's innermost component by walking the block stack
@@ -464,6 +499,20 @@ impl CompletionIndex {
                 if let [.., Token::Extend] = cursor.tail() {
                     return self.extend_targets();
                 }
+                // `view <kind> "<title>" ‸` may name its subject; `for ‸`
+                // takes a component the file defines or imports.
+                if let [.., Token::View, kind, Token::Str(_)] = cursor.tail()
+                    && kind.as_name().is_some()
+                {
+                    return keywords(&["for"]);
+                }
+                if let [.., Token::Str(_), Token::For] = cursor.tail() {
+                    return scope
+                        .component_types
+                        .iter()
+                        .map(|name| item(name, CompletionItemKind::CLASS, "component"))
+                        .collect();
+                }
                 if cursor.at_statement_start() {
                     return keywords(&["use", "component", "extend", "connector_type", "view"]);
                 }
@@ -519,9 +568,9 @@ impl CompletionIndex {
                 _ if cursor.at_statement_start() => keywords(&["pub", "port"]),
                 _ => Vec::new(),
             },
-            Some(Block::View { kind }) => match cursor.tail() {
+            Some(Block::View { kind, .. }) => match cursor.tail() {
                 [.., Token::Include, instance, Token::Dot] => {
-                    match (scope.subject, instance.as_name()) {
+                    match (self.view_subject(scope, cursor), instance.as_name()) {
                         (Some(subject), Some(instance)) => {
                             self.instance_connectors(subject, instance)
                         }
@@ -529,7 +578,7 @@ impl CompletionIndex {
                     }
                 }
                 [.., Token::Include] => {
-                    let Some(subject) = scope.subject else {
+                    let Some(subject) = self.view_subject(scope, cursor) else {
                         return Vec::new();
                     };
                     match kind.as_deref() {
@@ -549,7 +598,9 @@ impl CompletionIndex {
             },
             Some(Block::Ports { instance }) => {
                 if matches!(cursor.tail(), [.., Token::Colon] | [.., Token::Comma]) {
-                    let (Some(subject), Some(instance)) = (scope.subject, instance) else {
+                    let (Some(subject), Some(instance)) =
+                        (self.view_subject(scope, cursor), instance)
+                    else {
                         return Vec::new();
                     };
                     return self.instance_ports(subject, instance);
@@ -570,8 +621,8 @@ impl CompletionIndex {
                     return constants(&SIDES);
                 }
                 if cursor.at_statement_start() {
-                    return scope
-                        .subject
+                    return self
+                        .view_subject(scope, cursor)
                         .map(|s| self.ports(s, true))
                         .unwrap_or_default();
                 }
@@ -682,6 +733,29 @@ impl CompletionIndex {
     }
 }
 
+/// The canonical key of the component `import` brings into `file`: the
+/// top-level definition of that name in the file its path names.
+fn imported_component(
+    project: &Project,
+    resolved: &Resolved,
+    file: &crate::dsl::project::LoadedFile,
+    import: &crate::dsl::ast::Use,
+) -> Option<ComponentKey> {
+    let target = file
+        .path
+        .parent()?
+        .join(&import.path.node)
+        .canonicalize()
+        .ok()?;
+    let tf = FileId(project.files.iter().position(|f| f.path == target)?);
+    let name = import.name.node.as_str();
+    let id = resolved
+        .defs
+        .iter()
+        .position(|d| d.file == tf && d.parent.is_none() && d.name == name)?;
+    Some(resolved.groups.canonical(id))
+}
+
 fn item(label: &str, kind: CompletionItemKind, detail: &str) -> CompletionItem {
     CompletionItem {
         label: label.to_string(),
@@ -759,6 +833,8 @@ enum Block {
     Wire,
     View {
         kind: Option<String>,
+        /// The component named after `for`, when the header has one.
+        subject: Option<String>,
     },
     Ports {
         instance: Option<String>,
@@ -874,8 +950,13 @@ fn classify(before: &[Token]) -> Block {
                 return Block::Component { name };
             }
             Token::View => {
+                let header = &before[i..];
                 return Block::View {
                     kind: name_at(before, i + 1),
+                    subject: header
+                        .iter()
+                        .position(|t| *t == Token::For)
+                        .and_then(|at| name_at(header, at + 1)),
                 };
             }
             // `ports {` opens a placement block only after an include's
@@ -1276,6 +1357,65 @@ mod tests {
     fn view_keyword_offers_kinds() {
         let labels = complete_in(&[LAMP, MAIN], "view ‸");
         assert_eq!(labels, ["schematic", "harness", "pinout"]);
+    }
+
+    #[test]
+    fn view_title_offers_for_and_for_offers_component_types() {
+        let after_title = complete_in(&[LAMP, MAIN], "view pinout \"P\" ‸");
+        assert_eq!(after_title, ["for"]);
+
+        let mut after_for = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root { }\nview pinout \"P\" for ‸",
+        );
+        after_for.sort();
+        assert_eq!(after_for, ["Lamp", "Root"]);
+    }
+
+    #[test]
+    fn a_view_for_an_imported_component_completes_against_it() {
+        let connectors = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n}\nview pinout \"P\" for Lamp {\n    include ‸\n}\n",
+        );
+        assert_eq!(connectors, ["plug"]);
+
+        let ports = complete_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n}\nview schematic \"S\" for Lamp {\n    enclosure {\n        ‸\n    }\n}\n",
+        );
+        assert!(ports.contains(&"anode".to_string()), "{ports:?}");
+        assert!(!ports.contains(&"feed".to_string()), "{ports:?}");
+    }
+
+    #[test]
+    fn views_for_each_of_two_components_complete_against_each() {
+        let head = "use Lamp from \"lamp.wb\";\ncomponent A {\n    l: Lamp;\n}\ncomponent B {\n    pub port b \"B\";\n}\n";
+        let main = ("main.wb", head);
+        let instance_ports = complete_in(
+            &[LAMP, main],
+            &format!(
+                "{head}view schematic \"A\" for A {{\n    include l at (0, 0) ports {{\n        west: ‸\n    }}\n}}\n"
+            ),
+        );
+        assert!(
+            instance_ports.contains(&"anode".to_string()),
+            "{instance_ports:?}"
+        );
+
+        let ports = complete_in(
+            &[LAMP, main],
+            &format!(
+                "{head}view schematic \"B\" for B {{\n    enclosure {{\n        ‸\n    }}\n}}\n"
+            ),
+        );
+        assert_eq!(ports, ["b"]);
+
+        let without_for = complete_in(
+            &[LAMP, main],
+            &format!("{head}view schematic \"S\" {{\n    include ‸\n}}\n"),
+        );
+        assert!(without_for.is_empty(), "no single subject: {without_for:?}");
     }
 
     #[test]

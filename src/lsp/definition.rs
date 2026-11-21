@@ -171,6 +171,13 @@ fn find(resolved: &Resolved, file: FileId, offset: usize) -> Option<Span> {
     for binding in &resolved.views {
         let view = binding.ast;
         let subject = binding.subject;
+        // `for <Component>` jumps to the component (its root `component`
+        // when it is split with `extend`).
+        if let Some(named) = &view.subject
+            && hit(named.span)
+        {
+            return subject.map(|s| resolved.defs[s].ast.name.span);
+        }
         for ep in &view.enclosure {
             if hit(ep.port.span) {
                 return find_port(resolved, subject?, ep.port.node.as_str());
@@ -505,6 +512,34 @@ mod tests {
         assert_eq!(
             with_cursor("include ic.male", "include ic.ma‸le"),
             Some(("main.wb".into(), "male".into()))
+        );
+    }
+
+    #[test]
+    fn view_subject_jumps_to_the_component() {
+        let main = (
+            "main.wb",
+            "use Leaf from \"leaf.wb\";\ncomponent Root { l: Leaf; }\nview pinout \"P\" for Le‸af {\n    include j at (0, 0);\n}\n",
+        );
+        assert_eq!(
+            target_of(&[LEAF, main], "main.wb"),
+            Some(("leaf.wb".into(), "Leaf".into()))
+        );
+    }
+
+    #[test]
+    fn view_subject_in_a_fragment_jumps_to_the_root_component() {
+        let frag = (
+            "frag.wb",
+            "extend Root {\n    pub port x \"X\";\n}\nview schematic \"S\" for Ro‸ot { }\n",
+        );
+        let main = (
+            "main.wb",
+            "use Root from \"frag.wb\";\ncomponent Root { }\n",
+        );
+        assert_eq!(
+            target_of(&[frag, main], "frag.wb"),
+            Some(("main.wb".into(), "Root".into()))
         );
     }
 

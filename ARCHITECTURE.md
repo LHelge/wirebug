@@ -82,7 +82,11 @@ Four CLI commands share it:
   inserting the full `<Name> from "<relative path>";` remainder — plus
   `extend` targets, the `connector_type`/`layout` bodies, and the keys of
   a cable body, of a wire body (a `{` right after a wire's `]`) and of a
-  component's part data (beside the member keywords). An open
+  component's part data (beside the member keywords), and `for` after a
+  view's title with the file's component types after it; inside a view,
+  includes, `ports { }` and `enclosure { }` complete against the
+  component its `for` names (`FileScope.top_level`, then
+  `FileScope.imported`), else the file's lone top-level one. An open
   `.wb` file its project never loads (not reachable from `main.wb` via
   `use`) gets one info-severity `unlinked_file` notice instead of
   silence — rust-analyzer's unlinked-file move; its contents stay
@@ -90,8 +94,9 @@ Four CLI commands share it:
   auto-import can wire the fresh fragment in. Go-to-definition
   (`lsp/definition.rs`) re-runs load/resolve per request (never stale;
   projects are small) and span-walks the registry: use names/paths,
-  instance type refs, connector type refs, wire endpoints, view
-  includes/ports/enclosures, and `extend` → its root `component`, all
+  instance type refs, connector type refs, wire endpoints, a view's `for`
+  subject, view includes/ports/enclosures, and `extend` → its root
+  `component`, all
   merge-group aware. Hover/rename/semantic tokens/formatting are
   deliberately later.
 
