@@ -12,10 +12,11 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use lsp_types::{CompletionItem, CompletionItemKind};
+use lsp_types::{CompletionItem, CompletionItemKind, CompletionTextEdit, Range, TextEdit};
 
-use crate::dsl::diagnostics::PropertyOwner;
-use crate::dsl::ir::ColorName;
+use super::line_index::LineIndex;
+use crate::dsl::diagnostics::{PropertyKind, PropertyOwner};
+use crate::dsl::ir::{ColorName, LengthUnit};
 use crate::dsl::lex::{Token, lex, significant};
 use crate::dsl::project::Project;
 use crate::dsl::resolve::Resolved;
@@ -544,6 +545,9 @@ impl CompletionIndex {
                 _ => Vec::new(),
             },
             Some(Block::Cable) => {
+                if let Some(units) = length_units(cursor, PropertyOwner::Cable) {
+                    return units;
+                }
                 if cursor.at_statement_start() {
                     let mut items = keywords(&["wire", "twisted"]);
                     items.extend(properties(PropertyOwner::Cable));
@@ -558,6 +562,9 @@ impl CompletionIndex {
                 Vec::new()
             }
             Some(Block::Wire) => {
+                if let Some(units) = length_units(cursor, PropertyOwner::Wire) {
+                    return units;
+                }
                 if cursor.at_statement_start() {
                     return properties(PropertyOwner::Wire);
                 }
@@ -804,6 +811,27 @@ fn properties(owner: PropertyOwner) -> Vec<CompletionItem> {
         .collect()
 }
 
+/// The length units, when the cursor touches the number of an `owner`
+/// property that takes a length (`length: 150‸`, `length: 150m‸`): each
+/// replaces the unit typed so far, which the client filters them by.
+fn length_units(cursor: &Cursor, owner: PropertyOwner) -> Option<Vec<CompletionItem>> {
+    let range = cursor.unit?;
+    let [.., key, Token::Colon, Token::Number { .. }] = cursor.tail() else {
+        return None;
+    };
+    if owner.expects(key.as_name()?) != Some(PropertyKind::Length) {
+        return None;
+    }
+    let units = LengthUnit::ALL.iter().map(|unit| CompletionItem {
+        text_edit: Some(CompletionTextEdit::Edit(TextEdit::new(
+            range,
+            unit.symbol().to_string(),
+        ))),
+        ..item(unit.symbol(), CompletionItemKind::UNIT, "length unit")
+    });
+    Some(units.collect())
+}
+
 /// `to` relative to `from_dir`, with forward slashes — the form a `use`
 /// path is written in. Both paths must be absolute (they come from the
 /// loader's canonicalization).
@@ -854,6 +882,9 @@ struct Cursor {
     in_list: bool,
     in_at_parens: bool,
     tokens: Vec<Token>,
+    /// Where a number touching the cursor has its unit, typed or not yet
+    /// (`150‸`, `150m‸`): from the end of its digits to the cursor.
+    unit: Option<Range>,
 }
 
 impl Cursor {
@@ -900,12 +931,21 @@ fn scan(text: &str, offset: usize) -> Cursor {
     {
         tokens.pop();
     }
+    let unit = match tokens.last() {
+        Some((Token::Number { digits, .. }, span)) if span.end == offset => {
+            let lines = LineIndex::new(text);
+            let start = lines.position(text, span.start + digits.len());
+            Some(Range::new(start, lines.position(text, offset)))
+        }
+        _ => None,
+    };
 
     let mut cursor = Cursor {
         blocks: Vec::new(),
         in_list: false,
         in_at_parens: false,
         tokens: Vec::new(),
+        unit,
     };
     let mut list_depth = 0usize;
     let mut paren_depth = 0usize;
@@ -1548,6 +1588,56 @@ mod tests {
             "use Lamp from \"lamp.wb\";\ncomponent Root {\n    l: Lamp;\n    wire red 1 [l.anode, l.cathode] {\n        length: 1.2;\n        ‸\n    }\n}\n",
         );
         assert_eq!(labels, ["length", "type", "part"]);
+    }
+
+    /// Each item as `<label> → <the text its edit writes> @ <columns>`.
+    fn edits(items: &[CompletionItem]) -> Vec<String> {
+        items
+            .iter()
+            .map(|item| match &item.text_edit {
+                Some(CompletionTextEdit::Edit(edit)) => format!(
+                    "{} → {} @ {}..{}",
+                    item.label, edit.new_text, edit.range.start.character, edit.range.end.character
+                ),
+                _ => format!("{} (no edit)", item.label),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_length_number_offers_the_units_in_place_of_the_typed_one() {
+        let cable = complete_items_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    cable c {\n        length: 150‸\n    }\n}\n",
+        );
+        assert_eq!(
+            edits(&cable),
+            ["m → m @ 19..19", "cm → cm @ 19..19", "mm → mm @ 19..19"]
+        );
+        // A unit half typed is replaced whole, inside a twisted pair too.
+        let conductor = complete_items_in(
+            &[LAMP, MAIN],
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    cable c {\n        twisted {\n            wire white 0.5 [a, b] { length: 15m‸ }\n        }\n    }\n}\n",
+        );
+        assert_eq!(
+            edits(&conductor),
+            ["m → m @ 46..47", "cm → cm @ 46..47", "mm → mm @ 46..47"]
+        );
+    }
+
+    #[test]
+    fn units_are_offered_only_on_a_length() {
+        for live in [
+            // Not touching the number.
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    cable c {\n        length: 150 ‸\n    }\n}\n",
+            // A key that takes no length.
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    cable c {\n        type: 150‸\n    }\n}\n",
+            // A gauge.
+            "use Lamp from \"lamp.wb\";\ncomponent Root {\n    wire red 1‸\n}\n",
+        ] {
+            let labels = complete_in(&[LAMP, MAIN], live);
+            assert!(!labels.contains(&"mm".to_string()), "{live:?}: {labels:?}");
+        }
     }
 
     #[test]
