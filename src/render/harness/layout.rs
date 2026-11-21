@@ -29,11 +29,12 @@ use std::collections::{HashMap, HashSet};
 use indexmap::IndexMap;
 
 use super::bezier::{Cubic, FLEX, flex};
-use super::draw::{shorten, wire_annotation};
+use super::draw::wire_annotation;
 use super::{
-    BADGE_INSET, BADGE_SIZE, BRAID_SECTION, CABLE_GAP, CABLE_LABEL_PAD, CHAR_WIDTH, HEADER_HEIGHT,
-    LABEL_CHAR_WIDTH, LANE_MIN_LEAD, MIN_NODE_WIDTH, NODE_PAD, PIN_COL_WIDTH, ROW_HEIGHT,
-    SPLICE_DOT_RADIUS, SPLICE_LINE_HEIGHT, SVG_MARGIN,
+    BADGE_INSET, BADGE_SIZE, BRAID_SECTION, CABLE_GAP, CABLE_LABEL_FONT, CABLE_LABEL_PAD,
+    DRAIN_LABEL_FONT, HEADER_HEIGHT, LANE_MIN_LEAD, MIN_NODE_WIDTH, NODE_PAD, PART_FONT,
+    PIN_COL_WIDTH, PIN_LABEL_FONT, PIN_NUM_FONT, ROW_HEIGHT, SPLICE_DOT_RADIUS, SPLICE_LABEL_FONT,
+    SPLICE_LINE_HEIGHT, SPLICE_NAME_FONT, SPLICE_PART_FONT, SVG_MARGIN, TITLE_FONT,
 };
 use crate::dsl::ir::{
     CableMeta, CableName, ConnectorName, ConnectorPropertyValue, Design, Half, HarnessNode,
@@ -42,6 +43,7 @@ use crate::dsl::ir::{
 };
 use crate::render::geometry::{Bounds, Point, Side};
 use crate::render::lint::{DeclaredHalves, EndTarget, IncludeTarget, Segment};
+use crate::render::text::Font;
 
 /// One pin of a connector node, as a table row.
 pub(super) struct PinRow {
@@ -70,6 +72,9 @@ pub(super) struct ConnectorNode {
     pub(super) origin: Point,
     pub(super) width: f64,
     pub(super) height: f64,
+    /// Width of the pin-number column: [`PIN_COL_WIDTH`], or wider where a
+    /// pin's text needs it.
+    pub(super) pin_col: f64,
     /// The node's dominant pin side — a per-node summary of the per-pin
     /// [`PinRow::side`]s, used where a single facing is wanted.
     pub(super) facing: Side,
@@ -108,6 +113,17 @@ pub(super) enum SpliceText {
     Part,
 }
 
+impl SpliceText {
+    /// The font a line of this kind is drawn in.
+    pub(super) fn font(self) -> Font {
+        match self {
+            Self::Name => SPLICE_NAME_FONT,
+            Self::Label => SPLICE_LABEL_FONT,
+            Self::Part => SPLICE_PART_FONT,
+        }
+    }
+}
+
 impl SpliceNode {
     /// The joint for `splice`, placed by include number `include` with its
     /// dot at world `centre`.
@@ -123,7 +139,7 @@ impl SpliceNode {
         .collect();
         let widest = lines
             .iter()
-            .map(|l| l.text.chars().count() as f64 * CHAR_WIDTH)
+            .map(|l| l.kind.font().width(&l.text))
             .fold(2.0 * SPLICE_DOT_RADIUS, f64::max);
         let width = widest + 2.0 * NODE_PAD;
         let height = 2.0 * SPLICE_DOT_RADIUS + lines.len() as f64 * SPLICE_LINE_HEIGHT + NODE_PAD;
@@ -189,9 +205,9 @@ pub(super) struct Lane {
     pub(super) left: f64,
     /// Where the run ends.
     pub(super) right: f64,
-    /// How many characters of the annotation the run has room for, when
-    /// that is fewer than it has: it is cut short to fit.
-    pub(super) fit: Option<usize>,
+    /// The width the annotation has on the run, when that is less than it
+    /// needs: it is cut short to fit.
+    pub(super) fit: Option<f64>,
 }
 
 /// Height of a wire annotation's 9px text above its baseline, its white
@@ -252,7 +268,7 @@ impl LooseWire {
     pub(super) fn annotation(&self) -> String {
         let full = self.full_annotation();
         match self.lane.and_then(|lane| lane.fit) {
-            Some(chars) => shorten(&full, chars),
+            Some(width) => CABLE_LABEL_FONT.fit(&full, width).text,
             None => full,
         }
     }
@@ -260,7 +276,7 @@ impl LooseWire {
     /// The box the drawn annotation's text covers, halo included.
     pub(super) fn annotation_bounds(&self) -> Bounds {
         let at = self.annotation_at();
-        let width = self.annotation().chars().count() as f64 * LABEL_CHAR_WIDTH;
+        let width = CABLE_LABEL_FONT.width(&self.annotation());
         Bounds {
             origin: Point::new(at.x - width / 2.0, at.y - LABEL_ASCENT),
             width,
@@ -294,7 +310,7 @@ impl LooseWire {
 
     /// The width the full annotation needs on a lane's run.
     fn annotation_width(&self) -> f64 {
-        self.full_annotation().chars().count() as f64 * LABEL_CHAR_WIDTH + 2.0 * NODE_PAD
+        CABLE_LABEL_FONT.width(&self.full_annotation()) + 2.0 * NODE_PAD
     }
 
     /// How wide a lane on the spine at `spine_x` the wire wants: as wide
@@ -311,11 +327,7 @@ impl LooseWire {
     /// Give the wire its lane at height `y`, `width` wide and centred on
     /// the spine at `spine_x`, its annotation cut short if it needs more.
     fn take_lane(&mut self, y: f64, spine_x: f64, width: f64) {
-        let fit = (self.annotation_width() > width).then(|| {
-            ((width - 2.0 * NODE_PAD) / LABEL_CHAR_WIDTH)
-                .floor()
-                .max(1.0) as usize
-        });
+        let fit = (self.annotation_width() > width).then(|| (width - 2.0 * NODE_PAD).max(0.0));
         self.lane = Some(Lane {
             y,
             left: spine_x - width / 2.0,
@@ -1323,8 +1335,18 @@ fn build_node(
         (None, None) => conn.to_string(),
     };
 
-    let widest_label = rows.iter().map(|r| r.2.chars().count()).max().unwrap_or(0);
-    let body_width = PIN_COL_WIDTH + widest_label as f64 * CHAR_WIDTH + 2.0 * NODE_PAD;
+    let widest_label = rows
+        .iter()
+        .map(|r| PIN_LABEL_FONT.width(&r.2))
+        .fold(0.0, f64::max);
+    // The pin text is centred in its column, clear of the attach dot on
+    // the column's outer edge.
+    let pin_col = rows
+        .iter()
+        .filter_map(|r| r.1.as_deref())
+        .map(|pin| PIN_NUM_FONT.width(pin) + NODE_PAD)
+        .fold(PIN_COL_WIDTH, f64::max);
+    let body_width = pin_col + widest_label + 2.0 * NODE_PAD;
     // The badge chip sits in the header's top-right corner; give the header
     // room for it on both sides so the centred title stays clear of it.
     let badge_allowance = if badge.is_some() {
@@ -1332,9 +1354,8 @@ fn build_node(
     } else {
         0.0
     };
-    let header_width = title.chars().count().max(subtitle.chars().count()) as f64 * CHAR_WIDTH
-        + 2.0 * NODE_PAD
-        + badge_allowance;
+    let header_width =
+        TITLE_FONT.width(&title).max(PART_FONT.width(&subtitle)) + 2.0 * NODE_PAD + badge_allowance;
     let width = body_width.max(header_width).max(MIN_NODE_WIDTH);
     let height = HEADER_HEIGHT + rows.len() as f64 * ROW_HEIGHT;
 
@@ -1359,6 +1380,7 @@ fn build_node(
         origin,
         width,
         height,
+        pin_col,
         facing: Side::East,
         pins,
         badge,
@@ -1490,21 +1512,14 @@ fn build_cable_box(
 
     let annotation_widths: Vec<f64> = strands
         .iter()
-        .map(|s| {
-            wire_annotation(s.label.as_deref(), s.gauge, &s.color)
-                .chars()
-                .count() as f64
-                * LABEL_CHAR_WIDTH
-        })
+        .map(|s| CABLE_LABEL_FONT.width(&wire_annotation(s.label.as_deref(), s.gauge, &s.color)))
         .collect();
-    let header = title.chars().count().max(subtitle.chars().count()) as f64 * CHAR_WIDTH;
+    let header = TITLE_FONT.width(&title).max(PART_FONT.width(&subtitle));
     // A braided pair lays out label zone · braid · label zone side by
     // side, so it needs room for all three; a straight row only its own
     // annotation. Take the widest requirement across rows.
     let pair_partner = braid_partners(strands.iter().map(|s| s.group));
-    let drain_widths = drains
-        .iter()
-        .map(|d| d.label.chars().count() as f64 * LABEL_CHAR_WIDTH);
+    let drain_widths = drains.iter().map(|d| DRAIN_LABEL_FONT.width(&d.label));
     let content = strands
         .iter()
         .enumerate()
@@ -1966,8 +1981,9 @@ component Root {
         let visible: HashSet<PortName> = [PortName::from("p")].into_iter().collect();
         let node =
             build_node(0, &instance, &connector, &visible, Point::ORIGIN, None).expect("node");
-        let expected = title.chars().count() as f64 * CHAR_WIDTH + 2.0 * NODE_PAD;
+        let expected = TITLE_FONT.width(title) + 2.0 * NODE_PAD;
         assert!(node.width >= expected);
+        assert!(TITLE_FONT.dejavu_width(title) + 2.0 * NODE_PAD <= node.width);
     }
 
     /// Auto-scope: a pin outside the view's wired set is dropped from the

@@ -100,14 +100,22 @@ Five CLI commands share it:
   …) is drawn as an empty `.notdef` box in PNG and PDF; nothing falls back
   to another font. SVG output still asks for `sans-serif` and is drawn
   with whatever font the viewer resolves, which may cover those scripts;
-  the font is not embedded in it. So the text-width estimators are not
-  made exact for DejaVu Sans: the pinout's `text::Font` is built on DejaVu
-  Sans's widths per character class, the widest common `sans-serif`. The
-  schematic and harness `*CHAR_WIDTH` constants are flat per-character
-  averages and are *not* upper bounds for DejaVu Sans Bold — a known
-  limit: a long bold title (a harness `.connector-title`, bold 13 px
-  against 7 px per character) can run past its box in PNG and PDF, and
-  in any viewer whose `sans-serif` is as wide.
+  the font is not embedded in it. So text is not measured exactly for
+  DejaVu Sans but bounded: `render/text.rs`'s `Font` (a size and a
+  `Face`, regular, bold or oblique, as the stylesheet sets the text;
+  `width`, and `fit` to cut text to a width with an ellipsis) counts each
+  character at the widest advance of its class in DejaVu Sans, rounded
+  up, bold text 1.15× that (a bold `r` a little more), oblique as
+  regular, and any character outside the classes a full em (wider than
+  the `.notdef` box PNG and PDF draw for a character with no glyph, and
+  as wide as a viewer's fallback CJK glyph). A test holds every class to
+  the bundled faces' advances, so the estimate never falls short of what
+  PNG and PDF draw, and DejaVu Sans being the widest common `sans-serif`,
+  it bounds what a browser draws too; it errs wide by up to about a
+  fifth for lowercase text. The pinout and the harness size their text
+  with it. The schematic still uses flat per-character constants
+  (`PIN_CHAR_WIDTH`, an off-view reference's 7 px a character, the
+  wire-code and port-label estimates), which are averages, not bounds.
   The legacy YAML model/view loader has been removed; `ir::Design` is the
   only thing the renderer consumes.
 - **`export` (`src/export/`)** — runs `check_project` like `render`,
@@ -663,7 +671,10 @@ include names a **connector** (`include <inst>.<connector> at (x,y)`), placed
 at its authored centre; that connector becomes a **pin table** (header =
 instance label + `<designator> · <description>` (bare designator when the
 description is unset), one row per pin = number + label,
-ordered by pin), **auto-scoped to the pins that carry a conductor in this
+ordered by pin; the table is as wide as its widest header line or pin
+label needs, each measured in its own font with `text::Font`, and the
+pin-number column, 28 wide, widens for a longer pin list such as a
+ganged `10,11,12,13`), **auto-scoped to the pins that carry a conductor in this
 view** — a 60-cavity control connector shrinks to what the harness uses,
 and an include with no conductors draws as a header-only box (visible, so
 the author notices). The renderer derives a vertical **spine** at the x-midpoint of
@@ -730,8 +741,12 @@ classes — a bare `text-anchor` attribute would lose to the
 wire is unambiguously on its own row. Rows sort by endpoint-y with
 groups kept adjacent (`layout::braid_partners` finds each strand's
 partner, defensively straightening any non-pair group a hand-built
-design might carry); the box is sized per-row, a pair needing label +
-braid + label (`LABEL_CHAR_WIDTH` for the 9px font). Rows are
+design might carry); the box is as wide as its title and subtitle and
+its widest row need, a pair needing label + braid + label, every text
+measured in its own font (`text::Font`; the `*_FONT` constants in
+`harness/mod.rs`, kept in step with `STYLE`). Every harness text is
+measured so: a splice's lines size its box, and a lane's annotation is
+cut to its run with `Font::fit`. Rows are
 ordered by each conductor's endpoint-y midpoint (the 1D occupancy step), the
 box's vertical centre is its strands' centroid (`layout::midpoint_y`).
 
@@ -761,8 +776,9 @@ staying within their endpoints' x-span, never enter a box; the
 annotation sits over the run's middle (`LooseWire::annotation_at`). The
 run is kept inside the gap between the wire's ends, short of
 `LANE_MIN_LEAD` each side, where the widest box allows: an annotation
-wider than that is cut short with an ellipsis (`draw::shorten`,
-`Lane::fit`), the full text in a `<title>`. Loose wires draw over the
+wider than that is cut short with an ellipsis (`Font::fit` into
+`Lane::fit`, the run's width less its padding; no separator is left
+before the ellipsis), the full text in a `<title>`. Loose wires draw over the
 boxes, so one that still meets a box — it stays on one side of the
 spine, which only happens when one of its ends lies inside the box
 column — crosses it visibly rather than hiding behind it. The lanes are
@@ -868,8 +884,8 @@ as `data-color` in every mode; it is a `<path>`, since `.pinout rect`
 would paint a rectangle's fill white.
 
 Each column (`Columns`) is as wide as its widest cell, measured with the
-same estimator as cavity labels (`text::Font`, per-class widths, bold
-counted wider), with minimum widths so an unwired table still shows its
+same estimator as cavity labels and the harness (`text::Font`,
+per-class widths, bold counted wider), with minimum widths so an unwired table still shows its
 columns; the far column is capped at `FAR_MAX_WIDTH`, then narrowed to
 the widest far end as drawn there. A far end takes the most detailed text
 that fits its column and is cut with an ellipsis only when the least
@@ -1493,8 +1509,9 @@ src/
 │   │                #   SmallText (views too small to read on the paper)
 │   ├── png.rs       # SVG → PNG rasterisation for --png (resvg/usvg/tiny_skia)
 │   ├── stamp.rs     # project-identity stamp text/element (corner of every SVG)
-│   ├── text.rs      # Font, FittedLabel: how wide text is drawn, and text
-│   │                #   shrunk or cut to its width
+│   ├── text.rs      # Font, Face, FittedLabel: how wide text is drawn (an
+│   │                #   upper bound on DejaVu Sans), and text shrunk or cut
+│   │                #   to its width; the pinout and the harness size with it
 │   ├── wire_stroke.rs # WireLayers/WireStroke: a wire's casing, colored core
 │   │                #   and tracer, shared by schematic and harness
 │   ├── schematic/   # rectangle-based SVG renderer (kind: schematic)
@@ -1710,6 +1727,10 @@ Dev / test:
 - [`assert_cmd`] — black-box CLI tests.
 - [`predicates`] — assertions for `assert_cmd`.
 - [`tempfile`] — scratch project dirs for pipeline/render tests.
+- [`ttf-parser`] — reads the bundled DejaVu Sans faces' advance widths,
+  so the text-width tests hold `render::text`'s estimate to the font PNG
+  and PDF draw with (already in the tree through `usvg`/`fontdb`, which
+  do not re-export it).
 
 [`chumsky`]: https://docs.rs/chumsky
 [`toml`]: https://docs.rs/toml
@@ -1740,3 +1761,4 @@ Dev / test:
 [`insta`]: https://docs.rs/insta
 [`assert_cmd`]: https://docs.rs/assert_cmd
 [`predicates`]: https://docs.rs/predicates
+[`ttf-parser`]: https://docs.rs/ttf-parser

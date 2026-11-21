@@ -29,6 +29,7 @@ use crate::error::ViewResult;
 use crate::render::geometry::Point;
 use crate::render::lint::{Conductor, IncludeBox, ViewLayout};
 use crate::render::stamp::{STAMP_HEIGHT, STAMP_INSET, stamp_element};
+use crate::render::text::Font;
 use crate::render::{Canvas, Drawing, GridFault, SvgMode};
 
 use layout::{HarnessConductor, HarnessLayout, ViewBox};
@@ -40,17 +41,13 @@ pub(super) const DEFAULT_GRID: f64 = 20.0;
 pub(super) const ROW_HEIGHT: f64 = 22.0;
 /// Header band height: instance title over the connector subtitle.
 pub(super) const HEADER_HEIGHT: f64 = 40.0;
-/// Width of the pin-number column along the facing edge.
+/// Width of the pin-number column along the facing edge: the narrowest
+/// it is drawn, wider only for a pin text that needs more.
 pub(super) const PIN_COL_WIDTH: f64 = 28.0;
 /// Inner padding around the label column.
 pub(super) const NODE_PAD: f64 = 10.0;
 /// Smallest a node gets, so short connectors still read as tables.
 pub(super) const MIN_NODE_WIDTH: f64 = 120.0;
-/// Nominal glyph advance for sizing label/title columns.
-pub(super) const CHAR_WIDTH: f64 = 7.0;
-/// Nominal glyph advance of the 9px `cable-label` font, for sizing a
-/// braided box's label zones (narrower than the table fonts' CHAR_WIDTH).
-pub(super) const LABEL_CHAR_WIDTH: f64 = 5.5;
 /// Space between a cable box's header band and its first strand row, so
 /// the row's annotation (drawn above the wire, halo included) clears the
 /// header instead of overlapping its bottom edge.
@@ -85,6 +82,28 @@ pub(super) const BRAID_SECTION: f64 = BRAID_HALF_TWISTS as f64 * TWIST_PITCH;
 pub(super) const SHIELD_INSET: f64 = 3.0;
 pub(super) const SVG_MARGIN: f64 = 48.0;
 pub(super) const TITLE_GAP: f64 = 12.0;
+
+// The fonts of the stylesheet's text, which widths are measured in: keep
+// each in step with its rule in `STYLE`.
+
+/// `.connector-title`: a connector's or a cable's title.
+pub(super) const TITLE_FONT: Font = Font::bold(13.0);
+/// `.connector-part`: a connector's or a cable's subtitle.
+pub(super) const PART_FONT: Font = Font::regular(10.0);
+/// `.pin-num`.
+pub(super) const PIN_NUM_FONT: Font = Font::italic(10.0);
+/// `.pin-label`.
+pub(super) const PIN_LABEL_FONT: Font = Font::regular(11.0);
+/// `.cable-label`: a strand's or a loose wire's annotation.
+pub(super) const CABLE_LABEL_FONT: Font = Font::regular(9.0);
+/// `.cable-label.drain-label`.
+pub(super) const DRAIN_LABEL_FONT: Font = Font::italic(9.0);
+/// `.splice-name`.
+pub(super) const SPLICE_NAME_FONT: Font = Font::bold(11.0);
+/// `.splice-label`.
+pub(super) const SPLICE_LABEL_FONT: Font = Font::regular(10.0);
+/// `.splice-part`.
+pub(super) const SPLICE_PART_FONT: Font = Font::italic(9.0);
 
 pub(super) const STYLE: &str = "\
 .connector rect { fill: white; stroke: black; stroke-width: 1.5; }
@@ -390,6 +409,53 @@ component sys {
         assert!(
             !svg.contains("AUX"),
             "unwired pin is scoped out of the table"
+        );
+    }
+
+    /// A ganged port's pin list is wider than the pin column's usual width:
+    /// the column widens for it, and the label column moves over with it.
+    #[test]
+    fn a_long_pin_list_widens_the_pin_column() {
+        let design = design_from(
+            r#"
+component sys {
+    a: src;
+    b: snk;
+    wire black 4 [a.gnd, b.gnd];
+    wire red 1 [a.pos, b.pos];
+    component src {
+        connector x1 "X1" {
+            pub port gnd "GND" pins [10, 11, 12, 13];
+            pub port pos "POS" pin 1;
+        }
+    }
+    component snk {
+        connector x1 "X1" {
+            pub port gnd "GND" pin 1;
+            pub port pos "POS" pin 2;
+        }
+    }
+}
+"#,
+        );
+        let view = harness_view("sys", &[("a", "x1", 0.0, 0.0), ("b", "x1", 20.0, 0.0)]);
+        let layout = compute(&design, &view);
+        let [ganged, single] = layout.nodes.as_slice() else {
+            panic!("two nodes");
+        };
+        let pins = "10,11,12,13";
+        assert!(ganged.pin_col > PIN_COL_WIDTH);
+        assert!(PIN_NUM_FONT.width(pins) <= ganged.pin_col - 2.0 * PIN_DOT_RADIUS);
+        assert_eq!(
+            single.pin_col, PIN_COL_WIDTH,
+            "a short pin keeps the column"
+        );
+
+        let svg = render(&design, &view);
+        let label_x = ganged.origin.x + ganged.width - ganged.pin_col - NODE_PAD;
+        assert!(
+            svg.contains(&format!("text-anchor=\"end\" x=\"{label_x}\"")),
+            "{svg}"
         );
     }
 
@@ -1383,7 +1449,7 @@ component sys {
         assert!(shown.starts_with("WAKE FROM THE BODY"), "{shown}");
         assert!(shown.ends_with('…'), "{shown}");
         assert!(
-            shown.chars().count() as f64 * LABEL_CHAR_WIDTH <= lane.right - lane.left,
+            CABLE_LABEL_FONT.width(&shown) <= lane.right - lane.left,
             "the shortened annotation fits its run"
         );
 
@@ -1566,5 +1632,129 @@ component sys {
             writeln!(s, "loose {} {}->{}{lane}", w.color, pt(w.from), pt(w.to)).unwrap();
         }
         s
+    }
+
+    /// Every text a layout draws inside a box or a lane, with the font it
+    /// is set in and the width it has there: a table's header lines and
+    /// cells, a cable box's header, strand annotations and drain labels, a
+    /// splice's lines, a laned loose wire's annotation.
+    fn boxed_texts(layout: &HarnessLayout) -> Vec<(String, Font, f64)> {
+        let mut texts = Vec::new();
+        for node in &layout.nodes {
+            let badge = if node.badge.is_some() {
+                2.0 * (BADGE_SIZE + BADGE_INSET)
+            } else {
+                0.0
+            };
+            let header = node.width - 2.0 * NODE_PAD - badge;
+            texts.push((node.title.clone(), TITLE_FONT, header));
+            texts.push((node.subtitle.clone(), PART_FONT, header));
+            for pin in &node.pins {
+                let label = node.width - node.pin_col - 2.0 * NODE_PAD;
+                texts.push((pin.label.clone(), PIN_LABEL_FONT, label));
+                if let Some(number) = &pin.pin {
+                    // Centred in its column, clear of the attach dot on the
+                    // column's outer edge.
+                    let column = node.pin_col - 2.0 * PIN_DOT_RADIUS;
+                    texts.push((number.clone(), PIN_NUM_FONT, column));
+                }
+            }
+        }
+        for cb in &layout.cable_boxes {
+            let inner = cb.width - 2.0 * NODE_PAD;
+            texts.push((cb.title.clone(), TITLE_FONT, inner));
+            texts.push((cb.subtitle.clone(), PART_FONT, inner));
+            let annotations: Vec<String> = cb
+                .strands
+                .iter()
+                .map(|s| draw::wire_annotation(s.label.as_deref(), s.gauge, &s.color))
+                .collect();
+            let partners = layout::braid_partners(cb.strands.iter().map(|s| s.group));
+            for (i, annotation) in annotations.iter().enumerate() {
+                // A braided pair's two labels share the row's width with
+                // the braid between them.
+                let room = match partners[i] {
+                    Some(j) => {
+                        inner
+                            - 2.0 * NODE_PAD
+                            - BRAID_SECTION
+                            - CABLE_LABEL_FONT.width(&annotations[j])
+                    }
+                    None => inner,
+                };
+                texts.push((annotation.clone(), CABLE_LABEL_FONT, room));
+            }
+            for drain in &cb.drains {
+                texts.push((drain.label.clone(), DRAIN_LABEL_FONT, inner));
+            }
+        }
+        for splice in &layout.splices {
+            for line in &splice.lines {
+                let room = splice.bounds.width - 2.0 * NODE_PAD;
+                texts.push((line.text.clone(), line.kind.font(), room));
+            }
+        }
+        for wire in &layout.loose {
+            if let Some(lane) = wire.lane {
+                let room = lane.right - lane.left - 2.0 * NODE_PAD;
+                texts.push((wire.annotation(), CABLE_LABEL_FONT, room));
+            }
+        }
+        texts
+    }
+
+    /// Every harness view of every fixture project that elaborates, laid
+    /// out on its own grid, by project and title.
+    fn fixture_harness_layouts() -> Vec<(String, HarnessLayout)> {
+        let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let mut projects: Vec<_> = std::fs::read_dir(fixtures)
+            .expect("the fixtures directory")
+            .map(|entry| entry.expect("a fixture").path())
+            .filter(|path| path.join("main.wb").is_file())
+            .collect();
+        projects.sort();
+        let mut layouts = Vec::new();
+        for project in projects {
+            let Some(design) = crate::check_project(Some(&project.join("main.wb"))).design else {
+                continue;
+            };
+            for view in design.views.iter().filter(|v| v.kind == ViewKind::Harness) {
+                let Some(subject) = design.subject_of(view) else {
+                    continue;
+                };
+                let Ok(step) = GridFault::positive_step(view, DEFAULT_GRID) else {
+                    continue;
+                };
+                let name = format!("{}: {}", project.display(), view.title);
+                layouts.push((name, HarnessLayout::compute(&design, subject, view, step)));
+            }
+        }
+        layouts
+    }
+
+    /// No harness text runs past the box (or the lane) it is drawn in: not
+    /// as the renderer measures it, which is what sizes the boxes, and not
+    /// as PNG and PDF draw it in the bundled DejaVu Sans.
+    #[test]
+    fn every_fixture_harness_text_fits_the_box_it_is_drawn_in() {
+        let layouts = fixture_harness_layouts();
+        assert!(
+            layouts
+                .iter()
+                .any(|(name, _)| name.contains("long_labels_project")),
+            "the long-labels fixture is among them"
+        );
+        let mut overruns = Vec::new();
+        for (name, layout) in &layouts {
+            for (text, font, room) in boxed_texts(layout) {
+                let (measured, drawn) = (font.width(&text), font.dejavu_width(&text));
+                if measured > room + 1e-6 || drawn > room + 1e-6 {
+                    overruns.push(format!(
+                        "{name}: {text:?} measures {measured:.1} and draws {drawn:.1} in {room:.1}"
+                    ));
+                }
+            }
+        }
+        assert!(overruns.is_empty(), "{overruns:#?}");
     }
 }
