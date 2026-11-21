@@ -1,0 +1,23 @@
+// Ground leads.
+//
+// The signal-connector grounds that return to the VCM on leads of their
+// own rather than on the chassis ground bus (systems/lv.wb): the
+// inverter's B- and the front BMS's GND. (The OBC's signal ground is drawn
+// with the rest of its signal loom, looms/ac_charge.wb.) This fragment
+// adds no instances or wires of its own — it binds the view to the merged
+// Vehicle namespace.
+
+extend Vehicle {
+}
+
+// --- View: ground leads ---
+// The VCM's 12V connector on the left, each lead's far connector on the
+// right.
+
+view harness "Ground leads" {
+    grid: 20;
+
+    include vcm.lv            at (0, 6);
+    include inv.control       at (40, 0);
+    include front.bms_signals at (40, 12);
+}

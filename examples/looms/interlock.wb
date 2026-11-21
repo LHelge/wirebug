@@ -1,0 +1,23 @@
+// Battery interlock harness.
+//
+// The stretch of the HV interlock loop (systems/safety.wb) that threads
+// the battery side: out of the MSD into the front pack, through the
+// tunnel loom to the rear pack (looms/tunnel.wb), and on into the HV
+// junction box. This fragment adds no instances or wires of its own — it
+// binds the view to the merged Vehicle namespace.
+
+extend Vehicle {
+}
+
+// --- View: battery interlock harness ---
+// The loop runs down the page: MSD → front pack on the left, the tunnel
+// loom across to the rear pack, rear pack → junction box on the right.
+
+view harness "Battery interlock harness" {
+    grid: 20;
+
+    include msd.intlk         at (0, 0);
+    include front.bms_signals at (0, 12);
+    include rear.bms_signals  at (40, 12);
+    include hvjb.intlk        at (40, 24);
+}

@@ -51,3 +51,14 @@ view harness "Gear loom" {
     include ic_gear.male at (0, 0);
     include gear.x1      at (36, 0);
 }
+
+// --- View: cab side ---
+// The branch point to the VCM: the lever's R and D requests leave the
+// inline's female half (the housing crimped onto the main loom) for the VCM.
+
+view harness "Cab loom — gear branch" {
+    grid: 20;
+
+    include vcm.gear       at (0, 0);
+    include ic_gear.female at (36, 0);
+}

@@ -53,3 +53,14 @@ view harness "Key loom" {
     include ic_key.male at (0, 0);
     include key.x1      at (36, 0);
 }
+
+// --- View: cab side ---
+// The branch point to the VCM: the key's IGN and CRANK leave the inline's
+// female half (the housing crimped onto the main loom) for the VCM.
+
+view harness "Cab loom — key branch" {
+    grid: 20;
+
+    include vcm.key       at (0, 0);
+    include ic_key.female at (36, 0);
+}

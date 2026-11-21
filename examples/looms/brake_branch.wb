@@ -71,3 +71,14 @@ view harness "Brake loom" {
     include bs1.sig       at (60, 0);
     include bs2.sig       at (60, 6);
 }
+
+// --- View: cab side ---
+// VCM to the branch point: the brake signals land in the inline's female
+// half (the housing crimped onto the main loom), shown with an F chip.
+
+view harness "Cab loom — brake branch" {
+    grid: 20;
+
+    include vcm.brake       at (0, 0);
+    include ic_brake.female at (36, 0);
+}
