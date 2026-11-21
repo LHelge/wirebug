@@ -1,12 +1,13 @@
 ---
 id: k7r.x7
 title: Part metadata on components
-status: open
+status: done
 priority: P2
 created: "2026-11-20T21:40:31.993150435Z"
-updated: "2026-11-20T21:40:31.993150435Z"
+updated: "2026-11-21T02:06:51.176305089Z"
 tags:
   - dsl
+attempts: 1
 ---
 
 ## Summary
