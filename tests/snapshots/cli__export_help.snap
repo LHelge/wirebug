@@ -2,13 +2,14 @@
 source: tests/cli.rs
 expression: "help(&[\"export\", \"--help\"])"
 ---
-Write a build table of a project — the wire list or the connector pin tables — as CSV or JSON
+Write a build table of a project — the wire list, the connector pin tables or the bill of materials — as CSV or JSON
 
 Usage: wirebug export <COMMAND>
 
 Commands:
   wires       The wire list (cut list): one row per conductor — each segment of a multi-endpoint wire — and one per cable screen
   connectors  The connector pin tables (crimp sheet): one row per conductor or drain in each cavity, and one per empty cavity or port without a pin
+  bom         The bill of materials: one row per thing to buy — housings by part, cables by type, loose wire by colour and gauge, components and splices by part — with its quantity per placement
   help        Print this message or the help of the given subcommand(s)
 
 Options:
