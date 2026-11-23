@@ -94,6 +94,14 @@ impl FarEnd {
         }
     }
 
+    /// The end's own name, without what a joint joins beyond it.
+    fn brief(&self) -> String {
+        match self {
+            Self::Joint { joint, .. } => joint.to_string(),
+            other => other.to_string(),
+        }
+    }
+
     /// The texts the end can be written as, most detailed first: a
     /// joint lists what its net joins beyond it as far as room allows,
     /// then `+N more`, then its name alone.
@@ -149,8 +157,9 @@ pub(super) struct Undrawn {
 
 impl Undrawn {
     /// The texts the reference can read, most detailed first and without
-    /// the arrow: one far end as [`FarEnd::texts`]; several listed as far
-    /// as they go, then `+N more`, then `N more` naming none. Last, for a
+    /// the arrow: one far end as [`FarEnd::texts`]; several listed in full,
+    /// then with each joint by its name alone, then as far as they go with
+    /// `+N more`, then `N more` naming none. Last, for a
     /// spot too cramped for any of them, nothing: the arrow alone says the
     /// wire goes on, and the tooltip where.
     fn texts(&self) -> Vec<String> {
@@ -158,10 +167,12 @@ impl Undrawn {
             [one] => one.texts(),
             far => {
                 let names: Vec<String> = far.iter().map(ToString::to_string).collect();
-                let mut texts: Vec<String> = (1..=names.len())
-                    .rev()
-                    .map(|shown| listed(&names, shown))
-                    .collect();
+                let brief: Vec<String> = far.iter().map(FarEnd::brief).collect();
+                let mut texts = vec![names.join(", ")];
+                if brief != names {
+                    texts.push(brief.join(", "));
+                }
+                texts.extend((1..names.len()).rev().map(|shown| listed(&names, shown)));
                 texts.push(format!("{} more", names.len()));
                 texts
             }
@@ -1908,6 +1919,29 @@ component sys {
             ]
         );
         assert_eq!(splice.to_string(), "sp_gnd (lamp.gnd, horn.gnd)");
+    }
+
+    #[test]
+    fn a_joint_among_several_far_ends_is_named_alone_before_any_end_is_dropped() {
+        let several = undrawn(vec![
+            FarEnd::Port(port("charger", "igct")),
+            FarEnd::Joint {
+                joint: port("ic_brake", "v12"),
+                beyond: vec![port("bs1", "b_pos")],
+            },
+        ]);
+        assert_eq!(
+            several.texts(),
+            [
+                "charger.igct, ic_brake.v12 (bs1.b_pos)",
+                "charger.igct, ic_brake.v12",
+                "charger.igct, +1 more",
+                "2 more",
+                ""
+            ]
+        );
+        let texts = several.texts();
+        assert_eq!(texts[preferred(&texts)], "charger.igct, ic_brake.v12");
     }
 
     #[test]
