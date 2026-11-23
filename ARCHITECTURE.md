@@ -1468,7 +1468,17 @@ splice fewer than two conductors of its merged component end on
   pairs are not also reported as too close, and `unroutable_wire` is
   reported only in a view with neither. Together they are exactly the
   conditions under which `route_all` returns `RouteFailed`, so a project
-  that passes `check` does not fail to route. Last, the canvas: each
+  that passes `check` does not fail to route. A view that does route may
+  still draw two nets on one line: where a channel between boxes has
+  fewer lines than wires, the nudge keeps the wires out of the boxes and
+  lets them share (`Routed::together`, see Connector routing), and each
+  pair of *nets* so drawn is `overlapping_wires`, a warning (the view
+  renders, but reads as if the two were joined), named by the first two
+  connections found on one line and labelled on an include each ends on.
+  Two nets that only run a stretch of one port row, as the two wires of a
+  crossover between facing boxes do, are not reported: that is the
+  router's choice of bends, and no room given to the view changes it.
+  Last, the canvas: each
   renderer's `layout` also reports `ViewLayout.canvas`, the viewBox of the
   view's standalone SVG (titled and stamped, the largest of the output
   modes and the one `--png` rasterises), from the very function its
@@ -1836,7 +1846,18 @@ segments outside the clearance-inflated boxes. Walls outrank pins, and
 pins outrank free segments, as strength tiers (`vpsc::Strength`), not
 large weights: a block sits exactly where its strongest members put it,
 so a segment pushed against a wall lands on the wall's grid line rather
-than a weight's rounding error off it. Not implemented: the
+than a weight's rounding error off it. The solver merges blocks and never
+splits them, so a separation it cannot keep (more wires than a channel
+between two keepouts has lines for) would hold and a wall give way,
+drawing a wire inside a box. `place::solve_axis` therefore solves again
+while any segment ends up past a wall, each time squeezing the
+separations on those segments a notch (`Squeeze`: the full gap, half of
+it — one grid step, so a squeezed bundle stays on grid lines — then
+none); with no gap left every segment can keep the line it was routed
+on, which is inside its walls. The routes left on one line come back
+with the wires (`Routed::together`): two of one net are a joint drawn as
+it is, two of different nets are `overlapping_wires` (see DSL
+validation). Not implemented: the
 paper's general branching-tree ordering (pseudo-direction + split
 points) and alley-midpoint recentring. Revisit if a view needs them.
 

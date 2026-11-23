@@ -1100,7 +1100,8 @@ mod tests {
             let pairs: Vec<_> = connections.iter().map(|c| (c.a, c.b)).collect();
             let wires = Router::build(&placement, grid.step())
                 .route_all(&pairs, grid.pitch())
-                .expect("routes");
+                .expect("routes")
+                .wires;
             let colors: Vec<_> = connections.iter().map(|c| c.color).collect();
             let annotations: Vec<_> = placement
                 .ports()

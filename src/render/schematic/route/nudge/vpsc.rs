@@ -48,6 +48,7 @@ pub(super) struct Var {
 }
 
 /// `position[right] − position[left] ≥ gap`.
+#[derive(Debug, Clone, Copy)]
 pub(super) struct Constraint {
     pub(super) left: usize,
     pub(super) right: usize,

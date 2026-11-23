@@ -101,7 +101,11 @@ inline's port, then what lies beyond it (`→ ic_pedal.gnd (pedal.gnd)`).
 Boxes may touch but not overlap (`overlapping_includes`). A wire leaves its
 port by one grid step and keeps one step clear of other boxes, so a wired
 port needs two grid steps of room in front of it (`include_too_close`), and
-a wire walled in on every side is `unroutable_wire`.
+a wire walled in on every side is `unroutable_wire`. A gap of two steps
+between boxes holds one wire, and each further wire through it needs two
+steps more: with less, two wires are drawn on one line, and when they
+belong to different nets `check` warns that they cannot be told apart
+(`overlapping_wires`).
 
 ### Enclosure
 

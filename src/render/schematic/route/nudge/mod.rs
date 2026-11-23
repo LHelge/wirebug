@@ -18,19 +18,19 @@ mod segments;
 mod vpsc;
 
 use super::RawRoute;
+use super::Routed;
 use super::collapse_collinear;
 use super::geometry::Rect;
 use super::visibility::Ovg;
-use crate::render::geometry::Point;
 use segments::Segment;
 
 /// Coordinate tolerance shared across the nudge submodules.
 pub(super) const EPS: f64 = 1e-6;
 
-/// Run the full §6 pipeline, returning one finished polyline per route in
-/// the input order. `gap` is the minimum spacing between parallel wires
-/// in a shared channel (the view's grid step).
-pub(super) fn run(ovg: &Ovg, obstacles: &[Rect], raws: &[RawRoute], gap: f64) -> Vec<Vec<Point>> {
+/// Run the full §6 pipeline. `gap` is the minimum spacing between parallel
+/// wires in a shared channel (the port pitch), given up only where the
+/// boxes either side of the channel leave less.
+pub(super) fn run(ovg: &Ovg, obstacles: &[Rect], raws: &[RawRoute], gap: f64) -> Routed {
     let node_paths: Vec<Vec<usize>> = raws.iter().map(|r| r.nodes.clone()).collect();
 
     let mut shapes: Vec<Option<Vec<Segment>>> = raws
@@ -39,13 +39,15 @@ pub(super) fn run(ovg: &Ovg, obstacles: &[Rect], raws: &[RawRoute], gap: f64) ->
         .collect();
 
     let channels = order::channels(ovg, &node_paths);
-    place::place(&mut shapes, &channels, raws, obstacles, gap);
+    let together = place::place(&mut shapes, &channels, raws, obstacles, gap);
 
-    raws.iter()
+    let wires = raws
+        .iter()
         .zip(shapes.iter())
         .map(|(r, shape)| match shape {
             Some(segs) => place::rebuild(r, segs),
             None => collapse_collinear(vec![r.a, r.b]),
         })
-        .collect()
+        .collect();
+    Routed { wires, together }
 }

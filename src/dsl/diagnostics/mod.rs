@@ -496,6 +496,35 @@ pub enum Problem {
         other: Option<SourceSpan>,
     },
 
+    /// Two schematic wires of different nets that the router could only
+    /// draw along one line: the gap they share between boxes has no room
+    /// to hold them apart, and the drawing reads as if they were joined. A
+    /// warning: the view still renders, misleadingly. Labelled on an
+    /// include each wire ends on.
+    #[error(
+        "the wires `{from}`–`{to}` and `{other_from}`–`{other_to}` cannot be told apart in view \"{view}\""
+    )]
+    #[diagnostic(
+        severity(Warning),
+        code(wirebug::overlapping_wires),
+        help(
+            "they share a gap that has room for one wire: wires keep one grid step clear of every box, so two grid steps between boxes hold a single wire and each further wire needs two steps more; move the boxes beside the gap apart, or put a port on a side with more room"
+        )
+    )]
+    OverlappingWires {
+        from: String,
+        to: String,
+        other_from: String,
+        other_to: String,
+        view: String,
+        #[source_code]
+        src: NamedSource<String>,
+        #[label("`{from}`–`{to}` ends here")]
+        at: SourceSpan,
+        #[label("`{other_from}`–`{other_to}` ends here")]
+        other: Option<SourceSpan>,
+    },
+
     /// A view's `grid:` step is zero or negative, so no renderer can draw
     /// it. Found by asking the view's renderer (`render::lint`), like the
     /// other layout problems.
@@ -1677,6 +1706,7 @@ impl Problem {
             | Problem::OverlappingIncludes { .. }
             | Problem::IncludeTooClose { .. }
             | Problem::UnroutableWire { .. }
+            | Problem::OverlappingWires { .. }
             | Problem::InvalidGrid { .. }
             | Problem::GridTooFine { .. }
             | Problem::ViewTooLarge { .. }
