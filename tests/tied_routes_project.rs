@@ -67,7 +67,7 @@ fn rendering_again_in_the_same_process_gives_the_same_svgs() {
 }
 
 #[test]
-fn a_tied_wire_goes_round_the_far_box_on_the_east_or_the_north() {
+fn a_wire_goes_round_the_far_box_on_the_east_or_under_it() {
     let rendered = render(&design());
     let svg = |name: &str| {
         &rendered
@@ -84,10 +84,11 @@ fn a_tied_wire_goes_round_the_far_box_on_the_east_or_the_north() {
     assert!(stacked.iter().all(|&(x, _)| x >= 0.0), "{stacked:?}");
     assert!(stacked.iter().any(|&(x, _)| x > 0.0), "{stacked:?}");
 
-    // `left` and `right` share a centreline, y = 0.
+    // `left` and `right` share a centreline, y = 0. Over `right` the wire
+    // would have its title row to clear as well, so under is shorter.
     let [side] = wire_points(svg("side_by_side.svg"))
         .try_into()
         .expect("one wire");
-    assert!(side.iter().all(|&(_, y)| y <= 0.0), "{side:?}");
-    assert!(side.iter().any(|&(_, y)| y < 0.0), "{side:?}");
+    assert!(side.iter().all(|&(_, y)| y >= 0.0), "{side:?}");
+    assert!(side.iter().any(|&(_, y)| y > 0.0), "{side:?}");
 }

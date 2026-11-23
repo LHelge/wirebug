@@ -190,6 +190,7 @@ impl PinoutRenderer {
                 Some(IncludeBox {
                     include,
                     bounds: table.as_ref()?.bounds(),
+                    title_row: None,
                 })
             })
             .collect();

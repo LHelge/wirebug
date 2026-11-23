@@ -110,6 +110,27 @@ impl Grid {
         2.0 * self.0
     }
 
+    /// The row a box's title is drawn in: the strip above `boxed`, whole
+    /// grid steps high, that holds a title `title` wide. It is as wide as
+    /// the box or, for a title that overhangs it, wider by the same whole
+    /// number of steps on each side, so its edges stay on grid lines. The
+    /// row is part of the box's footprint: no other box may stand in it,
+    /// and wires keep clear of it as they do of the box.
+    fn title_row(self, boxed: Bounds, title: f64) -> Bounds {
+        let height = self.snap(COMPONENT_TITLE_GAP + TITLE_ASCENT);
+        let overhang = self.snap(((title - boxed.width) / 2.0).max(0.0));
+        Bounds {
+            origin: Point::new(boxed.origin.x - overhang, boxed.origin.y - height),
+            width: boxed.width + 2.0 * overhang,
+            height,
+        }
+    }
+
+    /// Round a world-space length up to a whole number of grid steps.
+    fn snap(self, v: f64) -> f64 {
+        (v / self.0).ceil() * self.0
+    }
+
     /// How far the enclosure box stands off the wrapped child boxes — four
     /// steps (an even count, so the edges stay grid-aligned and routing has
     /// room between the children and the boundary).
@@ -125,6 +146,9 @@ pub(super) struct PlacedComponent {
     pub(super) width: f64,
     pub(super) height: f64,
     pub(super) label: String,
+    /// The row above the box that its title is drawn in
+    /// ([`Grid::title_row`]).
+    pub(super) title_row: Bounds,
     pub(super) ports: Vec<PlacedPort>,
     /// Port name → index into `ports`. Port names are unique per
     /// component in the DSL, so the name alone keys a port.
@@ -139,6 +163,20 @@ impl PlacedComponent {
             width: self.width,
             height: self.height,
         }
+    }
+
+    /// What the component takes up in the view: its box grown upward by
+    /// its title row and, when the title overhangs the box, the row itself.
+    /// Another include's footprint may touch but not overlap it, and wires
+    /// are routed round it.
+    pub(super) fn footprint(&self) -> impl Iterator<Item = Bounds> + use<> {
+        let row = self.title_row;
+        let titled = Bounds {
+            origin: Point::new(self.origin.x, row.origin.y),
+            width: self.width,
+            height: self.height + row.height,
+        };
+        std::iter::once(titled).chain((row.width > self.width).then_some(row))
     }
 
     /// Move each north-side pin annotation that would meet the title out
@@ -198,6 +236,10 @@ pub(super) struct PlacedPort {
     /// The ends its wires reach that the view does not draw, when it has
     /// any: what its off-view reference names.
     pub(super) off_view: Option<Undrawn>,
+    /// How far its wire runs under its own box's title before the routing
+    /// stub starts: the height of the title row for a port on a box's north
+    /// side, nothing for any other.
+    pub(super) lead: f64,
 }
 
 impl PlacedPort {
@@ -226,9 +268,11 @@ impl PlacedPort {
     }
 
     /// The tip of the port's routing stub: `step` out the way its wire
-    /// leaves it (inward for an inverted enclosure port).
+    /// leaves it (inward for an inverted enclosure port), past its box's
+    /// title row on a north side.
     pub(super) fn stub(&self, step: f64) -> Point {
         let Point { x, y } = self.pos;
+        let step = step + self.lead;
         match self.label_side() {
             Side::West => Point::new(x - step, y),
             Side::East => Point::new(x + step, y),
@@ -494,6 +538,12 @@ impl Placement {
                 .unwrap_or_else(|| inst.type_name.to_string());
             let (width, height) = box_dimensions(&label, &side_ports, grid);
             let origin = Point::new(centre.x - width / 2.0, centre.y - height / 2.0);
+            let boxed = Bounds {
+                origin,
+                width,
+                height,
+            };
+            let title_row = grid.title_row(boxed, TITLE_FONT.width(&label));
 
             let mut ports = Vec::new();
             let mut port_index = HashMap::new();
@@ -521,6 +571,10 @@ impl Placement {
                         label: port.label.clone(),
                         inverted: false,
                         off_view: None,
+                        lead: match side {
+                            Side::North => title_row.height,
+                            Side::West | Side::East | Side::South => 0.0,
+                        },
                     });
                 }
             }
@@ -530,6 +584,7 @@ impl Placement {
                 width,
                 height,
                 label,
+                title_row,
                 ports,
                 port_index,
             };
@@ -668,14 +723,16 @@ impl Placement {
             return None;
         }
 
-        // Bounding box of every child, then folded to span each port's
-        // free-axis coordinate so the edge always reaches its ports.
+        // Bounding box of every child's footprint (its title row is part
+        // of it, so a title never stands nearer the edge than a box does),
+        // then folded to span each port's free-axis coordinate so the edge
+        // always reaches its ports.
         let mut bounds: Option<(f64, f64, f64, f64)> = None;
-        for pc in components.values() {
+        for part in components.values().flat_map(PlacedComponent::footprint) {
             grow_bounds(
                 &mut bounds,
-                pc.origin,
-                Point::new(pc.origin.x + pc.width, pc.origin.y + pc.height),
+                part.origin,
+                Point::new(part.origin.x + part.width, part.origin.y + part.height),
             );
         }
         let (mut min_x, mut min_y, mut max_x, mut max_y) = bounds.unwrap_or((0.0, 0.0, 0.0, 0.0));
@@ -722,6 +779,7 @@ impl Placement {
                 label: port.label.clone(),
                 inverted: true,
                 off_view: None,
+                lead: 0.0,
             });
         }
         // Authored coordinates space enclosure ports freely, so each edge's
@@ -762,11 +820,18 @@ impl Placement {
             .clone()
             .unwrap_or_else(|| subject.type_name.to_string());
 
+        let boxed = Bounds {
+            origin,
+            width,
+            height,
+        };
+        let title_row = grid.title_row(boxed, TITLE_FONT.width(&label));
         Some(PlacedComponent {
             origin,
             width,
             height,
             label,
+            title_row,
             ports,
             port_index,
         })
@@ -823,9 +888,14 @@ impl Placement {
         })
     }
 
-    /// The bounding box of every placed component, in include order.
-    pub(super) fn component_bounds(&self) -> impl Iterator<Item = Bounds> + '_ {
-        self.components.values().map(PlacedComponent::bounds)
+    /// What wires are routed round: every part of every placed component's
+    /// footprint ([`PlacedComponent::footprint`]), with the component's
+    /// index in include order.
+    pub(super) fn obstacles(&self) -> impl Iterator<Item = (usize, Bounds)> + '_ {
+        self.components
+            .values()
+            .enumerate()
+            .flat_map(|(owner, pc)| pc.footprint().map(move |part| (owner, part)))
     }
 
     /// The subject's boundary box, if the view authors an `enclosure { }`.
@@ -842,7 +912,7 @@ impl Placement {
 
     /// Every placed port the router must reach: child ports, then the
     /// enclosure's inverted ports. The enclosure is a routing endpoint set
-    /// but not an obstacle, so it is absent from [`Self::component_bounds`].
+    /// but not an obstacle, so it is absent from [`Self::obstacles`].
     pub(super) fn ports(&self) -> impl Iterator<Item = &PlacedPort> + '_ {
         self.components
             .values()

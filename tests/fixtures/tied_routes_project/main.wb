@@ -1,6 +1,6 @@
-// Every wire here has two mirror-image routes of equal cost: the router's
-// tie-break alone decides which one is drawn, so rendering must settle it
-// the same way every time.
+// The wire of "Stacked" has two mirror-image routes of equal cost: the
+// router's tie-break alone decides which one is drawn, so rendering must
+// settle it the same way every time.
 use Unit from "components/unit.wb";
 
 component Rig {
@@ -27,8 +27,9 @@ view schematic "Stacked" {
     }
 }
 
-// The same tie turned on its side: `left.sig` faces `right`, and the wire
-// goes round `right` on the north or on the south.
+// The same layout turned on its side is no tie: `left.sig` faces `right`,
+// and the way round `right` on the north has its title row to clear, so the
+// wire goes round on the south.
 view schematic "Side By Side" {
     grid: 20;
 

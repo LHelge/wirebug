@@ -51,7 +51,12 @@ pub(super) struct RawRoute {
 /// every connection against the shared visibility graph.
 pub(super) struct Router {
     ovg: Ovg,
+    /// The keepouts: each part of a component's footprint (its box with
+    /// its title row), inflated by the clearance.
     obstacles: Vec<Rect>,
+    /// The component each of `obstacles` belongs to, by its index in
+    /// include order.
+    owners: Vec<usize>,
     soft_avoid: Vec<Vec<Point>>,
     /// How far routes stay clear of component boxes, and the length of
     /// the stub a wire leaves its port by — one grid step.
@@ -60,10 +65,10 @@ pub(super) struct Router {
 
 impl Router {
     pub(super) fn build(placement: &Placement, clearance: f64) -> Self {
-        let obstacles: Vec<Rect> = placement
-            .component_bounds()
-            .map(|b| Rect::from(b).inflated(clearance))
-            .collect();
+        let (owners, obstacles): (Vec<usize>, Vec<Rect>) = placement
+            .obstacles()
+            .map(|(owner, part)| (owner, Rect::from(part).inflated(clearance)))
+            .unzip();
 
         // Each port contributes its connection point and its stub (one
         // clearance out along the normal) as interesting points, so the
@@ -83,6 +88,7 @@ impl Router {
         Self {
             ovg: Ovg::build(&obstacles, &extra),
             obstacles,
+            owners,
             soft_avoid,
             clearance,
         }
@@ -103,11 +109,11 @@ impl Router {
                 }
                 let at = port.stub(self.clearance);
                 let swallowed = self
-                    .obstacles
+                    .owners
                     .iter()
-                    .enumerate()
-                    .find(|&(i, keepout)| i != owner && keepout.contains_point(at));
-                if let Some((blocker, _)) = swallowed {
+                    .zip(&self.obstacles)
+                    .find(|&(&i, keepout)| i != owner && keepout.contains_point(at));
+                if let Some((&blocker, _)) = swallowed {
                     blocked.push(BlockedStub {
                         owner,
                         port,
@@ -297,6 +303,7 @@ mod tests {
             label: "X".to_string(),
             inverted: true,
             off_view: None,
+            lead: 0.0,
         };
         let s = port.stub(10.0);
         assert_eq!(s.x, 110.0);
@@ -347,7 +354,7 @@ component sys {
 
         // `b`'s drawn box (un-inflated) — taken from the placement, since
         // its world position depends on the centre-based layout.
-        let b = Rect::from(placement.component_bounds().nth(1).expect("b placed"));
+        let b = Rect::from(placement.components[1].bounds());
 
         let path = router
             .route_all(&[(a, c)], step)
@@ -376,6 +383,7 @@ component sys {
         let router = Router {
             ovg: Ovg::build(&[obstacle], &clear),
             obstacles: vec![obstacle],
+            owners: vec![0],
             soft_avoid: Vec::new(),
             clearance: 10.0,
         };
@@ -387,6 +395,7 @@ component sys {
             label: "A".to_string(),
             inverted: false,
             off_view: None,
+            lead: 0.0,
         };
         let b = PlacedPort {
             port: PortName::from("b"),
@@ -396,6 +405,7 @@ component sys {
             label: "B".to_string(),
             inverted: false,
             off_view: None,
+            lead: 0.0,
         };
 
         assert!(router.route_one_avoiding(&a, &b, &[]).is_none());
@@ -408,6 +418,7 @@ component sys {
             label: "C".to_string(),
             inverted: false,
             off_view: None,
+            lead: 0.0,
         };
         assert_eq!(
             router.route_all(&[(&b, &c), (&a, &b)], 10.0).err(),
@@ -427,6 +438,7 @@ component sys {
             label: name.to_string(),
             inverted: false,
             off_view: None,
+            lead: 0.0,
         };
         let ports = [
             mk_port("a", Side::East, 0.0, 50.0),
@@ -447,6 +459,7 @@ component sys {
         let router = Router {
             ovg: Ovg::build(&[], &extra),
             obstacles: Vec::new(),
+            owners: Vec::new(),
             soft_avoid: Vec::new(),
             clearance: 10.0,
         };
@@ -546,7 +559,11 @@ component sys {
 
         let routed = router.route_all(&pairs, grid.pitch()).expect("routes");
 
-        let boxes: Vec<Rect> = placement.component_bounds().map(Rect::from).collect();
+        let boxes: Vec<Rect> = placement
+            .components
+            .values()
+            .map(|pc| Rect::from(pc.bounds()))
+            .collect();
         for wire in &routed.wires {
             assert!(
                 !wire
@@ -574,13 +591,60 @@ component sys {
     }
 
     #[test]
-    fn a_tied_wire_goes_round_the_box_on_the_east_or_the_north() {
+    fn a_tied_wire_goes_round_the_box_on_the_east() {
         let stacked = route_round_the_far_box(true);
         assert!(stacked.iter().any(|p| p.x > 0.0), "{stacked:?}");
         assert!(stacked.iter().all(|p| p.x >= 0.0), "{stacked:?}");
+    }
 
+    /// Over a box a wire has the title row to clear as well, so the way
+    /// under it is the shorter one: no tie.
+    #[test]
+    fn a_wire_goes_under_a_box_rather_than_over_its_title() {
         let side_by_side = route_round_the_far_box(false);
-        assert!(side_by_side.iter().any(|p| p.y < 0.0), "{side_by_side:?}");
-        assert!(side_by_side.iter().all(|p| p.y <= 0.0), "{side_by_side:?}");
+        assert!(side_by_side.iter().any(|p| p.y > 0.0), "{side_by_side:?}");
+        assert!(side_by_side.iter().all(|p| p.y >= 0.0), "{side_by_side:?}");
+    }
+
+    #[test]
+    fn a_north_wire_bends_above_its_box_s_title_row() {
+        // `near.p` leaves north and has to come back down to `far.p`, also
+        // on a north side: the run between them lies a step above both
+        // title rows, never in one.
+        let design = design_from(
+            r#"
+component sys {
+    near: node;
+    far: node;
+    wire red 1 [near.p, far.p];
+    component node {
+        pub port p "P";
+    }
+}
+"#,
+        );
+        const NORTH: &[(&str, Side)] = &[("p", Side::North)];
+        let view = view_of(
+            "sys",
+            &[("near", 0.0, 0.0, NORTH), ("far", 12.0, 0.0, NORTH)],
+        );
+        let grid = Grid::new(20.0);
+        let subject = design.get(&design.root).unwrap();
+        let placement = Placement::compute(&design, subject, &view, grid).expect("places");
+        let router = Router::build(&placement, grid.step());
+        let connections = placement.connections();
+        let pair = (connections[0].a, connections[0].b);
+
+        let wire = router
+            .route_all(&[pair], grid.pitch())
+            .expect("routes")
+            .wires
+            .remove(0);
+
+        let top = placement.components[0].origin.y;
+        let row = placement.components[0].title_row;
+        assert_eq!(row.height, 20.0, "one step holds the title on this grid");
+        let run: Vec<f64> = wire[1..wire.len() - 1].iter().map(|p| p.y).collect();
+        assert_eq!(run, [top - 40.0, top - 40.0], "{wire:?}");
     }
 }

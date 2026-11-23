@@ -36,7 +36,7 @@ view schematic "Cooling system" {
         south: fan_ctrl;
     }
 
-    include fuses at (4, 14) ports {
+    include fuses at (4, 15) ports {
         north: fan_ctrl;
         east:  ev_12v, fan_12v;
     }
@@ -46,7 +46,7 @@ view schematic "Cooling system" {
         south: gnd;
     }
 
-    include fan at (26, 15) ports {
+    include fan at (26, 16) ports {
         west:  v12;
         south: gnd;
     }

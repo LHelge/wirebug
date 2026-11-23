@@ -98,10 +98,14 @@ devices, in the colour of the conductor that reaches the second one. Where
 the view leaves the far side out, the stub names the splice or the
 inline's port, then what lies beyond it (`→ ic_pedal.gnd (pedal.gnd)`).
 
-Boxes may touch but not overlap (`overlapping_includes`). A wire leaves its
-port by one grid step and keeps one step clear of other boxes, so a wired
-port needs two grid steps of room in front of it (`include_too_close`), and
-a wire walled in on every side is `unroutable_wire`. A gap of two steps
+Boxes may touch but not overlap (`overlapping_includes`). A box's title is
+drawn in the row above it, one grid step high on the default grid (20
+units, in whole steps), and that row is part of the box: a box below
+another leaves the row free. A wire leaves its port by one grid
+step and keeps one step clear of other boxes and their titles, so a wired
+port needs two grid steps of room in front of it (`include_too_close`), a
+port on a north side a title row more, and a wire walled in on every side
+is `unroutable_wire`. A gap of two steps
 between boxes holds one wire, and each further wire through it needs two
 steps more: with less, two wires are drawn on one line, and when they
 belong to different nets `check` warns that they cannot be told apart
