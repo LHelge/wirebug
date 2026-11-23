@@ -488,8 +488,16 @@ Distinct from clap's `--version`, which prints the wirebug app version.
   with the splice as an end; `Wire::other_end` gives the pin across it),
   `Instance::splice_net(name)` (an `ir::SpliceNet`: the splices linked to
   it by splice-to-splice conductors and every other end of their
-  conductors, as `NetEnd`s with their wire) and `Instance::splice_nets()`
-  (one per group of linked splices). Every
+  conductors, as `NetEnd`s with their wire). `Design::joint_nets(subject)`
+  answers the wider question a schematic asks, what is one net where no
+  box stands: a **joint** (`Design::is_joint`) is a splice or a port of an
+  inline connector, whose halves mate pin for pin, and an `ir::JointNet`
+  is a group of joints linked by runs from joint to joint, with every
+  other end of a run landing on one (`JointEnd`: the end, the joint it
+  lands on, its wire). It is taken per run (`Wire::segments`), so a rail
+  passing an inline port joins only the two runs meeting there. Nets with
+  a splice come first, in the order their first splice is declared, then
+  the rest in wire order. Every
   `Wire` keeps its authored `span` (the `wire` statement, inside its
   cable for a conductor), so a check over the drawings can point back at
   it. So the schematic renderer ignores cables
@@ -508,8 +516,10 @@ Distinct from clap's `--version`, which prints the wirebug app version.
   share the instance namespace (endpoints say `ic.sig`) and elaborate as a
   **synthetic child `Instance`** marked by `Instance.inline: Option<
   InlineMeta>` (halves' description/`part`/layout) with one
-  designator-named connector — so `rewrite_wire`, the harness layout's
-  endpoint/node keys, and the schematic renderer need no special cases.
+  designator-named connector — so `rewrite_wire` and the harness layout's
+  endpoint/node keys need no special cases. A schematic never places an
+  inline: it draws the conductors landing on each of its ports as one net,
+  as it does a splice's (`Design::joint_nets`, see Render mental model).
   A harness include selects a half (`include ic.female`); elaboration
   normalizes the include's connector slot to the designator and records
   `Include.half`, and the harness node renders that half's part identity
@@ -551,12 +561,17 @@ adds no inference (`src/render/schematic/layout.rs`):
   a listed port whose wire lands on such an end gets an **off-view
   reference** instead (below). Being unplaced is the only reason a
   segment is not drawn.
-  A splice has no box and no port in a schematic (no schematic syntax
-  names one): each `Instance::splice_nets()` net is drawn as what it is
-  electrically, one rail between the far ends of its conductors — those
-  the view places, in wire order, each port once — chain-decomposed like
-  a multi-endpoint wire, each segment in the color of the conductor that
-  brings its second end in. No junction dot, as for any rail. The segments
+  A joint — a splice, or a port of an inline connector — has no box and
+  no port in a schematic (no schematic syntax names a splice, and
+  including an inline is `wrong_include_form`): each
+  `Design::joint_nets` net is drawn as what it is electrically, one rail
+  between the far ends of the runs landing on its joints — those the view
+  places, in wire order, each port once — chain-decomposed like a
+  multi-endpoint wire, each segment in the color of the conductor that
+  brings its second end in. So a signal handed from one loom to the next
+  through an inline is one wire between the two devices, and a splice
+  wired to an inline port is one net with it. No junction dot, as for any
+  rail, and no mark where the wire passes the inline. The segments
   join `Placement`'s connections, so the router and the Layout lints
   (`include_too_close`, `unroutable_wire`) see exactly what is drawn.
   Each drawn segment carries a `wire-code` annotation — the wire's color
@@ -677,8 +692,9 @@ syntax). `Placement::compute` records on each placed port
 view does not place, as `FarEnd`s, in wire order then endpoint order. Along
 a wire, a placed port reaches the unplaced ends on either side of it up to
 the nearest placed one (`[a, x, y, b]` with `a` and `b` placed gives both
-`x, y`); a splice net is named once, beside the first port it places, as
-the splice that port's conductor lands on and the net's unplaced ends; an
+`x, y`), and no further than a joint; a joint net is named once, beside
+the first port it places, as the joint that port's run lands on (a splice,
+`sp_gnd`, or an inline's port, `ic.sig`) and the net's unplaced ends; an
 own end off the enclosure reads `out (leaves <Subject>)`, as in a pinout.
 A port all of whose wires are drawn, or that has none, gets nothing. The
 reference (`OffView`) is a stub in the colour of the port's first undrawn

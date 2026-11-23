@@ -378,6 +378,78 @@ impl Design {
             .values()
             .filter(move |inst| inst.inline.is_none() && &inst.type_name == type_name)
     }
+
+    /// Whether `end`, an end of one of `subject`'s wires, is a joint: a
+    /// splice, or a port of an inline connector, whose mated halves pass
+    /// each pin straight through. Every conductor landing on a joint is
+    /// electrically one net with the others there.
+    pub fn is_joint(&self, subject: &Instance, end: &WireEnd) -> bool {
+        match end {
+            WireEnd::Splice(_) => true,
+            WireEnd::Child { instance, .. } => subject
+                .children
+                .get(instance)
+                .and_then(|path| self.get(path))
+                .is_some_and(|child| child.inline.is_some()),
+            WireEnd::Own(_) => false,
+        }
+    }
+
+    /// The nets `subject`'s joints make of its wires ([`Design::is_joint`]),
+    /// one per group of joints linked by runs from joint to joint. Nets
+    /// with a splice come first, in the order their first splice is
+    /// declared; the rest follow in wire order. A joint no wire ends on has
+    /// no net.
+    pub fn joint_nets<'a>(&'a self, subject: &'a Instance) -> Vec<JointNet<'a>> {
+        let runs: Vec<(&Wire, [&WireEnd; 2])> = subject
+            .wires
+            .iter()
+            .flat_map(|wire| wire.segments().map(move |run| (wire, run.ends)))
+            .filter(|(_, ends)| ends.iter().any(|end| self.is_joint(subject, end)))
+            .collect();
+        let joints = || {
+            runs.iter()
+                .flat_map(|(_, ends)| *ends)
+                .filter(|end| self.is_joint(subject, end))
+        };
+        let declared = subject.splices.keys().filter_map(|name| {
+            joints().find(|end| matches!(end, WireEnd::Splice(splice) if splice == name))
+        });
+
+        let mut nets: Vec<JointNet<'a>> = Vec::new();
+        for seed in declared.chain(joints()) {
+            if nets.iter().any(|net| net.joints.contains(&seed)) {
+                continue;
+            }
+            let mut net = JointNet {
+                joints: vec![seed],
+                ends: Vec::new(),
+            };
+            let mut next = 0;
+            while let Some(&joint) = net.joints.get(next) {
+                next += 1;
+                for (_, ends) in &runs {
+                    let linked = match ends {
+                        [a, b] if *a == joint => *b,
+                        [a, b] if *b == joint => *a,
+                        _ => continue,
+                    };
+                    if self.is_joint(subject, linked) && !net.joints.contains(&linked) {
+                        net.joints.push(linked);
+                    }
+                }
+            }
+            for (wire, [a, b]) in &runs {
+                for (end, joint) in [(*a, *b), (*b, *a)] {
+                    if net.joints.contains(&joint) && !self.is_joint(subject, end) {
+                        net.ends.push(JointEnd { end, joint, wire });
+                    }
+                }
+            }
+            nets.push(net);
+        }
+        nets
+    }
 }
 
 /// One elaborated instance (one node per placement).
@@ -478,6 +550,28 @@ pub struct NetEnd<'a> {
     pub wire: &'a Wire,
 }
 
+/// The conductors a group of linked joints makes one electrical net of:
+/// through splices and through the ports of inline connectors alike. See
+/// [`Design::joint_nets`].
+#[derive(Debug, Clone)]
+pub struct JointNet<'a> {
+    /// The joints of the net, as the wire ends naming them: the first one
+    /// found, then the ones reached through runs from joint to joint.
+    pub joints: Vec<&'a WireEnd>,
+    /// Each end of a run to one of the net's joints that is not itself a
+    /// joint, in wire order and then run order.
+    pub ends: Vec<JointEnd<'a>>,
+}
+
+/// One end a [`JointNet`] reaches beyond its joints: a port, the joint its
+/// run lands on, and the wire the run is part of.
+#[derive(Debug, Clone, Copy)]
+pub struct JointEnd<'a> {
+    pub end: &'a WireEnd,
+    pub joint: &'a WireEnd,
+    pub wire: &'a Wire,
+}
+
 /// What a component type is bought as, from the `key: value;` lines of its
 /// body. Every field is optional: a type without part data is still a
 /// component, only one a bill of materials cannot name.
@@ -572,18 +666,6 @@ impl Instance {
             })
             .collect();
         SpliceNet { splices, ends }
-    }
-
-    /// One [`SpliceNet`] per group of linked splices, in the order their
-    /// first splice is declared.
-    pub fn splice_nets(&self) -> Vec<SpliceNet<'_>> {
-        let mut nets: Vec<SpliceNet<'_>> = Vec::new();
-        for name in self.splices.keys() {
-            if !nets.iter().any(|net| net.splices.contains(&name)) {
-                nets.push(self.splice_net(name));
-            }
-        }
-        nets
     }
 
     /// The length that applies to `wire`, one of this instance's wires: its

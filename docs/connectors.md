@@ -182,3 +182,5 @@ same ports, which is what makes the two looms continuous.
 A harness view includes one half, the one built onto the loom it draws
 (`include ic_pedal.female at (x, y);`): see
 [Harness views](views.md#harness-views).
+A schematic view draws no inline: the ports wired to either side of one
+show connected, as one wire straight through it.

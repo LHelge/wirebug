@@ -1014,7 +1014,11 @@ mod tests {
                 &WireEnd::Own(PortName::from("gnd"))
             ]
         );
-        assert_eq!(root.splice_nets().len(), 1, "one net for the linked pair");
+        assert_eq!(
+            design.joint_nets(root).len(),
+            1,
+            "one net for the linked pair"
+        );
 
         // Across a conductor from a pin, the splice; across the link, the
         // other splice.
@@ -1250,6 +1254,85 @@ mod tests {
             )
         };
         assert_eq!(root.wires.iter().filter(|w| on_ic(w)).count(), 2);
+    }
+
+    /// The joint nets of the root of `body`, as `joint+joint: end@joint`
+    /// lists.
+    fn joint_nets_of(body: &str) -> Vec<String> {
+        let (design, problems) = elaborate_files(&[("main.wb", body)]);
+        assert!(problems.is_empty(), "{problems:?}");
+        let design = design.expect("design");
+        let root = design.get(&design.root).expect("root");
+        design
+            .joint_nets(root)
+            .iter()
+            .map(|net| {
+                let joints: Vec<String> = net.joints.iter().map(ToString::to_string).collect();
+                let ends: Vec<String> = net
+                    .ends
+                    .iter()
+                    .map(|e| format!("{}@{}", e.end, e.joint))
+                    .collect();
+                format!("{}: {}", joints.join("+"), ends.join(" "))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_inline_port_joins_the_conductors_landing_on_it_into_one_net() {
+        let nets = joint_nets_of(
+            "component top {
+                component leaf { pub port a \"A\"; pub port b \"B\"; }
+                x: leaf; y: leaf; z: leaf;
+                inline ic { port sig \"SIG\" pin 1; port gnd \"GND\" pin 2; }
+                wire red 1 [x.a, ic.sig];
+                wire blue 1 [ic.gnd, y.b];
+                wire red 1 [ic.sig, y.a];
+                wire black 1 [x.b, z.b];
+            }\n",
+        );
+        // Each port of the inline passes its own pin through: two nets, in
+        // wire order, and the wire that touches no joint is in neither.
+        assert_eq!(
+            nets,
+            ["ic.sig: x.a@ic.sig y.a@ic.sig", "ic.gnd: y.b@ic.gnd"]
+        );
+    }
+
+    #[test]
+    fn a_net_runs_on_through_a_splice_wired_to_an_inline_port() {
+        let nets = joint_nets_of(
+            "component top {
+                component leaf { pub port a \"A\"; }
+                x: leaf; y: leaf; z: leaf;
+                inline ic { port sig \"SIG\" pin 1; }
+                inline lone { port sig \"SIG\" pin 1; }
+                splice sp;
+                wire red 1 [x.a, ic.sig];
+                wire red 1 [ic.sig, sp];
+                wire red 1 [sp, y.a];
+                wire red 1 [sp, z.a];
+            }\n",
+        );
+        // The splice's net is found from the splice, and takes in the
+        // inline port its conductor runs to; ends stay in wire order. An
+        // inline no wire ends on has no net.
+        assert_eq!(nets, ["sp+ic.sig: x.a@ic.sig y.a@sp z.a@sp"]);
+    }
+
+    #[test]
+    fn a_rail_through_an_inline_port_joins_only_the_runs_that_land_on_it() {
+        let nets = joint_nets_of(
+            "component top {
+                component leaf { pub port a \"A\"; }
+                w: leaf; x: leaf; y: leaf;
+                inline ic { port sig \"SIG\" pin 1; }
+                wire red 1 [w.a, x.a, ic.sig, y.a];
+            }\n",
+        );
+        // `w.a`–`x.a` is a run of its own; the net is the two runs meeting
+        // on the inline.
+        assert_eq!(nets, ["ic.sig: x.a@ic.sig y.a@ic.sig"]);
     }
 
     #[test]

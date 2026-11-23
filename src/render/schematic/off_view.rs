@@ -4,11 +4,12 @@
 //! A schematic view draws a wire segment only when both its ends are placed
 //! ports. A listed port whose wire lands on an end the view leaves out (an
 //! unlisted port, an instance the view does not include, an own port with
-//! no enclosure placement, the far side of a splice) would otherwise show
-//! as a bare stub. It gets an [`OffView`] reference instead: a short stub
-//! in the wire's colour running out from the port, and the far ends as
-//! text at its end (`→ vcm.can2_h`), collapsed to `+N more` as room runs
-//! out, the whole list in the text's tooltip.
+//! no enclosure placement, the far side of a splice or of an inline
+//! connector) would otherwise show as a bare stub. It gets an [`OffView`]
+//! reference instead: a short stub in the wire's colour running out from
+//! the port, and the far ends as text at its end (`→ vcm.can2_h`),
+//! collapsed to `+N more` as room runs out, the whole list in the text's
+//! tooltip.
 //!
 //! References never move a wire. The view is routed as if they did not
 //! exist, and each reference is then fitted round what is drawn
@@ -24,7 +25,7 @@ use std::fmt;
 use super::draw::{CODE_HALF_HEIGHT, CodeAnchor};
 use super::layout::{Connection, Grid, PlacedComponent, PlacedPort, PlacedText, Placement};
 use super::{LABEL_INSET, PORT_RADIUS};
-use crate::dsl::ir::{InstanceName, PortName, SpliceName, TypeName, WireColor, WireEnd};
+use crate::dsl::ir::{InstanceName, PortName, TypeName, WireColor, WireEnd};
 use crate::render::Canvas;
 use crate::render::geometry::{Bounds, Point, Side};
 use crate::render::text::Font;
@@ -69,9 +70,10 @@ pub(super) enum FarEnd {
     /// The subject's own port, which the view does not place on an
     /// enclosure: the wire leaves the subject there.
     Leaves { port: PortName, subject: TypeName },
-    /// A splice, and the ends its net joins that the view does not place.
-    Splice {
-        splice: SpliceName,
+    /// A joint (a splice, or a port of an inline connector), and the ends
+    /// its net joins that the view does not place.
+    Joint {
+        joint: WireEnd,
         beyond: Vec<WireEnd>,
     },
 }
@@ -84,8 +86,8 @@ impl FarEnd {
                 port: port.clone(),
                 subject: subject.clone(),
             },
-            WireEnd::Splice(splice) => Self::Splice {
-                splice: splice.clone(),
+            WireEnd::Splice(_) => Self::Joint {
+                joint: end.clone(),
                 beyond: Vec::new(),
             },
             WireEnd::Child { .. } => Self::Port(end.clone()),
@@ -93,34 +95,34 @@ impl FarEnd {
     }
 
     /// The texts the end can be written as, most detailed first: a
-    /// splice lists what its net joins beyond it as far as room allows,
+    /// joint lists what its net joins beyond it as far as room allows,
     /// then `+N more`, then its name alone.
     fn texts(&self) -> Vec<String> {
-        let Self::Splice { splice, beyond } = self else {
+        let Self::Joint { joint, beyond } = self else {
             return vec![self.to_string()];
         };
         let names: Vec<String> = beyond.iter().map(ToString::to_string).collect();
         let mut texts: Vec<String> = (1..=names.len())
             .rev()
-            .map(|shown| format!("{splice} ({})", listed(&names, shown)))
+            .map(|shown| format!("{joint} ({})", listed(&names, shown)))
             .collect();
-        texts.push(splice.to_string());
+        texts.push(joint.to_string());
         texts
     }
 }
 
 /// The most detailed text: the name a reader would write in a wire, a
 /// mark on an own port saying the wire leaves the subject there, and a
-/// splice's name with everything it joins beyond it.
+/// joint's name with everything it joins beyond it.
 impl fmt::Display for FarEnd {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Port(end) => write!(f, "{end}"),
             Self::Leaves { port, subject } => write!(f, "{port} (leaves {subject})"),
-            Self::Splice { splice, beyond } if beyond.is_empty() => write!(f, "{splice}"),
-            Self::Splice { splice, beyond } => {
+            Self::Joint { joint, beyond } if beyond.is_empty() => write!(f, "{joint}"),
+            Self::Joint { joint, beyond } => {
                 let names: Vec<String> = beyond.iter().map(ToString::to_string).collect();
-                write!(f, "{splice} ({})", names.join(", "))
+                write!(f, "{joint} ({})", names.join(", "))
             }
         }
     }
@@ -1058,7 +1060,7 @@ impl Placement {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dsl::ir::{Design, View};
+    use crate::dsl::ir::{Design, SpliceName, View};
     use crate::render::MAX_CANVAS;
     use crate::render::schematic::MIN_PORT_PITCH;
     use crate::render::schematic::draw::code_anchors;
@@ -1893,8 +1895,8 @@ component sys {
 
     #[test]
     fn a_splice_names_itself_then_what_it_joins() {
-        let splice = FarEnd::Splice {
-            splice: SpliceName::from("sp_gnd"),
+        let splice = FarEnd::Joint {
+            joint: WireEnd::Splice(SpliceName::from("sp_gnd")),
             beyond: vec![port("lamp", "gnd"), port("horn", "gnd")],
         };
         assert_eq!(
@@ -1906,5 +1908,14 @@ component sys {
             ]
         );
         assert_eq!(splice.to_string(), "sp_gnd (lamp.gnd, horn.gnd)");
+    }
+
+    #[test]
+    fn an_inline_port_names_itself_then_what_it_joins() {
+        let inline = FarEnd::Joint {
+            joint: port("ic", "sig"),
+            beyond: vec![port("ecu", "sig_in")],
+        };
+        assert_eq!(inline.texts(), ["ic.sig (ecu.sig_in)", "ic.sig"]);
     }
 }

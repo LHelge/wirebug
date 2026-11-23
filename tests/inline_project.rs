@@ -1,6 +1,6 @@
 //! End-to-end check of the `inline_project` fixture: a loom split by an
 //! inline connector (a mated plug/receptacle pair), rendered as one
-//! harness drawing per housing half.
+//! harness drawing per housing half and seen through by a schematic.
 //!
 //! Tests never target `examples/` — that is the real, freely-changing
 //! vehicle project.
@@ -62,4 +62,27 @@ fn each_loom_drawing_shows_its_own_half() {
         assert!(view.svg.contains("APPS1"));
         assert!(view.svg.contains("Pedal branch"));
     }
+}
+
+#[test]
+fn a_schematic_draws_each_signal_straight_through_the_inline() {
+    let views = rendered();
+    let signals = views
+        .iter()
+        .find(|v| v.title == "Pedal signals")
+        .expect("schematic view");
+
+    // One wire per signal from the ECU to the pedal, in the colour of the
+    // conductor on the pedal's side of the inline.
+    assert_eq!(signals.svg.matches("class=\"wire\"").count(), 2);
+    for color in ["green", "yellow"] {
+        let stroked = format!("class=\"wire\" data-color=\"{color}\"");
+        assert_eq!(signals.svg.matches(&stroked).count(), 1, "{color}");
+    }
+
+    // The pedal's ground is not listed, so the ECU's ground alone gets a
+    // reference: the inline's port, then what lies beyond it.
+    assert_eq!(signals.svg.matches("class=\"off-view\"").count(), 1);
+    assert!(signals.svg.contains("ic_pedal.gnd (pedal.gnd)"));
+    assert!(!signals.svg.contains("ic_pedal.apps1"));
 }
