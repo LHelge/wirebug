@@ -2,7 +2,7 @@
   "name": "wirebug",
   "displayName": "Wirebug",
   "description": "Language support for the wirebug electrical schematic and wiring harness DSL (.wb)",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "wirebug",
   "license": "(MIT OR Apache-2.0)",
   "icon": "icon.png",
