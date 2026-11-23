@@ -426,14 +426,16 @@ pub enum Problem {
         first: SourceSpan,
     },
 
-    /// Two includes of one view draw boxes that overlap. Box sizes follow
-    /// from ports, labels and pin rows in the renderer's layout, so this is
-    /// found by laying the view out (`render::lint`), not from the DSL.
+    /// Two includes of one view draw boxes that overlap, or, in a
+    /// schematic, one stands in the row above the other that its title is
+    /// drawn in. Box sizes follow from ports, labels and pin rows in the
+    /// renderer's layout, so this is found by laying the view out
+    /// (`render::lint`), not from the DSL.
     #[error("`{include}` overlaps `{other}` in view \"{view}\"")]
     #[diagnostic(
         code(wirebug::overlapping_includes),
         help(
-            "boxes are sized from their ports and labels; move one include so the boxes no longer overlap (touching edges are fine)"
+            "boxes are sized from their ports and labels, and a schematic box also takes the row above it for its title; move one include so that neither box nor title overlaps the other (touching edges are fine)"
         )
     )]
     OverlappingIncludes {
@@ -450,13 +452,14 @@ pub enum Problem {
 
     /// A schematic include sits so close to another that a wired port has
     /// no room for its wire: the router leaves each port by one grid step
-    /// and keeps one step clear of every box, so that stub lands inside the
-    /// other box's clearance and the wire cannot be routed.
+    /// (past the title row, on a north side) and keeps one step clear of
+    /// every box and its title row, so that stub lands inside the other
+    /// box's clearance and the wire cannot be routed.
     #[error("no room to route {ports}: `{include}` is too close to `{other}` in view \"{view}\"")]
     #[diagnostic(
         code(wirebug::include_too_close),
         help(
-            "a wire leaves its port by one grid step and keeps one grid step clear of every other box, so leave at least two grid steps between a wired port and the box it faces"
+            "a wire leaves its port by one grid step and keeps one grid step clear of every other box and of the title above it, so leave at least two grid steps between a wired port and the box or title it faces"
         )
     )]
     IncludeTooClose {

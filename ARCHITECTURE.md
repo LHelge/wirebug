@@ -612,9 +612,9 @@ adds no inference (`src/render/schematic/layout.rs`):
   to the interior). Each port is placed `<port> at (x, y)` where one slot is a
   side keyword (`west`/`east` in x, `north`/`south` in y) pinning that axis to
   the edge, the other a grid coordinate along the free axis. The box
-  auto-wraps the child boxes (`Grid::enclosure_inset` standoff); it is a
-  routing endpoint set but never an obstacle (`Placement::component_bounds`
-  excludes it). An inverted port labels like a normal port on the *opposite*
+  auto-wraps the child boxes and their title rows (`Grid::enclosure_inset`
+  standoff, from each child's footprint, below); it is a routing endpoint
+  set but never an obstacle (`Placement::obstacles` excludes it). An inverted port labels like a normal port on the *opposite*
   side, so its name sits outside the boundary and its pin number inside.
 
 Box geometry is unchanged from before, minus author-supplied sizes: a
@@ -638,6 +638,30 @@ Because the pitch is two steps, the grid must be at least
 room: a wired port needs two steps clear in front of it, and boxes closer
 than two steps to each other close the corridor between them. `check`'s
 Layout phase finds both, from the same `Placement` and router geometry.
+
+**The title row.** A box's title is drawn above it, so the strip it is
+drawn in belongs to the box: `PlacedComponent.title_row`
+(`Grid::title_row`), as high as the title reaches above the box
+(`COMPONENT_TITLE_GAP` plus its ascent, 20 units) rounded up to whole grid
+steps — one step on the default grid, two at 10 — and as wide as the box
+or, for a title that overhangs it, whole steps wider on each side (a box
+is sized to hold its title, so only one of some 80 characters does).
+`PlacedComponent::footprint` is the box grown upward by the row, plus the
+row itself where it is the wider. Everything that asks what a box takes up
+asks for the footprint: the router's keepouts (`Placement::obstacles`, each
+part inflated by the clearance, `Router.owners` naming its component), so
+a wire runs a step above a title, never along it; the overlap check
+(`IncludeBox.title_row`), so a box standing in another's title row is
+`overlapping_includes`; and the enclosure, which wraps footprints. A wire
+from a north-side port has the row to cross before it can turn:
+`PlacedPort.lead` is the row's height on a box's north side (nothing
+elsewhere), and `PlacedPort::stub` runs the lead and then the one-step
+clearance, so the stub's tip sits on the keepout's edge as on any other
+side. That first run still crosses the title where the port stands under
+the text; a rail joining north ports no longer runs through every title.
+A north-side neighbour therefore needs the row's height more room than
+one on any other side (`include_too_close`), and the way over a box is
+that much longer than the way under it.
 
 **Pin annotations** (`render/schematic/pin.rs`, `PinAnnotation`, class
 `port-pin`) sit outside the box beside each port that has pins: the pins
@@ -786,8 +810,8 @@ estimates. So `check` is unchanged by construction: `include_too_close`,
 `unroutable_wire` and `overlapping_includes` read boxes and routes that do
 not depend on references, and the canvas rule never takes a view past
 `view_too_large`'s limit that was within it. A stub drawn through its own
-box's title (a north port under it) is what a drawn north wire does too;
-the router does not see titles either.
+box's title (a north port under it) is what a drawn north wire does too:
+the title row keeps other wires off a title, not the port's own.
 
 ### Wire strokes (`render/wire_stroke.rs`)
 
@@ -1456,9 +1480,12 @@ splice fewer than two conductors of its merged component end on
   plain two-label diagnostics):
   two includes whose boxes overlap (`overlapping_includes`, every view
   kind; boxes that only touch are fine, and the enclosure, text boxes and
-  harness cable boxes are not includes); a wired schematic port whose
-  routing stub (one clearance out) lands strictly inside another box's
-  clearance-inflated keepout, so the visibility graph has no node there
+  harness cable boxes are not includes; a schematic box includes its
+  title row, `IncludeBox::overlaps`, so a box may touch the title row of
+  the one below it and not stand in it); a wired schematic port whose
+  routing stub (one clearance out, past its own title row on a north
+  side) lands strictly inside another box's clearance-inflated keepout,
+  title row included, so the visibility graph has no node there
   (`include_too_close`, one per pair of includes, naming every blocked
   port — `Router::blocked_stubs`, the router's own precondition); and a
   schematic wire whose two stubs the visibility graph does not connect —
@@ -1870,7 +1897,8 @@ map. Two choices settle the ties a symmetric layout produces:
   either side) are settled by the order A\* is handed a node's
   successors, so the visibility graph lists every node's neighbours in
   `Dir` order (north, south, east, west). In practice a wire that must go
-  round a box goes east rather than west, north rather than south. The
+  round a box goes east rather than west. Over or under a box is no tie:
+  the title row makes the way over the longer one. The
   graph keeps its cells in a dense `Vec` in coordinate order, not a map.
 - **Nudging order.** `nudge::segments::shared_edges` is an `IndexMap`, so
   channels, and the separation constraints built from them, come in the

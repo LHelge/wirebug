@@ -240,10 +240,12 @@ impl HarnessRenderer {
                     .map(|node| IncludeBox {
                         include: node.include,
                         bounds: node.bounds(),
+                        title_row: None,
                     })
                     .chain(layout.splices.iter().map(|splice| IncludeBox {
                         include: splice.include,
                         bounds: splice.bounds,
+                        title_row: None,
                     }))
                     .collect();
                 boxes.sort_by_key(|b| b.include);

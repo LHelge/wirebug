@@ -274,6 +274,7 @@ impl SchematicRenderer {
                 Some(IncludeBox {
                     include: include_of(component)?,
                     bounds: pc.bounds(),
+                    title_row: Some(pc.title_row),
                 })
             })
             .collect();

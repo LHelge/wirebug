@@ -146,7 +146,7 @@ view schematic "Rear Battery" {
         south: coil_n;
     }
 
-    include precharge at (2, 10) ports {
+    include precharge at (2, 11) ports {
         west:  in;
         east:  out;
         south: coil_n;

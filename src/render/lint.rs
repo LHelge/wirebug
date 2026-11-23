@@ -32,6 +32,19 @@ pub(super) struct IncludeBox {
     /// The include's index in `view.includes`.
     pub(super) include: usize,
     pub(super) bounds: Bounds,
+    /// The row above a schematic box that its title is drawn in, which is
+    /// the box's to keep clear as much as the box is; `None` for the other
+    /// kinds, whose boxes carry their titles inside.
+    pub(super) title_row: Option<Bounds>,
+}
+
+impl IncludeBox {
+    /// Whether the two includes collide: the box or title row of one
+    /// shares area with the box or title row of the other.
+    fn overlaps(&self, other: &IncludeBox) -> bool {
+        let parts = |b: &IncludeBox| [Some(b.bounds), b.title_row].into_iter().flatten();
+        parts(self).any(|mine| parts(other).any(|theirs| mine.overlaps(&theirs)))
+    }
 }
 
 /// A wired port whose wire the renderer cannot route, because another
@@ -367,7 +380,7 @@ impl ViewLayout {
         let mut overlapping = Vec::new();
         for (k, later) in self.boxes.iter().enumerate() {
             for earlier in &self.boxes[..k] {
-                if earlier.bounds.overlaps(&later.bounds) {
+                if earlier.overlaps(later) {
                     overlapping.push(pair(earlier.include, later.include));
                 }
             }
@@ -613,8 +626,19 @@ view schematic "V" {{
 
     #[test]
     fn boxes_touching_edge_to_edge_are_fine() {
-        // `b` sits on `a`'s south edge; neither port faces the other.
-        assert!(summary(&two_nodes((0, 4), "east", "east")).is_empty());
+        // `b` sits on `a`'s east edge; neither port faces the other.
+        assert!(summary(&two_nodes((8, 0), "west", "east")).is_empty());
+    }
+
+    #[test]
+    fn a_box_in_the_title_row_of_the_one_below_overlaps_it() {
+        // `b` sits on `a`'s south edge, where `b`'s title is drawn.
+        assert_eq!(
+            summary(&two_nodes((0, 4), "east", "east")),
+            [code("overlapping_includes", &["b", "a"])]
+        );
+        // One step lower, its title row touches `a` and no more.
+        assert!(summary(&two_nodes((0, 5), "east", "east")).is_empty());
     }
 
     #[test]
@@ -670,8 +694,9 @@ view schematic "V" {{
         }
     }
 
-    /// `a`'s port has room to leave, but `n`, `s` and `e` stand within two
-    /// steps of each other (and touch `a`), closing every way out.
+    /// `a`'s port has room to leave, but `n`, `s` (with its title row) and
+    /// `e` stand within two steps of each other (and touch `a`), closing
+    /// every way out.
     const WALLED_IN: &str = r#"
 component Sys {
     a: Node;
@@ -690,7 +715,7 @@ view schematic "V" {
     grid: 20;
     include a at (0, 0) ports { east: sig; }
     include n at (8, -3);
-    include s at (8, 3);
+    include s at (8, 4);
     include e at (16, 0);
     include far at (30, 0) ports { west: sig; }
 }

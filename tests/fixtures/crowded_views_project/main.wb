@@ -38,8 +38,8 @@ view schematic "Overlap" {
     include rear at (4, 1);
 }
 
-// Clean: `rear` touches `left` edge to edge, and the enclosure that wraps
-// them all is not an obstacle.
+// Clean: `rear`'s title row touches `left` edge to edge, and the enclosure
+// that wraps them all is not an obstacle.
 view schematic "Touching" {
     grid: 20;
 
@@ -50,7 +50,7 @@ view schematic "Touching" {
         east: sig;
     }
 
-    include rear at (0, 4);
+    include rear at (0, 5);
 
     include right at (12, 0) ports {
         west: sig;
@@ -68,7 +68,7 @@ view schematic "Walled In" {
     }
 
     include wall_n at (8, -3);
-    include wall_s at (8, 3);
+    include wall_s at (8, 4);
     include wall_e at (16, 0);
 
     include rear at (30, 0) ports {
