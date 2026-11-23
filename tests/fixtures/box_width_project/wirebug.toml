@@ -1,0 +1,4 @@
+[project]
+name = "box-width-project"
+version = "0.1.0"
+description = "Schematic boxes of one type under long and short titles, and labels that set a box's width"

@@ -222,6 +222,13 @@ const TITLE_FONT: Font = Font::bold(13.0);
 const TITLE_ASCENT: f64 = 12.0;
 const TITLE_DESCENT: f64 = 3.0;
 
+/// A port label's font (the `.port-label` rule).
+const LABEL_FONT_SIZE: f64 = 11.0;
+const LABEL_FONT: Font = Font::regular(LABEL_FONT_SIZE);
+/// The least room between two port labels inside one box. A box is made
+/// as wide as that takes ([`SidePorts::label_spread`]).
+const LABEL_GAP: f64 = 6.0;
+
 pub(super) struct PlacedPort {
     pub(super) port: PortName,
     pub(super) side: Side,
@@ -251,6 +258,42 @@ impl PlacedPort {
             self.side.opposite()
         } else {
             self.side
+        }
+    }
+
+    /// The area the port's name covers: inside its box, or, for an
+    /// inverted enclosure port, outside the boundary.
+    pub(super) fn label_extent(&self) -> Bounds {
+        Self::label_area(self.label_side(), self.pos, &self.label)
+    }
+
+    /// The area the name `label` covers beside a port at `pos` that labels
+    /// as one on `side` does: 11px text starting `LABEL_INSET` in from the
+    /// port, level on a west or east side and turned to run inward on a
+    /// north or south one. Measured with the shared estimator, which
+    /// bounds the bundled font's widths.
+    fn label_area(side: Side, pos: Point, label: &str) -> Bounds {
+        let length = LABEL_FONT.width(label);
+        let half = LABEL_FONT_SIZE / 2.0;
+        let Point { x, y } = pos;
+        let (origin, width, height) = match side {
+            Side::West => (Point::new(x + LABEL_INSET, y - half), length, 2.0 * half),
+            Side::East => (
+                Point::new(x - LABEL_INSET - length, y - half),
+                length,
+                2.0 * half,
+            ),
+            Side::North => (Point::new(x - half, y + LABEL_INSET), 2.0 * half, length),
+            Side::South => (
+                Point::new(x - half, y - LABEL_INSET - length),
+                2.0 * half,
+                length,
+            ),
+        };
+        Bounds {
+            origin,
+            width,
+            height,
         }
     }
 
@@ -425,6 +468,118 @@ impl<'a> SidePorts<'a> {
             (Side::South, &self.south),
         ]
     }
+
+    /// The size (width, height) in world units of the box that holds these
+    /// ports and their labels on `grid`. The title has no say: boxes
+    /// listing the same ports are the same size whatever they are called,
+    /// and a title longer than its box overhangs it ([`Grid::title_row`]).
+    ///
+    /// Both dimensions are rounded up to an even number of steps (so the
+    /// box centres on the grid), and margins and port pitch are the values
+    /// [`port_position`] places ports at, so the box always contains its
+    /// ports. The height holds the busier of the west and east sides and
+    /// the turned north and south labels end to end; the width holds the
+    /// busier of the north and south sides, at least `MIN_WIDTH`, and is
+    /// then as much wider as keeps the labels apart.
+    fn box_size(&self, grid: Grid) -> (f64, f64) {
+        let (margin, pitch) = (grid.margin(), grid.pitch());
+
+        // Span a side needs for `n` ports: nothing when empty, otherwise the
+        // pitch between ports plus a margin at each end.
+        let side_extent = |n: usize| match n {
+            0 => 0.0,
+            _ => (n - 1) as f64 * pitch + 2.0 * margin,
+        };
+
+        // North/south labels are drawn vertically (rotated 90°), each
+        // reaching in only from the edge it sits on. The box must fit both
+        // without them colliding, plus a margin of clearance between them.
+        let top_label_h = vertical_label_extent(&self.north);
+        let bot_label_h = vertical_label_extent(&self.south);
+        let vertical_label_h = top_label_h + bot_label_h + margin;
+
+        // No fixed height floor — the box need only fit its ports and any
+        // north/south labels, but always at least one port with its margins.
+        let height = grid.snap_box(
+            side_extent(self.west.len())
+                .max(side_extent(self.east.len()))
+                .max(vertical_label_h)
+                .max(2.0 * margin),
+        );
+
+        let width = MIN_WIDTH
+            .max(side_extent(self.north.len()))
+            .max(side_extent(self.south.len()));
+        let width = width + self.label_spread(width, height, pitch);
+
+        (grid.snap_box(width), height)
+    }
+
+    /// How much wider than `width` a box `height` high must be to hold its
+    /// port labels with [`LABEL_GAP`] between any two of them; nothing
+    /// when it does already.
+    ///
+    /// A level label must end inside the box, [`LABEL_INSET`] short of the
+    /// far edge. Beyond that, only labels that would meet count. Two
+    /// labels more than the gap apart up and down (a west label on a row
+    /// that a turned label stops short of) pass each other at any width.
+    /// The others are level with each other and must be the gap apart
+    /// sideways: a west and an east label move apart by what the box
+    /// widens, a west or east label and a turned one by half of it, the
+    /// north and south ports staying centred. Turned labels keep clear of
+    /// each other through the height and the port pitch.
+    fn label_spread(&self, width: f64, height: f64, pitch: f64) -> f64 {
+        let origin = Point::new(-width / 2.0, -height / 2.0);
+        let areas = |side: Side, refs: &[(&PortName, &Port)]| -> Vec<Bounds> {
+            refs.iter()
+                .enumerate()
+                .map(|(k, (_, port))| {
+                    let pos = port_position(origin, width, height, side, k, refs.len(), pitch);
+                    PlacedPort::label_area(side, pos, &port.label)
+                })
+                .collect()
+        };
+        let (west, east) = (areas(Side::West, &self.west), areas(Side::East, &self.east));
+        let mut turned = areas(Side::North, &self.north);
+        turned.extend(areas(Side::South, &self.south));
+
+        let level = |a: &Bounds, b: &Bounds| {
+            a.origin.y < b.origin.y + b.height + LABEL_GAP
+                && b.origin.y < a.origin.y + a.height + LABEL_GAP
+        };
+        // How far `left` and `right` are short of the gap between them.
+        let short =
+            |left: &Bounds, right: &Bounds| left.origin.x + left.width + LABEL_GAP - right.origin.x;
+
+        let facing = west.iter().flat_map(|w| {
+            east.iter()
+                .filter(move |e| level(w, e))
+                .map(move |e| short(w, e))
+        });
+        let west_of_turned = west.iter().flat_map(|w| {
+            turned
+                .iter()
+                .filter(move |t| level(w, t))
+                .map(move |t| 2.0 * short(w, t))
+        });
+        let east_of_turned = east.iter().flat_map(|e| {
+            turned
+                .iter()
+                .filter(move |t| level(e, t))
+                .map(move |t| 2.0 * short(t, e))
+        });
+        // A level label with nothing beside it still ends inside the box,
+        // as far from the far edge as it starts from its own.
+        let held = west
+            .iter()
+            .chain(&east)
+            .map(|label| label.width + 2.0 * LABEL_INSET - width);
+        facing
+            .chain(west_of_turned)
+            .chain(east_of_turned)
+            .chain(held)
+            .fold(0.0, f64::max)
+    }
 }
 
 impl Placement {
@@ -536,7 +691,7 @@ impl Placement {
                 .label
                 .clone()
                 .unwrap_or_else(|| inst.type_name.to_string());
-            let (width, height) = box_dimensions(&label, &side_ports, grid);
+            let (width, height) = side_ports.box_size(grid);
             let origin = Point::new(centre.x - width / 2.0, centre.y - height / 2.0);
             let boxed = Bounds {
                 origin,
@@ -921,9 +1076,10 @@ impl Placement {
     }
 
     /// The drawing's bounding box, padded for margins and an optional
-    /// title. Encloses both the component boxes and every routed wire —
-    /// wires can detour outside the boxes, so they must be measured too —
-    /// and keeps every pin annotation and off-view reference inside it.
+    /// title. Encloses the component boxes, their titles (one longer than
+    /// its box overhangs it) and every routed wire — wires can detour
+    /// outside the boxes, so they must be measured too — and keeps every
+    /// pin annotation and off-view reference inside it.
     pub(super) fn viewbox(
         &self,
         has_title: bool,
@@ -949,6 +1105,10 @@ impl Placement {
             min_y = min_y.min(pc.origin.y);
             max_x = max_x.max(pc.origin.x + pc.width);
             max_y = max_y.max(pc.origin.y + pc.height);
+            // A title longer than its box overhangs it on both sides.
+            let title = pc.title_bound();
+            min_x = min_x.min(title.origin.x);
+            max_x = max_x.max(title.origin.x + title.width);
         }
         for text in &self.texts {
             min_x = min_x.min(text.origin.x);
@@ -1037,45 +1197,6 @@ fn endpoint_key(end: &WireEnd) -> Option<PortKey> {
         WireEnd::Own(port) => Some(PortKey::Enclosure(port.clone())),
         WireEnd::Splice(_) => None,
     }
-}
-
-/// The minimum box size (width, height) in world units that fits this
-/// component's ports and label on the given grid. Both dimensions are
-/// rounded up to an even number of steps (so the box centres on the grid),
-/// and margins/port pitch are the same values [`port_position`] places
-/// ports at — so the box always contains its ports.
-fn box_dimensions(label: &str, sides: &SidePorts, grid: Grid) -> (f64, f64) {
-    let (margin, pitch) = (grid.margin(), grid.pitch());
-
-    let label_w = label.chars().count() as f64 * CHAR_WIDTH + 2.0 * margin;
-
-    // Span a side needs for `n` ports: nothing when empty, otherwise the
-    // pitch between ports plus a margin at each end.
-    let side_extent = |n: usize| match n {
-        0 => 0.0,
-        _ => (n - 1) as f64 * pitch + 2.0 * margin,
-    };
-
-    let width = MIN_WIDTH
-        .max(label_w)
-        .max(side_extent(sides.north.len()))
-        .max(side_extent(sides.south.len()));
-
-    // North/south labels are drawn vertically (rotated 90°), each reaching
-    // in only from the edge it sits on. The box must fit both without them
-    // colliding, plus a margin of clearance between them.
-    let top_label_h = vertical_label_extent(&sides.north);
-    let bot_label_h = vertical_label_extent(&sides.south);
-    let vertical_label_h = top_label_h + bot_label_h + margin;
-
-    // No fixed height floor — the box need only fit its ports and any
-    // north/south labels, but always at least one port with its margins.
-    let height = side_extent(sides.west.len())
-        .max(side_extent(sides.east.len()))
-        .max(vertical_label_h)
-        .max(2.0 * margin);
-
-    (grid.snap_box(width), grid.snap_box(height))
 }
 
 /// Vertical span (in user units) that a rotated label needs from the box
@@ -2012,5 +2133,216 @@ component sys {
             })
             .collect();
         assert_eq!(moved, [true, true, true, false]);
+    }
+
+    /// A relay drawn three times under titles of very different lengths,
+    /// and a controller whose labels are far longer than its title.
+    fn titled() -> Design {
+        design_from(
+            r#"
+component sys {
+    k1: Relay "K1";
+    k2: Relay "Main contactor economiser relay";
+    ecu: Ecu "ECU";
+    component Relay {
+        pub port coil  "COIL";
+        pub port com   "COMMON";
+        pub port no    "NORMALLY OPEN";
+        pub port sense "SENSE";
+    }
+    component Ecu {
+        pub port supply "IGNITION SWITCHED SUPPLY";
+        pub port ground "CHASSIS GROUND RETURN";
+        pub port can_h  "CAN HIGH";
+        pub port can_l  "CAN LOW";
+        pub port wake   "WAKE";
+    }
+}
+"#,
+        )
+    }
+
+    /// Place `ports` of `instance` alone in a view on the default grid.
+    fn placed(design: &Design, instance: &str, ports: &[(&str, Side)]) -> PlacedComponent {
+        let subject = design.get(&design.root).unwrap();
+        let view = view_of("sys", &[(instance, 0.0, 0.0, ports)]);
+        let mut placement =
+            Placement::compute(design, subject, &view, Grid::new(DEFAULT_GRID)).unwrap();
+        placement
+            .components
+            .swap_remove(&InstanceName::from(instance))
+            .unwrap()
+    }
+
+    /// The room between two label areas: how far apart they are along the
+    /// axis that separates them most.
+    fn room(a: &Bounds, b: &Bounds) -> f64 {
+        let across = (b.origin.x - a.origin.x - a.width).max(a.origin.x - b.origin.x - b.width);
+        let along = (b.origin.y - a.origin.y - a.height).max(a.origin.y - b.origin.y - b.height);
+        across.max(along)
+    }
+
+    /// The least room between any two port labels of `component`.
+    fn least_room(component: &PlacedComponent) -> f64 {
+        let labels: Vec<Bounds> = component
+            .ports
+            .iter()
+            .map(PlacedPort::label_extent)
+            .collect();
+        labels
+            .iter()
+            .enumerate()
+            .flat_map(|(i, a)| labels[i + 1..].iter().map(move |b| room(a, b)))
+            .fold(f64::INFINITY, f64::min)
+    }
+
+    #[test]
+    fn boxes_listing_the_same_ports_are_the_same_size_whatever_their_titles() {
+        let design = titled();
+        let ports = [
+            ("coil", Side::West),
+            ("com", Side::East),
+            ("sense", Side::South),
+        ];
+        let short = placed(&design, "k1", &ports);
+        let long = placed(&design, "k2", &ports);
+        assert_eq!((short.width, short.height), (long.width, long.height));
+        assert_eq!(short.origin, long.origin);
+
+        // The long title is wider than the box and overhangs it evenly, in
+        // a row whole steps wider on each side; the short one's row is the
+        // box's width.
+        let title = long.title_bound();
+        assert!(title.width > long.width, "{title:?}");
+        assert_eq!(short.title_row.width, short.width);
+        let overhang = long.origin.x - long.title_row.origin.x;
+        assert!(overhang > 0.0);
+        assert_eq!(overhang % DEFAULT_GRID, 0.0);
+        assert_eq!(long.title_row.width, long.width + 2.0 * overhang);
+        assert!(long.title_row.origin.x <= title.origin.x);
+    }
+
+    #[test]
+    fn a_box_with_short_labels_keeps_the_minimum_width() {
+        let design = titled();
+        let relay = placed(&design, "k1", &[("coil", Side::West), ("com", Side::East)]);
+        assert_eq!(relay.width, Grid::new(DEFAULT_GRID).snap_box(MIN_WIDTH));
+    }
+
+    #[test]
+    fn facing_labels_widen_the_box_by_no_more_than_keeps_them_apart() {
+        // On one row the two long names do not fit in the minimum width.
+        let design = titled();
+        let ecu = placed(
+            &design,
+            "ecu",
+            &[("supply", Side::West), ("ground", Side::East)],
+        );
+        let quantum = 2.0 * DEFAULT_GRID;
+        assert!(ecu.width > Grid::new(DEFAULT_GRID).snap_box(MIN_WIDTH));
+        let between = least_room(&ecu);
+        assert!(between >= LABEL_GAP, "{between}");
+        // One size down (a west and an east label close in by all of it)
+        // they would be nearer than the gap.
+        assert!(between - quantum < LABEL_GAP, "{between}");
+    }
+
+    #[test]
+    fn a_level_label_keeps_clear_of_a_turned_one_it_is_level_with() {
+        // `NORMALLY OPEN` reaches the middle of a minimum-width box, where
+        // `SENSE` runs up from the south side.
+        let design = titled();
+        let ports = [
+            ("coil", Side::West),
+            ("no", Side::East),
+            ("sense", Side::South),
+        ];
+        let relay = placed(&design, "k1", &ports);
+        let quantum = 2.0 * DEFAULT_GRID;
+        assert!(relay.width > Grid::new(DEFAULT_GRID).snap_box(MIN_WIDTH));
+        let between = least_room(&relay);
+        assert!(between >= LABEL_GAP, "{between}");
+        // The south port stays centred, so a size down brings the east
+        // label half of it nearer.
+        assert!(between - quantum / 2.0 < LABEL_GAP, "{between}");
+    }
+
+    #[test]
+    fn labels_that_pass_each_other_do_not_widen_the_box() {
+        // `CHASSIS GROUND RETURN` runs across the middle of the box on the
+        // top row; `WAKE`, turned in the middle of the south side, stops
+        // short of that row and is level only with the short `CAN LOW`.
+        let design = titled();
+        let ports = [
+            ("ground", Side::West),
+            ("can_h", Side::West),
+            ("can_l", Side::West),
+            ("wake", Side::South),
+        ];
+        let ecu = placed(&design, "ecu", &ports);
+        assert_eq!(ecu.width, Grid::new(DEFAULT_GRID).snap_box(MIN_WIDTH));
+        assert!(least_room(&ecu) >= LABEL_GAP);
+        let label = |name: &str| ecu.ports[ecu.port_index[&PortName::from(name)]].label_extent();
+        let (ground, wake) = (label("ground"), label("wake"));
+        assert!(ground.origin.x + ground.width > wake.origin.x + wake.width);
+        assert!(ground.origin.y + ground.height + LABEL_GAP <= wake.origin.y);
+    }
+
+    #[test]
+    fn a_lone_label_longer_than_the_minimum_width_is_held_inside_the_box() {
+        let design = titled();
+        let ecu = placed(&design, "ecu", &[("supply", Side::West)]);
+        let supply = ecu.ports[0].label_extent();
+        assert!(supply.width + 2.0 * LABEL_INSET > MIN_WIDTH, "{supply:?}");
+        let room = ecu.origin.x + ecu.width - (supply.origin.x + supply.width);
+        assert!(room >= LABEL_INSET, "{room}");
+        assert!(room - 2.0 * DEFAULT_GRID < LABEL_INSET, "{room}");
+    }
+
+    #[test]
+    fn no_two_labels_of_a_box_with_ports_on_every_side_come_within_the_gap() {
+        let design = titled();
+        let ecu = placed(
+            &design,
+            "ecu",
+            &[
+                ("supply", Side::West),
+                ("can_h", Side::West),
+                ("ground", Side::East),
+                ("can_l", Side::East),
+                ("wake", Side::South),
+            ],
+        );
+        let between = least_room(&ecu);
+        assert!(between >= LABEL_GAP, "{between}");
+        // Every port is still on the box's edge, the south one centred.
+        let wake = &ecu.ports[ecu.port_index[&PortName::from("wake")]];
+        assert_eq!(wake.pos.x, ecu.origin.x + ecu.width / 2.0);
+        assert!(
+            ecu.ports
+                .iter()
+                .all(|p| p.side != Side::East || p.pos.x == ecu.origin.x + ecu.width)
+        );
+    }
+
+    #[test]
+    fn the_canvas_holds_a_title_longer_than_its_box() {
+        let design = titled();
+        let subject = design.get(&design.root).unwrap();
+        let view = view_of(
+            "sys",
+            &[
+                ("k1", 0.0, 0.0, &[("coil", Side::West)]),
+                ("k2", 0.0, 10.0, &[("coil", Side::West)]),
+            ],
+        );
+        let placement =
+            Placement::compute(&design, subject, &view, Grid::new(DEFAULT_GRID)).unwrap();
+        let long = &placement.components[&InstanceName::from("k2")];
+        let title = long.title_bound();
+        let vb = placement.viewbox(false, &[], &[]);
+        assert!(title.origin.x < long.origin.x);
+        assert_eq!(vb.x, title.origin.x - SVG_MARGIN);
+        assert_eq!(vb.x + vb.width, title.origin.x + title.width + SVG_MARGIN);
     }
 }

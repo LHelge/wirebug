@@ -1,0 +1,103 @@
+// Box width: a schematic box is sized from the ports it lists and their
+// labels, never from its title. So the three fuses of "Fuse Column" are
+// the same width and line up, the long title of the middle one overhanging
+// its box, and in "Relays" it is the labels that make a box wider than the
+// minimum: `NORMALLY OPEN` level with the turned `SENSE`, and the two long
+// names facing each other on the controller's top row. "Lone Fuse" is the
+// long-titled fuse on its own: the canvas must hold the title, which
+// reaches past everything else drawn.
+
+component Panel {
+    f1: Fuse "F1";
+    f2: Fuse "Cabin heater and demister supply fuse";
+    f3: Fuse "F3";
+
+    k1:  Relay      "K1";
+    k2:  Relay      "Main contactor economiser relay";
+    ecu: Controller "ECU";
+
+    pub port feed "FEED";
+    pub port o1   "O1";
+    pub port o2   "O2";
+    pub port o3   "O3";
+
+    wire red 1 [feed, f1.a, f2.a, f3.a];
+    wire red 1 [f1.b, o1];
+    wire red 1 [f2.b, o2];
+    wire red 1 [f3.b, o3];
+
+    wire blue  1 [k1.com,      k2.com];
+    wire green 1 [k1.no,       ecu.supply];
+    wire black 1 [k2.coil_neg, ecu.ground];
+
+    component Fuse {
+        pub port a "IN";
+        pub port b "OUT";
+    }
+
+    component Relay {
+        pub port coil_pos "COIL+";
+        pub port coil_neg "COIL-";
+        pub port com      "COMMON";
+        pub port no       "NORMALLY OPEN";
+        pub port sense    "SENSE";
+    }
+
+    component Controller {
+        pub port supply "IGNITION SWITCHED SUPPLY";
+        pub port ground "CHASSIS GROUND RETURN";
+        pub port can_h  "CAN HIGH";
+        pub port can_l  "CAN LOW";
+    }
+}
+
+view schematic "Fuse Column" {
+    grid: 20;
+
+    enclosure {
+        feed at (west, 7);
+        o1   at (east, 2);
+        o2   at (east, 7);
+        o3   at (east, 12);
+    }
+
+    include f1 at (14, 2) ports {
+        west: a;
+        east: b;
+    }
+
+    include f2 at (14, 7) ports {
+        west: a;
+        east: b;
+    }
+
+    include f3 at (14, 12) ports {
+        west: a;
+        east: b;
+    }
+}
+
+view schematic "Relays" {
+    include k1 at (10, 6) ports {
+        west:  coil_pos, coil_neg;
+        east:  com, no;
+        south: sense;
+    }
+
+    include k2 at (10, 18) ports {
+        west:  coil_pos, coil_neg;
+        east:  com, no;
+        south: sense;
+    }
+
+    include ecu at (34, 12) ports {
+        west: supply, can_h;
+        east: ground, can_l;
+    }
+}
+
+view schematic "Lone Fuse" {
+    grid: 20;
+
+    include f2 at (0, 0);
+}

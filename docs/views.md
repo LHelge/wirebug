@@ -98,10 +98,19 @@ devices, in the colour of the conductor that reaches the second one. Where
 the view leaves the far side out, the stub names the splice or the
 inline's port, then what lies beyond it (`→ ic_pedal.gnd (pedal.gnd)`).
 
+A box is sized from the ports it lists and their labels, never from its
+title: it is at least 160 units wide (every box is an even number of grid
+steps), and wider only where two labels would otherwise meet or a label
+would not fit. Boxes of one type that list the
+same ports are therefore the same size, and line up in a column whatever
+they are called. A title longer than its box is drawn whole, overhanging
+the box evenly on both sides.
+
 Boxes may touch but not overlap (`overlapping_includes`). A box's title is
 drawn in the row above it, one grid step high on the default grid (20
 units, in whole steps), and that row is part of the box: a box below
-another leaves the row free. A wire leaves its port by one grid
+another leaves the row free, and so does a box beside one whose title
+overhangs. A wire leaves its port by one grid
 step and keeps one step clear of other boxes and their titles, so a wired
 port needs two grid steps of room in front of it (`include_too_close`), a
 port on a north side a title row more, and a wire walled in on every side

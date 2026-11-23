@@ -624,9 +624,28 @@ step). Ports sit a fixed **two steps** apart, **centred** on each side
 (even count straddles the centreline, odd puts the middle port on it). A
 box is always an even number of steps, so its centre and every port land on
 a grid line. The side margin (corner to first port) is a full pitch (two
-steps). Boxes always size from the busiest side's port count — width also
-respects a text minimum (`MIN_WIDTH`); there is no explicit `width`/`height`
-in the DSL. The routing clearance (box keepout) is one grid step; the nudge
+steps). A box is sized from the ports it lists and their labels
+(`SidePorts::box_size`), never from its title, so boxes listing the same
+ports are the same size whatever they are called and a column of them has
+even edges; there is no explicit `width`/`height` in the DSL. The height
+holds the busier of the west and east sides, and the turned north and south
+labels end to end. The width holds the busier of the north and south sides,
+is at least `MIN_WIDTH`, and is then as much wider as the labels need
+(`SidePorts::label_spread`, over `PlacedPort::label_area`: the areas
+off-view references keep clear of, measured with the shared estimator, so
+room measured is room drawn). A level label, on a west or east side, ends
+`LABEL_INSET` short of the far edge, and no two labels come within
+`LABEL_GAP` of each other. Only labels that would meet count: two that are
+more than the gap apart up and down pass each other at any width, so a long
+west name on a row a turned south label stops short of costs nothing. Of
+those level with each other, a west and an east label move apart by what the
+box widens, a level label and a turned one by half of it, because the north
+and south ports stay centred: one long name beside a turned label widens the
+box on both sides. (Sizing from the longest label of each side, whatever row
+it is on, was prototyped and set aside: it widened boxes whose labels would
+never have met. Sizing from the title, as before, left the labels no room
+of their own, and they met wherever the title was short.) The routing
+clearance (box keepout) is one grid step; the nudge
 gap is the port pitch (two steps), so parallel wires in a channel space out
 like the ports they fan from. Both keep bundles grid-integral, and routing
 otherwise sees only world geometry. (Matching the keepout to the pitch was
@@ -644,8 +663,13 @@ drawn in belongs to the box: `PlacedComponent.title_row`
 (`Grid::title_row`), as high as the title reaches above the box
 (`COMPONENT_TITLE_GAP` plus its ascent, 20 units) rounded up to whole grid
 steps — one step on the default grid, two at 10 — and as wide as the box
-or, for a title that overhangs it, whole steps wider on each side (a box
-is sized to hold its title, so only one of some 80 characters does).
+or, for a title that overhangs it, whole steps wider on each side. A box
+is not sized for its title, so any title longer than its box is wide
+overhangs: it is drawn whole, centred, past the box's edges (wrapping it
+would make the row's height vary, and with it every stub and stacked box;
+cutting it short would lose the name in PNG and PDF). The canvas
+(`Placement::viewbox`) measures titles too (`title_bound`), so one that
+reaches past everything else drawn is not clipped.
 `PlacedComponent::footprint` is the box grown upward by the row, plus the
 row itself where it is the wider. Everything that asks what a box takes up
 asks for the footprint: the router's keepouts (`Placement::obstacles`, each

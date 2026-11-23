@@ -22,9 +22,9 @@
 
 use std::fmt;
 
+use super::PORT_RADIUS;
 use super::draw::{CODE_HALF_HEIGHT, CodeAnchor};
 use super::layout::{Connection, Grid, PlacedComponent, PlacedPort, PlacedText, Placement};
-use super::{LABEL_INSET, PORT_RADIUS};
 use crate::dsl::ir::{InstanceName, PortName, TypeName, WireColor, WireEnd};
 use crate::render::Canvas;
 use crate::render::geometry::{Bounds, Point, Side};
@@ -54,9 +54,6 @@ const BESIDE: [f64; 2] = [
 const LEADER_RUN: f64 = 3.0;
 /// The shortest stub worth drawing: one that reaches past the port's dot.
 const MIN_STUB: f64 = PORT_RADIUS + 4.0;
-/// A port label's font (the `.port-label` rule).
-const LABEL_FONT_SIZE: f64 = 11.0;
-const LABEL_FONT: Font = Font::regular(LABEL_FONT_SIZE);
 /// The longest list a reference spells out, in characters (the arrow
 /// aside); a longer one collapses to `+N more`.
 const MAX_CHARS: usize = 32;
@@ -594,48 +591,6 @@ impl PlacedComponent {
             .iter()
             .filter(|p| p.label_side() == side && p.port != port.port)
             .all(|p| (line(p) - text).abs() > across)
-    }
-}
-
-impl PlacedPort {
-    /// The area the port's name covers (11px, `LABEL_INSET` in from the
-    /// port, turned on a north or south side): inside its box, or, for an
-    /// inverted enclosure port, outside the boundary.
-    fn label_extent(&self) -> Bounds {
-        let length = LABEL_FONT.width(&self.label);
-        let half = LABEL_FONT_SIZE / 2.0;
-        let Point { x, y } = self.pos;
-        let (x0, y0, x1, y1) = match self.label_side() {
-            Side::West => (
-                x + LABEL_INSET,
-                y - half,
-                x + LABEL_INSET + length,
-                y + half,
-            ),
-            Side::East => (
-                x - LABEL_INSET - length,
-                y - half,
-                x - LABEL_INSET,
-                y + half,
-            ),
-            Side::North => (
-                x - half,
-                y + LABEL_INSET,
-                x + half,
-                y + LABEL_INSET + length,
-            ),
-            Side::South => (
-                x - half,
-                y - LABEL_INSET - length,
-                x + half,
-                y - LABEL_INSET,
-            ),
-        };
-        Bounds {
-            origin: Point::new(x0, y0),
-            width: x1 - x0,
-            height: y1 - y0,
-        }
     }
 }
 
