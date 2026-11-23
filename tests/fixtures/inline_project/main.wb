@@ -67,3 +67,17 @@ view harness "Pedal stub" {
     include ic_pedal.male at (0, 0);
     include pedal.x1 at (14, 0);
 }
+
+// The schematic sees through the inline: each signal is one wire from the
+// ECU to the pedal. The pedal's ground is left out, so the ECU's names it.
+view schematic "Pedal signals" {
+    grid: 20;
+
+    include ecu at (4, 4) ports {
+        east: a, b, gnd;
+    }
+
+    include pedal at (24, 4) ports {
+        west: a, b;
+    }
+}

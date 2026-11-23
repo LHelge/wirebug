@@ -19,7 +19,7 @@ use super::{
     MIN_WIDTH, PIN_CANVAS_PAD, SVG_MARGIN, TEXT_BOX_HEIGHT, TEXT_BOX_MIN_WIDTH, TEXT_BOX_PAD_X,
 };
 use crate::dsl::ir::{
-    Design, Instance, InstanceName, NetEnd, Port, PortName, View, WireColor, WireEnd,
+    Design, Instance, InstanceName, JointEnd, JointNet, Port, PortName, View, WireColor, WireEnd,
 };
 use crate::error::ViewResult;
 use crate::render::GridFault;
@@ -449,12 +449,15 @@ impl Placement {
             }
         }
 
-        // A splice is drawn as what it is electrically: one net joining the
-        // far ends of its conductors (through any splice-to-splice links),
-        // chained like a multi-endpoint rail between the ends the view
-        // places, in wire order, each port once. A segment takes the color
-        // of the conductor that brings its second end in.
-        for net in subject.splice_nets() {
+        // A joint (a splice, or a port of an inline connector) has no box
+        // in a schematic, so it is drawn as what it is electrically: one
+        // net joining the far ends of the runs landing on it (through any
+        // joint-to-joint links), chained like a multi-endpoint rail between
+        // the ends the view places, in wire order, each port once. A
+        // segment takes the color of the conductor that brings its second
+        // end in.
+        let joint_nets = design.joint_nets(subject);
+        for net in &joint_nets {
             let mut placed: Vec<(PortKey, &WireColor)> = Vec::new();
             for end in &net.ends {
                 let Some(key) = endpoint_key(end.end) else {
@@ -560,7 +563,7 @@ impl Placement {
             enclosure,
             connections,
         };
-        for (key, undrawn) in placement.undrawn(subject) {
+        for (key, undrawn) in placement.undrawn(subject, &joint_nets) {
             if let Some(port) = placement.endpoint_mut(&key) {
                 port.off_view = Some(undrawn);
             }
@@ -572,16 +575,17 @@ impl Placement {
     /// with those ends, in wire order and then endpoint order.
     ///
     /// Along a wire, a placed port reaches the ends on either side of it up
-    /// to the nearest placed one: `[a, x, y, b]` with only `a` and `b`
-    /// placed gives each of them `x` and `y`, since neither segment to
-    /// them is drawn. A splice net (taken at its first conductor in wire
-    /// order) is drawn as a rail between the ports it places, so the ends
-    /// it does not place are named once, beside the first port it places,
-    /// as the splice its conductor lands on and the ends beyond it. A net
-    /// placing one port and reaching nothing else still names its splice.
-    fn undrawn(&self, subject: &Instance) -> IndexMap<PortKey, Undrawn> {
+    /// to the nearest placed one or joint: `[a, x, y, b]` with only `a` and
+    /// `b` placed gives each of them `x` and `y`, since neither segment to
+    /// them is drawn. A joint net (taken at its first wire in wire order)
+    /// is drawn as a rail between the ports it places, so the ends it does
+    /// not place are named once, beside the first port it places, as the
+    /// joint that port's run lands on and the ends beyond it. A net placing
+    /// one port and reaching nothing else still names its joint.
+    fn undrawn(&self, subject: &Instance, nets: &[JointNet<'_>]) -> IndexMap<PortKey, Undrawn> {
         let placed = |end: &WireEnd| endpoint_key(end).filter(|key| self.endpoint(key).is_some());
-        let unplaced = |end: &&WireEnd| !matches!(end, WireEnd::Splice(_)) && placed(end).is_none();
+        let is_joint = |end: &WireEnd| nets.iter().any(|net| net.joints.contains(&end));
+        let unplaced = |end: &&WireEnd| !is_joint(end) && placed(end).is_none();
         let mut undrawn: IndexMap<PortKey, Undrawn> = IndexMap::new();
         let mut add = |key: PortKey, far: FarEnd, color: &WireColor| {
             let entry = undrawn.entry(key).or_insert_with(|| Undrawn {
@@ -592,18 +596,17 @@ impl Placement {
                 entry.far.push(far);
             }
         };
-        let nets = subject.splice_nets();
         let mut seen = vec![false; nets.len()];
         for wire in &subject.wires {
-            let net = nets
-                .iter()
-                .position(|net| net.splices.iter().any(|splice| wire.ends_on(splice)));
-            if let Some(n) = net {
+            for end in &wire.endpoints {
+                let Some(n) = nets.iter().position(|net| net.joints.contains(&end)) else {
+                    continue;
+                };
                 if std::mem::replace(&mut seen[n], true) {
                     continue;
                 }
                 let net = &nets[n];
-                let mut ports: Vec<(PortKey, &NetEnd)> = Vec::new();
+                let mut ports: Vec<(PortKey, &JointEnd)> = Vec::new();
                 let mut beyond: Vec<WireEnd> = Vec::new();
                 for end in &net.ends {
                     match placed(end.end) {
@@ -621,18 +624,11 @@ impl Placement {
                 if beyond.is_empty() && ports.len() > 1 {
                     continue;
                 }
-                let landing = match first.wire.other_end(first.end) {
-                    Some(WireEnd::Splice(splice)) => Some(splice),
-                    _ => net.splices.first().copied(),
+                let far = FarEnd::Joint {
+                    joint: first.joint.clone(),
+                    beyond,
                 };
-                if let Some(splice) = landing {
-                    let far = FarEnd::Splice {
-                        splice: splice.clone(),
-                        beyond,
-                    };
-                    add(key.clone(), far, &first.wire.color);
-                }
-                continue;
+                add(key.clone(), far, &first.wire.color);
             }
             for (i, end) in wire.endpoints.iter().enumerate() {
                 let Some(key) = placed(end) else {
@@ -959,8 +955,9 @@ fn grow_bounds(bounds: &mut Option<(f64, f64, f64, f64)>, a: Point, b: Point) {
 /// A wire endpoint's port key: a child instance's port, or a subject-own port
 /// on the enclosure boundary. Whether the key is actually drawn depends on it
 /// being listed (present in `side_of`); see [`Placement::compute`]. A splice
-/// has no port in a schematic (`None`): its conductors draw as the net they
-/// join, between the ports at their far ends.
+/// has no port in a schematic (`None`), and an inline connector's port is
+/// never listed: the runs to either draw as the net they join, between the
+/// ports at their far ends.
 fn endpoint_key(end: &WireEnd) -> Option<PortKey> {
     match end {
         WireEnd::Child { instance, port } => Some(PortKey::Child {
@@ -1376,6 +1373,97 @@ component sys {
         assert_eq!(placed(&["a", "b"]), ["a.p: sp (c.p, d.p) black"]);
         assert_eq!(placed(&["b"]), ["b.p: sp (a.p, c.p, d.p) brown"]);
         assert!(placed(&["a", "b", "c", "d"]).is_empty());
+    }
+
+    /// `sw` and `ecu` each run a conductor to the inline `ic`, `lamp` one
+    /// to the splice `sp` that `ic` is also wired to.
+    fn through_inline() -> Design {
+        design_from(
+            r#"
+component sys {
+    sw: blk;
+    ecu: blk;
+    lamp: blk;
+    inline ic {
+        port sig "SIG" pin 1;
+    }
+    splice sp;
+    wire green 1 [sw.p, ic.sig];
+    wire blue 1 [ic.sig, ecu.p];
+    wire grey 1 [ic.sig, sp];
+    wire red 1 [sp, lamp.p];
+    component blk {
+        pub port p "P";
+    }
+}
+"#,
+        )
+    }
+
+    #[test]
+    fn an_inline_connector_draws_as_one_net_between_the_ports_it_joins() {
+        let design = through_inline();
+        // Straight through the inline, and on through the splice wired to
+        // it, as one rail in wire order; a segment takes the color of the
+        // conductor bringing its second end in.
+        assert_eq!(
+            connections_of(&design, &["sw", "ecu", "lamp"]),
+            ["sw.p-ecu.p blue", "ecu.p-lamp.p red"]
+        );
+        assert_eq!(
+            connections_of(&design, &["sw", "lamp"]),
+            ["sw.p-lamp.p red"]
+        );
+        assert!(connections_of(&design, &["ecu"]).is_empty());
+    }
+
+    #[test]
+    fn a_rail_passing_an_inline_port_draws_through_it() {
+        let design = design_from(
+            r#"
+component sys {
+    a: blk;
+    b: blk;
+    c: blk;
+    inline ic {
+        port sig "SIG" pin 1;
+    }
+    wire red 1 [a.p, b.p, ic.sig, c.p];
+    component blk {
+        pub port p "P";
+    }
+}
+"#,
+        );
+        // `a`–`b` is the rail's own first run; the two runs meeting on the
+        // inline draw as `b`–`c`.
+        assert_eq!(
+            connections_of(&design, &["a", "b", "c"]),
+            ["a.p-b.p red", "b.p-c.p red"]
+        );
+    }
+
+    #[test]
+    fn an_inline_net_names_its_port_and_the_ends_beyond_it_once() {
+        let design = through_inline();
+        let subject = design.get(&design.root).unwrap();
+        let placed = |includes: &[&str]| {
+            const SOUTH: &[(&str, Side)] = &[("p", Side::South)];
+            let includes: Vec<_> = includes
+                .iter()
+                .enumerate()
+                .map(|(k, name)| (*name, k as f64 * 10.0, 0.0, SOUTH))
+                .collect();
+            let view = view_of("sys", &includes);
+            let placement = Placement::compute(&design, subject, &view, Grid::new(20.0)).unwrap();
+            undrawn_of(&placement)
+        };
+        // Every end placed: the net is drawn whole and nothing is named.
+        assert!(placed(&["sw", "ecu", "lamp"]).is_empty());
+        // The ends the view leaves out are named once, beside the net's
+        // first placed port, after the joint that port's conductor lands on.
+        assert_eq!(placed(&["sw", "ecu"]), ["sw.p: ic.sig (lamp.p) green"]);
+        assert_eq!(placed(&["lamp"]), ["lamp.p: sp (sw.p, ecu.p) red"]);
     }
 
     #[test]

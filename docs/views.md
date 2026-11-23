@@ -91,6 +91,13 @@ wire is drawn only between two listed ports. A listed port whose wire goes
 somewhere the view does not show ends in a short stub that names where it
 goes (`→ vcm.can_h`).
 
+A splice or an inline connector is never drawn in a schematic. The ports
+wired to it show connected instead: a signal that runs from one device to
+an inline and on from the inline to another is one wire between the two
+devices, in the colour of the conductor that reaches the second one. Where
+the view leaves the far side out, the stub names the splice or the
+inline's port, then what lies beyond it (`→ ic_pedal.gnd (pedal.gnd)`).
+
 Boxes may touch but not overlap (`overlapping_includes`). A wire leaves its
 port by one grid step and keeps one step clear of other boxes, so a wired
 port needs two grid steps of room in front of it (`include_too_close`), and
