@@ -169,7 +169,8 @@ impl Router {
     }
 
     /// Route every connection, then nudge shared channels apart (paper
-    /// §6). Returns one polyline per input pair, in order. `gap` is the
+    /// §6). Returns one polyline per input pair, in order, and the pairs
+    /// left on one line for lack of room ([`Routed`]). `gap` is the
     /// minimum spacing between parallel wires in a shared channel — the
     /// port pitch (two grid steps), so a nudged bundle stays grid-aligned
     /// and matches the spacing of the ports it fans out from.
@@ -181,7 +182,7 @@ impl Router {
         &self,
         pairs: &[(&PlacedPort, &PlacedPort)],
         gap: f64,
-    ) -> Result<Vec<Vec<Point>>, Unrouted> {
+    ) -> Result<Routed, Unrouted> {
         let mut raws = Vec::with_capacity(pairs.len());
         let mut routed = Vec::with_capacity(pairs.len());
         for (pair, &(a, b)) in pairs.iter().enumerate() {
@@ -201,6 +202,14 @@ impl Router {
         pts.push(raw.b);
         pts
     }
+}
+
+/// What [`Router::route_all`] routes: one polyline per input pair, in
+/// order, and the pairs (lower index first) a channel had no room to hold
+/// apart, which run on one line there.
+pub(super) struct Routed {
+    pub(super) wires: Vec<Vec<Point>>,
+    pub(super) together: Vec<(usize, usize)>,
 }
 
 /// The connection [`Router::route_all`] found no route for.
@@ -340,7 +349,11 @@ component sys {
         // its world position depends on the centre-based layout.
         let b = Rect::from(placement.component_bounds().nth(1).expect("b placed"));
 
-        let path = router.route_all(&[(a, c)], step).expect("routes").remove(0);
+        let path = router
+            .route_all(&[(a, c)], step)
+            .expect("routes")
+            .wires
+            .remove(0);
 
         assert!(path.len() > 2, "expected a detour, got {path:?}");
         assert!(
@@ -440,7 +453,8 @@ component sys {
 
         let wires = router
             .route_all(&[(&ports[0], &ports[1]), (&ports[2], &ports[3])], 10.0)
-            .expect("routes");
+            .expect("routes")
+            .wires;
 
         assert_eq!(
             wires[0],
@@ -490,7 +504,60 @@ component sys {
         router
             .route_all(&[pair], 2.0 * step)
             .expect("routes")
+            .wires
             .remove(0)
+    }
+
+    /// A rail and a wire that both have to pass between two boxes two
+    /// steps apart: one line clear of both, which the two share. Nudging
+    /// them the port pitch apart used to put one inside a box.
+    #[test]
+    fn wires_sharing_a_gap_with_room_for_one_stay_out_of_the_boxes() {
+        let design = design_from(
+            r#"
+component sys {
+    a: node;
+    b: node;
+    c: node;
+    wire red 1 [a.p, b.p, c.p];
+    wire black 1 [a.q, b.q];
+    component node {
+        pub port p "P";
+        pub port q "Q";
+    }
+}
+"#,
+        );
+        const SIDES: &[(&str, Side)] = &[("p", Side::West), ("q", Side::East)];
+        let view = view_of(
+            "sys",
+            &[
+                ("a", 0.0, 0.0, SIDES),
+                ("b", 10.0, 0.0, SIDES),
+                ("c", 20.0, 0.0, SIDES),
+            ],
+        );
+        let grid = Grid::new(20.0);
+        let subject = design.get(&design.root).unwrap();
+        let placement = Placement::compute(&design, subject, &view, grid).expect("places");
+        let router = Router::build(&placement, grid.step());
+        let connections = placement.connections();
+        let pairs: Vec<_> = connections.iter().map(|c| (c.a, c.b)).collect();
+
+        let routed = router.route_all(&pairs, grid.pitch()).expect("routes");
+
+        let boxes: Vec<Rect> = placement.component_bounds().map(Rect::from).collect();
+        for wire in &routed.wires {
+            assert!(
+                !wire
+                    .windows(2)
+                    .any(|w| boxes.iter().any(|b| b.blocks_segment(w[0], w[1]))),
+                "a wire runs through a box: {wire:?}"
+            );
+        }
+        // Both runs of the rail and the wire share the line between `a`
+        // and `b`: every pair of them is named as left together.
+        assert_eq!(routed.together, [(0, 1), (0, 2), (1, 2)]);
     }
 
     /// The tie between two equally good routes is settled by geometry, not

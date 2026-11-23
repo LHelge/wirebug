@@ -22,13 +22,16 @@ use crate::render::geometry::Point;
 /// pass runs first and its result is applied before the vertical pass:
 /// a vertical segment's span depends on the `y` its horizontal neighbours
 /// just took. `obstacles` are the clearance-inflated component rectangles.
+///
+/// Returns the pairs of routes left on one line: a channel between walls
+/// with no room to hold them apart (see [`solve_axis`]).
 pub(super) fn place(
     shapes: &mut [Option<Vec<Segment>>],
     channels: &[Channel],
     raws: &[RawRoute],
     obstacles: &[Rect],
     gap: f64,
-) {
+) -> Vec<(usize, usize)> {
     let horizontal = solve_axis(
         shapes,
         channels,
@@ -37,7 +40,7 @@ pub(super) fn place(
         Orientation::Horizontal,
         gap,
     );
-    apply(shapes, &horizontal);
+    apply(shapes, &horizontal.perps);
     let vertical = solve_axis(
         shapes,
         channels,
@@ -46,7 +49,20 @@ pub(super) fn place(
         Orientation::Vertical,
         gap,
     );
-    apply(shapes, &vertical);
+    apply(shapes, &vertical.perps);
+    let mut together = horizontal.together;
+    together.extend(vertical.together);
+    together.sort_unstable();
+    together.dedup();
+    together
+}
+
+/// One axis solved: the new `perp` of every segment of the orientation as
+/// `(route, segment, perp)`, and the pairs of routes, lower index first,
+/// whose segments were squeezed onto one line.
+struct Solved {
+    perps: Vec<(usize, usize, f64)>,
+    together: Vec<(usize, usize)>,
 }
 
 /// Write solved perpendicular coordinates back onto their segments.
@@ -60,9 +76,8 @@ fn apply(shapes: &mut [Option<Vec<Segment>>], assignment: &[(usize, usize, f64)]
     }
 }
 
-/// Solve one axis, returning the new `perp` for every segment of
-/// `orientation` as `(route, segment, perp)`. Pure: reads the current
-/// segments, writes nothing.
+/// Solve one axis: the new `perp` for every segment of `orientation`.
+/// Pure: reads the current segments, writes nothing.
 fn solve_axis(
     shapes: &[Option<Vec<Segment>>],
     channels: &[Channel],
@@ -70,7 +85,7 @@ fn solve_axis(
     obstacles: &[Rect],
     orientation: Orientation,
     gap: f64,
-) -> Vec<(usize, usize, f64)> {
+) -> Solved {
     // Each segment's extent along its parallel axis, from its neighbours'
     // current `perp`. A segment of this orientation runs between two of
     // the *other* orientation, whose `perp` this pass leaves fixed — so
@@ -107,12 +122,11 @@ fn solve_axis(
         }
     }
 
-    let mut cons = Vec::new();
-
-    // Separation constraints: routes in each channel's order whose segments
+    // Separation pairs: routes in each channel's order whose segments
     // actually overlap along the channel. A single `prev` route is not enough:
     // a long segment can overlap a later segment even when a route between
     // them in channel order is disjoint from both.
+    let mut separations: Vec<Separation> = Vec::new();
     for ch in channels.iter().filter(|c| c.orientation == orientation) {
         let seg_in_channel = |r: usize| -> Option<usize> {
             shapes[r].as_ref()?.iter().position(|s| {
@@ -131,10 +145,10 @@ fn solve_axis(
                     span_at(&spans, left_route, left_seg),
                     span_at(&spans, right_route, right_seg),
                 ) {
-                    cons.push(Constraint {
+                    separations.push(Separation {
                         left: var_of[&(left_route, left_seg)],
                         right: var_of[&(right_route, right_seg)],
-                        gap,
+                        squeeze: Squeeze::Apart,
                     });
                 }
             }
@@ -144,6 +158,9 @@ fn solve_axis(
     // Wall constraints: keep every interior segment on the side of each
     // box it routed around, so nudging can't push it into the clearance.
     // Each boundary becomes an immovable variable.
+    let segments = vars.len();
+    let mut room = vec![(f64::NEG_INFINITY, f64::INFINITY); segments];
+    let mut walls = Vec::new();
     for (vi, &(ri, si)) in owner.iter().enumerate() {
         let Some(segs) = shapes[ri].as_ref() else {
             continue;
@@ -162,29 +179,118 @@ fn solve_axis(
                 });
                 // `seg_below_wall` means the segment sits at a smaller
                 // coordinate than the wall, i.e. `wall - seg >= 0`.
-                cons.push(if seg_below_wall {
-                    Constraint {
+                if seg_below_wall {
+                    room[vi].1 = room[vi].1.min(wall_pos);
+                    walls.push(Constraint {
                         left: vi,
                         right: wall,
                         gap: 0.0,
-                    }
+                    });
                 } else {
-                    Constraint {
+                    room[vi].0 = room[vi].0.max(wall_pos);
+                    walls.push(Constraint {
                         left: wall,
                         right: vi,
                         gap: 0.0,
-                    }
-                });
+                    });
+                }
             }
         }
     }
 
-    let positions = vpsc::solve(&vars, &cons);
-    owner
+    // The solver takes a separation it cannot keep as binding and gives a
+    // wall up for it, which draws the wire inside the box. So a wall comes
+    // first: while a segment ends up past one, the separations pushing it
+    // there are squeezed a notch (the full gap, half of it, none) and the
+    // axis solved again. With no gap left every segment may keep the line
+    // it was routed on, which is inside its walls.
+    let positions = loop {
+        let cons: Vec<Constraint> = separations
+            .iter()
+            .map(|s| Constraint {
+                left: s.left,
+                right: s.right,
+                gap: s.squeeze.of(gap),
+            })
+            .chain(walls.iter().copied())
+            .collect();
+        let positions = vpsc::solve(&vars, &cons);
+        let past_a_wall: Vec<bool> = (0..segments)
+            .map(|vi| positions[vi] < room[vi].0 - EPS || positions[vi] > room[vi].1 + EPS)
+            .collect();
+        if !past_a_wall.contains(&true) {
+            break positions;
+        }
+        let squeezable = |s: &Separation| s.squeeze != Squeeze::Together;
+        // The separations on the segments past a wall; once those are
+        // spent, the ones that reach them through other segments.
+        let beside = |s: &Separation| past_a_wall[s.left] || past_a_wall[s.right];
+        let direct = separations.iter().any(|s| squeezable(s) && beside(s));
+        let mut squeezed = false;
+        for s in separations
+            .iter_mut()
+            .filter(|s| squeezable(s) && (!direct || beside(s)))
+        {
+            s.squeeze = s.squeeze.tighter();
+            squeezed = true;
+        }
+        if !squeezed {
+            break positions;
+        }
+    };
+    let together = separations
+        .iter()
+        .filter(|s| s.squeeze == Squeeze::Together)
+        .filter(|s| (positions[s.left] - positions[s.right]).abs() < EPS)
+        .map(|s| {
+            let (a, b) = (owner[s.left].0, owner[s.right].0);
+            (a.min(b), a.max(b))
+        })
+        .collect();
+    let perps = owner
         .iter()
         .enumerate()
         .map(|(vi, &(ri, si))| (ri, si, positions[vi]))
-        .collect()
+        .collect();
+    Solved { perps, together }
+}
+
+/// Two segments sharing a channel, `left` before `right` in its order, and
+/// how far apart they are still held.
+struct Separation {
+    left: usize,
+    right: usize,
+    squeeze: Squeeze,
+}
+
+/// How much of the nudge gap a [`Separation`] keeps. The steps halve the
+/// gap, which is the port pitch (two grid steps), so a squeezed bundle
+/// stays on grid lines.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Squeeze {
+    /// The whole gap.
+    Apart,
+    /// Half the gap: one grid step.
+    Close,
+    /// No gap: the segments may share a line, in channel order.
+    Together,
+}
+
+impl Squeeze {
+    fn of(self, gap: f64) -> f64 {
+        match self {
+            Self::Apart => gap,
+            Self::Close => gap / 2.0,
+            Self::Together => 0.0,
+        }
+    }
+
+    fn tighter(self) -> Self {
+        match self {
+            Self::Apart => Self::Close,
+            Self::Close | Self::Together => Self::Together,
+        }
+    }
 }
 
 /// The precomputed `(lo, hi)` span of segment `si` in route `ri`. Indices
@@ -383,7 +489,7 @@ mod tests {
             Orientation::Horizontal,
             gap,
         );
-        let (y0, y1) = (solved_perp(&out, 0, 1), solved_perp(&out, 1, 1));
+        let (y0, y1) = (solved_perp(&out.perps, 0, 1), solved_perp(&out.perps, 1, 1));
 
         assert!((y1 - y0 - gap).abs() < EPS, "gap was {}", y1 - y0);
         assert!(
@@ -414,10 +520,72 @@ mod tests {
             Orientation::Horizontal,
             gap,
         );
-        let (y0, y1) = (solved_perp(&out, 0, 1), solved_perp(&out, 1, 1));
+        let (y0, y1) = (solved_perp(&out.perps, 0, 1), solved_perp(&out.perps, 1, 1));
 
         assert!((y0 - 10.0).abs() < 1e-3, "pinned segment moved to {y0}");
         assert!((y1 - 16.0).abs() < 1e-3, "free segment didn't yield: {y1}");
+    }
+
+    #[test]
+    fn segments_sharing_a_lane_with_no_room_stay_on_it_rather_than_enter_a_box() {
+        // Two boxes whose keepouts meet along y = 10 leave one line between
+        // them, and two routes run along it.
+        let edge: Edge = (1, 2);
+        let shapes = vec![
+            Some(channel_route(10.0, edge, false)),
+            Some(channel_route(10.0, edge, false)),
+        ];
+        let channels = vec![Channel {
+            orientation: Orientation::Horizontal,
+            order: vec![0, 1],
+            edges: HashSet::from([edge]),
+        }];
+        let above = Rect::new(-50.0, -90.0, 200.0, 100.0);
+        let below = Rect::new(-50.0, 10.0, 200.0, 100.0);
+
+        let out = solve_axis(
+            &shapes,
+            &channels,
+            &[raw(), raw()],
+            &[above, below],
+            Orientation::Horizontal,
+            8.0,
+        );
+
+        assert_eq!(solved_perp(&out.perps, 0, 1), 10.0);
+        assert_eq!(solved_perp(&out.perps, 1, 1), 10.0);
+        assert_eq!(out.together, [(0, 1)]);
+    }
+
+    #[test]
+    fn segments_in_a_lane_with_room_for_half_the_gap_take_half() {
+        // The keepouts stand one half-gap apart: the bundle closes up to
+        // that, on whole steps, instead of pushing a wall.
+        let edge: Edge = (1, 2);
+        let shapes = vec![
+            Some(channel_route(10.0, edge, false)),
+            Some(channel_route(10.0, edge, false)),
+        ];
+        let channels = vec![Channel {
+            orientation: Orientation::Horizontal,
+            order: vec![0, 1],
+            edges: HashSet::from([edge]),
+        }];
+        let above = Rect::new(-50.0, -90.0, 200.0, 100.0);
+        let below = Rect::new(-50.0, 14.0, 200.0, 100.0);
+
+        let out = solve_axis(
+            &shapes,
+            &channels,
+            &[raw(), raw()],
+            &[above, below],
+            Orientation::Horizontal,
+            8.0,
+        );
+
+        assert_eq!(solved_perp(&out.perps, 0, 1), 10.0);
+        assert_eq!(solved_perp(&out.perps, 1, 1), 14.0);
+        assert!(out.together.is_empty());
     }
 
     #[test]
@@ -458,7 +626,7 @@ mod tests {
             Orientation::Horizontal,
             gap,
         );
-        let (y0, y2) = (solved_perp(&out, 0, 1), solved_perp(&out, 2, 1));
+        let (y0, y2) = (solved_perp(&out.perps, 0, 1), solved_perp(&out.perps, 2, 1));
 
         assert!((y2 - y0 - gap).abs() < EPS, "gap was {}", y2 - y0);
     }

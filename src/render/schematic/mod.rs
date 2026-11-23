@@ -22,13 +22,15 @@ use svg::node::element::{Group, Style, Text};
 use crate::dsl::ir::{Design, Instance, InstanceName, View};
 use crate::error::{ViewErrorKind, ViewResult};
 use crate::render::geometry::Point;
-use crate::render::lint::{CrowdedPort, IncludeBox, UnroutableWire, ViewLayout, WireEndAt};
+use crate::render::lint::{
+    CrowdedPort, IncludeBox, OverlappingWires, UnroutableWire, ViewLayout, WireEndAt,
+};
 use crate::render::stamp::{STAMP_HEIGHT, STAMP_INSET, stamp_element};
 use crate::render::{Canvas, Drawing, SvgMode};
 
 use layout::{Connection, Grid, PlacedPort, Placement, ViewBox};
 use off_view::{Drawn, OffView};
-use route::Router;
+use route::{Routed, Router};
 
 /// Grid step (world units) used when a view doesn't specify one. Ports
 /// sit two steps apart, so the default port pitch is twice this.
@@ -119,7 +121,7 @@ impl SchematicRenderer {
         // off-view references are fitted round what is drawn, after.
         let router = Router::build(&placement, grid.step());
         let connections = placement.connections();
-        let wires = route(&router, &connections, grid)?;
+        let wires = route(&router, &connections, grid)?.wires;
         let codes = code_anchors(&placement, &connections, &wires);
         let references = off_views(design, view, &placement, &connections, &wires, &codes, grid);
 
@@ -301,28 +303,40 @@ impl SchematicRenderer {
             .collect();
         // The canvas encloses the routed wires, and only a view whose every
         // wire routes is drawn at all.
-        let canvas = if crowded.is_empty() && unroutable.is_empty() {
-            route(&router, &connections, grid).ok().map(|wires| {
-                let codes = code_anchors(&placement, &connections, &wires);
-                let references =
-                    off_views(design, view, &placement, &connections, &wires, &codes, grid);
-                let vb = viewbox(
-                    design,
-                    view,
-                    &placement,
-                    &wires,
-                    &references,
-                    SvgMode::Standalone,
-                );
-                Canvas::new(vb.width, vb.height)
-            })
+        let routed = if crowded.is_empty() && unroutable.is_empty() {
+            route(&router, &connections, grid).ok()
         } else {
             None
         };
+        let overlapping_wires = routed
+            .iter()
+            .flat_map(|routed| overlapping_nets(&connections, routed))
+            .map(|(first, second)| {
+                let ends = |c: &Connection<'_>| [end(c.owners[0], c.a), end(c.owners[1], c.b)];
+                OverlappingWires {
+                    wires: [ends(&connections[first]), ends(&connections[second])],
+                }
+            })
+            .collect();
+        let canvas = routed.map(|Routed { wires, .. }| {
+            let codes = code_anchors(&placement, &connections, &wires);
+            let references =
+                off_views(design, view, &placement, &connections, &wires, &codes, grid);
+            let vb = viewbox(
+                design,
+                view,
+                &placement,
+                &wires,
+                &references,
+                SvgMode::Standalone,
+            );
+            Canvas::new(vb.width, vb.height)
+        });
         ViewLayout {
             boxes,
             crowded,
             unroutable,
+            overlapping_wires,
             canvas,
             ..ViewLayout::default()
         }
@@ -331,11 +345,7 @@ impl SchematicRenderer {
 
 /// Route every connection as [`SchematicRenderer::render`] draws it, or
 /// name the wire that has no route.
-fn route(
-    router: &Router,
-    connections: &[Connection<'_>],
-    grid: Grid,
-) -> ViewResult<Vec<Vec<Point>>> {
+fn route(router: &Router, connections: &[Connection<'_>], grid: Grid) -> ViewResult<Routed> {
     let pairs: Vec<_> = connections.iter().map(|c| (c.a, c.b)).collect();
     // Spread parallel wires in a shared channel by the port pitch (two
     // steps), so a nudged bundle matches the spacing of the ports it fans
@@ -344,6 +354,33 @@ fn route(
         let [from, to] = connections[unrouted.pair].ends();
         ViewErrorKind::RouteFailed { from, to }
     })
+}
+
+/// The pairs of nets `routed` (one wire per connection) draws so that they
+/// cannot be told apart: a wire of each left on one line by a channel with
+/// no room to hold them apart. Each pair of nets is named once, by the
+/// first two such connections, in connection order.
+///
+/// Wires of one net on one line are a joint drawn as it is. And two nets
+/// that only run a stretch of one port row (a plain crossover between
+/// facing boxes does) are not reported: no room given to the view pulls
+/// those apart.
+fn overlapping_nets(connections: &[Connection<'_>], routed: &Routed) -> Vec<(usize, usize)> {
+    let nets = Connection::nets(connections);
+    let net_of = |connection: usize| nets.iter().position(|net| net.contains(&connection));
+    let mut seen = Vec::new();
+    routed
+        .together
+        .iter()
+        .copied()
+        .filter(|&(a, b)| {
+            let pair = (net_of(a), net_of(b));
+            pair.0 != pair.1 && !seen.contains(&pair) && {
+                seen.push(pair);
+                true
+            }
+        })
+        .collect()
 }
 
 /// Where the codes of `placement`'s routed `wires` (one per connection)

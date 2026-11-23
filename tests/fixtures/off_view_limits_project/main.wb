@@ -140,7 +140,7 @@ view schematic "Crossed" {
     include a at (0, 0) ports {
         east: p0, p1, p2, p3, p4, p5, p6, p7;
     }
-    include b at (20, 0) ports {
+    include b at (26, 0) ports {
         west: p0, p1, p2, p3, p4, p5, p6, p7;
     }
 }

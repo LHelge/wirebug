@@ -58,6 +58,12 @@ pub(super) struct UnroutableWire {
     pub(super) ends: [WireEndAt; 2],
 }
 
+/// Two routed wires of different nets drawn along one line, for lack of
+/// room to hold them apart, so that they read as joined.
+pub(super) struct OverlappingWires {
+    pub(super) wires: [[WireEndAt; 2]; 2],
+}
+
 /// One chain segment of a subject wire: the pair `endpoints[index]`,
 /// `endpoints[index + 1]` of `subject.wires[wire]`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -154,6 +160,8 @@ pub(super) struct ViewLayout {
     /// is `unroutable`.
     pub(super) crowded: Vec<CrowdedPort>,
     pub(super) unroutable: Vec<UnroutableWire>,
+    /// One per pair of nets; empty unless every wire routes.
+    pub(super) overlapping_wires: Vec<OverlappingWires>,
     /// The conductors a harness view draws; empty for other kinds.
     pub(super) drawn: Vec<Segment>,
     /// Why the renderer rejects the view's `grid:`, when it does; nothing
@@ -266,7 +274,8 @@ impl Conductor<'_> {
 /// the layout shows to be wrong: includes whose boxes overlap
 /// (`overlapping_includes`), schematic includes too close for a wire to
 /// leave a port (`include_too_close`), schematic wires walled in by boxes
-/// all around (`unroutable_wire`), and, after every view's problems,
+/// all around (`unroutable_wire`), schematic wires of different nets drawn
+/// on one line (`overlapping_wires`), and, after every view's problems,
 /// conductors that no harness view of their component draws
 /// (`undrawn_conductor`). `project` supplies the sources the spans point
 /// into.
@@ -321,7 +330,8 @@ impl ViewLayout {
 
     /// A rejected grid alone, when there is one. Otherwise overlapping
     /// pairs first, then crowded pairs, each in include order, then
-    /// unroutable wires in wire order, then a canvas over the limit. A pair
+    /// unroutable wires in wire order, then wires of different nets drawn
+    /// on one line, then a canvas over the limit. A pair
     /// that overlaps is not also reported as too close, and unroutable
     /// wires are reported only in a view with neither: colliding boxes are
     /// the cause to fix first, and a port without room to leave never
@@ -402,13 +412,13 @@ impl ViewLayout {
             }
         });
         let mut problems: Vec<Problem> = overlaps.chain(too_close).collect();
+        let named = |end: &WireEndAt| match end.include {
+            Some(i) => format!("{}.{}", view.includes[i].instance, end.port),
+            None => end.port.to_string(),
+        };
         if problems.is_empty() {
             problems.extend(self.unroutable.iter().filter_map(|wire| {
                 let [from, to] = &wire.ends;
-                let named = |end: &WireEndAt| match end.include {
-                    Some(i) => format!("{}.{}", view.includes[i].instance, end.port),
-                    None => end.port.to_string(),
-                };
                 // Label the includes the wire ends on. A wire between two
                 // enclosure ports has none to point at, but never needs
                 // one: the enclosure stands four steps off every box, so
@@ -428,6 +438,31 @@ impl ViewLayout {
                 })
             }));
         }
+        problems.extend(self.overlapping_wires.iter().filter_map(|pair| {
+            let [[from, to], [other_from, other_to]] = &pair.wires;
+            // Each wire is labelled on an include it ends on, the second
+            // on another include than the first where it has one; a wire
+            // between two enclosure ports has none, and the other wire then
+            // carries the main label.
+            let includes = |wire: usize| pair.wires[wire].iter().filter_map(|end| end.include);
+            let first = includes(0).next();
+            let second = includes(1)
+                .find(|&include| Some(include) != first)
+                .or_else(|| includes(1).next());
+            let span = |include: Option<usize>| include.map(|i| view.includes[i].span);
+            let (first, second) = (span(first), span(second));
+            let at = first.or(second)?;
+            Some(Problem::OverlappingWires {
+                from: named(from),
+                to: named(to),
+                other_from: named(other_from),
+                other_to: named(other_to),
+                view: view.title.clone(),
+                src: project.source(at.file),
+                at: at.into(),
+                other: first.and(second).map(Into::into),
+            })
+        }));
         problems.extend(self.too_large(view, project));
         problems
     }
@@ -700,6 +735,85 @@ view schematic "V" {
         assert!(summary(&open).is_empty());
         let (_, design) = load(&open);
         assert!(renders(&design));
+    }
+
+    /// Three `Node`s in a row, each with `p` on the west and `q` on the
+    /// east, `gap` grid steps between neighbours: a rail joins every `p`
+    /// and a wire joins `a.q` to `b.q`, so both nets must pass between `a`
+    /// and `b`.
+    fn row_of_three(gap: i32) -> String {
+        let pitch = 8 + gap;
+        format!(
+            r#"
+component Sys {{
+    a: Node;
+    b: Node;
+    c: Node;
+    wire red 1 [a.p, b.p, c.p];
+    wire black 1 [a.q, b.q];
+
+    component Node {{
+        pub port p "P";
+        pub port q "Q";
+    }}
+}}
+
+view schematic "V" {{
+    grid: 20;
+    include a at (0, 0) ports {{ west: p; east: q; }}
+    include b at ({pitch}, 0) ports {{ west: p; east: q; }}
+    include c at ({}, 0) ports {{ west: p; east: q; }}
+}}
+"#,
+            2 * pitch
+        )
+    }
+
+    #[test]
+    fn two_nets_in_a_gap_with_room_for_one_wire_cannot_be_told_apart() {
+        // Two steps between the boxes is one line clear of both.
+        let src = row_of_three(2);
+        assert_eq!(summary(&src), [code("overlapping_wires", &["a", "b"])]);
+        let (project, design) = load(&src);
+        let [problem] = layout_problems(&design, &project)
+            .try_into()
+            .expect("one problem");
+        assert_eq!(
+            problem.to_string(),
+            "the wires `a.p`–`b.p` and `a.q`–`b.q` cannot be told apart in view \"V\""
+        );
+        assert!(!problem.is_error(), "the view still renders");
+    }
+
+    #[test]
+    fn two_nets_in_a_gap_with_room_for_both_are_fine() {
+        assert!(summary(&row_of_three(4)).is_empty());
+    }
+
+    #[test]
+    fn a_crossover_between_facing_boxes_is_not_reported() {
+        // The two wires run a stretch of one port row between the boxes,
+        // which no room given to the view changes.
+        let src = r#"
+component Sys {
+    a: Node;
+    b: Node;
+    wire green 1 [a.tx, b.rx];
+    wire yellow 1 [a.rx, b.tx];
+
+    component Node {
+        pub port tx "TX";
+        pub port rx "RX";
+    }
+}
+
+view schematic "V" {
+    grid: 20;
+    include a at (0, 0) ports { east: tx, rx; }
+    include b at (20, 0) ports { west: tx, rx; }
+}
+"#;
+        assert!(summary(src).is_empty());
     }
 
     #[test]
